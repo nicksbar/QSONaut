@@ -19,6 +19,7 @@ pub struct StationConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioConfig {
+    pub enabled: bool,
     pub input_device: Option<String>,
     pub sample_rate_hz: u32,
     pub channels: u8,
@@ -26,6 +27,7 @@ pub struct AudioConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RadioConfig {
+    pub enabled: bool,
     pub backend: String,
     pub serial_port: Option<String>,
 }
@@ -44,11 +46,13 @@ impl Default for AppConfig {
                 grid: None,
             },
             audio: AudioConfig {
+                enabled: true,
                 input_device: None,
                 sample_rate_hz: 48_000,
                 channels: 1,
             },
             radio: RadioConfig {
+                enabled: true,
                 backend: "none".to_string(),
                 serial_port: None,
             },
@@ -62,6 +66,8 @@ impl Default for AppConfig {
 
 impl AppConfig {
     pub fn load(path: Option<&Path>) -> Result<Self> {
+        let _ = dotenvy::dotenv();
+
         let mut cfg = if let Some(path) = path {
             let src = fs::read_to_string(path)
                 .with_context(|| format!("failed reading config file {}", path.display()))?;
@@ -81,9 +87,40 @@ impl AppConfig {
             cfg.ai.provider = provider;
         }
         if let Ok(enabled) = std::env::var("RIGFORGE_AI_ENABLED") {
-            cfg.ai.enabled = matches!(enabled.as_str(), "1" | "true" | "TRUE" | "yes" | "YES");
+            cfg.ai.enabled = parse_bool(&enabled);
+        }
+
+        if let Ok(enabled) = std::env::var("RIGFORGE_AUDIO_ENABLED") {
+            cfg.audio.enabled = parse_bool(&enabled);
+        }
+        if let Ok(device) = std::env::var("RIGFORGE_AUDIO_INPUT_DEVICE") {
+            cfg.audio.input_device = Some(device);
+        }
+        if let Ok(rate) = std::env::var("RIGFORGE_AUDIO_SAMPLE_RATE_HZ") {
+            if let Ok(parsed) = rate.parse::<u32>() {
+                cfg.audio.sample_rate_hz = parsed;
+            }
+        }
+        if let Ok(channels) = std::env::var("RIGFORGE_AUDIO_CHANNELS") {
+            if let Ok(parsed) = channels.parse::<u8>() {
+                cfg.audio.channels = parsed;
+            }
+        }
+
+        if let Ok(enabled) = std::env::var("RIGFORGE_RADIO_ENABLED") {
+            cfg.radio.enabled = parse_bool(&enabled);
+        }
+        if let Ok(backend) = std::env::var("RIGFORGE_RADIO_BACKEND") {
+            cfg.radio.backend = backend;
+        }
+        if let Ok(port) = std::env::var("RIGFORGE_RADIO_SERIAL_PORT") {
+            cfg.radio.serial_port = Some(port);
         }
 
         Ok(cfg)
     }
+}
+
+fn parse_bool(value: &str) -> bool {
+    matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
 }

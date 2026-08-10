@@ -1,6 +1,7 @@
 target/
 **/*.rs.bk
 .DS_Store
+.env
 
 # local runtime artifacts
 recordings/*.wav

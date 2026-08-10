@@ -42,15 +42,42 @@ pub struct CaptureSummary {
     pub rms_dbfs: f32,
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct AudioService;
+#[derive(Debug, Clone)]
+pub struct AudioService {
+    preferred_device_name: Option<String>,
+    enabled: bool,
+}
+
+impl Default for AudioService {
+    fn default() -> Self {
+        Self::new(None, true)
+    }
+}
 
 impl AudioService {
+    pub fn new(preferred_device_name: Option<String>, enabled: bool) -> Self {
+        Self {
+            preferred_device_name,
+            enabled,
+        }
+    }
+
     pub async fn enumerate_devices(&self) -> Result<Vec<AudioDevice>> {
-        self.enumerate_from_proc_asound()
+        if !self.enabled {
+            return Ok(Vec::new());
+        }
+        let mut devices = self.enumerate_from_proc_asound()?;
+        if let Some(pref) = self.preferred_device_name.as_deref() {
+            devices.retain(|device| device.name.to_ascii_lowercase().contains(&pref.to_ascii_lowercase()));
+        }
+        Ok(devices)
     }
 
     pub fn capture_wav<P: AsRef<Path>>(&self, path: P, options: CaptureOptions) -> Result<CaptureSummary> {
+        if !self.enabled {
+            bail!("audio capture disabled by config; enable it with RIGFORGE_AUDIO_ENABLED=true or audio.enabled=true");
+        }
+
         self.preflight_audio_permissions()?;
 
         if let Some(parent) = path.as_ref().parent() {

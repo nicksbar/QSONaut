@@ -36,6 +36,31 @@ The `docs/` directory contains curated research imported from an adjacent projec
 cargo run -p rigforge -- --help
 ```
 
+## Environment and hardware config
+
+RigForge now supports a `.env` file and hardware toggles so you can keep the app usable even when radios are unplugged.
+
+Copy the example file:
+
+```text
+cp .env.example .env
+```
+
+Useful variables:
+
+```text
+RIGFORGE_AUDIO_ENABLED=true
+RIGFORGE_AUDIO_INPUT_DEVICE="USB Audio CODEC"
+RIGFORGE_AUDIO_SAMPLE_RATE_HZ=48000
+RIGFORGE_AUDIO_CHANNELS=1
+
+RIGFORGE_RADIO_ENABLED=true
+RIGFORGE_RADIO_BACKEND="none"
+RIGFORGE_RADIO_SERIAL_PORT="/dev/ttyUSB0"
+```
+
+With `RIGFORGE_AUDIO_ENABLED=false` or `RIGFORGE_RADIO_ENABLED=false`, RigForge will stay functional without requiring those devices.
+
 ## Stage 1 (current) quick checks
 
 Discover audio capture devices:

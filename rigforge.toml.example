@@ -3,11 +3,13 @@ callsign = "N0CALL"
 grid = "AA00"
 
 [audio]
+enabled = true
 input_device = ""
 sample_rate_hz = 48000
 channels = 1
 
 [radio]
+enabled = true
 backend = "none"
 serial_port = "/dev/ttyUSB0"
 

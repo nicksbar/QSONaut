@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
 
     let radio = NullRadio::default();
     let ai = NullLanguageModel::default();
-    let audio = AudioService::default();
+    let audio = AudioService::new(config.audio.input_device.clone(), config.audio.enabled);
 
     info!(?config.station.callsign, ?config.station.grid, "RigForge starting");
 
@@ -71,7 +71,16 @@ async fn main() -> Result<()> {
         });
     }
 
-    let serial_ports = enumerate_serial_ports()?;
+    let mut serial_ports = if config.radio.enabled {
+        enumerate_serial_ports()?
+    } else {
+        Vec::new()
+    };
+    if let Some(port) = config.radio.serial_port.as_deref() {
+        if !serial_ports.iter().any(|existing| existing == port) {
+            serial_ports.push(port.to_string());
+        }
+    }
     for p in &serial_ports {
         events.publish(rigforge_core::AppEvent::DeviceDiscovered {
             subsystem: "radio-serial".to_string(),
@@ -86,7 +95,11 @@ async fn main() -> Result<()> {
             println!("  [{idx}] {} ({} Hz, {} ch)", d.name, d.default_sample_rate_hz, d.channels);
         }
         if devices.is_empty() {
-            println!("  (none discovered)");
+            if config.audio.enabled {
+                println!("  (none discovered; hardware may be unplugged or unavailable)");
+            } else {
+                println!("  (audio disabled by config)");
+            }
         }
         return Ok(());
     }
@@ -97,7 +110,11 @@ async fn main() -> Result<()> {
             println!("  [{idx}] {p}");
         }
         if serial_ports.is_empty() {
-            println!("  (none discovered)");
+            if config.radio.enabled {
+                println!("  (none discovered; hardware may be unplugged or unavailable)");
+            } else {
+                println!("  (radio disabled by config)");
+            }
         }
         return Ok(());
     }

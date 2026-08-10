@@ -19,6 +19,7 @@ license = "MIT"
 authors = ["RigForge Contributors"]
 
 [workspace.dependencies]
+dotenvy = "0.15"
 anyhow = "1"
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
