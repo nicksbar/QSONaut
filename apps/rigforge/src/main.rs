@@ -1,11 +1,12 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
 use rigforge_ai::NullLanguageModel;
-use rigforge_audio::AudioService;
+use rigforge_audio::{AudioService, CaptureOptions};
 use rigforge_core::{AppConfig, AppEventBus};
-use rigforge_radio::NullRadio;
+use rigforge_radio::{enumerate_serial_ports, NullRadio};
 use tracing::{info, warn};
 
 #[derive(Debug, Parser)]
@@ -19,6 +20,26 @@ struct Cli {
     /// Optional WAV file input (future M2/M4 pipeline)
     #[arg(long)]
     input: Option<PathBuf>,
+
+    /// Print discovered audio inputs and exit
+    #[arg(long)]
+    list_audio: bool,
+
+    /// Print discovered serial radio ports and exit
+    #[arg(long)]
+    list_radio: bool,
+
+    /// Capture audio to WAV (Stage 1)
+    #[arg(long)]
+    record_wav: Option<PathBuf>,
+
+    /// Capture duration in seconds for --record-wav
+    #[arg(long, default_value_t = 10)]
+    duration_secs: u64,
+
+    /// Preferred audio input device name (substring match)
+    #[arg(long)]
+    audio_device: Option<String>,
 }
 
 #[tokio::main]
@@ -42,12 +63,62 @@ async fn main() -> Result<()> {
     }
 
     let devices = audio.enumerate_devices().await?;
-    for d in devices {
+    for d in &devices {
         events.publish(rigforge_core::AppEvent::DeviceDiscovered {
             subsystem: "audio".to_string(),
-            name: d.name,
+            name: d.name.clone(),
             detail: format!("{} Hz, {} ch", d.default_sample_rate_hz, d.channels),
         });
+    }
+
+    let serial_ports = enumerate_serial_ports()?;
+    for p in &serial_ports {
+        events.publish(rigforge_core::AppEvent::DeviceDiscovered {
+            subsystem: "radio-serial".to_string(),
+            name: p.clone(),
+            detail: "serial endpoint".to_string(),
+        });
+    }
+
+    if cli.list_audio {
+        println!("Audio input devices:");
+        for (idx, d) in devices.iter().enumerate() {
+            println!("  [{idx}] {} ({} Hz, {} ch)", d.name, d.default_sample_rate_hz, d.channels);
+        }
+        if devices.is_empty() {
+            println!("  (none discovered)");
+        }
+        return Ok(());
+    }
+
+    if cli.list_radio {
+        println!("Serial radio endpoints:");
+        for (idx, p) in serial_ports.iter().enumerate() {
+            println!("  [{idx}] {p}");
+        }
+        if serial_ports.is_empty() {
+            println!("  (none discovered)");
+        }
+        return Ok(());
+    }
+
+    if let Some(path) = cli.record_wav {
+        let preferred_device_name = cli.audio_device.or_else(|| config.audio.input_device.clone());
+        let opts = CaptureOptions {
+            preferred_device_name,
+            sample_rate_hz: Some(config.audio.sample_rate_hz),
+            channels: Some(config.audio.channels as u16),
+            duration: Duration::from_secs(cli.duration_secs),
+        };
+        println!("Recording WAV for {} seconds...", cli.duration_secs);
+        let summary = audio.capture_wav(path.clone(), opts)?;
+        println!("Saved: {}", path.display());
+        println!("Sample rate: {} Hz", summary.sample_rate_hz);
+        println!("Channels: {}", summary.channels);
+        println!("Samples: {}", summary.samples_written);
+        println!("Peak: {:.1} dBFS", summary.peak_dbfs);
+        println!("RMS: {:.1} dBFS", summary.rms_dbfs);
+        return Ok(());
     }
 
     rigforge_tui::render_shell(&config, &events, &radio, &ai).await?;

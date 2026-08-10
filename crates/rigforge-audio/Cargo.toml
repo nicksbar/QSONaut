@@ -7,4 +7,5 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+hound.workspace = true
 tokio.workspace = true

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use std::fs;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Mode {
@@ -54,4 +55,18 @@ impl Default for Mode {
     fn default() -> Self {
         Self::Usb
     }
+}
+
+pub fn enumerate_serial_ports() -> Result<Vec<String>> {
+    let mut ports = Vec::new();
+    for entry in fs::read_dir("/dev")? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("ttyUSB") || name.starts_with("ttyACM") {
+            ports.push(format!("/dev/{name}"));
+        }
+    }
+    ports.sort();
+    Ok(ports)
 }

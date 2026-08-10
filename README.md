@@ -36,6 +36,26 @@ The `docs/` directory contains curated research imported from an adjacent projec
 cargo run -p rigforge -- --help
 ```
 
+## Stage 1 (current) quick checks
+
+Discover audio capture devices:
+
+```text
+cargo run -p rigforge -- --list-audio
+```
+
+Discover serial endpoints (CI-V candidates):
+
+```text
+cargo run -p rigforge -- --list-radio
+```
+
+Capture a WAV sample (10s default):
+
+```text
+cargo run -p rigforge -- --record-wav recordings/ic7300-test.wav --duration-secs 10
+```
+
 ## Milestones
 
 - M0 — Bootstrap workspace + shell (current)

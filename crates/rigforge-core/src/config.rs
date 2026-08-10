@@ -27,6 +27,7 @@ pub struct AudioConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RadioConfig {
     pub backend: String,
+    pub serial_port: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +50,7 @@ impl Default for AppConfig {
             },
             radio: RadioConfig {
                 backend: "none".to_string(),
+                serial_port: None,
             },
             ai: AiConfig {
                 enabled: false,

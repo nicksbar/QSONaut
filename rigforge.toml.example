@@ -9,6 +9,7 @@ channels = 1
 
 [radio]
 backend = "none"
+serial_port = "/dev/ttyUSB0"
 
 [ai]
 enabled = false
