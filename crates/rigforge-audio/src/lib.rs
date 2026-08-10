@@ -53,6 +53,14 @@ impl AudioService {
     pub fn capture_wav<P: AsRef<Path>>(&self, path: P, options: CaptureOptions) -> Result<CaptureSummary> {
         self.preflight_audio_permissions()?;
 
+        if let Some(parent) = path.as_ref().parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("failed to create output directory {}", parent.display())
+                })?;
+            }
+        }
+
         let sample_rate_hz = options.sample_rate_hz.unwrap_or(48_000);
         let channels = options.channels.unwrap_or(1);
         let duration_secs = options.duration.as_secs().max(1);
