@@ -1,0 +1,7 @@
+target/
+**/*.rs.bk
+.DS_Store
+
+# local runtime artifacts
+recordings/*.wav
+!recordings/.gitkeep

@@ -1,0 +1,15 @@
+[station]
+callsign = "N0CALL"
+grid = "AA00"
+
+[audio]
+input_device = ""
+sample_rate_hz = 48000
+channels = 1
+
+[radio]
+backend = "none"
+
+[ai]
+enabled = false
+provider = "none"

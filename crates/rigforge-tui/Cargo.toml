@@ -1,0 +1,15 @@
+[package]
+name = "rigforge-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+rigforge-ai = { path = "../rigforge-ai" }
+rigforge-core = { path = "../rigforge-core" }
+rigforge-radio = { path = "../rigforge-radio" }
