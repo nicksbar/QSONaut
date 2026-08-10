@@ -51,6 +51,8 @@ impl AudioService {
     }
 
     pub fn capture_wav<P: AsRef<Path>>(&self, path: P, options: CaptureOptions) -> Result<CaptureSummary> {
+        self.preflight_audio_permissions()?;
+
         let sample_rate_hz = options.sample_rate_hz.unwrap_or(48_000);
         let channels = options.channels.unwrap_or(1);
         let duration_secs = options.duration.as_secs().max(1);
@@ -92,6 +94,22 @@ impl AudioService {
             peak_dbfs: amplitude_to_dbfs(stats.peak_abs),
             rms_dbfs: amplitude_to_dbfs(stats.rms()),
         })
+    }
+
+    fn preflight_audio_permissions(&self) -> Result<()> {
+        let probe = Path::new("/dev/snd/controlC0");
+        if probe.exists() {
+            match std::fs::File::open(probe) {
+                Ok(_) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => bail!(
+                    "no permission to access {}. Add your user to the 'audio' group and re-login/restart WSL",
+                    probe.display()
+                ),
+                Err(_) => Ok(()),
+            }
+        } else {
+            Ok(())
+        }
     }
 
     fn enumerate_from_proc_asound(&self) -> Result<Vec<AudioDevice>> {
