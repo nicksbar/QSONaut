@@ -11,7 +11,11 @@ eframe.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 rustfft.workspace = true
+serde.workspace = true
+toml.workspace = true
+mfsk-core = { path = "../../../mfsk-core/mfsk-core" }
 
 rigforge-audio = { path = "../rigforge-audio" }
+rigforge-dsp   = { path = "../rigforge-dsp" }
 rigforge-core = { path = "../rigforge-core" }
 rigforge-radio = { path = "../rigforge-radio" }

@@ -19,6 +19,13 @@ This repository is initialized to **M0 (Bootstrap)** as a Rust workspace with:
 - DSP and modes placeholders (`crates/rigforge-dsp`, `crates/rigforge-modes`)
 - AI provider abstraction (`crates/rigforge-ai`)
 
+Recent architecture update:
+
+- FT8 live decode path in GUI is now integrated with external modem backend `mfsk-core` (local path dependency during active development), replacing custom in-app decoder logic for the active mode.
+- Workspace mode tabs now cover the modem families being staged (`FT8/FT4/FST4/WSPR/JT9/JT65/Q65/MSK144`) plus `CW` and `FLDIGI` integration surfaces.
+- Decode log UX includes auto-follow toggle, configurable trimming, and clearer row grouping.
+- Operator profile inputs (callsign/grid/QTH) are now editable in-app and shared across modem workspaces.
+
 ## Architecture boundaries
 
 - **Realtime path:** device I/O, DSP, decoders, timing, radio control.
@@ -29,6 +36,11 @@ In practical terms: with AI disabled, RigForge remains fully functional.
 ## Repository context docs
 
 The `docs/` directory contains curated research imported from an adjacent project and should be treated as foundational context for protocol and radio-control implementation planning.
+
+See also:
+
+- `docs/external-modem-backends.md` for backend selection and integration strategy.
+- `docs/progress/2026-08-10-reactive-gui-audio-stability.md` for stability milestones.
 
 ## Run
 

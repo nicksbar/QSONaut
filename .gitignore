@@ -2,6 +2,7 @@ target/
 **/*.rs.bk
 .DS_Store
 .env
+.rigforge_profile.toml
 
 # local runtime artifacts
 recordings/*.wav

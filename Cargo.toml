@@ -32,3 +32,21 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "wayland"] }
 rustfft = "6"
+
+[profile.dev.package."mfsk-core"]
+opt-level = 3
+debug = false
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package."rigforge-dsp"]
+opt-level = 3
+debug = false
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package."rigforge-modes"]
+opt-level = 3
+debug = false
+debug-assertions = false
+overflow-checks = false

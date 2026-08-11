@@ -290,6 +290,19 @@ const ICOM_CIV_CONTROL_SPECS: &[CiVControlSpec] = &[
 ];
 
 impl IcomCiVRadio {
+        fn set_operating_mode_blocking(&self, base_mode: BaseMode, data_mode: bool, filter: u8) -> Result<()> {
+            let mode_byte = base_mode_to_civ_mode(base_mode)
+                .with_context(|| format!("unsupported base mode for CI-V set: {base_mode:?}"))?;
+            let filter = filter.clamp(1, 3);
+            let data_byte = if data_mode { 0x01 } else { 0x00 };
+            let _ = self.transact(&[0x26, 0x00, mode_byte, data_byte, filter], false)?;
+            Ok(())
+        }
+
+        pub async fn set_operating_mode_details(&self, base_mode: BaseMode, data_mode: bool, filter: u8) -> Result<()> {
+            self.set_operating_mode_blocking(base_mode, data_mode, filter)
+        }
+
     pub fn new(port: impl Into<String>, baud_rate: u32, address: u8) -> Self {
         Self {
             port: port.into(),
@@ -537,9 +550,11 @@ impl IcomCiVRadio {
     fn set_mode_blocking(&self, mode: Mode) -> Result<()> {
         match mode {
             Mode::Data => {
-                // USB-D baseline + DATA ON / FIL1
-                let _ = self.transact(&[0x06, 0x01], false)?;
-                let _ = self.transact(&[0x1A, 0x06, 0x01, 0x01], false)?;
+                let response = self.transact(&[0x26, 0x00], true)?;
+                let current_filter = parse_mode_details(&response)
+                    .and_then(|d| d.filter)
+                    .unwrap_or(1);
+                self.set_operating_mode_blocking(BaseMode::Usb, true, current_filter)?;
             }
             _ => {
                 let mode_byte = mode_to_civ_mode(mode)?;
