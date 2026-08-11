@@ -16,4 +16,4 @@ rigforge-audio = { path = "../../crates/rigforge-audio" }
 rigforge-core = { path = "../../crates/rigforge-core" }
 rigforge-log = { path = "../../crates/rigforge-log" }
 rigforge-radio = { path = "../../crates/rigforge-radio" }
-rigforge-tui = { path = "../../crates/rigforge-tui" }
+rigforge-gui = { path = "../../crates/rigforge-gui" }

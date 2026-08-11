@@ -1,0 +1,5 @@
+# Captured IC-7300 CI-V frames for 20m FT8 (USB-D)
+# line1: frequency response frame
+# line2: mode/data/filter response frame
+FE FE E0 94 03 00 40 07 14 00 FD
+FE FE E0 94 04 01 01 01 FD

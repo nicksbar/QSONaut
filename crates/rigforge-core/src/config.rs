@@ -30,6 +30,12 @@ pub struct RadioConfig {
     pub enabled: bool,
     pub backend: String,
     pub serial_port: Option<String>,
+    #[serde(default = "default_radio_baud_rate")]
+    pub baud_rate: u32,
+    #[serde(default = "default_radio_civ_address")]
+    pub civ_address: u8,
+    #[serde(default = "default_controller_civ_address")]
+    pub controller_civ_address: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +61,9 @@ impl Default for AppConfig {
                 enabled: true,
                 backend: "none".to_string(),
                 serial_port: None,
+                baud_rate: default_radio_baud_rate(),
+                civ_address: default_radio_civ_address(),
+                controller_civ_address: default_controller_civ_address(),
             },
             ai: AiConfig {
                 enabled: false,
@@ -116,6 +125,21 @@ impl AppConfig {
         if let Ok(port) = std::env::var("RIGFORGE_RADIO_SERIAL_PORT") {
             cfg.radio.serial_port = Some(port);
         }
+        if let Ok(baud) = std::env::var("RIGFORGE_RADIO_BAUD_RATE") {
+            if let Ok(parsed) = baud.parse::<u32>() {
+                cfg.radio.baud_rate = parsed;
+            }
+        }
+        if let Ok(addr) = std::env::var("RIGFORGE_RADIO_CIV_ADDRESS") {
+            if let Some(parsed) = parse_u8_flexible(&addr) {
+                cfg.radio.civ_address = parsed;
+            }
+        }
+        if let Ok(addr) = std::env::var("RIGFORGE_RADIO_CONTROLLER_CIV_ADDRESS") {
+            if let Some(parsed) = parse_u8_flexible(&addr) {
+                cfg.radio.controller_civ_address = parsed;
+            }
+        }
 
         Ok(cfg)
     }
@@ -123,4 +147,36 @@ impl AppConfig {
 
 fn parse_bool(value: &str) -> bool {
     matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+}
+
+fn default_radio_baud_rate() -> u32 {
+    115_200
+}
+
+fn default_radio_civ_address() -> u8 {
+    0x94
+}
+
+fn default_controller_civ_address() -> u8 {
+    0xE0
+}
+
+fn parse_u8_flexible(input: &str) -> Option<u8> {
+    let raw = input.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    if let Ok(v) = raw.parse::<u8>() {
+        return Some(v);
+    }
+
+    let lower = raw.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("0x") {
+        return u8::from_str_radix(rest, 16).ok();
+    }
+    if let Some(rest) = lower.strip_suffix('h') {
+        return u8::from_str_radix(rest, 16).ok();
+    }
+    u8::from_str_radix(&lower, 16).ok()
 }

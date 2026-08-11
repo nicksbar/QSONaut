@@ -13,7 +13,7 @@ This repository is initialized to **M0 (Bootstrap)** as a Rust workspace with:
 - App shell (`apps/rigforge`)
 - Core configuration + event bus (`crates/rigforge-core`)
 - Structured logging (`crates/rigforge-log`)
-- TUI shell scaffolding (`crates/rigforge-tui`)
+- Native GUI shell (`crates/rigforge-gui`)
 - Device/audio abstraction (`crates/rigforge-audio`)
 - Radio abstraction (`crates/rigforge-radio`)
 - DSP and modes placeholders (`crates/rigforge-dsp`, `crates/rigforge-modes`)
@@ -34,6 +34,12 @@ The `docs/` directory contains curated research imported from an adjacent projec
 
 ```text
 cargo run -p rigforge -- --help
+```
+
+Launch the native operator console (recommended):
+
+```text
+cargo run -p rigforge -- --gui
 ```
 
 ## Environment and hardware config
@@ -57,9 +63,12 @@ RIGFORGE_AUDIO_CHANNELS=1
 RIGFORGE_RADIO_ENABLED=true
 RIGFORGE_RADIO_BACKEND="none"
 RIGFORGE_RADIO_SERIAL_PORT="/dev/ttyUSB0"
+RIGFORGE_RADIO_BAUD_RATE=115200
 ```
 
 With `RIGFORGE_AUDIO_ENABLED=false` or `RIGFORGE_RADIO_ENABLED=false`, RigForge will stay functional without requiring those devices.
+
+Radio control defaults to `115200` baud unless overridden by `--radio-baud` or `RIGFORGE_RADIO_BAUD_RATE`.
 
 ## Stage 1 (current) quick checks
 

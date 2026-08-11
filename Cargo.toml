@@ -8,7 +8,7 @@ members = [
     "crates/rigforge-modes",
     "crates/rigforge-log",
     "crates/rigforge-ai",
-    "crates/rigforge-tui",
+    "crates/rigforge-gui",
 ]
 resolver = "2"
 
@@ -23,10 +23,12 @@ dotenvy = "0.15"
 anyhow = "1"
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
-hound = "3"
 serde = { version = "1", features = ["derive"] }
+serialport = "4"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "wayland"] }
+rustfft = "6"

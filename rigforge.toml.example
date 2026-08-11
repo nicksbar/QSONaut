@@ -12,6 +12,9 @@ channels = 1
 enabled = true
 backend = "none"
 serial_port = "/dev/ttyUSB0"
+baud_rate = 115200
+civ_address = 148
+controller_civ_address = 224
 
 [ai]
 enabled = false
