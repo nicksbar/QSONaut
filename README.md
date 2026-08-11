@@ -21,8 +21,9 @@ This repository is initialized to **M0 (Bootstrap)** as a Rust workspace with:
 
 Recent architecture update:
 
-- FT8 live decode path in GUI is now integrated with external modem backend `mfsk-core` (local path dependency during active development), replacing custom in-app decoder logic for the active mode.
-- Workspace mode tabs now cover the modem families being staged (`FT8/FT4/FST4/WSPR/JT9/JT65/Q65/MSK144`) plus `CW` and `FLDIGI` integration surfaces.
+- Native `mfsk-core` receive pipelines are active for FT8, FT4, FST4-60, WSPR, JT9, JT65, Q65-30A, and MSK144 with mode-specific UTC slot capture and decode tables.
+- Scheduled transmit synthesis is active for FT8, FT4, FST4-60, JT9, JT65, and Q65-30A. WSPR and MSK144 remain receive-only while their specialized operator controls are built.
+- CW and FLDIGI tabs are intentionally integration surfaces: CW still needs a keyer/decoder backend, while FLDIGI will use its external modem control interface.
 - Decode log UX includes auto-follow toggle, configurable trimming, and clearer row grouping.
 - Operator profile inputs (callsign/grid/QTH) are now editable in-app and shared across modem workspaces.
 - FT8 automatic operation supports standard QSO sequencing and deterministic caller selection by first decoded, strongest, weakest, or closest RX tone.
@@ -87,6 +88,9 @@ With `RIGFORGE_AUDIO_ENABLED=false` or `RIGFORGE_RADIO_ENABLED=false`, RigForge 
 Radio control defaults to `115200` baud unless overridden by `--radio-baud` or `RIGFORGE_RADIO_BAUD_RATE`.
 
 ## Stage 1 (current) quick checks
+
+For native Windows/Linux x86_64 and ARM64 builds, in-window device selection,
+and release artifact details, see [`docs/desktop-builds.md`](docs/desktop-builds.md).
 
 Discover audio capture devices:
 

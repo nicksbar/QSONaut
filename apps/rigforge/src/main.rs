@@ -167,6 +167,7 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let launch_gui_by_default = std::env::args_os().len() == 1;
     let cli = Cli::parse();
 
     rigforge_log::init("info")?;
@@ -380,7 +381,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    if cli.gui {
+    if cli.gui || launch_gui_by_default {
         let display_value = std::env::var("DISPLAY").ok();
         let wayland_value = std::env::var("WAYLAND_DISPLAY").ok();
 

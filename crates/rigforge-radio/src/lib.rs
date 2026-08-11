@@ -2,7 +2,6 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use serialport::SerialPort;
 use std::{
-    fs,
     io::ErrorKind,
     io::Read,
     io::Write,
@@ -183,16 +182,13 @@ impl Default for Mode {
 }
 
 pub fn enumerate_serial_ports() -> Result<Vec<String>> {
-    let mut ports = Vec::new();
-    for entry in fs::read_dir("/dev")? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with("ttyUSB") || name.starts_with("ttyACM") || name.starts_with("ttyS") {
-            ports.push(format!("/dev/{name}"));
-        }
-    }
+    let mut ports = serialport::available_ports()
+        .context("failed to enumerate serial ports")?
+        .into_iter()
+        .map(|port| port.port_name)
+        .collect::<Vec<_>>();
     ports.sort();
+    ports.dedup();
     Ok(ports)
 }
 
@@ -1740,4 +1736,3 @@ fn is_radio_to_controller_frame(frame: &[u8], radio_address: u8, controller_addr
         && frame.get(2).copied() == Some(controller_address)
         && frame.get(3).copied() == Some(radio_address)
 }
-

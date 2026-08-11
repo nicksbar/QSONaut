@@ -7,4 +7,5 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+cpal.workspace = true
 tokio.workspace = true

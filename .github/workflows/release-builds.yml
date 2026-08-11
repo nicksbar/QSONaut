@@ -1,0 +1,90 @@
+name: Release builds
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            artifact: rigforge-linux-x86_64
+            os: linux
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: rigforge-linux-arm64
+            os: linux
+          - name: Windows x86_64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            artifact: rigforge-windows-x86_64
+            os: windows
+          - name: Windows ARM64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            artifact: rigforge-windows-arm64
+            os: windows
+
+    steps:
+      # The application currently consumes mfsk-core as a sibling workspace.
+      - name: Check out RigForge
+        uses: actions/checkout@v6
+        with:
+          path: RigForge
+
+      - name: Check out mfsk-core
+        uses: actions/checkout@v6
+        with:
+          repository: jl1nie/mfsk-core
+          path: mfsk-core
+
+      - name: Install Linux native libraries
+        if: matrix.os == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build release binary
+        working-directory: RigForge
+        run: cargo build --release --target ${{ matrix.target }} -p rigforge
+
+      - name: Package Linux distribution
+        if: matrix.os == 'linux'
+        working-directory: RigForge
+        shell: bash
+        run: |
+          mkdir -p "dist/${{ matrix.artifact }}"
+          cp "target/${{ matrix.target }}/release/rigforge" "dist/${{ matrix.artifact }}/"
+          cp README.md rigforge.toml.example "dist/${{ matrix.artifact }}/"
+          tar -C dist -czf "dist/${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"
+
+      - name: Package Windows distribution
+        if: matrix.os == 'windows'
+        working-directory: RigForge
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "dist/${{ matrix.artifact }}" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/rigforge.exe" "dist/${{ matrix.artifact }}/"
+          Copy-Item README.md,rigforge.toml.example "dist/${{ matrix.artifact }}/"
+          Compress-Archive -Path "dist/${{ matrix.artifact }}/*" -DestinationPath "dist/${{ matrix.artifact }}.zip"
+
+      - name: Upload distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: RigForge/dist/${{ matrix.artifact }}.*
+          if-no-files-found: error
