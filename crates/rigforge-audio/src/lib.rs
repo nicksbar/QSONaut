@@ -60,8 +60,15 @@ impl AudioService {
             }
         }
 
-        let mut child = cmd.spawn().context("failed to spawn arecord for streaming capture")?;
-        let stdout = BufReader::new(child.stdout.take().context("arecord stdout was not captured")?);
+        let mut child = cmd
+            .spawn()
+            .context("failed to spawn arecord for streaming capture")?;
+        let stdout = BufReader::new(
+            child
+                .stdout
+                .take()
+                .context("arecord stdout was not captured")?,
+        );
 
         Ok(AudioStream {
             _child: child,
@@ -86,13 +93,14 @@ impl AudioService {
             Ok(())
         }
     }
-
 }
 
 impl AudioStream {
     pub fn read_chunk(&mut self, bytes_to_read: usize) -> Result<Vec<i16>> {
         let mut buf = vec![0u8; bytes_to_read];
-        self.stdout.read_exact(&mut buf).context("audio stream ended")?;
+        self.stdout
+            .read_exact(&mut buf)
+            .context("audio stream ended")?;
         decode_pcm_bytes_to_i16_samples(&buf, self.channels as usize)
             .context("failed to decode PCM audio bytes")
     }
@@ -102,18 +110,18 @@ fn decode_pcm_bytes_to_i16_samples(bytes: &[u8], channels: usize) -> Result<Vec<
     if channels == 0 {
         bail!("audio channel count must be positive");
     }
-    if bytes.len() % (2 * channels) != 0 {
+    if !bytes.len().is_multiple_of(2 * channels) {
         bail!("PCM byte length is not an even multiple of the sample size");
     }
 
     let mut out = Vec::with_capacity(bytes.len() / (2 * channels));
     for chunk in bytes.chunks_exact(2 * channels) {
-        let mut sample = 0i16;
+        let mut sample = 0i32;
         for frame in chunk.chunks_exact(2) {
             let raw = i16::from_le_bytes([frame[0], frame[1]]);
-            sample = sample.saturating_add(raw);
+            sample += i32::from(raw);
         }
-        out.push(sample / channels as i16);
+        out.push((sample / channels as i32) as i16);
     }
 
     Ok(out)
@@ -128,5 +136,12 @@ mod tests {
         let bytes = [0x00, 0x00, 0x00, 0x80, 0xFF, 0x7F, 0x00, 0xC0];
         let samples = decode_pcm_bytes_to_i16_samples(&bytes, 1).expect("mono PCM should decode");
         assert_eq!(samples, vec![0i16, -32768i16, 32767i16, -16384i16]);
+    }
+
+    #[test]
+    fn decode_pcm_bytes_to_i16_samples_averages_stereo_without_clipping() {
+        let bytes = [0xFF, 0x7F, 0xFF, 0x7F, 0x00, 0x80, 0x00, 0x80];
+        let samples = decode_pcm_bytes_to_i16_samples(&bytes, 2).expect("stereo PCM should decode");
+        assert_eq!(samples, vec![i16::MAX, i16::MIN]);
     }
 }

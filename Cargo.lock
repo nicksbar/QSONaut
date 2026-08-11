@@ -2200,6 +2200,7 @@ dependencies = [
  "rigforge-audio",
  "rigforge-core",
  "rigforge-dsp",
+ "rigforge-log",
  "rigforge-radio",
  "rustfft",
  "serde",
@@ -2213,6 +2214,8 @@ name = "rigforge-log"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "serde",
+ "toml",
  "tracing-subscriber",
 ]
 

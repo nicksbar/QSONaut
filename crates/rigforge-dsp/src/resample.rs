@@ -40,7 +40,9 @@ fn bessel_i0(x: f64) -> f64 {
         term *= hx / k as f64;
         term *= hx / k as f64;
         sum += term;
-        if term < 1e-15 { break; }
+        if term < 1e-15 {
+            break;
+        }
     }
     sum
 }
@@ -50,18 +52,30 @@ pub struct Decimator {
     buf: Vec<f32>,
     pos: usize,
     phase: usize,
-    input_rate: u32,
 }
 
 impl Decimator {
     pub fn new(input_rate: u32) -> Self {
-        assert_eq!(input_rate % 12_000, 0, "input rate must be a multiple of 12 kHz");
+        assert_eq!(
+            input_rate % 12_000,
+            0,
+            "input rate must be a multiple of 12 kHz"
+        );
         let factor = (input_rate / 12_000) as usize;
-        assert_eq!(factor, FACTOR, "only 4× decimation (48→12 kHz) is implemented");
-        Self { buf: vec![0.0; NTAPS], pos: 0, phase: 0, input_rate }
+        assert_eq!(
+            factor, FACTOR,
+            "only 4× decimation (48→12 kHz) is implemented"
+        );
+        Self {
+            buf: vec![0.0; NTAPS],
+            pos: 0,
+            phase: 0,
+        }
     }
 
-    pub fn output_rate(&self) -> u32 { 12_000 }
+    pub fn output_rate(&self) -> u32 {
+        12_000
+    }
 
     /// Process a chunk of input samples, returning one output sample per FACTOR inputs.
     pub fn process(&mut self, input: &[f32]) -> Vec<f32> {
@@ -102,7 +116,8 @@ mod tests {
             .map(|n| {
                 // Mixed tones + slight envelope to avoid trivial periodic alias.
                 let t = n as f32 / 48_000.0;
-                (2.0 * std::f32::consts::PI * 700.0 * t).sin() * (0.7 + 0.3 * (2.0 * std::f32::consts::PI * 2.0 * t).sin())
+                (2.0 * std::f32::consts::PI * 700.0 * t).sin()
+                    * (0.7 + 0.3 * (2.0 * std::f32::consts::PI * 2.0 * t).sin())
                     + 0.4 * (2.0 * std::f32::consts::PI * 1500.0 * t).sin()
             })
             .collect();
@@ -118,7 +133,10 @@ mod tests {
 
         assert_eq!(out_one.len(), out_chunked.len());
         for (a, b) in out_one.iter().zip(out_chunked.iter()) {
-            assert!((a - b).abs() < 1e-6, "chunked decimator mismatch: {a} vs {b}");
+            assert!(
+                (a - b).abs() < 1e-6,
+                "chunked decimator mismatch: {a} vs {b}"
+            );
         }
     }
 }

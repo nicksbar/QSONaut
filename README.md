@@ -25,6 +25,9 @@ Recent architecture update:
 - Workspace mode tabs now cover the modem families being staged (`FT8/FT4/FST4/WSPR/JT9/JT65/Q65/MSK144`) plus `CW` and `FLDIGI` integration surfaces.
 - Decode log UX includes auto-follow toggle, configurable trimming, and clearer row grouping.
 - Operator profile inputs (callsign/grid/QTH) are now editable in-app and shared across modem workspaces.
+- FT8 automatic operation supports standard QSO sequencing and deterministic caller selection by first decoded, strongest, weakest, or closest RX tone.
+- FT8 TX now confirms CI-V PTT before audio and applies configurable lead/tail timing with visible failure reporting.
+- Completed FT8 contacts are saved to an editable local QSO log with ADIF export for future service integrations.
 
 ## Architecture boundaries
 
@@ -69,6 +72,7 @@ Useful variables:
 ```text
 RIGFORGE_AUDIO_ENABLED=true
 RIGFORGE_AUDIO_INPUT_DEVICE="USB Audio CODEC"
+RIGFORGE_AUDIO_OUTPUT_DEVICE="USB Audio CODEC"
 RIGFORGE_AUDIO_SAMPLE_RATE_HZ=48000
 RIGFORGE_AUDIO_CHANNELS=1
 

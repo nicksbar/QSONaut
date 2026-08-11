@@ -21,6 +21,8 @@ pub struct StationConfig {
 pub struct AudioConfig {
     pub enabled: bool,
     pub input_device: Option<String>,
+    #[serde(default)]
+    pub output_device: Option<String>,
     pub sample_rate_hz: u32,
     pub channels: u8,
 }
@@ -54,6 +56,7 @@ impl Default for AppConfig {
             audio: AudioConfig {
                 enabled: true,
                 input_device: None,
+                output_device: None,
                 sample_rate_hz: 48_000,
                 channels: 1,
             },
@@ -105,6 +108,9 @@ impl AppConfig {
         if let Ok(device) = std::env::var("RIGFORGE_AUDIO_INPUT_DEVICE") {
             cfg.audio.input_device = Some(device);
         }
+        if let Ok(device) = std::env::var("RIGFORGE_AUDIO_OUTPUT_DEVICE") {
+            cfg.audio.output_device = Some(device);
+        }
         if let Ok(rate) = std::env::var("RIGFORGE_AUDIO_SAMPLE_RATE_HZ") {
             if let Ok(parsed) = rate.parse::<u32>() {
                 cfg.audio.sample_rate_hz = parsed;
@@ -146,7 +152,10 @@ impl AppConfig {
 }
 
 fn parse_bool(value: &str) -> bool {
-    matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 fn default_radio_baud_rate() -> u32 {
