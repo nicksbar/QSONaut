@@ -9,6 +9,8 @@ pub struct AppConfig {
     pub audio: AudioConfig,
     pub radio: RadioConfig,
     pub ai: AiConfig,
+    #[serde(default)]
+    pub contest: ContestProfile,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +48,64 @@ pub struct AiConfig {
     pub provider: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ContestOperatingMode {
+    #[default]
+    Run,
+    SearchAndPounce,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum SplitPolicy {
+    #[default]
+    Off,
+    Fake,
+    Rig,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum FoxHoundRole {
+    #[default]
+    Disabled,
+    Fox,
+    Hound,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContestProfile {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub operating_mode: ContestOperatingMode,
+    #[serde(default)]
+    pub split_policy: SplitPolicy,
+    #[serde(default)]
+    pub fox_hound_role: FoxHoundRole,
+    #[serde(default)]
+    pub exchange_template: Option<String>,
+    #[serde(default = "default_serial_start")]
+    pub serial_start: u32,
+    #[serde(default = "default_serial_step")]
+    pub serial_step: u32,
+    #[serde(default = "default_dupe_check")]
+    pub dupe_check: bool,
+}
+
+impl Default for ContestProfile {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            operating_mode: ContestOperatingMode::Run,
+            split_policy: SplitPolicy::Off,
+            fox_hound_role: FoxHoundRole::Disabled,
+            exchange_template: None,
+            serial_start: default_serial_start(),
+            serial_step: default_serial_step(),
+            dupe_check: default_dupe_check(),
+        }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -72,6 +132,7 @@ impl Default for AppConfig {
                 enabled: false,
                 provider: "none".to_string(),
             },
+            contest: ContestProfile::default(),
         }
     }
 }
@@ -100,6 +161,46 @@ impl AppConfig {
         }
         if let Ok(enabled) = std::env::var("QSONAUT_AI_ENABLED") {
             cfg.ai.enabled = parse_bool(&enabled);
+        }
+
+        if let Ok(enabled) = std::env::var("QSONAUT_CONTEST_ENABLED") {
+            cfg.contest.enabled = parse_bool(&enabled);
+        }
+        if let Ok(mode) = std::env::var("QSONAUT_CONTEST_OPERATING_MODE") {
+            if let Some(parsed) = parse_contest_operating_mode(&mode) {
+                cfg.contest.operating_mode = parsed;
+            }
+        }
+        if let Ok(split) = std::env::var("QSONAUT_CONTEST_SPLIT_POLICY") {
+            if let Some(parsed) = parse_split_policy(&split) {
+                cfg.contest.split_policy = parsed;
+            }
+        }
+        if let Ok(role) = std::env::var("QSONAUT_CONTEST_FOX_HOUND_ROLE") {
+            if let Some(parsed) = parse_fox_hound_role(&role) {
+                cfg.contest.fox_hound_role = parsed;
+            }
+        }
+        if let Ok(template) = std::env::var("QSONAUT_CONTEST_EXCHANGE_TEMPLATE") {
+            let trimmed = template.trim();
+            cfg.contest.exchange_template = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+        }
+        if let Ok(start) = std::env::var("QSONAUT_CONTEST_SERIAL_START") {
+            if let Ok(parsed) = start.parse::<u32>() {
+                cfg.contest.serial_start = parsed.max(1);
+            }
+        }
+        if let Ok(step) = std::env::var("QSONAUT_CONTEST_SERIAL_STEP") {
+            if let Ok(parsed) = step.parse::<u32>() {
+                cfg.contest.serial_step = parsed.max(1);
+            }
+        }
+        if let Ok(dupe_check) = std::env::var("QSONAUT_CONTEST_DUPE_CHECK") {
+            cfg.contest.dupe_check = parse_bool(&dupe_check);
         }
 
         if let Ok(enabled) = std::env::var("QSONAUT_AUDIO_ENABLED") {
@@ -170,6 +271,46 @@ fn default_controller_civ_address() -> u8 {
     0xE0
 }
 
+fn default_serial_start() -> u32 {
+    1
+}
+
+fn default_serial_step() -> u32 {
+    1
+}
+
+fn default_dupe_check() -> bool {
+    true
+}
+
+fn parse_contest_operating_mode(value: &str) -> Option<ContestOperatingMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "run" => Some(ContestOperatingMode::Run),
+        "snp" | "search" | "search_and_pounce" | "search-and-pounce" => {
+            Some(ContestOperatingMode::SearchAndPounce)
+        }
+        _ => None,
+    }
+}
+
+fn parse_split_policy(value: &str) -> Option<SplitPolicy> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "off" | "none" => Some(SplitPolicy::Off),
+        "fake" | "fake_split" | "fake-split" => Some(SplitPolicy::Fake),
+        "rig" | "rig_split" | "rig-split" => Some(SplitPolicy::Rig),
+        _ => None,
+    }
+}
+
+fn parse_fox_hound_role(value: &str) -> Option<FoxHoundRole> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "disabled" | "off" | "none" => Some(FoxHoundRole::Disabled),
+        "fox" => Some(FoxHoundRole::Fox),
+        "hound" => Some(FoxHoundRole::Hound),
+        _ => None,
+    }
+}
+
 fn parse_u8_flexible(input: &str) -> Option<u8> {
     let raw = input.trim();
     if raw.is_empty() {
@@ -188,4 +329,43 @@ fn parse_u8_flexible(input: &str) -> Option<u8> {
         return u8::from_str_radix(rest, 16).ok();
     }
     u8::from_str_radix(&lower, 16).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contest_profile_defaults_when_missing_from_toml() {
+        let src = r#"
+[station]
+callsign = "N0CALL"
+grid = "AA00"
+
+[audio]
+enabled = true
+sample_rate_hz = 48000
+channels = 1
+
+[radio]
+enabled = true
+backend = "none"
+
+[ai]
+enabled = false
+provider = "none"
+"#;
+
+        let cfg: AppConfig = toml::from_str(src).expect("config parse");
+        assert_eq!(cfg.contest, ContestProfile::default());
+    }
+
+    #[test]
+    fn app_config_serializes_contest_profile_section() {
+        let cfg = AppConfig::default();
+        let body = toml::to_string(&cfg).expect("serialize config");
+        assert!(body.contains("[contest]"));
+        assert!(body.contains("serial_start = 1"));
+        assert!(body.contains("dupe_check = true"));
+    }
 }

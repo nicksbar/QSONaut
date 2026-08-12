@@ -15,7 +15,14 @@ use qsonaut_accelerate::{
     AccelerationReport, ActiveBackend, ComputePreference, DecodeTelemetry, DecodeTrace,
 };
 use qsonaut_audio::{play_pcm_blocking, AudioService};
-use qsonaut_core::AppConfig;
+use qsonaut_automation::{
+    Action, AutomationEvent, AutomationHost, Capability, CapabilitySet, EventKind, RuleComponent,
+    RuleComponentConfig,
+};
+use qsonaut_core::{
+    AppConfig, AppEvent, AppEventBus, ContestOperatingMode, ContestProfile, FoxHoundRole,
+    SplitPolicy,
+};
 use qsonaut_dsp::resample::Decimator;
 use qsonaut_log::{app_config_dir, QsoLog, QsoRecord};
 use qsonaut_pskreporter::{ReceptionReport, ReportSender, Reporter, ReporterConfig};
@@ -25,7 +32,7 @@ use qsonaut_radio::{
 };
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::f32::consts::PI;
 use std::fs;
 use std::path::PathBuf;
@@ -34,6 +41,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::broadcast::error::TryRecvError;
 use tracing::{debug, info};
 
 const QSONAUT_ICON_PNG: &[u8] = include_bytes!("../../../assets/branding/qsonaut-icon.png");
@@ -52,7 +60,7 @@ const AUDIO_MAX_FREQ_HZ: u32 = 4_000;
 // 8192 samples @ 48 kHz = 170 ms window, ~5.9 Hz/bin, ~683 useful bins for 0-4 kHz.
 const FFT_SIZE: usize = 8192;
 const OPERATOR_PROFILE_FILE: &str = "profile.toml";
-const OPERATOR_PROFILE_VERSION: u32 = 4;
+const OPERATOR_PROFILE_VERSION: u32 = 5;
 const GUI_SCALE_BASE: f32 = 1.2;
 const GUI_SCALE_MAX: f32 = 2.0;
 const GUI_SCALE_MIN: f32 = 0.9;
@@ -222,6 +230,22 @@ struct OperatorProfile {
     compute_preference: ComputePreference,
     #[serde(default)]
     psk_reporter_enabled: bool,
+    #[serde(default)]
+    contest_enabled: bool,
+    #[serde(default)]
+    contest_operating_mode: ContestOperatingMode,
+    #[serde(default)]
+    contest_split_policy: SplitPolicy,
+    #[serde(default)]
+    contest_fox_hound_role: FoxHoundRole,
+    #[serde(default)]
+    contest_exchange_template: String,
+    #[serde(default = "default_contest_serial_start")]
+    contest_serial_start: u32,
+    #[serde(default = "default_contest_serial_step")]
+    contest_serial_step: u32,
+    #[serde(default = "default_contest_dupe_check")]
+    contest_dupe_check: bool,
 }
 
 fn default_gui_scale() -> f32 {
@@ -260,6 +284,156 @@ fn default_ptt_lead_ms() -> u64 {
 }
 fn default_ptt_tail_ms() -> u64 {
     100
+}
+
+fn default_contest_serial_start() -> u32 {
+    1
+}
+
+fn default_contest_serial_step() -> u32 {
+    1
+}
+
+fn default_contest_dupe_check() -> bool {
+    true
+}
+
+fn contest_operating_mode_label(mode: ContestOperatingMode) -> &'static str {
+    match mode {
+        ContestOperatingMode::Run => "run",
+        ContestOperatingMode::SearchAndPounce => "search_and_pounce",
+    }
+}
+
+fn split_policy_label(policy: SplitPolicy) -> &'static str {
+    match policy {
+        SplitPolicy::Off => "off",
+        SplitPolicy::Fake => "fake",
+        SplitPolicy::Rig => "rig",
+    }
+}
+
+fn fox_hound_role_label(role: FoxHoundRole) -> &'static str {
+    match role {
+        FoxHoundRole::Disabled => "disabled",
+        FoxHoundRole::Fox => "fox",
+        FoxHoundRole::Hound => "hound",
+    }
+}
+
+fn parse_automation_hook_detail(detail: &str) -> BTreeMap<String, String> {
+    detail
+        .split_whitespace()
+        .filter_map(|token| {
+            let (key, value) = token.split_once('=')?;
+            let key = key.trim();
+            if key.is_empty() {
+                return None;
+            }
+            Some((key.to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
+
+fn normalize_app_event_for_automation(event: AppEvent) -> Option<AutomationEvent> {
+    match event {
+        AppEvent::ContestProfileChanged {
+            enabled,
+            operating_mode,
+            split_policy,
+            fox_hound_role,
+        } => Some(
+            AutomationEvent::new(EventKind::ContestState, "app.contest_profile")
+                .field("enabled", enabled.to_string())
+                .field("operating_mode", operating_mode)
+                .field("split_policy", split_policy)
+                .field("fox_hound_role", fox_hound_role),
+        ),
+        AppEvent::CallsignHit {
+            mode,
+            call,
+            snr_db,
+            freq_hz,
+            message,
+            directed_to_me,
+        } => {
+            let event = AutomationEvent::new(EventKind::CallsignHit, "app.callsign_hit")
+                .field("mode", mode)
+                .field("call", call)
+                .field("snr", format!("{snr_db:+.1}"))
+                .field("freq_hz", freq_hz.to_string())
+                .field("message", message)
+                .field("directed_to_me", directed_to_me.to_string());
+            Some(if directed_to_me {
+                event.tag("directed_to_me")
+            } else {
+                event
+            })
+        }
+        AppEvent::QsoLogged {
+            mode,
+            call,
+            band,
+            frequency_hz,
+        } => Some(
+            AutomationEvent::new(EventKind::QsoLogged, "app.qso_log")
+                .field("mode", mode)
+                .field("call", call)
+                .field("band", band)
+                .field("frequency_hz", frequency_hz.to_string()),
+        ),
+        AppEvent::AutomationHook {
+            kind,
+            source,
+            detail,
+        } => {
+            let event_kind = match kind.as_str() {
+                "contest_state" => EventKind::ContestState,
+                "operator_profile" => EventKind::OperatorProfile,
+                "callsign_hit" => EventKind::CallsignHit,
+                "qso_logged" => EventKind::QsoLogged,
+                _ => return None,
+            };
+            let mut event = AutomationEvent::new(event_kind, source)
+                .field("kind", kind)
+                .field("detail", detail.clone());
+            for (key, value) in parse_automation_hook_detail(&detail) {
+                event = event.field(key, value);
+            }
+            Some(event)
+        }
+        _ => None,
+    }
+}
+
+fn bootstrap_automation_host() -> (AutomationHost, String) {
+    let mut host = AutomationHost::default();
+    let source = include_str!("../../../automation.example.toml");
+
+    match RuleComponentConfig::from_toml(source) {
+        Ok(config) => {
+            let component_id = config.component.id.clone();
+            if let Err(error) = host.register(RuleComponent::new(config)) {
+                return (
+                    host,
+                    format!("Automation host active, component registration failed: {error}"),
+                );
+            }
+
+            host.set_grants(
+                component_id.clone(),
+                CapabilitySet::new([Capability::UiNotification]),
+            );
+            (
+                host,
+                format!("Automation component loaded: {component_id} (granted: ui_notification)"),
+            )
+        }
+        Err(error) => (
+            host,
+            format!("Automation config parse failed; runtime hooks paused: {error}"),
+        ),
+    }
 }
 
 fn start_psk_reporter(
@@ -1390,6 +1564,10 @@ fn configure_unix_gui_environment() {
 
 struct QsonautGuiApp {
     config: AppConfig,
+    app_events: AppEventBus,
+    automation_event_rx: tokio::sync::broadcast::Receiver<AppEvent>,
+    automation_host: AutomationHost,
+    automation_status: String,
     state: Arc<Mutex<GuiState>>,
     command_tx: Option<mpsc::Sender<GuiCommand>>,
     worker_stop: Arc<AtomicBool>,
@@ -1469,6 +1647,14 @@ struct QsonautGuiApp {
     station_callsign: String,
     station_grid: String,
     station_qth: String,
+    contest_enabled: bool,
+    contest_operating_mode: ContestOperatingMode,
+    contest_split_policy: SplitPolicy,
+    contest_fox_hound_role: FoxHoundRole,
+    contest_exchange_template: String,
+    contest_serial_start: u32,
+    contest_serial_step: u32,
+    contest_dupe_check: bool,
     civ_spectrum_on: bool,
     rx_tone_hz: u32,
     tx_tone_hz: u32,
@@ -1527,6 +1713,9 @@ impl QsonautGuiApp {
         let (radio_serial_ports, radio_serial_port_labels, radio_detected_models) =
             radio_port_inventory(enumerate_serial_port_descriptors().unwrap_or_default());
         let state = Arc::new(Mutex::new(GuiState::default()));
+        let app_events = AppEventBus::new(256);
+        let automation_event_rx = app_events.subscribe();
+        let (automation_host, automation_status) = bootstrap_automation_host();
         let worker_stop = Arc::new(AtomicBool::new(false));
         let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
 
@@ -1617,6 +1806,15 @@ impl QsonautGuiApp {
         let mut gui_scale = default_gui_scale();
         let mut compute_preference = ComputePreference::Auto;
         let mut psk_reporter_enabled = false;
+        let mut contest_enabled = config.contest.enabled;
+        let mut contest_operating_mode = config.contest.operating_mode;
+        let mut contest_split_policy = config.contest.split_policy;
+        let mut contest_fox_hound_role = config.contest.fox_hound_role;
+        let mut contest_exchange_template =
+            config.contest.exchange_template.clone().unwrap_or_default();
+        let mut contest_serial_start = config.contest.serial_start.max(1);
+        let mut contest_serial_step = config.contest.serial_step.max(1);
+        let mut contest_dupe_check = config.contest.dupe_check;
         let profile_io_status: String;
 
         if let Some(p) = load_operator_profile() {
@@ -1659,8 +1857,30 @@ impl QsonautGuiApp {
             };
             compute_preference = p.compute_preference;
             psk_reporter_enabled = p.psk_reporter_enabled;
+            contest_enabled = p.contest_enabled;
+            contest_operating_mode = p.contest_operating_mode;
+            contest_split_policy = p.contest_split_policy;
+            contest_fox_hound_role = p.contest_fox_hound_role;
+            contest_exchange_template = p.contest_exchange_template;
+            contest_serial_start = p.contest_serial_start.max(1);
+            contest_serial_step = p.contest_serial_step.max(1);
+            contest_dupe_check = p.contest_dupe_check;
             config.station.callsign = Some(station_callsign.clone());
             config.station.grid = Some(station_grid.clone());
+            config.contest = ContestProfile {
+                enabled: contest_enabled,
+                operating_mode: contest_operating_mode,
+                split_policy: contest_split_policy,
+                fox_hound_role: contest_fox_hound_role,
+                exchange_template: if contest_exchange_template.trim().is_empty() {
+                    None
+                } else {
+                    Some(contest_exchange_template.trim().to_string())
+                },
+                serial_start: contest_serial_start,
+                serial_step: contest_serial_step,
+                dupe_check: contest_dupe_check,
+            };
             profile_io_status = format!("Loaded {}", OPERATOR_PROFILE_FILE);
         } else {
             let bootstrap = OperatorProfile {
@@ -1694,6 +1914,14 @@ impl QsonautGuiApp {
                 gui_scale,
                 compute_preference,
                 psk_reporter_enabled,
+                contest_enabled,
+                contest_operating_mode,
+                contest_split_policy,
+                contest_fox_hound_role,
+                contest_exchange_template: contest_exchange_template.trim().to_string(),
+                contest_serial_start,
+                contest_serial_step,
+                contest_dupe_check,
             };
             match save_operator_profile(&bootstrap) {
                 Ok(_) => {
@@ -1725,6 +1953,10 @@ impl QsonautGuiApp {
 
         Self {
             config,
+            app_events,
+            automation_event_rx,
+            automation_host,
+            automation_status,
             state,
             command_tx,
             worker_stop,
@@ -1803,6 +2035,14 @@ impl QsonautGuiApp {
             station_callsign,
             station_grid,
             station_qth,
+            contest_enabled,
+            contest_operating_mode,
+            contest_split_policy,
+            contest_fox_hound_role,
+            contest_exchange_template,
+            contest_serial_start,
+            contest_serial_step,
+            contest_dupe_check,
             civ_spectrum_on,
             rx_tone_hz,
             tx_tone_hz,
@@ -1875,6 +2115,14 @@ impl QsonautGuiApp {
                 .saturating_add(1);
         }
         self.qso_log.contacts.push(record);
+        if let Some(last) = self.qso_log.contacts.last() {
+            self.app_events.publish(AppEvent::QsoLogged {
+                mode: last.mode.clone(),
+                call: last.callsign.clone(),
+                band: last.band.clone(),
+                frequency_hz: last.frequency_hz,
+            });
+        }
         self.qso_selected = Some(self.qso_log.contacts.len() - 1);
         self.qso_log_dirty = true;
         self.persist_qso_log(status);
@@ -1967,6 +2215,24 @@ impl QsonautGuiApp {
             self.ft4_seen_decodes
                 .retain(|(period, _, _)| *period + 100 >= latest);
         }
+
+        let operator_call = self.station_callsign_or_default().to_string();
+        for entry in &fresh {
+            if let Some(hit) = operator_call_hit(&entry.message, &operator_call) {
+                let call = parse_message(&entry.message)
+                    .map(|parsed| parsed.from)
+                    .unwrap_or_default();
+                self.app_events.publish(AppEvent::CallsignHit {
+                    mode: "FT4".to_string(),
+                    call,
+                    snr_db: entry.snr_db,
+                    freq_hz: entry.freq_hz,
+                    message: entry.message.clone(),
+                    directed_to_me: hit == OperatorCallHit::DirectedToMe,
+                });
+            }
+        }
+
         if !self.ft4_autoseq || self.digital_tx_active.load(Ordering::Acquire) {
             return;
         }
@@ -2551,6 +2817,23 @@ impl QsonautGuiApp {
 
         let my_call = self.station_callsign_or_default().to_ascii_uppercase();
         let my_grid = self.station_grid_or_default().to_ascii_uppercase();
+
+        for entry in decodes {
+            if let Some(hit) = operator_call_hit(&entry.message, &my_call) {
+                let call = parse_message(&entry.message)
+                    .map(|parsed| parsed.from)
+                    .unwrap_or_default();
+                self.app_events.publish(AppEvent::CallsignHit {
+                    mode: "FT8".to_string(),
+                    call,
+                    snr_db: f32::from(entry.snr_db),
+                    freq_hz: entry.freq_hz,
+                    message: entry.message.clone(),
+                    directed_to_me: hit == OperatorCallHit::DirectedToMe,
+                });
+            }
+        }
+
         if my_call == "N0CALL" {
             self.ft8_seq_status = "Auto reply paused: set a valid operator callsign".to_string();
             return;
@@ -2689,6 +2972,14 @@ impl QsonautGuiApp {
             gui_scale: self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX),
             compute_preference: self.compute_preference,
             psk_reporter_enabled: self.psk_reporter_enabled,
+            contest_enabled: self.contest_enabled,
+            contest_operating_mode: self.contest_operating_mode,
+            contest_split_policy: self.contest_split_policy,
+            contest_fox_hound_role: self.contest_fox_hound_role,
+            contest_exchange_template: self.contest_exchange_template.trim().to_string(),
+            contest_serial_start: self.contest_serial_start.max(1),
+            contest_serial_step: self.contest_serial_step.max(1),
+            contest_dupe_check: self.contest_dupe_check,
         }
     }
 
@@ -2707,6 +2998,114 @@ impl QsonautGuiApp {
             "AA00"
         } else {
             v
+        }
+    }
+
+    fn emit_operator_profile_hook(&self, detail: impl Into<String>) {
+        self.app_events.publish(AppEvent::AutomationHook {
+            kind: "operator_profile".to_string(),
+            source: "gui.operator_profile".to_string(),
+            detail: detail.into(),
+        });
+    }
+
+    fn emit_contest_profile_hooks(&self) {
+        self.app_events.publish(AppEvent::ContestProfileChanged {
+            enabled: self.contest_enabled,
+            operating_mode: contest_operating_mode_label(self.contest_operating_mode).to_string(),
+            split_policy: split_policy_label(self.contest_split_policy).to_string(),
+            fox_hound_role: fox_hound_role_label(self.contest_fox_hound_role).to_string(),
+        });
+
+        self.app_events.publish(AppEvent::AutomationHook {
+            kind: "contest_state".to_string(),
+            source: "gui.contest_profile".to_string(),
+            detail: format!(
+                "enabled={} mode={} split={} role={} serial_start={} serial_step={} dupe_check={}",
+                self.contest_enabled,
+                contest_operating_mode_label(self.contest_operating_mode),
+                split_policy_label(self.contest_split_policy),
+                fox_hound_role_label(self.contest_fox_hound_role),
+                self.contest_serial_start,
+                self.contest_serial_step,
+                self.contest_dupe_check
+            ),
+        });
+    }
+
+    fn pump_automation_events(&mut self) {
+        loop {
+            match self.automation_event_rx.try_recv() {
+                Ok(app_event) => {
+                    let Some(event) = normalize_app_event_for_automation(app_event) else {
+                        continue;
+                    };
+                    let report = self.automation_host.dispatch(&event);
+
+                    for approved in &report.approved {
+                        match &approved.action {
+                            Action::Notify {
+                                title,
+                                body,
+                                accent,
+                            } => {
+                                let accent = accent.as_deref().unwrap_or("default");
+                                self.automation_status =
+                                    format!("🤖 {title} — {body} (accent: {accent})");
+                            }
+                            Action::SetCompose { mode, message } => {
+                                let normalized_mode = mode.trim().to_ascii_uppercase();
+                                if normalized_mode == "FT8" {
+                                    self.ft8_compose = message.clone();
+                                    self.automation_status =
+                                        "🤖 Automation prepared FT8 compose text".to_string();
+                                } else {
+                                    self.digital_compose = message.clone();
+                                    self.automation_status = format!(
+                                        "🤖 Automation prepared {} compose text",
+                                        normalized_mode
+                                    );
+                                }
+                            }
+                            Action::SendExternal { source, target, .. } => {
+                                self.automation_status = format!(
+                                    "🤖 External send approved for {source} -> {target}, adapter execution pending"
+                                );
+                            }
+                            Action::RadioCommand { command, value } => {
+                                self.automation_status = format!(
+                                    "🤖 Radio command approved ({command}={value}), safety executor wiring pending"
+                                );
+                            }
+                            Action::RequestTransmit { mode, .. } => {
+                                self.automation_status = format!(
+                                    "🤖 TX request approved for {mode}, safety executor wiring pending"
+                                );
+                            }
+                        }
+                    }
+
+                    if !report.denied.is_empty() {
+                        self.automation_status = format!(
+                            "🤖 Automation denied {} action(s) (capability not granted/requested)",
+                            report.denied.len()
+                        );
+                    }
+                    if let Some(error) = report.errors.first() {
+                        self.automation_status = format!("🤖 Automation component error: {error}");
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Lagged(skipped)) => {
+                    self.automation_status =
+                        format!("🤖 Automation event stream lagged; skipped {skipped} event(s)");
+                }
+                Err(TryRecvError::Closed) => {
+                    self.automation_status =
+                        "🤖 Automation event stream closed; restart required".to_string();
+                    break;
+                }
+            }
         }
     }
 
@@ -2745,6 +3144,10 @@ impl QsonautGuiApp {
                 self.restart_psk_reporter();
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
+                self.emit_operator_profile_hook(format!(
+                    "callsign_changed={}",
+                    self.station_callsign_or_default()
+                ));
             }
 
             ui.label(RichText::new("Grid").strong());
@@ -2767,6 +3170,10 @@ impl QsonautGuiApp {
                 self.restart_psk_reporter();
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
+                self.emit_operator_profile_hook(format!(
+                    "grid_changed={}",
+                    self.station_grid_or_default()
+                ));
             }
         });
 
@@ -2783,8 +3190,159 @@ impl QsonautGuiApp {
             if qth_changed {
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
+                self.emit_operator_profile_hook("qth_changed");
             }
         });
+
+        ui.add_space(8.0);
+        egui::CollapsingHeader::new("🏁 Contest profile")
+            .default_open(false)
+            .show(ui, |ui| {
+                if ui
+                    .checkbox(&mut self.contest_enabled, "Enable contest workflow profile")
+                    .changed()
+                {
+                    self.config.contest.enabled = self.contest_enabled;
+                    self.profile_dirty = true;
+                    self.persist_profile("Auto-saved");
+                    self.emit_contest_profile_hooks();
+                }
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Operating mode");
+                    egui::ComboBox::from_id_salt("contest_operating_mode")
+                        .selected_text(match self.contest_operating_mode {
+                            ContestOperatingMode::Run => "Run",
+                            ContestOperatingMode::SearchAndPounce => "Search & Pounce",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.contest_operating_mode,
+                                ContestOperatingMode::Run,
+                                "Run",
+                            );
+                            ui.selectable_value(
+                                &mut self.contest_operating_mode,
+                                ContestOperatingMode::SearchAndPounce,
+                                "Search & Pounce",
+                            );
+                        });
+
+                    ui.label("Split policy");
+                    egui::ComboBox::from_id_salt("contest_split_policy")
+                        .selected_text(match self.contest_split_policy {
+                            SplitPolicy::Off => "Off",
+                            SplitPolicy::Fake => "Fake split",
+                            SplitPolicy::Rig => "Rig split",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.contest_split_policy,
+                                SplitPolicy::Off,
+                                "Off",
+                            );
+                            ui.selectable_value(
+                                &mut self.contest_split_policy,
+                                SplitPolicy::Fake,
+                                "Fake split",
+                            );
+                            ui.selectable_value(
+                                &mut self.contest_split_policy,
+                                SplitPolicy::Rig,
+                                "Rig split",
+                            );
+                        });
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Fox/Hound");
+                    egui::ComboBox::from_id_salt("contest_fox_hound")
+                        .selected_text(match self.contest_fox_hound_role {
+                            FoxHoundRole::Disabled => "Disabled",
+                            FoxHoundRole::Fox => "Fox",
+                            FoxHoundRole::Hound => "Hound",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.contest_fox_hound_role,
+                                FoxHoundRole::Disabled,
+                                "Disabled",
+                            );
+                            ui.selectable_value(
+                                &mut self.contest_fox_hound_role,
+                                FoxHoundRole::Fox,
+                                "Fox",
+                            );
+                            ui.selectable_value(
+                                &mut self.contest_fox_hound_role,
+                                FoxHoundRole::Hound,
+                                "Hound",
+                            );
+                        });
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Exchange template");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.contest_exchange_template)
+                            .desired_width(260.0)
+                            .hint_text("e.g. 5NN ${serial}"),
+                    );
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Serial start");
+                    ui.add(egui::DragValue::new(&mut self.contest_serial_start).range(1..=999_999));
+                    ui.label("Step");
+                    ui.add(egui::DragValue::new(&mut self.contest_serial_step).range(1..=100));
+                    ui.checkbox(&mut self.contest_dupe_check, "Dupe check");
+                });
+
+                self.contest_serial_start = self.contest_serial_start.max(1);
+                self.contest_serial_step = self.contest_serial_step.max(1);
+
+                if self.config.contest.enabled != self.contest_enabled
+                    || self.config.contest.operating_mode != self.contest_operating_mode
+                    || self.config.contest.split_policy != self.contest_split_policy
+                    || self.config.contest.fox_hound_role != self.contest_fox_hound_role
+                    || self
+                        .config
+                        .contest
+                        .exchange_template
+                        .as_deref()
+                        .unwrap_or_default()
+                        != self.contest_exchange_template.trim()
+                    || self.config.contest.serial_start != self.contest_serial_start
+                    || self.config.contest.serial_step != self.contest_serial_step
+                    || self.config.contest.dupe_check != self.contest_dupe_check
+                {
+                    self.config.contest = ContestProfile {
+                        enabled: self.contest_enabled,
+                        operating_mode: self.contest_operating_mode,
+                        split_policy: self.contest_split_policy,
+                        fox_hound_role: self.contest_fox_hound_role,
+                        exchange_template: if self.contest_exchange_template.trim().is_empty() {
+                            None
+                        } else {
+                            Some(self.contest_exchange_template.trim().to_string())
+                        },
+                        serial_start: self.contest_serial_start,
+                        serial_step: self.contest_serial_step,
+                        dupe_check: self.contest_dupe_check,
+                    };
+                    self.profile_dirty = true;
+                    self.persist_profile("Auto-saved");
+                    self.emit_contest_profile_hooks();
+                }
+
+                ui.label(
+                    RichText::new(
+                        "Automation hook targets: contest_state + operator_profile events",
+                    )
+                    .small()
+                    .color(Color32::GRAY),
+                );
+            });
 
         ui.add_space(6.0);
         let changed = ui
@@ -2800,6 +3358,10 @@ impl QsonautGuiApp {
             self.restart_psk_reporter();
             self.profile_dirty = true;
             self.persist_profile("PSK Reporter preference saved to");
+            self.emit_operator_profile_hook(format!(
+                "psk_reporter_enabled={}",
+                self.psk_reporter_enabled
+            ));
         }
         if self.psk_reporter_enabled {
             if let Some(reporter) = &self.psk_reporter {
@@ -2830,6 +3392,12 @@ impl QsonautGuiApp {
         }
 
         ui.add_space(4.0);
+        ui.label(
+            RichText::new(&self.automation_status)
+                .small()
+                .color(Color32::from_rgb(158, 217, 255)),
+        );
+        ui.add_space(2.0);
         ui.label(
             RichText::new(&self.profile_io_status)
                 .small()
@@ -5860,6 +6428,7 @@ impl eframe::App for QsonautGuiApp {
         }
         self.process_ft8_tx_pipeline();
         self.process_native_digital_tx_pipeline();
+        self.pump_automation_events();
         let (ft4_decodes, latest_ft4_period) = {
             let shared = self.state.lock().expect("ui state lock poisoned");
             (
@@ -8418,6 +8987,27 @@ mod tests {
     }
 
     #[test]
+    fn ft8_slot_gate_honors_adaptive_decode_threshold() {
+        let mut gate = Ft8SlotGate::default();
+
+        assert!(!gate.observe_at(700, 13.0, 13.8, true));
+        assert!(!gate.observe_at(701, 0.1, 13.8, false));
+        assert!(!gate.observe_at(701, 13.79, 13.8, true));
+        assert!(gate.observe_at(701, 13.8, 13.8, true));
+        assert!(!gate.observe_at(701, 14.2, 13.8, true));
+    }
+
+    #[test]
+    fn ft8_slot_gate_waits_for_buffer_readiness_at_decode_time() {
+        let mut gate = Ft8SlotGate::default();
+
+        assert!(!gate.observe_at(800, 13.0, 13.2, true));
+        assert!(!gate.observe_at(801, 0.0, 13.2, false));
+        assert!(!gate.observe_at(801, 13.2, 13.2, false));
+        assert!(gate.observe_at(801, 13.25, 13.2, true));
+    }
+
+    #[test]
     fn digital_slot_gate_requires_a_complete_period_after_startup() {
         let mut gate = DigitalSlotGate::default();
         assert!(!gate.boundary(10, true));
@@ -8425,6 +9015,33 @@ mod tests {
         assert!(!gate.boundary(11, false));
         assert!(gate.boundary(12, true));
         assert!(!gate.boundary(12, true));
+    }
+
+    #[test]
+    fn digital_slot_gate_reset_requires_new_boundary_again() {
+        let mut gate = DigitalSlotGate::default();
+        assert!(!gate.boundary(10, true));
+        assert!(gate.boundary(11, true));
+        gate.reset();
+        assert!(!gate.boundary(20, true));
+        assert!(gate.boundary(21, true));
+    }
+
+    #[test]
+    fn phase1_target_modes_have_slot_and_decoder_support() {
+        let targets = [WorkspaceMode::Ft8, WorkspaceMode::Ft4, WorkspaceMode::Jt9];
+        for mode in targets {
+            assert!(
+                mode.core_slot_seconds().is_some(),
+                "{} should define slot timing",
+                mode.label()
+            );
+            assert!(
+                mode.has_native_decoder(),
+                "{} should have a native decoder path",
+                mode.label()
+            );
+        }
     }
 
     #[test]
@@ -8469,6 +9086,38 @@ mod tests {
             .digital_decodes
             .iter()
             .any(|entry| entry.message == "CQ W1AW AA00"));
+    }
+
+    #[test]
+    fn jt9_workspace_adapter_decodes_generated_audio() {
+        let (pcm, offset_s) =
+            build_native_digital_tx_pcm(WorkspaceMode::Jt9, "CQ W1AW AA00", 1_500)
+                .expect("JT9 synthesis");
+        let slot_samples = (60.0 * 12_000.0) as usize;
+        let mut slot = vec![0.0f32; slot_samples];
+        let start = (offset_s * 12_000.0) as usize;
+        for (dst, sample) in slot[start..].iter_mut().zip(pcm) {
+            *dst = sample as f32 / i16::MAX as f32;
+        }
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        run_native_digital_decode(
+            WorkspaceMode::Jt9,
+            slot,
+            10,
+            "00:10:00.000".to_string(),
+            1_500,
+            false,
+            state.clone(),
+        );
+        let shared = state.lock().expect("state");
+        assert!(
+            shared.digital_decodes.iter().any(|entry| {
+                entry.mode == WorkspaceMode::Jt9
+                    && entry.message.contains("W1AW")
+                    && entry.message.contains("AA00")
+            }),
+            "JT9 decode did not surface expected callsign/grid payload"
+        );
     }
 
     #[test]
@@ -8563,6 +9212,43 @@ mod tests {
         assert!(
             messages.iter().any(|message| message == "CQ W1AW AA00"),
             "early decode messages: {messages:?}"
+        );
+    }
+
+    #[test]
+    fn parse_automation_hook_detail_extracts_key_value_pairs() {
+        let fields = parse_automation_hook_detail(
+            "enabled=true mode=run split=fake role=hound serial_start=1",
+        );
+        assert_eq!(fields.get("enabled").map(String::as_str), Some("true"));
+        assert_eq!(fields.get("mode").map(String::as_str), Some("run"));
+        assert_eq!(fields.get("split").map(String::as_str), Some("fake"));
+        assert_eq!(fields.get("role").map(String::as_str), Some("hound"));
+        assert_eq!(fields.get("serial_start").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn normalize_contest_profile_event_for_automation() {
+        let event = normalize_app_event_for_automation(AppEvent::ContestProfileChanged {
+            enabled: true,
+            operating_mode: "run".to_string(),
+            split_policy: "off".to_string(),
+            fox_hound_role: "disabled".to_string(),
+        })
+        .expect("automation event");
+
+        assert_eq!(event.kind, EventKind::ContestState);
+        assert_eq!(
+            event.fields.get("enabled").map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            event.fields.get("operating_mode").map(String::as_str),
+            Some("run")
+        );
+        assert_eq!(
+            event.fields.get("split_policy").map(String::as_str),
+            Some("off")
         );
     }
 }

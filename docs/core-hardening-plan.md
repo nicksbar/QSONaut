@@ -39,16 +39,38 @@ Date: 2026-08-12
    - QSO log + ADIF export exist.
    - Missing robust import/validation pipeline and contest-oriented fields/workflows.
 
+### Upstream implementation references (WSJT-X)
+
+To avoid cargo-culting and keep behavior explainable, align hardening decisions with WSJT-X decode flow checkpoints:
+
+- FT8 decode staging and early/full pass behavior:
+  - `lib/ft8_decode.f90`
+  - candidate search + decode core: `lib/ft8/sync8.f90`, `lib/ft8/bpdecode174_91.f90`
+- FT4 multi-pass/AP logic and candidate handling:
+  - `lib/ft4_decode.f90`
+  - candidate/sync internals: `lib/ft4/getcandidates4.f90`, `lib/ft4/sync4d.f90`
+- JT9 decode entry and soft-symbol/fano path:
+  - `lib/jt9_decode.f90`
+  - sync core: `lib/jt9sync.f90`
+- Global decoder orchestration and per-mode callback accounting:
+  - `lib/decoder.f90` (`multimode_decoder`)
+
+Reference clone used for this milestone work:
+
+- SourceForge mirror head: `b4f9a43`
+- Remote: `https://git.code.sf.net/p/wsjt/wsjtx`
+
 ---
 
 ## Milestone checklist (make-it-solid list)
 
 ## A) Core mode reliability + test matrix (FT8/FT4/JT9)
 
-- [ ] Define explicit reliability SLOs for FT8/FT4/JT9
+- [x] Define explicit reliability SLOs for FT8/FT4/JT9
   - Decode cadence, slot timing tolerance, max missed-slot rate, and TX trigger correctness.
-- [ ] Build mode matrix document with expected behavior per mode
+- [x] Build mode matrix document with expected behavior per mode
   - RX only vs RX/TX, timing model, decode path, status messages, and fallbacks.
+  - Initial artifact: `docs/core-mode-reliability-matrix.md`
 - [ ] Expand test coverage with scenario-focused tests
   - Boundary timing tests, startup mid-slot behavior, TX-slot skip behavior, deferred decode behavior.
 - [ ] Add deterministic regression fixtures
@@ -97,6 +119,21 @@ Acceptance criteria:
 - Import/export round-trip tests pass for representative ADIF samples.
 - Contest QSOs preserve exchange fidelity in both internal log and ADIF export.
 
+## D) Automation hooks (cross-cutting)
+
+- [x] Publish automation events for contest/profile state transitions
+  - `contest_state` and `operator_profile` event streams should be emitted with stable fields.
+  - Status: event kinds and app events added; GUI now emits hook events on profile/contest changes.
+- [x] Connect GUI event stream to runtime automation host
+  - GUI owns `AutomationHost`, normalizes app events, and dispatches rule components.
+  - Status: runtime dispatch active for contest/profile plus structured `callsign_hit` and `qso_logged` events.
+- [ ] Map approved automation actions to existing safety gates
+  - TX/radio-control actions must respect global disarm/armed guardrails.
+  - Status: only `ui_notification` grant is enabled by default; radio/TX executors still pending safety-gated wiring.
+- [x] Add sample automation recipes for contest workflow assists
+  - Examples: serial nudge notifications, dupe warnings, Run↔S&P context prompts.
+  - Status: `automation.example.toml` includes a contest-state activation notification rule.
+
 ---
 
 ## Delivery order (single milestone PR with internal phases)
@@ -120,6 +157,12 @@ Acceptance criteria:
 
 ## Immediate next implementation steps
 
-- [ ] Create `ContestProfile` data model + persistence stubs
-- [ ] Add mode reliability test harness scaffolding for FT8/FT4/JT9
+- [x] Create `ContestProfile` data model + persistence stubs
+  - Added in `crates/qsonaut-core/src/config.rs` with defaults, env overrides, and tests.
+- [x] Add mode reliability test harness scaffolding for FT8/FT4/JT9
+  - Added/extended tests in `crates/qsonaut-gui/src/lib.rs`:
+    - `phase1_target_modes_have_slot_and_decoder_support`
+    - `jt9_workspace_adapter_decodes_generated_audio`
+- [x] Publish initial core reliability matrix + SLO draft
+  - `docs/core-mode-reliability-matrix.md`
 - [ ] Add backlog labels/checklist into milestone PR description

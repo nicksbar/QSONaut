@@ -15,6 +15,8 @@ pub enum EventKind {
     CallsignHit,
     QsoLogged,
     RadioState,
+    ContestState,
+    OperatorProfile,
     Command,
     ExternalMessage,
     Timer,
@@ -513,6 +515,10 @@ mod tests {
         let source = include_str!("../../../automation.example.toml");
         let config = RuleComponentConfig::from_toml(source).unwrap();
         assert_eq!(config.sources.len(), 2);
-        assert_eq!(config.rules.len(), 2);
+        assert_eq!(config.rules.len(), 3);
+        assert!(config
+            .component
+            .subscriptions
+            .contains(&EventKind::ContestState));
     }
 }
