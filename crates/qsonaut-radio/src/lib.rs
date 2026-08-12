@@ -891,6 +891,51 @@ impl IcomCiVRadio {
         Ok(())
     }
 
+    pub async fn set_scope_center_fixed_mode(&self, fixed_mode: bool) -> Result<()> {
+        // 0x00=Center mode, 0x01=Fixed mode
+        let value = if fixed_mode { 0x01 } else { 0x00 };
+        let _ = self.transact(&[0x27, 0x14, value], false)?;
+        Ok(())
+    }
+
+    pub async fn set_scope_fixed_edge_number(&self, edge_number: u8) -> Result<()> {
+        // 0x01..0x03 => edge presets 1..3.
+        let value = edge_number.clamp(1, 3);
+        let _ = self.transact(&[0x27, 0x16, value], false)?;
+        Ok(())
+    }
+
+    pub async fn set_scope_fixed_edge_frequencies(
+        &self,
+        edge_number: u8,
+        lower_hz: u64,
+        upper_hz: u64,
+    ) -> Result<()> {
+        // 100 Hz and smaller digits are ignored by the radio.
+        let mut payload = Vec::with_capacity(2 + 1 + 5 + 5);
+        payload.push(0x27);
+        payload.push(0x1E);
+        payload.push(edge_number.clamp(1, 3));
+        payload.extend_from_slice(&encode_civ_frequency_bcd(lower_hz));
+        payload.extend_from_slice(&encode_civ_frequency_bcd(upper_hz));
+        let _ = self.transact(&payload, false)?;
+        Ok(())
+    }
+
+    pub async fn set_scope_span_code(&self, span_code: u8) -> Result<()> {
+        // 0x00..0x07 => 2.5k,5k,10k,25k,50k,100k,250k,500k
+        let value = span_code.min(7);
+        let _ = self.transact(&[0x27, 0x15, value], false)?;
+        Ok(())
+    }
+
+    pub async fn set_scope_vbw_wide(&self, wide: bool) -> Result<()> {
+        // 0x00=Narrow, 0x01=Wide
+        let value = if wide { 0x01 } else { 0x00 };
+        let _ = self.transact(&[0x27, 0x1D, value], false)?;
+        Ok(())
+    }
+
     fn request_scope_waveform_bins_blocking(&self) -> Result<Vec<u8>> {
         let frame = self.build_frame_payload(&[0x27, 0x00]);
         let mut last_response = Vec::new();
@@ -1683,6 +1728,21 @@ mod tests {
         assert_eq!(
             encode_civ_frequency_bcd(14_074_000),
             [0x00, 0x40, 0x07, 0x14, 0x00]
+        );
+    }
+
+    #[test]
+    fn encodes_fixed_scope_edge_frequencies() {
+        let mut payload = Vec::new();
+        payload.push(0x27);
+        payload.push(0x1E);
+        payload.push(0x01);
+        payload.extend_from_slice(&encode_civ_frequency_bcd(14_000_000));
+        payload.extend_from_slice(&encode_civ_frequency_bcd(14_350_000));
+
+        assert_eq!(
+            payload,
+            vec![0x27, 0x1E, 0x01, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x35, 0x14, 0x00,]
         );
     }
 

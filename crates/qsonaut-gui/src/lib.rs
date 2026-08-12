@@ -54,8 +54,8 @@ const FFT_SIZE: usize = 8192;
 const OPERATOR_PROFILE_FILE: &str = "profile.toml";
 const OPERATOR_PROFILE_VERSION: u32 = 4;
 const GUI_SCALE_BASE: f32 = 1.2;
-const GUI_SCALE_MIN: f32 = 0.9;
 const GUI_SCALE_MAX: f32 = 2.0;
+const GUI_SCALE_MIN: f32 = 0.9;
 const QSO_LOG_FILE: &str = "log.toml";
 const QSO_ADIF_FILE: &str = "log.adi";
 const LEGACY_OPERATOR_PROFILE_FILE: &str = ".rigforge_profile.toml";
@@ -363,6 +363,23 @@ enum WaterfallSpeed {
     Slow,
     Mid,
     Fast,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RadioScopeView {
+    If,
+    Overview,
+}
+
+type RadioScopeStreamConfig = (RadioScopeView, bool, u8, bool, Option<(u64, u64)>);
+
+impl RadioScopeView {
+    fn label(self) -> &'static str {
+        match self {
+            RadioScopeView::If => "IF",
+            RadioScopeView::Overview => "OVERVIEW",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1156,6 +1173,10 @@ struct GuiState {
     radio_waterfall_revision: u64,
     radio_scope_auto_contrast: bool,
     radio_scope_contrast: f32,
+    radio_scope_fixed_mode: bool,
+    radio_scope_span_code: u8,
+    radio_scope_vbw_wide: bool,
+    radio_scope_view: RadioScopeView,
     audio_spectrum_status: String,
     audio_waterfall_rows: VecDeque<Vec<u8>>,
     audio_waterfall_revision: u64,
@@ -1198,8 +1219,12 @@ impl Default for GuiState {
             radio_waterfall_status: "OFF".to_string(),
             radio_waterfall_rows: VecDeque::with_capacity(RADIO_WF_HEIGHT),
             radio_waterfall_revision: 0,
-            radio_scope_auto_contrast: true,
-            radio_scope_contrast: 1.6,
+            radio_scope_auto_contrast: false,
+            radio_scope_contrast: 1.2,
+            radio_scope_fixed_mode: false,
+            radio_scope_span_code: 0,
+            radio_scope_vbw_wide: false,
+            radio_scope_view: RadioScopeView::If,
             audio_spectrum_status: "INIT".to_string(),
             audio_waterfall_rows: VecDeque::with_capacity(AUDIO_WF_HEIGHT),
             audio_waterfall_revision: 0,
@@ -1373,6 +1398,7 @@ struct QsonautGuiApp {
     radio_waterfall_texture: Option<TextureHandle>,
     radio_waterfall_texture_revision: u64,
     radio_waterfall_texture_bins: usize,
+    radio_waterfall_texture_view: RadioScopeView,
     audio_waterfall_texture: Option<TextureHandle>,
     audio_waterfall_texture_revision: u64,
     audio_waterfall_texture_bins: usize,
@@ -1457,6 +1483,11 @@ struct QsonautGuiApp {
     radio_detected_models: Vec<String>,
     radio_scope_auto_contrast: bool,
     radio_scope_contrast: f32,
+    radio_scope_fixed_mode: bool,
+    radio_scope_span_code: u8,
+    radio_scope_vbw_wide: bool,
+    radio_scope_view: RadioScopeView,
+    radio_scope_lock_if_to_filter: bool,
     show_signal_panel: bool,
     show_device_settings: bool,
     device_restart_required: bool,
@@ -1702,6 +1733,7 @@ impl QsonautGuiApp {
             radio_waterfall_texture: None,
             radio_waterfall_texture_revision: 0,
             radio_waterfall_texture_bins: 0,
+            radio_waterfall_texture_view: RadioScopeView::If,
             audio_waterfall_texture: None,
             audio_waterfall_texture_revision: 0,
             audio_waterfall_texture_bins: 0,
@@ -1783,8 +1815,13 @@ impl QsonautGuiApp {
             radio_serial_ports,
             radio_serial_port_labels,
             radio_detected_models,
-            radio_scope_auto_contrast: true,
-            radio_scope_contrast: 1.6,
+            radio_scope_auto_contrast: false,
+            radio_scope_contrast: 1.2,
+            radio_scope_fixed_mode: false,
+            radio_scope_span_code: 0,
+            radio_scope_vbw_wide: false,
+            radio_scope_view: RadioScopeView::If,
+            radio_scope_lock_if_to_filter: true,
             show_signal_panel: true,
             show_device_settings: false,
             device_restart_required: false,
@@ -3465,73 +3502,191 @@ impl QsonautGuiApp {
         ctx: &egui::Context,
         snapshot: &GuiState,
     ) {
-        ui.heading("Radio Waterfall (CI-V Scope · RF/IF view)");
+        ui.heading("Radio Waterfall (IF/AF Views)");
         ui.separator();
 
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut self.radio_scope_auto_contrast, "Auto contrast");
+            ui.label(RichText::new("Source").strong());
+            ui.selectable_value(
+                &mut self.radio_scope_view,
+                RadioScopeView::If,
+                "IF (CI-V scope)",
+            );
+            ui.selectable_value(
+                &mut self.radio_scope_view,
+                RadioScopeView::Overview,
+                "CI-V overview (wide span)",
+            );
+        });
+
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut self.radio_scope_auto_contrast, "Adaptive contrast");
             ui.add(
                 egui::Slider::new(&mut self.radio_scope_contrast, 0.7..=3.0)
                     .text("contrast")
                     .clamping(egui::SliderClamping::Always),
             );
         });
-        ui.label(
-            RichText::new(
-                "Tip: CI-V scope is RF/IF activity. Audio Waterfall below is AF/baseband detail.",
-            )
-            .small()
-            .color(Color32::GRAY),
-        );
 
-        if !snapshot.radio_spectrum_desired {
+        let (rows, source_revision, source_bins, render_bins, gamma, detail_boost) = if self
+            .radio_scope_view
+            == RadioScopeView::If
+        {
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(
+                    &mut self.radio_scope_lock_if_to_filter,
+                    "Match IF span to selected FIL",
+                );
+                ui.checkbox(&mut self.radio_scope_fixed_mode, "Fixed mode");
+                ui.checkbox(&mut self.radio_scope_vbw_wide, "VBW wide");
+                if self.radio_scope_lock_if_to_filter {
+                    let auto_span = scope_span_for_filter(&snapshot.mode, snapshot.filter);
+                    self.radio_scope_span_code = auto_span;
+                    self.radio_scope_fixed_mode = false;
+                    ui.label(
+                        RichText::new(format!("auto span {}", scope_span_label(auto_span)))
+                            .small()
+                            .color(Color32::LIGHT_BLUE),
+                    );
+                } else {
+                    egui::ComboBox::from_id_salt("radio_scope_span")
+                        .selected_text(scope_span_label(self.radio_scope_span_code))
+                        .show_ui(ui, |ui| {
+                            for (code, label) in [
+                                (0u8, "2.5 kHz"),
+                                (1u8, "5 kHz"),
+                                (2u8, "10 kHz"),
+                                (3u8, "25 kHz"),
+                                (4u8, "50 kHz"),
+                                (5u8, "100 kHz"),
+                                (6u8, "250 kHz"),
+                                (7u8, "500 kHz"),
+                            ] {
+                                ui.selectable_value(&mut self.radio_scope_span_code, code, label);
+                            }
+                        });
+                }
+            });
             ui.label(
-                RichText::new("CI-V spectrum disabled (toggle it on in Live Status)")
+                RichText::new(
+                    "IF: CI-V scope stream (RF/IF). Use FIL lock for a practical narrow view.",
+                )
+                .small()
+                .color(Color32::GRAY),
+            );
+
+            if !self.civ_spectrum_on {
+                ui.label(
+                    RichText::new(
+                        "IF scope is disabled (enable Radio scope waterfall in Live Status)",
+                    )
+                    .color(Color32::GRAY),
+                );
+                return;
+            }
+
+            let source_bins = snapshot
+                .radio_waterfall_rows
+                .back()
+                .map(|row| row.len())
+                .unwrap_or(RADIO_WF_WIDTH)
+                .clamp(64, MAX_RADIO_WF_BINS);
+            let render_bins = radio_scope_render_bins(self.radio_scope_view, source_bins);
+            (
+                &snapshot.radio_waterfall_rows,
+                snapshot.radio_waterfall_revision,
+                source_bins,
+                render_bins,
+                0.8,
+                0.45,
+            )
+        } else {
+            ui.label(
+                RichText::new("CI-V overview: wide span for band view, still radio scope data.")
+                    .small()
                     .color(Color32::GRAY),
             );
-            return;
-        }
+            if let Some((low, high, label)) = band_edges_for_frequency(snapshot.frequency_hz) {
+                ui.label(
+                    RichText::new(format!(
+                        "Active band edges: {label} {:.3}–{:.3} MHz",
+                        low as f64 / 1_000_000.0,
+                        high as f64 / 1_000_000.0,
+                    ))
+                    .small()
+                    .color(Color32::LIGHT_BLUE),
+                );
+            }
+            let source_bins = snapshot
+                .radio_waterfall_rows
+                .back()
+                .map(|row| row.len())
+                .unwrap_or(RADIO_WF_WIDTH)
+                .clamp(64, MAX_RADIO_WF_BINS);
+            let render_bins = radio_scope_render_bins(self.radio_scope_view, source_bins);
+            (
+                &snapshot.radio_waterfall_rows,
+                snapshot.radio_waterfall_revision,
+                source_bins,
+                render_bins,
+                0.9,
+                0.60,
+            )
+        };
 
         let display_size = egui::vec2(ui.available_width(), RADIO_WF_HEIGHT as f32 * 1.9);
 
-        let display_bins = snapshot
-            .radio_waterfall_rows
-            .back()
-            .map(|row| row.len())
-            .unwrap_or(RADIO_WF_WIDTH)
-            .clamp(64, MAX_RADIO_WF_BINS);
-
         if self.radio_waterfall_texture.is_none()
-            || self.radio_waterfall_texture_revision != snapshot.radio_waterfall_revision
-            || self.radio_waterfall_texture_bins != display_bins
+            || self.radio_waterfall_texture_revision != source_revision
+            || self.radio_waterfall_texture_bins != render_bins
+            || self.radio_waterfall_texture_view != self.radio_scope_view
         {
-            let image = build_waterfall_image(
-                &snapshot.radio_waterfall_rows,
-                display_bins,
-                RADIO_WF_HEIGHT,
-                0.7,
-            );
+            let image =
+                build_waterfall_image(rows, render_bins, RADIO_WF_HEIGHT, gamma, detail_boost);
             if let Some(tex) = &mut self.radio_waterfall_texture {
-                tex.set(image, TextureOptions::NEAREST);
+                tex.set(image, TextureOptions::LINEAR);
             } else {
                 self.radio_waterfall_texture = Some(ctx.load_texture(
                     "qsonaut-radio-waterfall",
                     image,
-                    TextureOptions::NEAREST,
+                    TextureOptions::LINEAR,
                 ));
             }
-            self.radio_waterfall_texture_revision = snapshot.radio_waterfall_revision;
-            self.radio_waterfall_texture_bins = display_bins;
+            self.radio_waterfall_texture_revision = source_revision;
+            self.radio_waterfall_texture_bins = render_bins;
+            self.radio_waterfall_texture_view = self.radio_scope_view;
         }
 
         if let Some(tex) = &self.radio_waterfall_texture {
             ui.image((tex.id(), display_size));
         }
 
-        ui.label(format!(
-            "CI-V scope bins: {} · Palette: blue->cyan->yellow->white",
-            display_bins
-        ));
+        if self.radio_scope_view == RadioScopeView::If {
+            ui.label(format!(
+                "source={} · source bins: {} · render bins: {} · mode={} · span={} · VBW={} · Palette: blue->cyan->yellow->white",
+                self.radio_scope_view.label(),
+                source_bins,
+                render_bins,
+                if self.radio_scope_fixed_mode {
+                    "fixed"
+                } else {
+                    "center"
+                },
+                scope_span_label(self.radio_scope_span_code),
+                if self.radio_scope_vbw_wide {
+                    "wide"
+                } else {
+                    "narrow"
+                }
+            ));
+        } else {
+            ui.label(format!(
+                "source={} · source bins: {} · render bins: {} · span=500 kHz · VBW=wide · Palette: blue->cyan->yellow->white",
+                self.radio_scope_view.label(),
+                source_bins,
+                render_bins,
+            ));
+        }
     }
 
     fn draw_audio_waterfall(
@@ -3561,6 +3716,7 @@ impl QsonautGuiApp {
                 display_bins,
                 AUDIO_WF_HEIGHT,
                 1.0,
+                0.20,
             );
             if let Some(tex) = &mut self.audio_waterfall_texture {
                 tex.set(image, TextureOptions::LINEAR);
@@ -5688,6 +5844,10 @@ impl eframe::App for QsonautGuiApp {
             s.radio_spectrum_desired = self.civ_spectrum_on;
             s.radio_scope_auto_contrast = self.radio_scope_auto_contrast;
             s.radio_scope_contrast = self.radio_scope_contrast;
+            s.radio_scope_fixed_mode = self.radio_scope_fixed_mode;
+            s.radio_scope_span_code = self.radio_scope_span_code;
+            s.radio_scope_vbw_wide = self.radio_scope_vbw_wide;
+            s.radio_scope_view = self.radio_scope_view;
             (
                 s.ft8_pending.drain(..).collect::<Vec<_>>(),
                 s.ft8_last_decode_period,
@@ -6072,11 +6232,98 @@ fn spawn_radio_worker(
                 }
             };
 
+            let mut last_scope_config: Option<RadioScopeStreamConfig> = None;
+
             while !stream_stop.load(Ordering::Relaxed) {
-                let (spectrum_desired, spectrum_enabled) = {
+                let (
+                    spectrum_desired,
+                    spectrum_enabled,
+                    scope_view,
+                    frequency_hz,
+                    fixed_mode,
+                    span_code,
+                    vbw_wide,
+                ) = {
                     let s = stream_state.lock().expect("ui state lock poisoned");
-                    (s.radio_spectrum_desired, s.radio_spectrum_enabled)
+                    (
+                        s.radio_spectrum_desired,
+                        s.radio_spectrum_enabled,
+                        s.radio_scope_view,
+                        s.frequency_hz,
+                        s.radio_scope_fixed_mode,
+                        s.radio_scope_span_code,
+                        s.radio_scope_vbw_wide,
+                    )
                 };
+
+                if spectrum_desired {
+                    let overview_edges = if scope_view == RadioScopeView::Overview {
+                        frequency_hz
+                            .and_then(|hz| band_edges_for_frequency(Some(hz)))
+                            .map(|(low, high, _)| (low, high))
+                    } else {
+                        None
+                    };
+                    let config = (scope_view, fixed_mode, span_code, vbw_wide, overview_edges);
+                    if last_scope_config != Some(config) {
+                        if scope_view == RadioScopeView::Overview {
+                            if let Some((low_hz, high_hz)) = overview_edges {
+                                if let Err(err) =
+                                    rt.block_on(stream_radio.set_scope_center_fixed_mode(true))
+                                {
+                                    let mut s =
+                                        stream_state.lock().expect("ui state lock poisoned");
+                                    s.last_error = Some(err.to_string());
+                                }
+                                if let Err(err) =
+                                    rt.block_on(stream_radio.set_scope_fixed_edge_number(1))
+                                {
+                                    let mut s =
+                                        stream_state.lock().expect("ui state lock poisoned");
+                                    s.last_error = Some(err.to_string());
+                                }
+                                if let Err(err) = rt.block_on(
+                                    stream_radio
+                                        .set_scope_fixed_edge_frequencies(1, low_hz, high_hz),
+                                ) {
+                                    let mut s =
+                                        stream_state.lock().expect("ui state lock poisoned");
+                                    s.last_error = Some(err.to_string());
+                                }
+                                if let Err(err) = rt.block_on(stream_radio.set_scope_vbw_wide(true))
+                                {
+                                    let mut s =
+                                        stream_state.lock().expect("ui state lock poisoned");
+                                    s.last_error = Some(err.to_string());
+                                }
+                                if let Err(err) = rt.block_on(stream_radio.set_scope_span_code(7)) {
+                                    let mut s =
+                                        stream_state.lock().expect("ui state lock poisoned");
+                                    s.last_error = Some(err.to_string());
+                                }
+                            }
+                        } else {
+                            if let Err(err) =
+                                rt.block_on(stream_radio.set_scope_center_fixed_mode(fixed_mode))
+                            {
+                                let mut s = stream_state.lock().expect("ui state lock poisoned");
+                                s.last_error = Some(err.to_string());
+                            }
+                            if let Err(err) =
+                                rt.block_on(stream_radio.set_scope_span_code(span_code))
+                            {
+                                let mut s = stream_state.lock().expect("ui state lock poisoned");
+                                s.last_error = Some(err.to_string());
+                            }
+                            if let Err(err) = rt.block_on(stream_radio.set_scope_vbw_wide(vbw_wide))
+                            {
+                                let mut s = stream_state.lock().expect("ui state lock poisoned");
+                                s.last_error = Some(err.to_string());
+                            }
+                        }
+                        last_scope_config = Some(config);
+                    }
+                }
 
                 if !spectrum_desired {
                     if spectrum_enabled {
@@ -6381,6 +6628,10 @@ fn apply_waterfall_bins(next: &mut GuiState, bins: &[u8]) {
     };
     if next.radio_scope_auto_contrast {
         row = autocontrast_scope_row(&row, next.radio_scope_contrast);
+    }
+    row = smooth_scope_row_spatial(&row);
+    if let Some(previous) = next.radio_waterfall_rows.back() {
+        row = smooth_scope_row_temporal(previous, &row);
     }
     if next.radio_waterfall_rows.len() >= RADIO_WF_HEIGHT {
         next.radio_waterfall_rows.pop_front();
@@ -7658,22 +7909,114 @@ fn build_waterfall_image(
     width: usize,
     height: usize,
     gamma: f32,
+    detail_boost: f32,
 ) -> ColorImage {
-    let mut pixels = vec![Color32::BLACK; width * height];
+    let mut scalar_grid = vec![0u8; width * height];
     let empty_row = vec![0u8; width];
     let missing = height.saturating_sub(rows.len());
     for y in 0..height {
-        let src_row = if y < missing {
-            &empty_row
+        let rendered_row = if y < missing {
+            empty_row.clone()
         } else {
-            rows.get(y - missing).unwrap_or(&empty_row)
+            let src_row = rows.get(y - missing).unwrap_or(&empty_row);
+            resample_row_linear(src_row, width)
         };
-        for x in 0..width {
-            let value = src_row.get(x).copied().unwrap_or(0);
-            pixels[y * width + x] = waterfall_color(value, gamma);
-        }
+        scalar_grid[y * width..(y + 1) * width].copy_from_slice(&rendered_row[..width]);
+    }
+
+    let scalar_grid = sharpen_waterfall_grid(&scalar_grid, width, height, detail_boost);
+    let mut pixels = vec![Color32::BLACK; width * height];
+    for (idx, value) in scalar_grid.iter().copied().enumerate() {
+        pixels[idx] = waterfall_color(value, gamma);
     }
     ColorImage::new([width, height], pixels)
+}
+
+fn sharpen_waterfall_grid(values: &[u8], width: usize, height: usize, amount: f32) -> Vec<u8> {
+    if width < 3 || height < 3 || values.len() != width * height {
+        return values.to_vec();
+    }
+
+    let mut out = values.to_vec();
+    let amount = amount.clamp(0.0, 1.5);
+    for y in 1..height - 1 {
+        for x in 1..width - 1 {
+            let idx = y * width + x;
+            let center = values[idx] as f32;
+            let blur = (values[idx - 1] as f32
+                + values[idx + 1] as f32
+                + values[idx - width] as f32
+                + values[idx + width] as f32
+                + center * 4.0)
+                / 8.0;
+            let boosted = center + (center - blur) * amount;
+            out[idx] = boosted.round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    out
+}
+
+fn smooth_scope_row_spatial(row: &[u8]) -> Vec<u8> {
+    if row.len() < 3 {
+        return row.to_vec();
+    }
+    let mut out = Vec::with_capacity(row.len());
+    out.push(row[0]);
+    for i in 1..row.len() - 1 {
+        let a = row[i - 1] as u16;
+        let b = row[i] as u16;
+        let c = row[i + 1] as u16;
+        out.push(((a + (b * 2) + c) / 4) as u8);
+    }
+    out.push(*row.last().unwrap_or(&row[0]));
+    out
+}
+
+fn smooth_scope_row_temporal(previous: &[u8], current: &[u8]) -> Vec<u8> {
+    if previous.len() != current.len() {
+        return current.to_vec();
+    }
+    previous
+        .iter()
+        .zip(current.iter())
+        .map(|(&p, &c)| {
+            let blended = (p as u16 * 3 + c as u16 * 7) / 10;
+            blended as u8
+        })
+        .collect()
+}
+
+fn resample_row_linear(row: &[u8], width: usize) -> Vec<u8> {
+    if width == 0 {
+        return Vec::new();
+    }
+    if row.is_empty() {
+        return vec![0; width];
+    }
+    if row.len() == width {
+        return row.to_vec();
+    }
+    if row.len() == 1 {
+        return vec![row[0]; width];
+    }
+
+    let mut out = Vec::with_capacity(width);
+    let src_last = (row.len() - 1) as f32;
+    let dst_last = (width - 1).max(1) as f32;
+    for x in 0..width {
+        let pos = (x as f32 / dst_last) * src_last;
+        let i0 = pos.floor() as usize;
+        let i1 = pos.ceil() as usize;
+        if i0 == i1 {
+            out.push(row[i0]);
+        } else {
+            let t = pos - i0 as f32;
+            let a = row[i0] as f32;
+            let b = row[i1] as f32;
+            out.push((a + (b - a) * t).round() as u8);
+        }
+    }
+    out
 }
 
 fn waterfall_color(v: u8, gamma: f32) -> Color32 {
@@ -7703,6 +8046,68 @@ fn fmt_civ_level_percent(v: Option<u8>) -> String {
     .unwrap_or_else(|| "?".to_string())
 }
 
+fn scope_span_label(span_code: u8) -> &'static str {
+    match span_code.min(7) {
+        0 => "2.5 kHz",
+        1 => "5 kHz",
+        2 => "10 kHz",
+        3 => "25 kHz",
+        4 => "50 kHz",
+        5 => "100 kHz",
+        6 => "250 kHz",
+        _ => "500 kHz",
+    }
+}
+
+fn scope_span_for_filter(mode: &str, filter: Option<u8>) -> u8 {
+    let width_hz = filter_bandwidth_hz(mode, filter);
+    if width_hz <= 2_500 {
+        0
+    } else if width_hz <= 5_000 {
+        1
+    } else if width_hz <= 10_000 {
+        2
+    } else if width_hz <= 25_000 {
+        3
+    } else if width_hz <= 50_000 {
+        4
+    } else if width_hz <= 100_000 {
+        5
+    } else if width_hz <= 250_000 {
+        6
+    } else {
+        7
+    }
+}
+
+fn radio_scope_render_bins(view: RadioScopeView, source_bins: usize) -> usize {
+    let source_bins = source_bins.max(64);
+    match view {
+        RadioScopeView::If => source_bins.saturating_mul(2).clamp(512, 1_536),
+        RadioScopeView::Overview => source_bins.saturating_mul(3).clamp(768, 2_048),
+    }
+}
+
+fn band_edges_for_frequency(frequency_hz: Option<u64>) -> Option<(u64, u64, &'static str)> {
+    let freq = frequency_hz?;
+    match freq {
+        1_800_000..=2_000_000 => Some((1_800_000, 2_000_000, "160m")),
+        3_500_000..=4_000_000 => Some((3_500_000, 4_000_000, "80m")),
+        5_000_000..=5_500_000 => Some((5_000_000, 5_500_000, "60m")),
+        7_000_000..=7_300_000 => Some((7_000_000, 7_300_000, "40m")),
+        10_100_000..=10_150_000 => Some((10_100_000, 10_150_000, "30m")),
+        14_000_000..=14_350_000 => Some((14_000_000, 14_350_000, "20m")),
+        18_068_000..=18_168_000 => Some((18_068_000, 18_168_000, "17m")),
+        21_000_000..=21_450_000 => Some((21_000_000, 21_450_000, "15m")),
+        24_890_000..=24_990_000 => Some((24_890_000, 24_990_000, "12m")),
+        28_000_000..=29_700_000 => Some((28_000_000, 29_700_000, "10m")),
+        50_000_000..=54_000_000 => Some((50_000_000, 54_000_000, "6m")),
+        144_000_000..=148_000_000 => Some((144_000_000, 148_000_000, "2m")),
+        420_000_000..=450_000_000 => Some((420_000_000, 450_000_000, "70cm")),
+        _ => None,
+    }
+}
+
 fn autocontrast_scope_row(row: &[u8], contrast: f32) -> Vec<u8> {
     if row.len() < 8 {
         return row.to_vec();
@@ -7714,8 +8119,8 @@ fn autocontrast_scope_row(row: &[u8], contrast: f32) -> Vec<u8> {
     }
 
     let total = row.len();
-    let low_target = ((total as f32) * 0.08).round() as usize;
-    let high_target = ((total as f32) * 0.98).round() as usize;
+    let low_target = ((total as f32) * 0.20).round() as usize;
+    let high_target = ((total as f32) * 0.995).round() as usize;
 
     let mut cumulative = 0usize;
     let mut low = 0u8;
@@ -7737,11 +8142,13 @@ fn autocontrast_scope_row(row: &[u8], contrast: f32) -> Vec<u8> {
         }
     }
 
-    if high <= low.saturating_add(3) {
+    let dynamic = high.saturating_sub(low);
+    if dynamic <= 8 {
         return row.to_vec();
     }
 
-    let gamma = (1.0 / contrast.max(0.1)).clamp(0.2, 2.0);
+    let dynamic_factor = (dynamic as f32 / 64.0).clamp(0.55, 1.0);
+    let gamma = (1.0 / (contrast.max(0.1) * dynamic_factor)).clamp(0.45, 1.6);
     row.iter()
         .map(|&value| {
             let normalized = if value <= low {
@@ -7820,10 +8227,10 @@ mod tests {
         }
 
         assert_eq!(state.radio_waterfall_rows.len(), RADIO_WF_HEIGHT);
-        assert_eq!(
-            state.radio_waterfall_rows.back().unwrap()[0],
-            (RADIO_WF_HEIGHT + 2) as u8
-        );
+        let latest = state.radio_waterfall_rows.back().unwrap()[0];
+        let expected = (RADIO_WF_HEIGHT + 2) as u8;
+        assert!(latest <= expected);
+        assert!(latest >= expected.saturating_sub(2));
     }
 
     #[test]
