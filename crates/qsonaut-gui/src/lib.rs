@@ -3529,7 +3529,7 @@ impl QsonautGuiApp {
         }
 
         ui.label(format!(
-            "CI-V scope bins: {} · Palette: blue\u{2192}cyan\u{2192}yellow\u{2192}white",
+            "CI-V scope bins: {} · Palette: blue->cyan->yellow->white",
             display_bins
         ));
     }
