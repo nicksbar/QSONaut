@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-12
+
 ### Added
 - Platform log file output (`qsonaut.log`) for startup/runtime diagnostics that users can attach to issue reports.
 
