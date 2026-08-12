@@ -89,14 +89,18 @@ Acceptance criteria:
   - Run/S&P mode, exchange policy, serial scheme, split policy, and safety options.
 - [ ] Implement simple split workflow with safe orchestration
   - “Fake split” support where radio support is incomplete, with clear status and guardrails.
+  - Status: contest panel now exposes a fake-split offset and applies it as a software TX offset during transmit scheduling; rig split hardware control remains future work.
 - [ ] Add Fox/Hound guidance/state machine UX
   - Guided states, constraints, and contextual actions (instead of hidden assumptions).
+  - Status: contest panel now shows role-aware guidance text for Fox/Hound and split policy context.
 - [ ] Add dupe and worked-status engine
   - Real-time call matching against log, per-band/per-mode views.
   - Status: pre-TX duplicate guard is now enforced in GUI TX queue paths (FT8 + native digital) using `call+band+mode` matching when contest dupe-check is enabled.
   - Status: decode and TX panes now surface worked-contact visual cues, plus a new in-app "Achievement hunter" alert feed that highlights directed hits, duplicate-save events, and QSO milestones.
+  - Status: Achievement hunter unlocks and custom achievement rules now persist with the operator profile.
 - [ ] Add serial/CQ number workflow
   - Increment/decrement rules, resend behavior, and persistence across restart.
+  - Status: contest serial cursor now persists with the operator profile, is editable from the contest panel, and is previewed in the FT8 compose deck.
 - [ ] Add macro-friendly Run/S&P helper actions
   - Operator controls should reduce manual branch decisions during pileups.
 
@@ -108,11 +112,13 @@ Acceptance criteria:
 ## C) Logging + interoperability hardening
 
 - [ ] Expand ADIF writer to complete required/common contest fields where available.
+  - Status: contest exchange serials/text now round-trip through the log model and ADIF export/import as STX/SRX/STX_STRING/SRX_STRING fields.
 - [x] Add ADIF import with validation and conflict policy
   - duplicate strategy, normalization rules, and bad-record reporting.
   - Status: `qsonaut-log` now imports ADIF with record normalization, duplicate suppression (`call+date+time+band+mode`), and import summary counters (imported/duplicates/invalid); GUI log panel includes `Import ADIF` action.
 - [ ] Add filtered export slices
   - by date range, mode, band, and contest profile.
+  - Status: GUI export panel now offers a filtered export for the current mode/band view.
 - [ ] Add LoTW-prep export path
   - file-level prep, metadata checks, and operator instructions.
 - [ ] Add contest exchange-specific fields in log model

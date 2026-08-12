@@ -24,7 +24,7 @@ use qsonaut_core::{
     SplitPolicy,
 };
 use qsonaut_dsp::resample::Decimator;
-use qsonaut_log::{app_config_dir, QsoLog, QsoRecord};
+use qsonaut_log::{app_config_dir, AdifExportFilter, QsoLog, QsoRecord};
 use qsonaut_pskreporter::{ReceptionReport, ReportSender, Reporter, ReporterConfig};
 use qsonaut_radio::{
     enumerate_serial_port_descriptors, BaseMode, ControlId, ControlValue, IcomCiVRadio, Mode,
@@ -60,7 +60,7 @@ const AUDIO_MAX_FREQ_HZ: u32 = 4_000;
 // 8192 samples @ 48 kHz = 170 ms window, ~5.9 Hz/bin, ~683 useful bins for 0-4 kHz.
 const FFT_SIZE: usize = 8192;
 const OPERATOR_PROFILE_FILE: &str = "profile.toml";
-const OPERATOR_PROFILE_VERSION: u32 = 5;
+const OPERATOR_PROFILE_VERSION: u32 = 7;
 const GUI_SCALE_BASE: f32 = 1.2;
 const GUI_SCALE_MAX: f32 = 2.0;
 const GUI_SCALE_MIN: f32 = 0.9;
@@ -246,10 +246,22 @@ struct OperatorProfile {
     contest_serial_step: u32,
     #[serde(default = "default_contest_dupe_check")]
     contest_dupe_check: bool,
+    #[serde(default = "default_contest_serial_current")]
+    contest_serial_current: u32,
+    #[serde(default = "default_contest_fake_split_offset_hz")]
+    contest_fake_split_offset_hz: u32,
+    #[serde(default)]
+    hunter_unlocked: Vec<AchievementKind>,
+    #[serde(default)]
+    hunter_custom_rules: Vec<CustomAchievementRule>,
 }
 
 fn default_gui_scale() -> f32 {
     GUI_SCALE_BASE
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn gui_scale_from_percent(percent: u32) -> f32 {
@@ -296,6 +308,14 @@ fn default_contest_serial_step() -> u32 {
 
 fn default_contest_dupe_check() -> bool {
     true
+}
+
+fn default_contest_serial_current() -> u32 {
+    default_contest_serial_start()
+}
+
+fn default_contest_fake_split_offset_hz() -> u32 {
+    250
 }
 
 fn contest_operating_mode_label(mode: ContestOperatingMode) -> &'static str {
@@ -507,7 +527,8 @@ struct ExternalSendRecord {
     message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum AchievementKind {
     FirstDecode,
     DirectedCall,
@@ -516,6 +537,29 @@ enum AchievementKind {
     FiftyQsosLogged,
     DupeShield,
     CenturyHunter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum HunterMetric {
+    UniqueHeard,
+    DirectedHits,
+    QsoLogged,
+    DupeBlocks,
+    DecodeBursts,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CustomAchievementRule {
+    id: String,
+    title: String,
+    detail: String,
+    metric: HunterMetric,
+    threshold: u32,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default)]
+    unlocked: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1709,6 +1753,13 @@ struct QsonautGuiApp {
     hunter_unique_heard: HashSet<String>,
     hunter_directed_hits: u32,
     hunter_dupe_blocks: u32,
+    hunter_decode_bursts: u32,
+    hunter_custom_rules: Vec<CustomAchievementRule>,
+    hunter_custom_title_input: String,
+    hunter_custom_detail_input: String,
+    hunter_custom_metric_input: HunterMetric,
+    hunter_custom_threshold_input: u32,
+    hunter_custom_enabled_input: bool,
     external_ingress_source: String,
     external_ingress_author: String,
     external_ingress_channel: String,
@@ -1800,6 +1851,8 @@ struct QsonautGuiApp {
     contest_serial_start: u32,
     contest_serial_step: u32,
     contest_dupe_check: bool,
+    contest_serial_current: u32,
+    contest_fake_split_offset_hz: u32,
     civ_spectrum_on: bool,
     rx_tone_hz: u32,
     tx_tone_hz: u32,
@@ -1961,6 +2014,10 @@ impl QsonautGuiApp {
         let mut contest_serial_start = config.contest.serial_start.max(1);
         let mut contest_serial_step = config.contest.serial_step.max(1);
         let mut contest_dupe_check = config.contest.dupe_check;
+        let mut contest_serial_current = contest_serial_start;
+        let mut contest_fake_split_offset_hz = default_contest_fake_split_offset_hz();
+        let mut hunter_unlocked = HashSet::new();
+        let mut hunter_custom_rules = Vec::new();
         let profile_io_status: String;
 
         if let Some(p) = load_operator_profile() {
@@ -2011,6 +2068,10 @@ impl QsonautGuiApp {
             contest_serial_start = p.contest_serial_start.max(1);
             contest_serial_step = p.contest_serial_step.max(1);
             contest_dupe_check = p.contest_dupe_check;
+            contest_serial_current = p.contest_serial_current.max(contest_serial_start).max(1);
+            contest_fake_split_offset_hz = p.contest_fake_split_offset_hz.clamp(0, 2_000);
+            hunter_unlocked = p.hunter_unlocked.into_iter().collect();
+            hunter_custom_rules = p.hunter_custom_rules;
             config.station.callsign = Some(station_callsign.clone());
             config.station.grid = Some(station_grid.clone());
             config.contest = ContestProfile {
@@ -2068,6 +2129,10 @@ impl QsonautGuiApp {
                 contest_serial_start,
                 contest_serial_step,
                 contest_dupe_check,
+                contest_serial_current,
+                contest_fake_split_offset_hz,
+                hunter_unlocked: Vec::new(),
+                hunter_custom_rules: Vec::new(),
             };
             match save_operator_profile(&bootstrap) {
                 Ok(_) => {
@@ -2106,11 +2171,18 @@ impl QsonautGuiApp {
             last_radio_state_signature: None,
             automation_external_transports,
             automation_external_outbox: VecDeque::new(),
-            hunter_unlocked: HashSet::new(),
+            hunter_unlocked,
             hunter_feed: VecDeque::new(),
             hunter_unique_heard: HashSet::new(),
             hunter_directed_hits: 0,
             hunter_dupe_blocks: 0,
+            hunter_decode_bursts: 0,
+            hunter_custom_rules,
+            hunter_custom_title_input: String::new(),
+            hunter_custom_detail_input: String::new(),
+            hunter_custom_metric_input: HunterMetric::UniqueHeard,
+            hunter_custom_threshold_input: 1,
+            hunter_custom_enabled_input: true,
             external_ingress_source: "discord:shack".to_string(),
             external_ingress_author: "operator".to_string(),
             external_ingress_channel: "#qsonaut".to_string(),
@@ -2201,6 +2273,8 @@ impl QsonautGuiApp {
             contest_serial_start,
             contest_serial_step,
             contest_dupe_check,
+            contest_serial_current,
+            contest_fake_split_offset_hz,
             civ_spectrum_on,
             rx_tone_hz,
             tx_tone_hz,
@@ -2315,6 +2389,14 @@ impl QsonautGuiApp {
             .report_received
             .map(format_signal_report)
             .unwrap_or_default();
+        if self.contest_enabled {
+            record.contest_serial_sent = Some(self.contest_serial_current.max(1));
+            record.contest_exchange_sent = self.contest_exchange_preview(&session.target);
+            record.contest_exchange_received = record.report_received.clone();
+            self.advance_contest_serial();
+            self.profile_dirty = true;
+            self.persist_profile("Auto-saved");
+        }
         self.append_qso(record, "Auto-logged");
     }
 
@@ -2344,6 +2426,14 @@ impl QsonautGuiApp {
             .report_received
             .map(format_signal_report)
             .unwrap_or_default();
+        if self.contest_enabled {
+            record.contest_serial_sent = Some(self.contest_serial_current.max(1));
+            record.contest_exchange_sent = self.contest_exchange_preview(&session.target);
+            record.contest_exchange_received = record.report_received.clone();
+            self.advance_contest_serial();
+            self.profile_dirty = true;
+            self.persist_profile("Auto-saved");
+        }
         self.append_qso(record, "Auto-logged FT4");
     }
 
@@ -2533,7 +2623,8 @@ impl QsonautGuiApp {
             return;
         }
         self.ft8_tx_abort.store(false, Ordering::Relaxed);
-        match build_ft8_tx_pcm(&self.ft8_compose, self.tx_tone_hz) {
+        let tx_tone_hz = self.contest_effective_tx_tone_hz();
+        match build_ft8_tx_pcm(&self.ft8_compose, tx_tone_hz) {
             Ok(pcm) => {
                 let now_s = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -2912,7 +3003,8 @@ impl QsonautGuiApp {
             self.digital_tx_status = format!("{} TX backend is not available", mode.label());
             return;
         };
-        match build_native_digital_tx_pcm(mode, &self.digital_compose, self.tx_tone_hz) {
+        let tx_tone_hz = self.contest_effective_tx_tone_hz();
+        match build_native_digital_tx_pcm(mode, &self.digital_compose, tx_tone_hz) {
             Ok((pcm, audio_offset_s)) => {
                 let now_s = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -3208,7 +3300,62 @@ impl QsonautGuiApp {
             contest_serial_start: self.contest_serial_start.max(1),
             contest_serial_step: self.contest_serial_step.max(1),
             contest_dupe_check: self.contest_dupe_check,
+            contest_serial_current: self
+                .contest_serial_current
+                .max(self.contest_serial_start.max(1)),
+            contest_fake_split_offset_hz: self.contest_fake_split_offset_hz,
+            hunter_unlocked: self.hunter_unlocked.iter().copied().collect(),
+            hunter_custom_rules: self.hunter_custom_rules.clone(),
         }
+    }
+
+    fn contest_effective_tx_tone_hz(&self) -> u32 {
+        if self.contest_enabled && self.contest_split_policy == SplitPolicy::Fake {
+            self.rx_tone_hz
+                .saturating_add(self.contest_fake_split_offset_hz)
+                .clamp(100, AUDIO_MAX_FREQ_HZ)
+        } else {
+            self.tx_tone_hz
+        }
+    }
+
+    fn contest_exchange_preview(&self, target_call: &str) -> String {
+        let serial = self.contest_serial_current.max(1);
+        let my_call = self.station_callsign_or_default();
+        let my_grid = self.station_grid_or_default();
+        let template = if self.contest_exchange_template.trim().is_empty() {
+            "5NN ${serial}".to_string()
+        } else {
+            self.contest_exchange_template.trim().to_string()
+        };
+        template
+            .replace("${serial}", &format!("{serial:03}"))
+            .replace("${call}", target_call)
+            .replace("${target}", target_call)
+            .replace("${my_call}", my_call)
+            .replace("${grid}", my_grid)
+    }
+
+    fn advance_contest_serial(&mut self) {
+        let next = self
+            .contest_serial_current
+            .max(self.contest_serial_start.max(1))
+            .saturating_add(self.contest_serial_step.max(1));
+        self.contest_serial_current = next;
+    }
+
+    fn contest_guidance_text(&self) -> String {
+        let split_hint = match self.contest_split_policy {
+            SplitPolicy::Off => "split off",
+            SplitPolicy::Fake => "fake split uses a software TX offset",
+            SplitPolicy::Rig => "rig split requested (no direct split command yet)",
+        };
+        let role_hint = match self.contest_fox_hound_role {
+            FoxHoundRole::Disabled => "role disabled",
+            FoxHoundRole::Fox => "Fox: call CQ, keep the pileup flowing",
+            FoxHoundRole::Hound => "Hound: answer quickly and stay on the caller",
+        };
+        format!("{} · {}", split_hint, role_hint)
     }
 
     fn station_callsign_or_default(&self) -> &str {
@@ -3249,13 +3396,15 @@ impl QsonautGuiApp {
             kind: "contest_state".to_string(),
             source: "gui.contest_profile".to_string(),
             detail: format!(
-                "enabled={} mode={} split={} role={} serial_start={} serial_step={} dupe_check={}",
+                "enabled={} mode={} split={} role={} serial_start={} serial_step={} serial_current={} fake_split_offset_hz={} dupe_check={}",
                 self.contest_enabled,
                 contest_operating_mode_label(self.contest_operating_mode),
                 split_policy_label(self.contest_split_policy),
                 fox_hound_role_label(self.contest_fox_hound_role),
                 self.contest_serial_start,
                 self.contest_serial_step,
+                self.contest_serial_current,
+                self.contest_fake_split_offset_hz,
                 self.contest_dupe_check
             ),
         });
@@ -3347,6 +3496,106 @@ impl QsonautGuiApp {
                 detail,
                 Color32::from_rgb(255, 201, 92),
             );
+            self.profile_dirty = true;
+            self.persist_profile("Auto-saved");
+        }
+    }
+
+    fn custom_hunter_metric_value(&self, metric: HunterMetric) -> u32 {
+        match metric {
+            HunterMetric::UniqueHeard => self.hunter_unique_heard.len() as u32,
+            HunterMetric::DirectedHits => self.hunter_directed_hits,
+            HunterMetric::QsoLogged => self.qso_log.contacts.len() as u32,
+            HunterMetric::DupeBlocks => self.hunter_dupe_blocks,
+            HunterMetric::DecodeBursts => self.hunter_decode_bursts,
+        }
+    }
+
+    fn evaluate_custom_hunter_rules(&mut self) {
+        let mut newly_unlocked = Vec::new();
+        for (idx, rule) in self.hunter_custom_rules.iter().enumerate() {
+            if rule.enabled && !rule.unlocked {
+                let progress = self.custom_hunter_metric_value(rule.metric);
+                if progress >= rule.threshold {
+                    newly_unlocked.push(idx);
+                }
+            }
+        }
+
+        if newly_unlocked.is_empty() {
+            return;
+        }
+
+        for idx in newly_unlocked {
+            if let Some(rule) = self.hunter_custom_rules.get_mut(idx) {
+                let title = rule.title.clone();
+                let detail = rule.detail.clone();
+                rule.unlocked = true;
+                self.push_hunter_alert(
+                    format!("🏆 Achievement unlocked: {title}"),
+                    detail,
+                    Color32::from_rgb(132, 228, 255),
+                );
+            }
+        }
+        self.profile_dirty = true;
+        self.persist_profile("Auto-saved");
+    }
+
+    fn add_custom_hunter_rule(&mut self) {
+        let title = self.hunter_custom_title_input.trim();
+        let detail = self.hunter_custom_detail_input.trim();
+        if title.is_empty() || detail.is_empty() || self.hunter_custom_threshold_input == 0 {
+            self.push_hunter_alert(
+                "⚠ Custom achievement not saved",
+                "Provide a title, detail, and a threshold greater than zero.",
+                Color32::from_rgb(255, 170, 75),
+            );
+            return;
+        }
+
+        let mut id = title
+            .chars()
+            .map(|ch: char| {
+                if ch.is_ascii_alphanumeric() {
+                    ch.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string();
+        if id.is_empty() {
+            id = format!("custom-{}", self.hunter_custom_rules.len() + 1);
+        }
+        if self.hunter_custom_rules.iter().any(|rule| rule.id == id) {
+            id = format!("{id}-{}", self.hunter_custom_rules.len() + 1);
+        }
+
+        self.hunter_custom_rules.push(CustomAchievementRule {
+            id,
+            title: title.to_string(),
+            detail: detail.to_string(),
+            metric: self.hunter_custom_metric_input,
+            threshold: self.hunter_custom_threshold_input.max(1),
+            enabled: self.hunter_custom_enabled_input,
+            unlocked: false,
+        });
+        self.hunter_custom_title_input.clear();
+        self.hunter_custom_detail_input.clear();
+        self.hunter_custom_metric_input = HunterMetric::UniqueHeard;
+        self.hunter_custom_threshold_input = 1;
+        self.hunter_custom_enabled_input = true;
+        self.profile_dirty = true;
+        self.persist_profile("Auto-saved");
+    }
+
+    fn remove_custom_hunter_rule(&mut self, index: usize) {
+        if index < self.hunter_custom_rules.len() {
+            self.hunter_custom_rules.remove(index);
+            self.profile_dirty = true;
+            self.persist_profile("Auto-saved");
         }
     }
 
@@ -3403,15 +3652,19 @@ impl QsonautGuiApp {
             }
             _ => {}
         }
+
+        self.evaluate_custom_hunter_rules();
     }
 
     fn track_decode_batch(&mut self, decode_count: usize) {
         if decode_count > 0 {
+            self.hunter_decode_bursts = self.hunter_decode_bursts.saturating_add(1);
             self.unlock_achievement(
                 AchievementKind::FirstDecode,
                 "Signal Hunter",
                 "Captured your first decode burst in this session",
             );
+            self.evaluate_custom_hunter_rules();
         }
     }
 
@@ -3487,6 +3740,117 @@ impl QsonautGuiApp {
                     ui.add_space(2.0);
                 }
             });
+
+        ui.separator();
+        ui.label(
+            RichText::new("Custom achievements")
+                .strong()
+                .color(Color32::from_rgb(132, 228, 255)),
+        );
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Title");
+            ui.text_edit_singleline(&mut self.hunter_custom_title_input);
+            ui.label("Detail");
+            ui.text_edit_singleline(&mut self.hunter_custom_detail_input);
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Metric");
+            egui::ComboBox::from_id_salt("hunter_custom_metric")
+                .selected_text(match self.hunter_custom_metric_input {
+                    HunterMetric::UniqueHeard => "Unique heard",
+                    HunterMetric::DirectedHits => "Directed hits",
+                    HunterMetric::QsoLogged => "QSOs logged",
+                    HunterMetric::DupeBlocks => "Dupe blocks",
+                    HunterMetric::DecodeBursts => "Decode bursts",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.hunter_custom_metric_input,
+                        HunterMetric::UniqueHeard,
+                        "Unique heard",
+                    );
+                    ui.selectable_value(
+                        &mut self.hunter_custom_metric_input,
+                        HunterMetric::DirectedHits,
+                        "Directed hits",
+                    );
+                    ui.selectable_value(
+                        &mut self.hunter_custom_metric_input,
+                        HunterMetric::QsoLogged,
+                        "QSOs logged",
+                    );
+                    ui.selectable_value(
+                        &mut self.hunter_custom_metric_input,
+                        HunterMetric::DupeBlocks,
+                        "Dupe blocks",
+                    );
+                    ui.selectable_value(
+                        &mut self.hunter_custom_metric_input,
+                        HunterMetric::DecodeBursts,
+                        "Decode bursts",
+                    );
+                });
+            ui.label("Threshold");
+            ui.add(egui::DragValue::new(&mut self.hunter_custom_threshold_input).range(1..=10_000));
+            ui.checkbox(&mut self.hunter_custom_enabled_input, "Enabled");
+            if ui.button("Add custom achievement").clicked() {
+                self.add_custom_hunter_rule();
+            }
+        });
+
+        ui.add_space(4.0);
+        if self.hunter_custom_rules.is_empty() {
+            ui.label(
+                RichText::new("No custom achievements yet — add one to make the chase personal.")
+                    .small()
+                    .color(Color32::GRAY),
+            );
+        } else {
+            let mut remove_idx = None;
+            let unique_heard = self.hunter_unique_heard.len() as u32;
+            let directed_hits = self.hunter_directed_hits;
+            let qso_logged = self.qso_log.contacts.len() as u32;
+            let dupe_blocks = self.hunter_dupe_blocks;
+            let decode_bursts = self.hunter_decode_bursts;
+            for (idx, rule) in self.hunter_custom_rules.iter_mut().enumerate() {
+                let progress = match rule.metric {
+                    HunterMetric::UniqueHeard => unique_heard,
+                    HunterMetric::DirectedHits => directed_hits,
+                    HunterMetric::QsoLogged => qso_logged,
+                    HunterMetric::DupeBlocks => dupe_blocks,
+                    HunterMetric::DecodeBursts => decode_bursts,
+                };
+                ui.group(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(&mut rule.enabled, "");
+                        ui.label(RichText::new(&rule.title).strong().color(Color32::WHITE));
+                        if rule.unlocked {
+                            ui.label(
+                                RichText::new("UNLOCKED")
+                                    .small()
+                                    .color(Color32::from_rgb(132, 228, 255)),
+                            );
+                        }
+                        if ui.small_button("Remove").clicked() {
+                            remove_idx = Some(idx);
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(&rule.detail).small().color(Color32::GRAY));
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!("{} / {}", progress, rule.threshold))
+                                .small()
+                                .monospace(),
+                        );
+                    });
+                });
+                ui.add_space(4.0);
+            }
+            if let Some(idx) = remove_idx {
+                self.remove_custom_hunter_rule(idx);
+            }
+        }
     }
 
     fn execute_automation_external_send(
@@ -3911,8 +4275,69 @@ impl QsonautGuiApp {
                     ui.checkbox(&mut self.contest_dupe_check, "Dupe check");
                 });
 
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Serial current");
+                    ui.label(
+                        RichText::new(format!("{:03}", self.contest_serial_current.max(1)))
+                            .monospace()
+                            .strong(),
+                    );
+                    if ui.small_button("Reset").clicked() {
+                        self.contest_serial_current = self.contest_serial_start.max(1);
+                        self.profile_dirty = true;
+                        self.persist_profile("Auto-saved");
+                    }
+                    if ui.small_button("-Step").clicked() {
+                        self.contest_serial_current = self
+                            .contest_serial_current
+                            .saturating_sub(self.contest_serial_step.max(1))
+                            .max(self.contest_serial_start.max(1));
+                        self.profile_dirty = true;
+                        self.persist_profile("Auto-saved");
+                    }
+                    if ui.small_button("+Step").clicked() {
+                        self.advance_contest_serial();
+                        self.profile_dirty = true;
+                        self.persist_profile("Auto-saved");
+                    }
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Fake split offset");
+                    ui.add(
+                        egui::DragValue::new(&mut self.contest_fake_split_offset_hz)
+                            .range(0..=2_000)
+                            .suffix(" Hz"),
+                    );
+                    if ui.small_button("Use RX+offset").clicked() {
+                        self.contest_split_policy = SplitPolicy::Fake;
+                        self.profile_dirty = true;
+                        self.persist_profile("Auto-saved");
+                        self.emit_contest_profile_hooks();
+                    }
+                });
+
+                ui.label(
+                    RichText::new(self.contest_guidance_text())
+                        .small()
+                        .color(Color32::from_rgb(132, 228, 255)),
+                );
+                if self.contest_enabled && self.contest_split_policy == SplitPolicy::Fake {
+                    ui.label(
+                        RichText::new(format!(
+                            "Fake split active · TX offset {} Hz · software-only guardrail",
+                            self.contest_fake_split_offset_hz
+                        ))
+                        .small()
+                        .color(Color32::from_rgb(255, 201, 92)),
+                    );
+                }
+
                 self.contest_serial_start = self.contest_serial_start.max(1);
                 self.contest_serial_step = self.contest_serial_step.max(1);
+                self.contest_serial_current = self
+                    .contest_serial_current
+                    .max(self.contest_serial_start.max(1));
 
                 if self.config.contest.enabled != self.contest_enabled
                     || self.config.contest.operating_mode != self.contest_operating_mode
@@ -4143,6 +4568,22 @@ impl QsonautGuiApp {
                     Err(error) => self.qso_log_status = format!("ADIF export failed: {error}"),
                 }
             }
+            if ui.small_button("Export ADIF (view)").clicked() {
+                let band = band_for_frequency(snapshot.frequency_hz.unwrap_or_default());
+                let filter = AdifExportFilter {
+                    date_from: None,
+                    date_to: None,
+                    mode: Some(snapshot.mode.clone()),
+                    band: (!band.is_empty()).then(|| band.to_string()),
+                };
+                let filtered = qso_adif_path().with_file_name("qsonaut-view.adif");
+                match self.qso_log.export_adif_filtered(&filtered, &filter) {
+                    Ok(()) => self.qso_log_status = format!("Exported {}", filtered.display()),
+                    Err(error) => {
+                        self.qso_log_status = format!("Filtered ADIF export failed: {error}")
+                    }
+                }
+            }
             if ui.small_button("Import ADIF").clicked() {
                 match self.qso_log.import_adif(&qso_adif_path()) {
                     Ok(summary) => {
@@ -4285,6 +4726,40 @@ impl QsonautGuiApp {
                                 .font(egui::TextStyle::Monospace),
                         )
                         .changed();
+                    ui.label("Contest sent");
+                    changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut contact.contest_exchange_sent)
+                                .desired_width(82.0)
+                                .font(egui::TextStyle::Monospace),
+                        )
+                        .changed();
+                    ui.label("Contest rcvd");
+                    changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut contact.contest_exchange_received)
+                                .desired_width(82.0)
+                                .font(egui::TextStyle::Monospace),
+                        )
+                        .changed();
+                    ui.label("STX");
+                    let mut stx = contact.contest_serial_sent.unwrap_or_default() as i64;
+                    if ui
+                        .add(egui::DragValue::new(&mut stx).range(0..=999_999).speed(1.0))
+                        .changed()
+                    {
+                        contact.contest_serial_sent = (stx > 0).then_some(stx as u32);
+                        changed = true;
+                    }
+                    ui.label("SRX");
+                    let mut srx = contact.contest_serial_received.unwrap_or_default() as i64;
+                    if ui
+                        .add(egui::DragValue::new(&mut srx).range(0..=999_999).speed(1.0))
+                        .changed()
+                    {
+                        contact.contest_serial_received = (srx > 0).then_some(srx as u32);
+                        changed = true;
+                    }
                     ui.label("Notes");
                     changed |= ui
                         .add(
@@ -5971,11 +6446,24 @@ impl QsonautGuiApp {
                     self.ft8_autoseq = true;
                     self.ft8_seq_state = Ft8SeqState::CqArmed;
                     self.ft8_seq_target = None;
-                    self.ft8_seq_status = "CQ armed (waiting for next slot)".to_string();
+                    self.ft8_seq_status = format!(
+                        "CQ armed (waiting for next slot) · serial {} · {}",
+                        self.contest_serial_current.max(1),
+                        self.contest_guidance_text()
+                    );
                     self.ft8_session = None;
                     self.queue_ft8_tx_from_compose(Ft8TxQueuePolicy::NextSlotOnly, None);
                     self.profile_dirty = true;
                     self.persist_profile("Auto-saved");
+                }
+                if ui
+                    .add_enabled(target.is_some(), egui::Button::new("EXCH"))
+                    .on_hover_text("Insert the current contest exchange preview")
+                    .clicked()
+                {
+                    if let Some(target_call) = target.as_deref() {
+                        self.ft8_compose = self.contest_exchange_preview(target_call);
+                    }
                 }
                 for (label, exchange) in [("Grid", grid.as_str()), ("RR73", "RR73"), ("73", "73")] {
                     if ui
@@ -6003,6 +6491,18 @@ impl QsonautGuiApp {
                             );
                         }
                     }
+                }
+
+                if self.contest_enabled {
+                    ui.label(
+                        RichText::new(format!(
+                            "Contest serial next: {:03} · exchange preview: {}",
+                            self.contest_serial_current.max(1),
+                            self.contest_exchange_preview(target.as_deref().unwrap_or(&my))
+                        ))
+                        .small()
+                        .color(Color32::from_rgb(132, 228, 255)),
+                    );
                 }
             });
 
@@ -7445,6 +7945,14 @@ impl eframe::App for QsonautGuiApp {
                                 }
                                 self.ptt_lead_ms = p.ptt_lead_ms.clamp(100, 1_500);
                                 self.ptt_tail_ms = p.ptt_tail_ms.clamp(0, 1_000);
+                                self.contest_serial_current = p
+                                    .contest_serial_current
+                                    .max(self.contest_serial_start.max(1))
+                                    .max(1);
+                                self.contest_fake_split_offset_hz =
+                                    p.contest_fake_split_offset_hz.clamp(0, 2_000);
+                                self.hunter_unlocked = p.hunter_unlocked.into_iter().collect();
+                                self.hunter_custom_rules = p.hunter_custom_rules;
                                 self.gui_scale = if p.profile_version >= OPERATOR_PROFILE_VERSION {
                                     p.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
                                 } else {
