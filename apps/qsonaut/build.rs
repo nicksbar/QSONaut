@@ -1,6 +1,7 @@
 #[cfg(target_os = "windows")]
 fn main() {
     use std::path::PathBuf;
+    use image::imageops::FilterType;
 
     let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let png_path = manifest_dir
@@ -16,7 +17,8 @@ fn main() {
 
     let image = image::open(&png_path)
         .expect("failed to load qsonaut icon PNG for Windows resource embedding");
-    image
+    let icon = image.resize(256, 256, FilterType::Lanczos3);
+    icon
         .save_with_format(&ico_path, image::ImageFormat::Ico)
         .expect("failed to generate qsonaut ICO for Windows resource embedding");
 
