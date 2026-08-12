@@ -1041,7 +1041,7 @@ fn draw_operator_call_banner(
     let (badge, accent, fill) = call_hit_badge(hit);
     egui::Frame::group(ui.style())
         .fill(fill)
-        .stroke(egui::Stroke::new(2.0, accent))
+        .stroke(egui::Stroke::new(2.0_f32, accent))
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(badge).strong().size(16.0).color(accent));
@@ -3357,7 +3357,7 @@ impl QsonautGuiApp {
             ui.add_space(6.0);
             egui::Frame::group(ui.style())
                 .fill(Color32::from_rgb(70, 42, 20))
-                .stroke(egui::Stroke::new(1.5, Color32::YELLOW))
+                .stroke(egui::Stroke::new(1.5_f32, Color32::YELLOW))
                 .show(ui, |ui| {
                     ui.label(
                         RichText::new("⚠ NEEDS ATTENTION")
@@ -3518,14 +3518,14 @@ impl QsonautGuiApp {
                     egui::pos2(rx_x, response.rect.top()),
                     egui::pos2(rx_x, response.rect.bottom()),
                 ],
-                egui::Stroke::new(1.5, Color32::from_rgb(120, 220, 120)),
+                egui::Stroke::new(1.5_f32, Color32::from_rgb(120, 220, 120)),
             );
             ui.painter().line_segment(
                 [
                     egui::pos2(tx_x, response.rect.top()),
                     egui::pos2(tx_x, response.rect.bottom()),
                 ],
-                egui::Stroke::new(1.5, Color32::from_rgb(220, 160, 80)),
+                egui::Stroke::new(1.5_f32, Color32::from_rgb(220, 160, 80)),
             );
 
             ui.painter().text(
@@ -3808,7 +3808,7 @@ impl QsonautGuiApp {
                                     },
                                     |hit| {
                                         let (_, accent, fill) = call_hit_badge(hit);
-                                        (fill, egui::Stroke::new(2.0, accent))
+                                        (fill, egui::Stroke::new(2.0_f32, accent))
                                     },
                                 );
                                 egui::Frame::group(ui.style())
@@ -3988,7 +3988,7 @@ impl QsonautGuiApp {
                 .add(
                     egui::Button::new(RichText::new(auto_label).strong().color(Color32::WHITE))
                         .fill(auto_fill)
-                        .stroke(egui::Stroke::new(1.5, auto_stroke)),
+                        .stroke(egui::Stroke::new(1.5_f32, auto_stroke)),
                 )
                 .on_hover_text(if self.ft8_autoseq {
                     "Cancel queued/active TX, drop PTT, and disarm FT8 and FT4"
@@ -4201,7 +4201,7 @@ impl QsonautGuiApp {
                             let (badge, accent, fill) = call_hit_badge(hit);
                             egui::Frame::group(ui.style())
                                 .fill(fill)
-                                .stroke(egui::Stroke::new(1.5, accent))
+                                .stroke(egui::Stroke::new(1.5_f32, accent))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         ui.label(RichText::new(badge).strong().color(accent));
@@ -4618,7 +4618,7 @@ impl QsonautGuiApp {
                                     },
                                     |hit| {
                                         let (_, accent, fill) = call_hit_badge(hit);
-                                        (fill, egui::Stroke::new(2.0, accent))
+                                        (fill, egui::Stroke::new(2.0_f32, accent))
                                     },
                                 );
                                 egui::Frame::group(ui.style())
@@ -4793,7 +4793,7 @@ impl QsonautGuiApp {
                 .add(
                     egui::Button::new(RichText::new(auto_label).strong().color(Color32::WHITE))
                         .fill(auto_fill)
-                        .stroke(egui::Stroke::new(1.5, auto_stroke)),
+                        .stroke(egui::Stroke::new(1.5_f32, auto_stroke)),
                 )
                 .clicked()
             {
@@ -5016,7 +5016,7 @@ impl QsonautGuiApp {
                             let (badge, accent, fill) = call_hit_badge(hit);
                             egui::Frame::group(ui.style())
                                 .fill(fill)
-                                .stroke(egui::Stroke::new(1.5, accent))
+                                .stroke(egui::Stroke::new(1.5_f32, accent))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         ui.label(RichText::new(badge).strong().color(accent));
@@ -5106,7 +5106,7 @@ impl QsonautGuiApp {
                                 .color(Color32::WHITE),
                         )
                         .fill(Color32::from_rgb(112, 30, 38))
-                        .stroke(egui::Stroke::new(1.5, Color32::from_rgb(255, 100, 110))),
+                        .stroke(egui::Stroke::new(1.5_f32, Color32::from_rgb(255, 100, 110))),
                     )
                     .on_hover_text(
                         "Drop PTT and permanently cancel FT8/FT4 automatic TX until re-armed",
@@ -5387,7 +5387,7 @@ impl QsonautGuiApp {
 
         egui::Frame::group(ui.style())
             .fill(fill)
-            .stroke(egui::Stroke::new(2.0, border))
+            .stroke(egui::Stroke::new(2.0_f32, border))
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.label(RichText::new(status).strong().size(17.0).color(Color32::WHITE));
@@ -5403,7 +5403,7 @@ impl QsonautGuiApp {
                             )
                             .fill(Color32::from_rgb(126, 25, 39))
                             .stroke(egui::Stroke::new(
-                                1.5,
+                                1.5_f32,
                                 Color32::from_rgb(255, 105, 115),
                             )),
                         )
@@ -6436,7 +6436,7 @@ fn operator_status_card(
 ) {
     egui::Frame::group(ui.style())
         .fill(Color32::from_rgb(24, 29, 36))
-        .stroke(egui::Stroke::new(1.0, accent.gamma_multiply(0.7)))
+        .stroke(egui::Stroke::new(1.0_f32, accent.gamma_multiply(0.7)))
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(label).strong().color(Color32::LIGHT_GRAY));
