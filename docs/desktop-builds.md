@@ -42,4 +42,5 @@ read as a one-way migration fallback.
 `mfsk-core` remains a sibling source dependency during active modem development.
 The workflow checks a pinned revision out alongside QSONaut and packages its
 GPL-3.0-or-later license plus QSONaut's third-party notice with every binary
-archive. Update the pinned revision and notice together when upgrading it.
+archive. The exact post-release revision is pinned so merged decoder fixes are
+reproducible. Update the pin and notice together when upgrading it.

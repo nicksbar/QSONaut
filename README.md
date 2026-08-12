@@ -55,7 +55,7 @@ QSONaut currently uses
 ```bash
 git clone https://github.com/nicksbar/QSONaut.git
 git clone https://github.com/jl1nie/mfsk-core.git
-git -C mfsk-core checkout b70ad5ceecb45ddbdd05ba6f3bd4ef090c010bf7 # v0.9.1
+git -C mfsk-core checkout ff9a04119cb8580ede6f2c943afdeee08e81777e # post-v0.9.1 fixes
 cd QSONaut
 cargo run --release -p qsonaut -- --gui
 ```
