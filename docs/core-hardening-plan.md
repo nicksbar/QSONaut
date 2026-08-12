@@ -94,6 +94,7 @@ Acceptance criteria:
 - [ ] Add dupe and worked-status engine
   - Real-time call matching against log, per-band/per-mode views.
   - Status: pre-TX duplicate guard is now enforced in GUI TX queue paths (FT8 + native digital) using `call+band+mode` matching when contest dupe-check is enabled.
+  - Status: decode and TX panes now surface worked-contact visual cues, plus a new in-app "Achievement hunter" alert feed that highlights directed hits, duplicate-save events, and QSO milestones.
 - [ ] Add serial/CQ number workflow
   - Increment/decrement rules, resend behavior, and persistence across restart.
 - [ ] Add macro-friendly Run/S&P helper actions
