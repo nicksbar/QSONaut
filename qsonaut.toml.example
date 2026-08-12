@@ -20,3 +20,13 @@ controller_civ_address = 224
 [ai]
 enabled = false
 provider = "none"
+
+[contest]
+enabled = false
+operating_mode = "Run" # Run | SearchAndPounce
+split_policy = "Off"   # Off | Fake | Rig
+fox_hound_role = "Disabled" # Disabled | Fox | Hound
+exchange_template = ""
+serial_start = 1
+serial_step = 1
+dupe_check = true

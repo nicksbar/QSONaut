@@ -19,6 +19,7 @@ qsonaut-audio = { path = "../qsonaut-audio" }
 qsonaut-accelerate = { path = "../qsonaut-accelerate" }
 qsonaut-dsp   = { path = "../qsonaut-dsp" }
 qsonaut-core = { path = "../qsonaut-core" }
+qsonaut-automation = { path = "../qsonaut-automation" }
 qsonaut-log = { path = "../qsonaut-log" }
 qsonaut-radio = { path = "../qsonaut-radio" }
 qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }

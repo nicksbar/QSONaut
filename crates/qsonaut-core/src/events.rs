@@ -11,6 +11,38 @@ pub enum AppEvent {
         subsystem: String,
         name: String,
     },
+    ContestProfileChanged {
+        enabled: bool,
+        operating_mode: String,
+        split_policy: String,
+        fox_hound_role: String,
+    },
+    CallsignHit {
+        mode: String,
+        call: String,
+        snr_db: f32,
+        freq_hz: u32,
+        message: String,
+        directed_to_me: bool,
+    },
+    QsoLogged {
+        mode: String,
+        call: String,
+        band: String,
+        frequency_hz: u64,
+    },
+    ExternalMessageReceived {
+        source: String,
+        author: String,
+        message: String,
+        #[allow(dead_code)]
+        channel: String,
+    },
+    AutomationHook {
+        kind: String,
+        source: String,
+        detail: String,
+    },
     ShutdownRequested,
 }
 

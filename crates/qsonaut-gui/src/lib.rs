@@ -15,9 +15,16 @@ use qsonaut_accelerate::{
     AccelerationReport, ActiveBackend, ComputePreference, DecodeTelemetry, DecodeTrace,
 };
 use qsonaut_audio::{play_pcm_blocking, AudioService};
-use qsonaut_core::AppConfig;
+use qsonaut_automation::{
+    Action, AutomationEvent, AutomationHost, Capability, CapabilitySet, EventKind,
+    ExternalSourceConfig, RuleComponent, RuleComponentConfig,
+};
+use qsonaut_core::{
+    AppConfig, AppEvent, AppEventBus, ContestOperatingMode, ContestProfile, FoxHoundRole,
+    SplitPolicy,
+};
 use qsonaut_dsp::resample::Decimator;
-use qsonaut_log::{app_config_dir, QsoLog, QsoRecord};
+use qsonaut_log::{app_config_dir, AdifExportFilter, QsoLog, QsoRecord};
 use qsonaut_pskreporter::{ReceptionReport, ReportSender, Reporter, ReporterConfig};
 use qsonaut_radio::{
     enumerate_serial_port_descriptors, BaseMode, ControlId, ControlValue, IcomCiVRadio, Mode,
@@ -25,7 +32,7 @@ use qsonaut_radio::{
 };
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::f32::consts::PI;
 use std::fs;
 use std::path::PathBuf;
@@ -34,6 +41,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::broadcast::error::TryRecvError;
 use tracing::{debug, info};
 
 const QSONAUT_ICON_PNG: &[u8] = include_bytes!("../../../assets/branding/qsonaut-icon.png");
@@ -52,7 +60,7 @@ const AUDIO_MAX_FREQ_HZ: u32 = 4_000;
 // 8192 samples @ 48 kHz = 170 ms window, ~5.9 Hz/bin, ~683 useful bins for 0-4 kHz.
 const FFT_SIZE: usize = 8192;
 const OPERATOR_PROFILE_FILE: &str = "profile.toml";
-const OPERATOR_PROFILE_VERSION: u32 = 4;
+const OPERATOR_PROFILE_VERSION: u32 = 7;
 const GUI_SCALE_BASE: f32 = 1.2;
 const GUI_SCALE_MAX: f32 = 2.0;
 const GUI_SCALE_MIN: f32 = 0.9;
@@ -222,10 +230,38 @@ struct OperatorProfile {
     compute_preference: ComputePreference,
     #[serde(default)]
     psk_reporter_enabled: bool,
+    #[serde(default)]
+    contest_enabled: bool,
+    #[serde(default)]
+    contest_operating_mode: ContestOperatingMode,
+    #[serde(default)]
+    contest_split_policy: SplitPolicy,
+    #[serde(default)]
+    contest_fox_hound_role: FoxHoundRole,
+    #[serde(default)]
+    contest_exchange_template: String,
+    #[serde(default = "default_contest_serial_start")]
+    contest_serial_start: u32,
+    #[serde(default = "default_contest_serial_step")]
+    contest_serial_step: u32,
+    #[serde(default = "default_contest_dupe_check")]
+    contest_dupe_check: bool,
+    #[serde(default = "default_contest_serial_current")]
+    contest_serial_current: u32,
+    #[serde(default = "default_contest_fake_split_offset_hz")]
+    contest_fake_split_offset_hz: u32,
+    #[serde(default)]
+    hunter_unlocked: Vec<AchievementKind>,
+    #[serde(default)]
+    hunter_custom_rules: Vec<CustomAchievementRule>,
 }
 
 fn default_gui_scale() -> f32 {
     GUI_SCALE_BASE
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn gui_scale_from_percent(percent: u32) -> f32 {
@@ -260,6 +296,321 @@ fn default_ptt_lead_ms() -> u64 {
 }
 fn default_ptt_tail_ms() -> u64 {
     100
+}
+
+fn default_contest_serial_start() -> u32 {
+    1
+}
+
+fn default_contest_serial_step() -> u32 {
+    1
+}
+
+fn default_contest_dupe_check() -> bool {
+    true
+}
+
+fn default_contest_serial_current() -> u32 {
+    default_contest_serial_start()
+}
+
+fn default_contest_fake_split_offset_hz() -> u32 {
+    250
+}
+
+fn contest_operating_mode_label(mode: ContestOperatingMode) -> &'static str {
+    match mode {
+        ContestOperatingMode::Run => "run",
+        ContestOperatingMode::SearchAndPounce => "search_and_pounce",
+    }
+}
+
+fn split_policy_label(policy: SplitPolicy) -> &'static str {
+    match policy {
+        SplitPolicy::Off => "off",
+        SplitPolicy::Fake => "fake",
+        SplitPolicy::Rig => "rig",
+    }
+}
+
+fn fox_hound_role_label(role: FoxHoundRole) -> &'static str {
+    match role {
+        FoxHoundRole::Disabled => "disabled",
+        FoxHoundRole::Fox => "fox",
+        FoxHoundRole::Hound => "hound",
+    }
+}
+
+fn parse_automation_hook_detail(detail: &str) -> BTreeMap<String, String> {
+    detail
+        .split_whitespace()
+        .filter_map(|token| {
+            let (key, value) = token.split_once('=')?;
+            let key = key.trim();
+            if key.is_empty() {
+                return None;
+            }
+            Some((key.to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
+
+fn normalize_app_event_for_automation(event: AppEvent) -> Option<AutomationEvent> {
+    match event {
+        AppEvent::ContestProfileChanged {
+            enabled,
+            operating_mode,
+            split_policy,
+            fox_hound_role,
+        } => Some(
+            AutomationEvent::new(EventKind::ContestState, "app.contest_profile")
+                .field("enabled", enabled.to_string())
+                .field("operating_mode", operating_mode)
+                .field("split_policy", split_policy)
+                .field("fox_hound_role", fox_hound_role),
+        ),
+        AppEvent::CallsignHit {
+            mode,
+            call,
+            snr_db,
+            freq_hz,
+            message,
+            directed_to_me,
+        } => {
+            let event = AutomationEvent::new(EventKind::CallsignHit, "app.callsign_hit")
+                .field("mode", mode)
+                .field("call", call)
+                .field("snr", format!("{snr_db:+.1}"))
+                .field("freq_hz", freq_hz.to_string())
+                .field("message", message)
+                .field("directed_to_me", directed_to_me.to_string());
+            Some(if directed_to_me {
+                event.tag("directed_to_me")
+            } else {
+                event
+            })
+        }
+        AppEvent::QsoLogged {
+            mode,
+            call,
+            band,
+            frequency_hz,
+        } => Some(
+            AutomationEvent::new(EventKind::QsoLogged, "app.qso_log")
+                .field("mode", mode)
+                .field("call", call)
+                .field("band", band)
+                .field("frequency_hz", frequency_hz.to_string()),
+        ),
+        AppEvent::ExternalMessageReceived {
+            source,
+            author,
+            message,
+            channel,
+        } => Some(
+            AutomationEvent::new(EventKind::ExternalMessage, source.clone())
+                .field("source", source)
+                .field("author", author)
+                .field("message", message)
+                .field("channel", channel),
+        ),
+        AppEvent::AutomationHook {
+            kind,
+            source,
+            detail,
+        } => {
+            let event_kind = match kind.as_str() {
+                "contest_state" => EventKind::ContestState,
+                "operator_profile" => EventKind::OperatorProfile,
+                "callsign_hit" => EventKind::CallsignHit,
+                "qso_logged" => EventKind::QsoLogged,
+                "radio_state" => EventKind::RadioState,
+                _ => return None,
+            };
+            let mut event = AutomationEvent::new(event_kind, source)
+                .field("kind", kind)
+                .field("detail", detail.clone());
+            for (key, value) in parse_automation_hook_detail(&detail) {
+                event = event.field(key, value);
+            }
+            Some(event)
+        }
+        _ => None,
+    }
+}
+
+fn parse_workspace_mode_token(mode: &str) -> Option<WorkspaceMode> {
+    match mode.trim().to_ascii_uppercase().as_str() {
+        "FT8" => Some(WorkspaceMode::Ft8),
+        "FT4" => Some(WorkspaceMode::Ft4),
+        "FST4" => Some(WorkspaceMode::Fst4),
+        "WSPR" => Some(WorkspaceMode::Wspr),
+        "JT9" => Some(WorkspaceMode::Jt9),
+        "JT65" => Some(WorkspaceMode::Jt65),
+        "Q65" => Some(WorkspaceMode::Q65),
+        "MSK144" => Some(WorkspaceMode::Msk144),
+        "CW" => Some(WorkspaceMode::Cw),
+        "FLDIGI" => Some(WorkspaceMode::Fldigi),
+        _ => None,
+    }
+}
+
+fn workspace_mode_supports_native_tx(mode: WorkspaceMode) -> bool {
+    matches!(
+        mode,
+        WorkspaceMode::Ft4
+            | WorkspaceMode::Fst4
+            | WorkspaceMode::Jt9
+            | WorkspaceMode::Jt65
+            | WorkspaceMode::Q65
+    )
+}
+
+fn parse_tx_target_from_compose(compose: &str, operator_call: &str) -> Option<String> {
+    let parsed = parse_message(compose)?;
+    if parsed.is_cq {
+        return None;
+    }
+
+    let operator_call = operator_call.trim();
+    if ft8_ops::callsign_eq(&parsed.from, operator_call) {
+        return parsed.to;
+    }
+    if parsed
+        .to
+        .as_deref()
+        .is_some_and(|to| ft8_ops::callsign_eq(to, operator_call))
+    {
+        return Some(parsed.from);
+    }
+    parsed.to.or(Some(parsed.from))
+}
+
+fn parse_bool_env(var: &str) -> bool {
+    std::env::var(var)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on" | "enabled"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn external_source_transport(source: &str) -> Option<String> {
+    let (transport, _) = source.trim().split_once(':')?;
+    let transport = transport.trim();
+    if transport.is_empty() {
+        None
+    } else {
+        Some(transport.to_ascii_lowercase())
+    }
+}
+
+fn configured_external_transports(config: &RuleComponentConfig) -> HashSet<String> {
+    config
+        .sources
+        .iter()
+        .map(|source| match source {
+            ExternalSourceConfig::Discord { .. } => "discord",
+            ExternalSourceConfig::Irc { .. } => "irc",
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+#[derive(Debug, Clone)]
+struct ExternalSendRecord {
+    utc: String,
+    source: String,
+    target: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AchievementKind {
+    FirstDecode,
+    DirectedCall,
+    FirstQsoLogged,
+    TenQsosLogged,
+    FiftyQsosLogged,
+    DupeShield,
+    CenturyHunter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum HunterMetric {
+    UniqueHeard,
+    DirectedHits,
+    QsoLogged,
+    DupeBlocks,
+    DecodeBursts,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CustomAchievementRule {
+    id: String,
+    title: String,
+    detail: String,
+    metric: HunterMetric,
+    threshold: u32,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default)]
+    unlocked: bool,
+}
+
+#[derive(Debug, Clone)]
+struct HunterAlert {
+    utc: String,
+    title: String,
+    detail: String,
+    accent: Color32,
+}
+
+fn bootstrap_automation_host() -> (AutomationHost, String, HashSet<String>) {
+    let mut host = AutomationHost::default();
+    let source = include_str!("../../../automation.example.toml");
+
+    match RuleComponentConfig::from_toml(source) {
+        Ok(config) => {
+            let configured_transports = configured_external_transports(&config);
+            let component_id = config.component.id.clone();
+            if let Err(error) = host.register(RuleComponent::new(config)) {
+                return (
+                    host,
+                    format!("Automation host active, component registration failed: {error}"),
+                    HashSet::new(),
+                );
+            }
+
+            let external_send_enabled = parse_bool_env("QSONAUT_AUTOMATION_ENABLE_EXTERNAL_SEND");
+            let grants = if external_send_enabled {
+                CapabilitySet::new([Capability::UiNotification, Capability::ExternalSend])
+            } else {
+                CapabilitySet::new([Capability::UiNotification])
+            };
+            host.set_grants(component_id.clone(), grants);
+
+            let grant_status = if external_send_enabled {
+                "ui_notification, external_send (env-enabled)"
+            } else {
+                "ui_notification"
+            };
+            (
+                host,
+                format!("Automation component loaded: {component_id} (granted: {grant_status})"),
+                configured_transports,
+            )
+        }
+        Err(error) => (
+            host,
+            format!("Automation config parse failed; runtime hooks paused: {error}"),
+            HashSet::new(),
+        ),
+    }
 }
 
 fn start_psk_reporter(
@@ -1390,6 +1741,29 @@ fn configure_unix_gui_environment() {
 
 struct QsonautGuiApp {
     config: AppConfig,
+    app_events: AppEventBus,
+    automation_event_rx: tokio::sync::broadcast::Receiver<AppEvent>,
+    automation_host: AutomationHost,
+    automation_status: String,
+    last_radio_state_signature: Option<String>,
+    automation_external_transports: HashSet<String>,
+    automation_external_outbox: VecDeque<ExternalSendRecord>,
+    hunter_unlocked: HashSet<AchievementKind>,
+    hunter_feed: VecDeque<HunterAlert>,
+    hunter_unique_heard: HashSet<String>,
+    hunter_directed_hits: u32,
+    hunter_dupe_blocks: u32,
+    hunter_decode_bursts: u32,
+    hunter_custom_rules: Vec<CustomAchievementRule>,
+    hunter_custom_title_input: String,
+    hunter_custom_detail_input: String,
+    hunter_custom_metric_input: HunterMetric,
+    hunter_custom_threshold_input: u32,
+    hunter_custom_enabled_input: bool,
+    external_ingress_source: String,
+    external_ingress_author: String,
+    external_ingress_channel: String,
+    external_ingress_message: String,
     state: Arc<Mutex<GuiState>>,
     command_tx: Option<mpsc::Sender<GuiCommand>>,
     worker_stop: Arc<AtomicBool>,
@@ -1469,6 +1843,16 @@ struct QsonautGuiApp {
     station_callsign: String,
     station_grid: String,
     station_qth: String,
+    contest_enabled: bool,
+    contest_operating_mode: ContestOperatingMode,
+    contest_split_policy: SplitPolicy,
+    contest_fox_hound_role: FoxHoundRole,
+    contest_exchange_template: String,
+    contest_serial_start: u32,
+    contest_serial_step: u32,
+    contest_dupe_check: bool,
+    contest_serial_current: u32,
+    contest_fake_split_offset_hz: u32,
     civ_spectrum_on: bool,
     rx_tone_hz: u32,
     tx_tone_hz: u32,
@@ -1527,6 +1911,10 @@ impl QsonautGuiApp {
         let (radio_serial_ports, radio_serial_port_labels, radio_detected_models) =
             radio_port_inventory(enumerate_serial_port_descriptors().unwrap_or_default());
         let state = Arc::new(Mutex::new(GuiState::default()));
+        let app_events = AppEventBus::new(256);
+        let automation_event_rx = app_events.subscribe();
+        let (automation_host, automation_status, automation_external_transports) =
+            bootstrap_automation_host();
         let worker_stop = Arc::new(AtomicBool::new(false));
         let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
 
@@ -1617,6 +2005,19 @@ impl QsonautGuiApp {
         let mut gui_scale = default_gui_scale();
         let mut compute_preference = ComputePreference::Auto;
         let mut psk_reporter_enabled = false;
+        let mut contest_enabled = config.contest.enabled;
+        let mut contest_operating_mode = config.contest.operating_mode;
+        let mut contest_split_policy = config.contest.split_policy;
+        let mut contest_fox_hound_role = config.contest.fox_hound_role;
+        let mut contest_exchange_template =
+            config.contest.exchange_template.clone().unwrap_or_default();
+        let mut contest_serial_start = config.contest.serial_start.max(1);
+        let mut contest_serial_step = config.contest.serial_step.max(1);
+        let mut contest_dupe_check = config.contest.dupe_check;
+        let mut contest_serial_current = contest_serial_start;
+        let mut contest_fake_split_offset_hz = default_contest_fake_split_offset_hz();
+        let mut hunter_unlocked = HashSet::new();
+        let mut hunter_custom_rules = Vec::new();
         let profile_io_status: String;
 
         if let Some(p) = load_operator_profile() {
@@ -1659,8 +2060,34 @@ impl QsonautGuiApp {
             };
             compute_preference = p.compute_preference;
             psk_reporter_enabled = p.psk_reporter_enabled;
+            contest_enabled = p.contest_enabled;
+            contest_operating_mode = p.contest_operating_mode;
+            contest_split_policy = p.contest_split_policy;
+            contest_fox_hound_role = p.contest_fox_hound_role;
+            contest_exchange_template = p.contest_exchange_template;
+            contest_serial_start = p.contest_serial_start.max(1);
+            contest_serial_step = p.contest_serial_step.max(1);
+            contest_dupe_check = p.contest_dupe_check;
+            contest_serial_current = p.contest_serial_current.max(contest_serial_start).max(1);
+            contest_fake_split_offset_hz = p.contest_fake_split_offset_hz.clamp(0, 2_000);
+            hunter_unlocked = p.hunter_unlocked.into_iter().collect();
+            hunter_custom_rules = p.hunter_custom_rules;
             config.station.callsign = Some(station_callsign.clone());
             config.station.grid = Some(station_grid.clone());
+            config.contest = ContestProfile {
+                enabled: contest_enabled,
+                operating_mode: contest_operating_mode,
+                split_policy: contest_split_policy,
+                fox_hound_role: contest_fox_hound_role,
+                exchange_template: if contest_exchange_template.trim().is_empty() {
+                    None
+                } else {
+                    Some(contest_exchange_template.trim().to_string())
+                },
+                serial_start: contest_serial_start,
+                serial_step: contest_serial_step,
+                dupe_check: contest_dupe_check,
+            };
             profile_io_status = format!("Loaded {}", OPERATOR_PROFILE_FILE);
         } else {
             let bootstrap = OperatorProfile {
@@ -1694,6 +2121,18 @@ impl QsonautGuiApp {
                 gui_scale,
                 compute_preference,
                 psk_reporter_enabled,
+                contest_enabled,
+                contest_operating_mode,
+                contest_split_policy,
+                contest_fox_hound_role,
+                contest_exchange_template: contest_exchange_template.trim().to_string(),
+                contest_serial_start,
+                contest_serial_step,
+                contest_dupe_check,
+                contest_serial_current,
+                contest_fake_split_offset_hz,
+                hunter_unlocked: Vec::new(),
+                hunter_custom_rules: Vec::new(),
             };
             match save_operator_profile(&bootstrap) {
                 Ok(_) => {
@@ -1725,6 +2164,29 @@ impl QsonautGuiApp {
 
         Self {
             config,
+            app_events,
+            automation_event_rx,
+            automation_host,
+            automation_status,
+            last_radio_state_signature: None,
+            automation_external_transports,
+            automation_external_outbox: VecDeque::new(),
+            hunter_unlocked,
+            hunter_feed: VecDeque::new(),
+            hunter_unique_heard: HashSet::new(),
+            hunter_directed_hits: 0,
+            hunter_dupe_blocks: 0,
+            hunter_decode_bursts: 0,
+            hunter_custom_rules,
+            hunter_custom_title_input: String::new(),
+            hunter_custom_detail_input: String::new(),
+            hunter_custom_metric_input: HunterMetric::UniqueHeard,
+            hunter_custom_threshold_input: 1,
+            hunter_custom_enabled_input: true,
+            external_ingress_source: "discord:shack".to_string(),
+            external_ingress_author: "operator".to_string(),
+            external_ingress_channel: "#qsonaut".to_string(),
+            external_ingress_message: "!rig".to_string(),
             state,
             command_tx,
             worker_stop,
@@ -1803,6 +2265,16 @@ impl QsonautGuiApp {
             station_callsign,
             station_grid,
             station_qth,
+            contest_enabled,
+            contest_operating_mode,
+            contest_split_policy,
+            contest_fox_hound_role,
+            contest_exchange_template,
+            contest_serial_start,
+            contest_serial_step,
+            contest_dupe_check,
+            contest_serial_current,
+            contest_fake_split_offset_hz,
             civ_spectrum_on,
             rx_tone_hz,
             tx_tone_hz,
@@ -1875,6 +2347,14 @@ impl QsonautGuiApp {
                 .saturating_add(1);
         }
         self.qso_log.contacts.push(record);
+        if let Some(last) = self.qso_log.contacts.last() {
+            self.app_events.publish(AppEvent::QsoLogged {
+                mode: last.mode.clone(),
+                call: last.callsign.clone(),
+                band: last.band.clone(),
+                frequency_hz: last.frequency_hz,
+            });
+        }
         self.qso_selected = Some(self.qso_log.contacts.len() - 1);
         self.qso_log_dirty = true;
         self.persist_qso_log(status);
@@ -1909,6 +2389,14 @@ impl QsonautGuiApp {
             .report_received
             .map(format_signal_report)
             .unwrap_or_default();
+        if self.contest_enabled {
+            record.contest_serial_sent = Some(self.contest_serial_current.max(1));
+            record.contest_exchange_sent = self.contest_exchange_preview(&session.target);
+            record.contest_exchange_received = record.report_received.clone();
+            self.advance_contest_serial();
+            self.profile_dirty = true;
+            self.persist_profile("Auto-saved");
+        }
         self.append_qso(record, "Auto-logged");
     }
 
@@ -1938,6 +2426,14 @@ impl QsonautGuiApp {
             .report_received
             .map(format_signal_report)
             .unwrap_or_default();
+        if self.contest_enabled {
+            record.contest_serial_sent = Some(self.contest_serial_current.max(1));
+            record.contest_exchange_sent = self.contest_exchange_preview(&session.target);
+            record.contest_exchange_received = record.report_received.clone();
+            self.advance_contest_serial();
+            self.profile_dirty = true;
+            self.persist_profile("Auto-saved");
+        }
         self.append_qso(record, "Auto-logged FT4");
     }
 
@@ -1958,6 +2454,9 @@ impl QsonautGuiApp {
             })
             .cloned()
             .collect();
+        if !fresh.is_empty() {
+            self.track_decode_batch(fresh.len());
+        }
         if self.ft4_seen_decodes.len() > 1_000 {
             let latest = fresh
                 .iter()
@@ -1967,6 +2466,24 @@ impl QsonautGuiApp {
             self.ft4_seen_decodes
                 .retain(|(period, _, _)| *period + 100 >= latest);
         }
+
+        let operator_call = self.station_callsign_or_default().to_string();
+        for entry in &fresh {
+            if let Some(hit) = operator_call_hit(&entry.message, &operator_call) {
+                let call = parse_message(&entry.message)
+                    .map(|parsed| parsed.from)
+                    .unwrap_or_default();
+                self.app_events.publish(AppEvent::CallsignHit {
+                    mode: "FT4".to_string(),
+                    call,
+                    snr_db: entry.snr_db,
+                    freq_hz: entry.freq_hz,
+                    message: entry.message.clone(),
+                    directed_to_me: hit == OperatorCallHit::DirectedToMe,
+                });
+            }
+        }
+
         if !self.ft4_autoseq || self.digital_tx_active.load(Ordering::Acquire) {
             return;
         }
@@ -2074,6 +2591,10 @@ impl QsonautGuiApp {
             self.ft8_seq_status = "TX not queued: compose is empty".to_string();
             return;
         }
+        let compose = self.ft8_compose.clone();
+        if self.block_duplicate_tx_if_needed(WorkspaceMode::Ft8, &compose) {
+            return;
+        }
         let Some(command_tx) = self.command_tx.clone() else {
             self.ft8_seq_status = "TX unavailable: radio control is disabled".to_string();
             return;
@@ -2102,7 +2623,8 @@ impl QsonautGuiApp {
             return;
         }
         self.ft8_tx_abort.store(false, Ordering::Relaxed);
-        match build_ft8_tx_pcm(&self.ft8_compose, self.tx_tone_hz) {
+        let tx_tone_hz = self.contest_effective_tx_tone_hz();
+        match build_ft8_tx_pcm(&self.ft8_compose, tx_tone_hz) {
             Ok(pcm) => {
                 let now_s = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -2251,6 +2773,62 @@ impl QsonautGuiApp {
             || self.ft8_tx_active.load(Ordering::Acquire)
             || self.ft8_tx_queued_period.is_some()
             || self.digital_tx_active.load(Ordering::Acquire)
+    }
+
+    fn has_logged_contact_with(&self, target_call: &str, mode: &str, band: &str) -> bool {
+        self.qso_log.contacts.iter().any(|contact| {
+            ft8_ops::callsign_eq(&contact.callsign, target_call)
+                && contact.mode.eq_ignore_ascii_case(mode)
+                && contact.band.eq_ignore_ascii_case(band)
+        })
+    }
+
+    fn block_duplicate_tx_if_needed(&mut self, mode: WorkspaceMode, compose: &str) -> bool {
+        if !self.contest_dupe_check {
+            return false;
+        }
+
+        let Some(frequency_hz) = self
+            .state
+            .lock()
+            .expect("ui state lock poisoned")
+            .frequency_hz
+        else {
+            return false;
+        };
+        let band = band_for_frequency(frequency_hz);
+
+        let operator_call = self.station_callsign_or_default().to_string();
+        let Some(target_call) = parse_tx_target_from_compose(compose, &operator_call) else {
+            return false;
+        };
+        if ft8_ops::callsign_eq(&target_call, &operator_call) {
+            return false;
+        }
+
+        if self.has_logged_contact_with(&target_call, mode.label(), band) {
+            let status = format!(
+                "Dupe check blocked TX: {target_call} already worked on {band} {}",
+                mode.label()
+            );
+            self.ft8_seq_status = status.clone();
+            self.digital_tx_status = status;
+            self.hunter_dupe_blocks = self.hunter_dupe_blocks.saturating_add(1);
+            self.push_hunter_alert(
+                "🛡️ Dupe avoided",
+                format!("{target_call} on {band} {}", mode.label()),
+                Color32::from_rgb(255, 170, 75),
+            );
+            if self.hunter_dupe_blocks >= 10 {
+                self.unlock_achievement(
+                    AchievementKind::DupeShield,
+                    "Dupe Shield",
+                    "Prevented 10 duplicate TX attempts",
+                );
+            }
+            return true;
+        }
+        false
     }
 
     fn disarm_all_tx(&mut self, reason: &str) {
@@ -2403,6 +2981,10 @@ impl QsonautGuiApp {
     }
 
     fn queue_native_digital_tx(&mut self, mode: WorkspaceMode) {
+        let compose = self.digital_compose.clone();
+        if self.block_duplicate_tx_if_needed(mode, &compose) {
+            return;
+        }
         if self.digital_suppress_canceled_tx_events {
             self.digital_tx_status = "TX cancellation is still settling; try again".to_string();
             return;
@@ -2421,7 +3003,8 @@ impl QsonautGuiApp {
             self.digital_tx_status = format!("{} TX backend is not available", mode.label());
             return;
         };
-        match build_native_digital_tx_pcm(mode, &self.digital_compose, self.tx_tone_hz) {
+        let tx_tone_hz = self.contest_effective_tx_tone_hz();
+        match build_native_digital_tx_pcm(mode, &self.digital_compose, tx_tone_hz) {
             Ok((pcm, audio_offset_s)) => {
                 let now_s = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -2548,9 +3131,29 @@ impl QsonautGuiApp {
         if decodes.is_empty() && completed_period.is_none() {
             return;
         }
+        if !decodes.is_empty() {
+            self.track_decode_batch(decodes.len());
+        }
 
         let my_call = self.station_callsign_or_default().to_ascii_uppercase();
         let my_grid = self.station_grid_or_default().to_ascii_uppercase();
+
+        for entry in decodes {
+            if let Some(hit) = operator_call_hit(&entry.message, &my_call) {
+                let call = parse_message(&entry.message)
+                    .map(|parsed| parsed.from)
+                    .unwrap_or_default();
+                self.app_events.publish(AppEvent::CallsignHit {
+                    mode: "FT8".to_string(),
+                    call,
+                    snr_db: f32::from(entry.snr_db),
+                    freq_hz: entry.freq_hz,
+                    message: entry.message.clone(),
+                    directed_to_me: hit == OperatorCallHit::DirectedToMe,
+                });
+            }
+        }
+
         if my_call == "N0CALL" {
             self.ft8_seq_status = "Auto reply paused: set a valid operator callsign".to_string();
             return;
@@ -2689,7 +3292,70 @@ impl QsonautGuiApp {
             gui_scale: self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX),
             compute_preference: self.compute_preference,
             psk_reporter_enabled: self.psk_reporter_enabled,
+            contest_enabled: self.contest_enabled,
+            contest_operating_mode: self.contest_operating_mode,
+            contest_split_policy: self.contest_split_policy,
+            contest_fox_hound_role: self.contest_fox_hound_role,
+            contest_exchange_template: self.contest_exchange_template.trim().to_string(),
+            contest_serial_start: self.contest_serial_start.max(1),
+            contest_serial_step: self.contest_serial_step.max(1),
+            contest_dupe_check: self.contest_dupe_check,
+            contest_serial_current: self
+                .contest_serial_current
+                .max(self.contest_serial_start.max(1)),
+            contest_fake_split_offset_hz: self.contest_fake_split_offset_hz,
+            hunter_unlocked: self.hunter_unlocked.iter().copied().collect(),
+            hunter_custom_rules: self.hunter_custom_rules.clone(),
         }
+    }
+
+    fn contest_effective_tx_tone_hz(&self) -> u32 {
+        if self.contest_enabled && self.contest_split_policy == SplitPolicy::Fake {
+            self.rx_tone_hz
+                .saturating_add(self.contest_fake_split_offset_hz)
+                .clamp(100, AUDIO_MAX_FREQ_HZ)
+        } else {
+            self.tx_tone_hz
+        }
+    }
+
+    fn contest_exchange_preview(&self, target_call: &str) -> String {
+        let serial = self.contest_serial_current.max(1);
+        let my_call = self.station_callsign_or_default();
+        let my_grid = self.station_grid_or_default();
+        let template = if self.contest_exchange_template.trim().is_empty() {
+            "5NN ${serial}".to_string()
+        } else {
+            self.contest_exchange_template.trim().to_string()
+        };
+        template
+            .replace("${serial}", &format!("{serial:03}"))
+            .replace("${call}", target_call)
+            .replace("${target}", target_call)
+            .replace("${my_call}", my_call)
+            .replace("${grid}", my_grid)
+    }
+
+    fn advance_contest_serial(&mut self) {
+        let next = self
+            .contest_serial_current
+            .max(self.contest_serial_start.max(1))
+            .saturating_add(self.contest_serial_step.max(1));
+        self.contest_serial_current = next;
+    }
+
+    fn contest_guidance_text(&self) -> String {
+        let split_hint = match self.contest_split_policy {
+            SplitPolicy::Off => "split off",
+            SplitPolicy::Fake => "fake split uses a software TX offset",
+            SplitPolicy::Rig => "rig split requested (no direct split command yet)",
+        };
+        let role_hint = match self.contest_fox_hound_role {
+            FoxHoundRole::Disabled => "role disabled",
+            FoxHoundRole::Fox => "Fox: call CQ, keep the pileup flowing",
+            FoxHoundRole::Hound => "Hound: answer quickly and stay on the caller",
+        };
+        format!("{} · {}", split_hint, role_hint)
     }
 
     fn station_callsign_or_default(&self) -> &str {
@@ -2707,6 +3373,716 @@ impl QsonautGuiApp {
             "AA00"
         } else {
             v
+        }
+    }
+
+    fn emit_operator_profile_hook(&self, detail: impl Into<String>) {
+        self.app_events.publish(AppEvent::AutomationHook {
+            kind: "operator_profile".to_string(),
+            source: "gui.operator_profile".to_string(),
+            detail: detail.into(),
+        });
+    }
+
+    fn emit_contest_profile_hooks(&self) {
+        self.app_events.publish(AppEvent::ContestProfileChanged {
+            enabled: self.contest_enabled,
+            operating_mode: contest_operating_mode_label(self.contest_operating_mode).to_string(),
+            split_policy: split_policy_label(self.contest_split_policy).to_string(),
+            fox_hound_role: fox_hound_role_label(self.contest_fox_hound_role).to_string(),
+        });
+
+        self.app_events.publish(AppEvent::AutomationHook {
+            kind: "contest_state".to_string(),
+            source: "gui.contest_profile".to_string(),
+            detail: format!(
+                "enabled={} mode={} split={} role={} serial_start={} serial_step={} serial_current={} fake_split_offset_hz={} dupe_check={}",
+                self.contest_enabled,
+                contest_operating_mode_label(self.contest_operating_mode),
+                split_policy_label(self.contest_split_policy),
+                fox_hound_role_label(self.contest_fox_hound_role),
+                self.contest_serial_start,
+                self.contest_serial_step,
+                self.contest_serial_current,
+                self.contest_fake_split_offset_hz,
+                self.contest_dupe_check
+            ),
+        });
+    }
+
+    fn emit_radio_state_hook_if_changed(&mut self, snapshot: &GuiState) {
+        let frequency_hz = snapshot.frequency_hz.unwrap_or_default();
+        let data_mode = snapshot
+            .data_mode
+            .map_or("unknown", |value| if value { "true" } else { "false" });
+        let filter = snapshot
+            .filter
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let signature = format!(
+            "frequency_hz={frequency_hz} mode={} data_mode={data_mode} filter={filter} ptt_on={}",
+            snapshot.mode, snapshot.ptt_on
+        );
+
+        if self.last_radio_state_signature.as_deref() == Some(signature.as_str()) {
+            return;
+        }
+        self.last_radio_state_signature = Some(signature.clone());
+        self.app_events.publish(AppEvent::AutomationHook {
+            kind: "radio_state".to_string(),
+            source: "gui.radio".to_string(),
+            detail: signature,
+        });
+    }
+
+    fn publish_external_ingress_message(&mut self) {
+        let source = self.external_ingress_source.trim();
+        let author = self.external_ingress_author.trim();
+        let channel = self.external_ingress_channel.trim();
+        let message = self.external_ingress_message.trim();
+        if source.is_empty() || author.is_empty() || message.is_empty() {
+            self.automation_status =
+                "🤖 External ingress blocked: source, author, and message are required".to_string();
+            return;
+        }
+
+        self.app_events.publish(AppEvent::ExternalMessageReceived {
+            source: source.to_string(),
+            author: author.to_string(),
+            message: message.to_string(),
+            channel: if channel.is_empty() {
+                "(unspecified)".to_string()
+            } else {
+                channel.to_string()
+            },
+        });
+        self.automation_status =
+            format!("🤖 External message injected from {source} as {author}: {message}");
+        self.external_ingress_message.clear();
+    }
+
+    fn push_hunter_alert(
+        &mut self,
+        title: impl Into<String>,
+        detail: impl Into<String>,
+        accent: Color32,
+    ) {
+        let now_s = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64())
+            .unwrap_or_default();
+        self.hunter_feed.push_back(HunterAlert {
+            utc: utc_hhmmss_millis(now_s),
+            title: title.into(),
+            detail: detail.into(),
+            accent,
+        });
+        while self.hunter_feed.len() > 24 {
+            self.hunter_feed.pop_front();
+        }
+    }
+
+    fn unlock_achievement(
+        &mut self,
+        kind: AchievementKind,
+        title: impl Into<String>,
+        detail: impl Into<String>,
+    ) {
+        if self.hunter_unlocked.insert(kind) {
+            let title = title.into();
+            let detail = detail.into();
+            self.push_hunter_alert(
+                format!("🏆 Achievement unlocked: {title}"),
+                detail,
+                Color32::from_rgb(255, 201, 92),
+            );
+            self.profile_dirty = true;
+            self.persist_profile("Auto-saved");
+        }
+    }
+
+    fn custom_hunter_metric_value(&self, metric: HunterMetric) -> u32 {
+        match metric {
+            HunterMetric::UniqueHeard => self.hunter_unique_heard.len() as u32,
+            HunterMetric::DirectedHits => self.hunter_directed_hits,
+            HunterMetric::QsoLogged => self.qso_log.contacts.len() as u32,
+            HunterMetric::DupeBlocks => self.hunter_dupe_blocks,
+            HunterMetric::DecodeBursts => self.hunter_decode_bursts,
+        }
+    }
+
+    fn evaluate_custom_hunter_rules(&mut self) {
+        let mut newly_unlocked = Vec::new();
+        for (idx, rule) in self.hunter_custom_rules.iter().enumerate() {
+            if rule.enabled && !rule.unlocked {
+                let progress = self.custom_hunter_metric_value(rule.metric);
+                if progress >= rule.threshold {
+                    newly_unlocked.push(idx);
+                }
+            }
+        }
+
+        if newly_unlocked.is_empty() {
+            return;
+        }
+
+        for idx in newly_unlocked {
+            if let Some(rule) = self.hunter_custom_rules.get_mut(idx) {
+                let title = rule.title.clone();
+                let detail = rule.detail.clone();
+                rule.unlocked = true;
+                self.push_hunter_alert(
+                    format!("🏆 Achievement unlocked: {title}"),
+                    detail,
+                    Color32::from_rgb(132, 228, 255),
+                );
+            }
+        }
+        self.profile_dirty = true;
+        self.persist_profile("Auto-saved");
+    }
+
+    fn add_custom_hunter_rule(&mut self) {
+        let title = self.hunter_custom_title_input.trim();
+        let detail = self.hunter_custom_detail_input.trim();
+        if title.is_empty() || detail.is_empty() || self.hunter_custom_threshold_input == 0 {
+            self.push_hunter_alert(
+                "⚠ Custom achievement not saved",
+                "Provide a title, detail, and a threshold greater than zero.",
+                Color32::from_rgb(255, 170, 75),
+            );
+            return;
+        }
+
+        let mut id = title
+            .chars()
+            .map(|ch: char| {
+                if ch.is_ascii_alphanumeric() {
+                    ch.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string();
+        if id.is_empty() {
+            id = format!("custom-{}", self.hunter_custom_rules.len() + 1);
+        }
+        if self.hunter_custom_rules.iter().any(|rule| rule.id == id) {
+            id = format!("{id}-{}", self.hunter_custom_rules.len() + 1);
+        }
+
+        self.hunter_custom_rules.push(CustomAchievementRule {
+            id,
+            title: title.to_string(),
+            detail: detail.to_string(),
+            metric: self.hunter_custom_metric_input,
+            threshold: self.hunter_custom_threshold_input.max(1),
+            enabled: self.hunter_custom_enabled_input,
+            unlocked: false,
+        });
+        self.hunter_custom_title_input.clear();
+        self.hunter_custom_detail_input.clear();
+        self.hunter_custom_metric_input = HunterMetric::UniqueHeard;
+        self.hunter_custom_threshold_input = 1;
+        self.hunter_custom_enabled_input = true;
+        self.profile_dirty = true;
+        self.persist_profile("Auto-saved");
+    }
+
+    fn remove_custom_hunter_rule(&mut self, index: usize) {
+        if index < self.hunter_custom_rules.len() {
+            self.hunter_custom_rules.remove(index);
+            self.profile_dirty = true;
+            self.persist_profile("Auto-saved");
+        }
+    }
+
+    fn track_hunter_event(&mut self, event: &AppEvent) {
+        match event {
+            AppEvent::CallsignHit {
+                call,
+                directed_to_me,
+                ..
+            } => {
+                let call = call.trim().to_ascii_uppercase();
+                if !call.is_empty() {
+                    self.hunter_unique_heard.insert(call);
+                    if self.hunter_unique_heard.len() >= 100 {
+                        self.unlock_achievement(
+                            AchievementKind::CenturyHunter,
+                            "Century Hunter",
+                            "Heard 100 unique callsigns in this session",
+                        );
+                    }
+                }
+                if *directed_to_me {
+                    self.hunter_directed_hits = self.hunter_directed_hits.saturating_add(1);
+                    self.unlock_achievement(
+                        AchievementKind::DirectedCall,
+                        "You Have Mail",
+                        "Received your first directed-on-you callsign hit",
+                    );
+                }
+            }
+            AppEvent::QsoLogged { .. } => {
+                let qso_count = self.qso_log.contacts.len();
+                if qso_count >= 1 {
+                    self.unlock_achievement(
+                        AchievementKind::FirstQsoLogged,
+                        "Logbook Opened",
+                        "Logged your first contact",
+                    );
+                }
+                if qso_count >= 10 {
+                    self.unlock_achievement(
+                        AchievementKind::TenQsosLogged,
+                        "Ragchew Rookie",
+                        "Logged 10 contacts",
+                    );
+                }
+                if qso_count >= 50 {
+                    self.unlock_achievement(
+                        AchievementKind::FiftyQsosLogged,
+                        "Pileup Wrangler",
+                        "Logged 50 contacts",
+                    );
+                }
+            }
+            _ => {}
+        }
+
+        self.evaluate_custom_hunter_rules();
+    }
+
+    fn track_decode_batch(&mut self, decode_count: usize) {
+        if decode_count > 0 {
+            self.hunter_decode_bursts = self.hunter_decode_bursts.saturating_add(1);
+            self.unlock_achievement(
+                AchievementKind::FirstDecode,
+                "Signal Hunter",
+                "Captured your first decode burst in this session",
+            );
+            self.evaluate_custom_hunter_rules();
+        }
+    }
+
+    fn draw_hunter_panel(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        let worked_unique = self
+            .qso_log
+            .contacts
+            .iter()
+            .map(|contact| contact.callsign.trim().to_ascii_uppercase())
+            .collect::<HashSet<_>>()
+            .len();
+
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new("🏆 Achievement Hunter")
+                    .strong()
+                    .color(Color32::from_rgb(255, 201, 92)),
+            );
+            ui.separator();
+            ui.label(format!("Unlocked: {}", self.hunter_unlocked.len()));
+            ui.separator();
+            ui.label(format!("Unique heard: {}", self.hunter_unique_heard.len()));
+            ui.separator();
+            ui.label(format!("Worked calls: {worked_unique}"));
+            ui.separator();
+            ui.label(format!("Dupe saves: {}", self.hunter_dupe_blocks));
+            ui.separator();
+            ui.label(
+                RichText::new(format!(
+                    "Band {}",
+                    snapshot
+                        .frequency_hz
+                        .map(band_for_frequency)
+                        .filter(|band| !band.is_empty())
+                        .unwrap_or("?")
+                ))
+                .monospace(),
+            );
+        });
+
+        if let Some(alert) = self.hunter_feed.back() {
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(format!(
+                    "{} · {} — {}",
+                    alert.utc, alert.title, alert.detail
+                ))
+                .small()
+                .color(alert.accent),
+            );
+        }
+
+        ui.add_space(4.0);
+        egui::ScrollArea::vertical()
+            .max_height(120.0)
+            .show(ui, |ui| {
+                if self.hunter_feed.is_empty() {
+                    ui.label(
+                        RichText::new("No hunter alerts yet — spin the dial and chase one!")
+                            .small()
+                            .color(Color32::GRAY),
+                    );
+                    return;
+                }
+
+                for alert in self.hunter_feed.iter().rev().take(6) {
+                    ui.label(
+                        RichText::new(format!("{}  {}", alert.utc, alert.title))
+                            .small()
+                            .color(alert.accent),
+                    );
+                    ui.label(RichText::new(&alert.detail).small().color(Color32::GRAY));
+                    ui.add_space(2.0);
+                }
+            });
+
+        ui.separator();
+        ui.label(
+            RichText::new("Custom achievements")
+                .strong()
+                .color(Color32::from_rgb(132, 228, 255)),
+        );
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Title");
+            ui.text_edit_singleline(&mut self.hunter_custom_title_input);
+            ui.label("Detail");
+            ui.text_edit_singleline(&mut self.hunter_custom_detail_input);
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Metric");
+            egui::ComboBox::from_id_salt("hunter_custom_metric")
+                .selected_text(match self.hunter_custom_metric_input {
+                    HunterMetric::UniqueHeard => "Unique heard",
+                    HunterMetric::DirectedHits => "Directed hits",
+                    HunterMetric::QsoLogged => "QSOs logged",
+                    HunterMetric::DupeBlocks => "Dupe blocks",
+                    HunterMetric::DecodeBursts => "Decode bursts",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.hunter_custom_metric_input,
+                        HunterMetric::UniqueHeard,
+                        "Unique heard",
+                    );
+                    ui.selectable_value(
+                        &mut self.hunter_custom_metric_input,
+                        HunterMetric::DirectedHits,
+                        "Directed hits",
+                    );
+                    ui.selectable_value(
+                        &mut self.hunter_custom_metric_input,
+                        HunterMetric::QsoLogged,
+                        "QSOs logged",
+                    );
+                    ui.selectable_value(
+                        &mut self.hunter_custom_metric_input,
+                        HunterMetric::DupeBlocks,
+                        "Dupe blocks",
+                    );
+                    ui.selectable_value(
+                        &mut self.hunter_custom_metric_input,
+                        HunterMetric::DecodeBursts,
+                        "Decode bursts",
+                    );
+                });
+            ui.label("Threshold");
+            ui.add(egui::DragValue::new(&mut self.hunter_custom_threshold_input).range(1..=10_000));
+            ui.checkbox(&mut self.hunter_custom_enabled_input, "Enabled");
+            if ui.button("Add custom achievement").clicked() {
+                self.add_custom_hunter_rule();
+            }
+        });
+
+        ui.add_space(4.0);
+        if self.hunter_custom_rules.is_empty() {
+            ui.label(
+                RichText::new("No custom achievements yet — add one to make the chase personal.")
+                    .small()
+                    .color(Color32::GRAY),
+            );
+        } else {
+            let mut remove_idx = None;
+            let unique_heard = self.hunter_unique_heard.len() as u32;
+            let directed_hits = self.hunter_directed_hits;
+            let qso_logged = self.qso_log.contacts.len() as u32;
+            let dupe_blocks = self.hunter_dupe_blocks;
+            let decode_bursts = self.hunter_decode_bursts;
+            for (idx, rule) in self.hunter_custom_rules.iter_mut().enumerate() {
+                let progress = match rule.metric {
+                    HunterMetric::UniqueHeard => unique_heard,
+                    HunterMetric::DirectedHits => directed_hits,
+                    HunterMetric::QsoLogged => qso_logged,
+                    HunterMetric::DupeBlocks => dupe_blocks,
+                    HunterMetric::DecodeBursts => decode_bursts,
+                };
+                ui.group(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(&mut rule.enabled, "");
+                        ui.label(RichText::new(&rule.title).strong().color(Color32::WHITE));
+                        if rule.unlocked {
+                            ui.label(
+                                RichText::new("UNLOCKED")
+                                    .small()
+                                    .color(Color32::from_rgb(132, 228, 255)),
+                            );
+                        }
+                        if ui.small_button("Remove").clicked() {
+                            remove_idx = Some(idx);
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(&rule.detail).small().color(Color32::GRAY));
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!("{} / {}", progress, rule.threshold))
+                                .small()
+                                .monospace(),
+                        );
+                    });
+                });
+                ui.add_space(4.0);
+            }
+            if let Some(idx) = remove_idx {
+                self.remove_custom_hunter_rule(idx);
+            }
+        }
+    }
+
+    fn execute_automation_external_send(
+        &mut self,
+        source: &str,
+        target: &str,
+        message: &str,
+    ) -> String {
+        let source = source.trim();
+        let target = target.trim();
+        let message = message.trim();
+
+        if source.is_empty() || target.is_empty() || message.is_empty() {
+            return "External send rejected: source, target, and message are required".to_string();
+        }
+
+        let Some(transport) = external_source_transport(source) else {
+            return format!(
+                "External send rejected: source '{source}' must use '<transport>:<id>'"
+            );
+        };
+        if !self.automation_external_transports.contains(&transport) {
+            let mut configured: Vec<_> = self
+                .automation_external_transports
+                .iter()
+                .cloned()
+                .collect();
+            configured.sort();
+            let known = if configured.is_empty() {
+                "none".to_string()
+            } else {
+                configured.join(",")
+            };
+            return format!(
+                "External send rejected: transport '{transport}' is not configured (known: {known})"
+            );
+        }
+
+        self.automation_external_outbox
+            .push_back(ExternalSendRecord {
+                utc: utc_hhmmss_millis(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|duration| duration.as_secs_f64())
+                        .unwrap_or_default(),
+                ),
+                source: source.to_string(),
+                target: target.to_string(),
+                message: message.to_string(),
+            });
+        while self.automation_external_outbox.len() > 32 {
+            self.automation_external_outbox.pop_front();
+        }
+
+        format!(
+            "Queued external send via {source} -> {target} ({} chars)",
+            message.chars().count()
+        )
+    }
+
+    fn pump_automation_events(&mut self) {
+        loop {
+            match self.automation_event_rx.try_recv() {
+                Ok(app_event) => {
+                    self.track_hunter_event(&app_event);
+                    let Some(event) = normalize_app_event_for_automation(app_event) else {
+                        continue;
+                    };
+                    let report = self.automation_host.dispatch(&event);
+
+                    for approved in &report.approved {
+                        match &approved.action {
+                            Action::Notify {
+                                title,
+                                body,
+                                accent,
+                            } => {
+                                let accent = accent.as_deref().unwrap_or("default");
+                                self.automation_status =
+                                    format!("🤖 {title} — {body} (accent: {accent})");
+                            }
+                            Action::SetCompose { mode, message } => {
+                                let normalized_mode = mode.trim().to_ascii_uppercase();
+                                if normalized_mode == "FT8" {
+                                    self.ft8_compose = message.clone();
+                                    self.automation_status =
+                                        "🤖 Automation prepared FT8 compose text".to_string();
+                                } else {
+                                    self.digital_compose = message.clone();
+                                    self.automation_status = format!(
+                                        "🤖 Automation prepared {} compose text",
+                                        normalized_mode
+                                    );
+                                }
+                            }
+                            Action::SendExternal {
+                                source,
+                                target,
+                                message,
+                            } => {
+                                self.automation_status = format!(
+                                    "🤖 {}",
+                                    self.execute_automation_external_send(source, target, message)
+                                );
+                            }
+                            Action::RadioCommand { command, value } => {
+                                self.automation_status = format!(
+                                    "🤖 {}",
+                                    self.execute_automation_radio_command(command, value)
+                                );
+                            }
+                            Action::RequestTransmit { mode, message } => {
+                                self.automation_status = format!(
+                                    "🤖 {}",
+                                    self.execute_automation_transmit_request(mode, message)
+                                );
+                            }
+                        }
+                    }
+
+                    if !report.denied.is_empty() {
+                        self.automation_status = format!(
+                            "🤖 Automation denied {} action(s) (capability not granted/requested)",
+                            report.denied.len()
+                        );
+                    }
+                    if let Some(error) = report.errors.first() {
+                        self.automation_status = format!("🤖 Automation component error: {error}");
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Lagged(skipped)) => {
+                    self.automation_status =
+                        format!("🤖 Automation event stream lagged; skipped {skipped} event(s)");
+                }
+                Err(TryRecvError::Closed) => {
+                    self.automation_status =
+                        "🤖 Automation event stream closed; restart required".to_string();
+                    break;
+                }
+            }
+        }
+    }
+
+    fn execute_automation_radio_command(&mut self, command: &str, value: &str) -> String {
+        let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
+        if snapshot.ptt_on
+            || self.ft8_tx_active.load(Ordering::Acquire)
+            || self.digital_tx_active.load(Ordering::Acquire)
+        {
+            return "Radio command blocked: transmitter is currently active".to_string();
+        }
+
+        match command.trim().to_ascii_lowercase().as_str() {
+            "tune_delta_hz" => match value.trim().parse::<i64>() {
+                Ok(delta_hz) => {
+                    self.send_command(GuiCommand::TuneDelta(delta_hz));
+                    format!("Applied radio tune delta of {delta_hz} Hz")
+                }
+                Err(_) => format!("Rejected radio command: invalid tune delta '{value}'"),
+            },
+            "set_filter" => match value.trim().parse::<u8>() {
+                Ok(filter @ 1..=3) => {
+                    self.send_command(GuiCommand::SetFilter(filter));
+                    format!("Applied radio filter FIL{filter}")
+                }
+                Ok(other) => {
+                    format!("Rejected radio command: filter {other} is outside 1..=3")
+                }
+                Err(_) => format!("Rejected radio command: invalid filter '{value}'"),
+            },
+            "tune_workspace_band_hz" => match value.trim().parse::<u64>() {
+                Ok(frequency_hz) if frequency_hz > 0 => {
+                    self.send_command(GuiCommand::TuneWorkspaceBand(frequency_hz));
+                    format!(
+                        "Applied workspace band tune to {:.3} MHz",
+                        frequency_hz as f64 / 1_000_000.0
+                    )
+                }
+                Ok(_) => "Rejected radio command: frequency must be > 0 Hz".to_string(),
+                Err(_) => format!("Rejected radio command: invalid frequency '{value}'"),
+            },
+            "cycle_mode" => {
+                self.send_command(GuiCommand::CycleMode);
+                "Applied radio mode cycle".to_string()
+            }
+            blocked @ "set_ptt" | blocked @ "toggle_ptt" => {
+                format!("Rejected radio command: {blocked} is TX-controlled and not allowed")
+            }
+            other => format!("Rejected radio command: unsupported command '{other}'"),
+        }
+    }
+
+    fn execute_automation_transmit_request(&mut self, mode: &str, message: &str) -> String {
+        let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
+        if !self.any_tx_armed(&snapshot) {
+            return "TX request blocked: all transmit paths are disarmed".to_string();
+        }
+        if snapshot.ptt_on
+            || self.ft8_tx_active.load(Ordering::Acquire)
+            || self.digital_tx_active.load(Ordering::Acquire)
+        {
+            return "TX request blocked: transmitter is currently active".to_string();
+        }
+
+        let Some(parsed_mode) = parse_workspace_mode_token(mode) else {
+            return format!("TX request rejected: unknown mode '{mode}'");
+        };
+        let trimmed_message = message.trim();
+        if trimmed_message.is_empty() {
+            return "TX request rejected: message is empty".to_string();
+        }
+
+        match parsed_mode {
+            WorkspaceMode::Ft8 => {
+                self.ft8_compose = trimmed_message.to_string();
+                self.queue_ft8_tx_from_compose(Ft8TxQueuePolicy::Standard, None);
+                format!("FT8 TX request accepted: {}", self.ft8_seq_status)
+            }
+            mode if workspace_mode_supports_native_tx(mode) => {
+                self.digital_compose = trimmed_message.to_string();
+                self.queue_native_digital_tx(mode);
+                format!(
+                    "{} TX request accepted: {}",
+                    mode.label(),
+                    self.digital_tx_status
+                )
+            }
+            unsupported => format!(
+                "TX request rejected: {} transmit path is not available",
+                unsupported.label()
+            ),
         }
     }
 
@@ -2745,6 +4121,10 @@ impl QsonautGuiApp {
                 self.restart_psk_reporter();
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
+                self.emit_operator_profile_hook(format!(
+                    "callsign_changed={}",
+                    self.station_callsign_or_default()
+                ));
             }
 
             ui.label(RichText::new("Grid").strong());
@@ -2767,6 +4147,10 @@ impl QsonautGuiApp {
                 self.restart_psk_reporter();
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
+                self.emit_operator_profile_hook(format!(
+                    "grid_changed={}",
+                    self.station_grid_or_default()
+                ));
             }
         });
 
@@ -2783,8 +4167,220 @@ impl QsonautGuiApp {
             if qth_changed {
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
+                self.emit_operator_profile_hook("qth_changed");
             }
         });
+
+        ui.add_space(8.0);
+        egui::CollapsingHeader::new("🏁 Contest profile")
+            .default_open(false)
+            .show(ui, |ui| {
+                if ui
+                    .checkbox(&mut self.contest_enabled, "Enable contest workflow profile")
+                    .changed()
+                {
+                    self.config.contest.enabled = self.contest_enabled;
+                    self.profile_dirty = true;
+                    self.persist_profile("Auto-saved");
+                    self.emit_contest_profile_hooks();
+                }
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Operating mode");
+                    egui::ComboBox::from_id_salt("contest_operating_mode")
+                        .selected_text(match self.contest_operating_mode {
+                            ContestOperatingMode::Run => "Run",
+                            ContestOperatingMode::SearchAndPounce => "Search & Pounce",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.contest_operating_mode,
+                                ContestOperatingMode::Run,
+                                "Run",
+                            );
+                            ui.selectable_value(
+                                &mut self.contest_operating_mode,
+                                ContestOperatingMode::SearchAndPounce,
+                                "Search & Pounce",
+                            );
+                        });
+
+                    ui.label("Split policy");
+                    egui::ComboBox::from_id_salt("contest_split_policy")
+                        .selected_text(match self.contest_split_policy {
+                            SplitPolicy::Off => "Off",
+                            SplitPolicy::Fake => "Fake split",
+                            SplitPolicy::Rig => "Rig split",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.contest_split_policy,
+                                SplitPolicy::Off,
+                                "Off",
+                            );
+                            ui.selectable_value(
+                                &mut self.contest_split_policy,
+                                SplitPolicy::Fake,
+                                "Fake split",
+                            );
+                            ui.selectable_value(
+                                &mut self.contest_split_policy,
+                                SplitPolicy::Rig,
+                                "Rig split",
+                            );
+                        });
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Fox/Hound");
+                    egui::ComboBox::from_id_salt("contest_fox_hound")
+                        .selected_text(match self.contest_fox_hound_role {
+                            FoxHoundRole::Disabled => "Disabled",
+                            FoxHoundRole::Fox => "Fox",
+                            FoxHoundRole::Hound => "Hound",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.contest_fox_hound_role,
+                                FoxHoundRole::Disabled,
+                                "Disabled",
+                            );
+                            ui.selectable_value(
+                                &mut self.contest_fox_hound_role,
+                                FoxHoundRole::Fox,
+                                "Fox",
+                            );
+                            ui.selectable_value(
+                                &mut self.contest_fox_hound_role,
+                                FoxHoundRole::Hound,
+                                "Hound",
+                            );
+                        });
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Exchange template");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.contest_exchange_template)
+                            .desired_width(260.0)
+                            .hint_text("e.g. 5NN ${serial}"),
+                    );
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Serial start");
+                    ui.add(egui::DragValue::new(&mut self.contest_serial_start).range(1..=999_999));
+                    ui.label("Step");
+                    ui.add(egui::DragValue::new(&mut self.contest_serial_step).range(1..=100));
+                    ui.checkbox(&mut self.contest_dupe_check, "Dupe check");
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Serial current");
+                    ui.label(
+                        RichText::new(format!("{:03}", self.contest_serial_current.max(1)))
+                            .monospace()
+                            .strong(),
+                    );
+                    if ui.small_button("Reset").clicked() {
+                        self.contest_serial_current = self.contest_serial_start.max(1);
+                        self.profile_dirty = true;
+                        self.persist_profile("Auto-saved");
+                    }
+                    if ui.small_button("-Step").clicked() {
+                        self.contest_serial_current = self
+                            .contest_serial_current
+                            .saturating_sub(self.contest_serial_step.max(1))
+                            .max(self.contest_serial_start.max(1));
+                        self.profile_dirty = true;
+                        self.persist_profile("Auto-saved");
+                    }
+                    if ui.small_button("+Step").clicked() {
+                        self.advance_contest_serial();
+                        self.profile_dirty = true;
+                        self.persist_profile("Auto-saved");
+                    }
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Fake split offset");
+                    ui.add(
+                        egui::DragValue::new(&mut self.contest_fake_split_offset_hz)
+                            .range(0..=2_000)
+                            .suffix(" Hz"),
+                    );
+                    if ui.small_button("Use RX+offset").clicked() {
+                        self.contest_split_policy = SplitPolicy::Fake;
+                        self.profile_dirty = true;
+                        self.persist_profile("Auto-saved");
+                        self.emit_contest_profile_hooks();
+                    }
+                });
+
+                ui.label(
+                    RichText::new(self.contest_guidance_text())
+                        .small()
+                        .color(Color32::from_rgb(132, 228, 255)),
+                );
+                if self.contest_enabled && self.contest_split_policy == SplitPolicy::Fake {
+                    ui.label(
+                        RichText::new(format!(
+                            "Fake split active · TX offset {} Hz · software-only guardrail",
+                            self.contest_fake_split_offset_hz
+                        ))
+                        .small()
+                        .color(Color32::from_rgb(255, 201, 92)),
+                    );
+                }
+
+                self.contest_serial_start = self.contest_serial_start.max(1);
+                self.contest_serial_step = self.contest_serial_step.max(1);
+                self.contest_serial_current = self
+                    .contest_serial_current
+                    .max(self.contest_serial_start.max(1));
+
+                if self.config.contest.enabled != self.contest_enabled
+                    || self.config.contest.operating_mode != self.contest_operating_mode
+                    || self.config.contest.split_policy != self.contest_split_policy
+                    || self.config.contest.fox_hound_role != self.contest_fox_hound_role
+                    || self
+                        .config
+                        .contest
+                        .exchange_template
+                        .as_deref()
+                        .unwrap_or_default()
+                        != self.contest_exchange_template.trim()
+                    || self.config.contest.serial_start != self.contest_serial_start
+                    || self.config.contest.serial_step != self.contest_serial_step
+                    || self.config.contest.dupe_check != self.contest_dupe_check
+                {
+                    self.config.contest = ContestProfile {
+                        enabled: self.contest_enabled,
+                        operating_mode: self.contest_operating_mode,
+                        split_policy: self.contest_split_policy,
+                        fox_hound_role: self.contest_fox_hound_role,
+                        exchange_template: if self.contest_exchange_template.trim().is_empty() {
+                            None
+                        } else {
+                            Some(self.contest_exchange_template.trim().to_string())
+                        },
+                        serial_start: self.contest_serial_start,
+                        serial_step: self.contest_serial_step,
+                        dupe_check: self.contest_dupe_check,
+                    };
+                    self.profile_dirty = true;
+                    self.persist_profile("Auto-saved");
+                    self.emit_contest_profile_hooks();
+                }
+
+                ui.label(
+                    RichText::new(
+                        "Automation hook targets: contest_state + operator_profile events",
+                    )
+                    .small()
+                    .color(Color32::GRAY),
+                );
+            });
 
         ui.add_space(6.0);
         let changed = ui
@@ -2800,6 +4396,10 @@ impl QsonautGuiApp {
             self.restart_psk_reporter();
             self.profile_dirty = true;
             self.persist_profile("PSK Reporter preference saved to");
+            self.emit_operator_profile_hook(format!(
+                "psk_reporter_enabled={}",
+                self.psk_reporter_enabled
+            ));
         }
         if self.psk_reporter_enabled {
             if let Some(reporter) = &self.psk_reporter {
@@ -2829,7 +4429,97 @@ impl QsonautGuiApp {
             );
         }
 
+        ui.add_space(8.0);
+        egui::CollapsingHeader::new("💬 External automation ingress (local simulator)")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(
+                        "Publish an external_message event locally to validate rules before wiring live adapters.",
+                    )
+                    .small()
+                    .color(Color32::GRAY),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Source");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.external_ingress_source)
+                            .desired_width(130.0)
+                            .hint_text("discord:shack"),
+                    );
+                    ui.label("Author");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.external_ingress_author)
+                            .desired_width(120.0)
+                            .hint_text("K1ABC"),
+                    );
+                    ui.label("Channel");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.external_ingress_channel)
+                            .desired_width(120.0)
+                            .hint_text("#qsonaut"),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.external_ingress_message)
+                            .desired_width((ui.available_width() - 150.0).max(120.0))
+                            .hint_text("!rig"),
+                    );
+                    if ui.button("Inject event").clicked() {
+                        self.publish_external_ingress_message();
+                    }
+                });
+
+                ui.add_space(6.0);
+                let transport_summary = if self.automation_external_transports.is_empty() {
+                    "none".to_string()
+                } else {
+                    let mut transports: Vec<_> =
+                        self.automation_external_transports.iter().cloned().collect();
+                    transports.sort();
+                    transports.join(", ")
+                };
+                ui.label(
+                    RichText::new(format!(
+                        "Configured external transports: {transport_summary}"
+                    ))
+                    .small()
+                    .color(Color32::GRAY),
+                );
+                if let Some(last) = self.automation_external_outbox.back() {
+                    ui.label(
+                        RichText::new(format!(
+                            "Last queued send {} · {} → {} · {}",
+                            last.utc, last.source, last.target, last.message
+                        ))
+                        .small()
+                        .color(Color32::from_rgb(158, 217, 255)),
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "Outbox depth: {} (adapter polling still pending)",
+                            self.automation_external_outbox.len()
+                        ))
+                        .small()
+                        .color(Color32::GRAY),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new("Outbox is empty")
+                            .small()
+                            .color(Color32::GRAY),
+                    );
+                }
+            });
+
         ui.add_space(4.0);
+        ui.label(
+            RichText::new(&self.automation_status)
+                .small()
+                .color(Color32::from_rgb(158, 217, 255)),
+        );
+        ui.add_space(2.0);
         ui.label(
             RichText::new(&self.profile_io_status)
                 .small()
@@ -2876,6 +4566,38 @@ impl QsonautGuiApp {
                 match self.qso_log.export_adif(&qso_adif_path()) {
                     Ok(()) => self.qso_log_status = format!("Exported {}", QSO_ADIF_FILE),
                     Err(error) => self.qso_log_status = format!("ADIF export failed: {error}"),
+                }
+            }
+            if ui.small_button("Export ADIF (view)").clicked() {
+                let band = band_for_frequency(snapshot.frequency_hz.unwrap_or_default());
+                let filter = AdifExportFilter {
+                    date_from: None,
+                    date_to: None,
+                    mode: Some(snapshot.mode.clone()),
+                    band: (!band.is_empty()).then(|| band.to_string()),
+                };
+                let filtered = qso_adif_path().with_file_name("qsonaut-view.adif");
+                match self.qso_log.export_adif_filtered(&filtered, &filter) {
+                    Ok(()) => self.qso_log_status = format!("Exported {}", filtered.display()),
+                    Err(error) => {
+                        self.qso_log_status = format!("Filtered ADIF export failed: {error}")
+                    }
+                }
+            }
+            if ui.small_button("Import ADIF").clicked() {
+                match self.qso_log.import_adif(&qso_adif_path()) {
+                    Ok(summary) => {
+                        self.qso_log_status = format!(
+                            "ADIF import: {} added · {} duplicate(s) · {} invalid",
+                            summary.imported, summary.duplicates, summary.invalid
+                        );
+                        if summary.imported > 0 {
+                            self.qso_selected = Some(self.qso_log.contacts.len() - 1);
+                            self.qso_log_dirty = true;
+                            self.persist_qso_log("Imported + saved");
+                        }
+                    }
+                    Err(error) => self.qso_log_status = format!("ADIF import failed: {error}"),
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -3004,6 +4726,40 @@ impl QsonautGuiApp {
                                 .font(egui::TextStyle::Monospace),
                         )
                         .changed();
+                    ui.label("Contest sent");
+                    changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut contact.contest_exchange_sent)
+                                .desired_width(82.0)
+                                .font(egui::TextStyle::Monospace),
+                        )
+                        .changed();
+                    ui.label("Contest rcvd");
+                    changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut contact.contest_exchange_received)
+                                .desired_width(82.0)
+                                .font(egui::TextStyle::Monospace),
+                        )
+                        .changed();
+                    ui.label("STX");
+                    let mut stx = contact.contest_serial_sent.unwrap_or_default() as i64;
+                    if ui
+                        .add(egui::DragValue::new(&mut stx).range(0..=999_999).speed(1.0))
+                        .changed()
+                    {
+                        contact.contest_serial_sent = (stx > 0).then_some(stx as u32);
+                        changed = true;
+                    }
+                    ui.label("SRX");
+                    let mut srx = contact.contest_serial_received.unwrap_or_default() as i64;
+                    if ui
+                        .add(egui::DragValue::new(&mut srx).range(0..=999_999).speed(1.0))
+                        .changed()
+                    {
+                        contact.contest_serial_received = (srx > 0).then_some(srx as u32);
+                        changed = true;
+                    }
                     ui.label("Notes");
                     changed |= ui
                         .add(
@@ -4352,6 +6108,7 @@ impl QsonautGuiApp {
         let decode_h = (panel_h * 0.38).max(170.0);
         let tx_h = (panel_h * 0.20).max(120.0);
         let operator_call = self.station_callsign_or_default().to_string();
+        let active_band = snapshot.frequency_hz.map(band_for_frequency).unwrap_or("");
 
         if let Some((entry, hit)) = self.ft8_log.iter().rev().find_map(|entry| {
             operator_call_hit(&entry.message, &operator_call).map(|hit| (entry, hit))
@@ -4453,6 +6210,12 @@ impl QsonautGuiApp {
 
                         let is_sel = selected == Some(i);
                         let call_hit = operator_call_hit(&entry.message, &operator_call);
+                        let worked_call = parse_message(&entry.message).map(|parsed| parsed.from);
+                        let is_worked = worked_call.as_ref().is_some_and(|call| {
+                            !call.is_empty()
+                                && !active_band.is_empty()
+                                && self.has_logged_contact_with(call, "FT8", active_band)
+                        });
                         let text_color = if let Some(hit) = call_hit {
                             call_hit_badge(hit).1
                         } else if entry.is_cq {
@@ -4477,6 +6240,25 @@ impl QsonautGuiApp {
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         ui.label(RichText::new(badge).strong().color(accent));
+                                        ui.selectable_label(is_sel, row)
+                                    })
+                                    .inner
+                                })
+                                .inner
+                        } else if is_worked {
+                            egui::Frame::group(ui.style())
+                                .fill(Color32::from_rgb(20, 58, 30))
+                                .stroke(egui::Stroke::new(
+                                    1.2_f32,
+                                    Color32::from_rgb(120, 220, 145),
+                                ))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new("✅ WORKED")
+                                                .strong()
+                                                .color(Color32::from_rgb(120, 220, 145)),
+                                        );
                                         ui.selectable_label(is_sel, row)
                                     })
                                     .inner
@@ -4664,11 +6446,24 @@ impl QsonautGuiApp {
                     self.ft8_autoseq = true;
                     self.ft8_seq_state = Ft8SeqState::CqArmed;
                     self.ft8_seq_target = None;
-                    self.ft8_seq_status = "CQ armed (waiting for next slot)".to_string();
+                    self.ft8_seq_status = format!(
+                        "CQ armed (waiting for next slot) · serial {} · {}",
+                        self.contest_serial_current.max(1),
+                        self.contest_guidance_text()
+                    );
                     self.ft8_session = None;
                     self.queue_ft8_tx_from_compose(Ft8TxQueuePolicy::NextSlotOnly, None);
                     self.profile_dirty = true;
                     self.persist_profile("Auto-saved");
+                }
+                if ui
+                    .add_enabled(target.is_some(), egui::Button::new("EXCH"))
+                    .on_hover_text("Insert the current contest exchange preview")
+                    .clicked()
+                {
+                    if let Some(target_call) = target.as_deref() {
+                        self.ft8_compose = self.contest_exchange_preview(target_call);
+                    }
                 }
                 for (label, exchange) in [("Grid", grid.as_str()), ("RR73", "RR73"), ("73", "73")] {
                     if ui
@@ -4679,6 +6474,35 @@ impl QsonautGuiApp {
                         self.ft8_compose =
                             format!("{} {my} {exchange}", target.as_deref().unwrap_or_default());
                     }
+                }
+
+                if let Some(target_call) = parse_tx_target_from_compose(&self.ft8_compose, &my) {
+                    if let Some(frequency_hz) = snapshot.frequency_hz {
+                        let band = band_for_frequency(frequency_hz);
+                        if !band.is_empty()
+                            && self.has_logged_contact_with(&target_call, "FT8", band)
+                        {
+                            ui.label(
+                                RichText::new(format!(
+                                    "⚠ Dupe risk: {target_call} already worked on {band} FT8"
+                                ))
+                                .small()
+                                .color(Color32::from_rgb(255, 180, 82)),
+                            );
+                        }
+                    }
+                }
+
+                if self.contest_enabled {
+                    ui.label(
+                        RichText::new(format!(
+                            "Contest serial next: {:03} · exchange preview: {}",
+                            self.contest_serial_current.max(1),
+                            self.contest_exchange_preview(target.as_deref().unwrap_or(&my))
+                        ))
+                        .small()
+                        .color(Color32::from_rgb(132, 228, 255)),
+                    );
                 }
             });
 
@@ -5193,6 +7017,7 @@ impl QsonautGuiApp {
             entries.drain(..entries.len() - self.ft4_max_log_entries);
         }
         let operator_call = self.station_callsign_or_default().to_string();
+        let active_band = snapshot.frequency_hz.map(band_for_frequency).unwrap_or("");
 
         if let Some((entry, hit)) = entries.iter().rev().find_map(|entry| {
             operator_call_hit(&entry.message, &operator_call).map(|hit| (entry, hit))
@@ -5272,6 +7097,12 @@ impl QsonautGuiApp {
                                 && selected.message == entry.message
                         });
                         let call_hit = operator_call_hit(&entry.message, &operator_call);
+                        let worked_call = parse_message(&entry.message).map(|parsed| parsed.from);
+                        let is_worked = worked_call.as_ref().is_some_and(|call| {
+                            !call.is_empty()
+                                && !active_band.is_empty()
+                                && self.has_logged_contact_with(call, "FT4", active_band)
+                        });
                         let row = RichText::new(format!(
                             "{:12}  {:+5.1}  {:+6.2}  {:>5}  {}",
                             entry.utc, entry.snr_db, entry.dt_s, entry.freq_hz, entry.message
@@ -5292,6 +7123,25 @@ impl QsonautGuiApp {
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         ui.label(RichText::new(badge).strong().color(accent));
+                                        ui.selectable_label(selected, row)
+                                    })
+                                    .inner
+                                })
+                                .inner
+                        } else if is_worked {
+                            egui::Frame::group(ui.style())
+                                .fill(Color32::from_rgb(20, 58, 30))
+                                .stroke(egui::Stroke::new(
+                                    1.2_f32,
+                                    Color32::from_rgb(120, 220, 145),
+                                ))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new("✅ WORKED")
+                                                .strong()
+                                                .color(Color32::from_rgb(120, 220, 145)),
+                                        );
                                         ui.selectable_label(selected, row)
                                     })
                                     .inner
@@ -5397,6 +7247,25 @@ impl QsonautGuiApp {
                     {
                         if ui.small_button(label).clicked() {
                             self.digital_compose = format!("{target} {my} {exchange}");
+                        }
+                    }
+                }
+                if let Some(target_call) = parse_tx_target_from_compose(
+                    &self.digital_compose,
+                    self.station_callsign_or_default(),
+                ) {
+                    if let Some(frequency_hz) = snapshot.frequency_hz {
+                        let band = band_for_frequency(frequency_hz);
+                        if !band.is_empty()
+                            && self.has_logged_contact_with(&target_call, "FT4", band)
+                        {
+                            ui.label(
+                                RichText::new(format!(
+                                    "⚠ Dupe risk: {target_call} already worked on {band} FT4"
+                                ))
+                                .small()
+                                .color(Color32::from_rgb(255, 180, 82)),
+                            );
                         }
                     }
                 }
@@ -5860,6 +7729,7 @@ impl eframe::App for QsonautGuiApp {
         }
         self.process_ft8_tx_pipeline();
         self.process_native_digital_tx_pipeline();
+        self.pump_automation_events();
         let (ft4_decodes, latest_ft4_period) = {
             let shared = self.state.lock().expect("ui state lock poisoned");
             (
@@ -5891,6 +7761,7 @@ impl eframe::App for QsonautGuiApp {
         }
 
         let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
+        self.emit_radio_state_hook_if_changed(&snapshot);
 
         egui::TopBottomPanel::top("header")
             .resizable(true)
@@ -6074,6 +7945,14 @@ impl eframe::App for QsonautGuiApp {
                                 }
                                 self.ptt_lead_ms = p.ptt_lead_ms.clamp(100, 1_500);
                                 self.ptt_tail_ms = p.ptt_tail_ms.clamp(0, 1_000);
+                                self.contest_serial_current = p
+                                    .contest_serial_current
+                                    .max(self.contest_serial_start.max(1))
+                                    .max(1);
+                                self.contest_fake_split_offset_hz =
+                                    p.contest_fake_split_offset_hz.clamp(0, 2_000);
+                                self.hunter_unlocked = p.hunter_unlocked.into_iter().collect();
+                                self.hunter_custom_rules = p.hunter_custom_rules;
                                 self.gui_scale = if p.profile_version >= OPERATOR_PROFILE_VERSION {
                                     p.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
                                 } else {
@@ -6111,6 +7990,15 @@ impl eframe::App for QsonautGuiApp {
                             .small()
                             .color(status_color),
                     );
+                    if let Some(alert) = self.hunter_feed.back() {
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!("{} {}", alert.utc, alert.title))
+                                .small()
+                                .color(alert.accent),
+                        )
+                        .on_hover_text(&alert.detail);
+                    }
                 });
             });
 
@@ -6148,6 +8036,9 @@ impl eframe::App for QsonautGuiApp {
                             egui::CollapsingHeader::new("Audio waterfall")
                                 .default_open(true)
                                 .show(ui, |ui| self.draw_audio_waterfall(ui, ctx, &snapshot));
+                            egui::CollapsingHeader::new("🏆 Achievement hunter")
+                                .default_open(true)
+                                .show(ui, |ui| self.draw_hunter_panel(ui, &snapshot));
                             egui::CollapsingHeader::new("Station profile")
                                 .default_open(false)
                                 .show(ui, |ui| self.draw_station_profile(ui));
@@ -8418,6 +10309,27 @@ mod tests {
     }
 
     #[test]
+    fn ft8_slot_gate_honors_adaptive_decode_threshold() {
+        let mut gate = Ft8SlotGate::default();
+
+        assert!(!gate.observe_at(700, 13.0, 13.8, true));
+        assert!(!gate.observe_at(701, 0.1, 13.8, false));
+        assert!(!gate.observe_at(701, 13.79, 13.8, true));
+        assert!(gate.observe_at(701, 13.8, 13.8, true));
+        assert!(!gate.observe_at(701, 14.2, 13.8, true));
+    }
+
+    #[test]
+    fn ft8_slot_gate_waits_for_buffer_readiness_at_decode_time() {
+        let mut gate = Ft8SlotGate::default();
+
+        assert!(!gate.observe_at(800, 13.0, 13.2, true));
+        assert!(!gate.observe_at(801, 0.0, 13.2, false));
+        assert!(!gate.observe_at(801, 13.2, 13.2, false));
+        assert!(gate.observe_at(801, 13.25, 13.2, true));
+    }
+
+    #[test]
     fn digital_slot_gate_requires_a_complete_period_after_startup() {
         let mut gate = DigitalSlotGate::default();
         assert!(!gate.boundary(10, true));
@@ -8425,6 +10337,33 @@ mod tests {
         assert!(!gate.boundary(11, false));
         assert!(gate.boundary(12, true));
         assert!(!gate.boundary(12, true));
+    }
+
+    #[test]
+    fn digital_slot_gate_reset_requires_new_boundary_again() {
+        let mut gate = DigitalSlotGate::default();
+        assert!(!gate.boundary(10, true));
+        assert!(gate.boundary(11, true));
+        gate.reset();
+        assert!(!gate.boundary(20, true));
+        assert!(gate.boundary(21, true));
+    }
+
+    #[test]
+    fn phase1_target_modes_have_slot_and_decoder_support() {
+        let targets = [WorkspaceMode::Ft8, WorkspaceMode::Ft4, WorkspaceMode::Jt9];
+        for mode in targets {
+            assert!(
+                mode.core_slot_seconds().is_some(),
+                "{} should define slot timing",
+                mode.label()
+            );
+            assert!(
+                mode.has_native_decoder(),
+                "{} should have a native decoder path",
+                mode.label()
+            );
+        }
     }
 
     #[test]
@@ -8469,6 +10408,38 @@ mod tests {
             .digital_decodes
             .iter()
             .any(|entry| entry.message == "CQ W1AW AA00"));
+    }
+
+    #[test]
+    fn jt9_workspace_adapter_decodes_generated_audio() {
+        let (pcm, offset_s) =
+            build_native_digital_tx_pcm(WorkspaceMode::Jt9, "CQ W1AW AA00", 1_500)
+                .expect("JT9 synthesis");
+        let slot_samples = (60.0 * 12_000.0) as usize;
+        let mut slot = vec![0.0f32; slot_samples];
+        let start = (offset_s * 12_000.0) as usize;
+        for (dst, sample) in slot[start..].iter_mut().zip(pcm) {
+            *dst = sample as f32 / i16::MAX as f32;
+        }
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        run_native_digital_decode(
+            WorkspaceMode::Jt9,
+            slot,
+            10,
+            "00:10:00.000".to_string(),
+            1_500,
+            false,
+            state.clone(),
+        );
+        let shared = state.lock().expect("state");
+        assert!(
+            shared.digital_decodes.iter().any(|entry| {
+                entry.mode == WorkspaceMode::Jt9
+                    && entry.message.contains("W1AW")
+                    && entry.message.contains("AA00")
+            }),
+            "JT9 decode did not surface expected callsign/grid payload"
+        );
     }
 
     #[test]
@@ -8564,5 +10535,148 @@ mod tests {
             messages.iter().any(|message| message == "CQ W1AW AA00"),
             "early decode messages: {messages:?}"
         );
+    }
+
+    #[test]
+    fn parse_automation_hook_detail_extracts_key_value_pairs() {
+        let fields = parse_automation_hook_detail(
+            "enabled=true mode=run split=fake role=hound serial_start=1",
+        );
+        assert_eq!(fields.get("enabled").map(String::as_str), Some("true"));
+        assert_eq!(fields.get("mode").map(String::as_str), Some("run"));
+        assert_eq!(fields.get("split").map(String::as_str), Some("fake"));
+        assert_eq!(fields.get("role").map(String::as_str), Some("hound"));
+        assert_eq!(fields.get("serial_start").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn normalize_contest_profile_event_for_automation() {
+        let event = normalize_app_event_for_automation(AppEvent::ContestProfileChanged {
+            enabled: true,
+            operating_mode: "run".to_string(),
+            split_policy: "off".to_string(),
+            fox_hound_role: "disabled".to_string(),
+        })
+        .expect("automation event");
+
+        assert_eq!(event.kind, EventKind::ContestState);
+        assert_eq!(
+            event.fields.get("enabled").map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            event.fields.get("operating_mode").map(String::as_str),
+            Some("run")
+        );
+        assert_eq!(
+            event.fields.get("split_policy").map(String::as_str),
+            Some("off")
+        );
+    }
+
+    #[test]
+    fn normalize_external_message_event_for_automation() {
+        let event = normalize_app_event_for_automation(AppEvent::ExternalMessageReceived {
+            source: "discord:shack".to_string(),
+            author: "W1AW".to_string(),
+            message: "!rig".to_string(),
+            channel: "#qsonaut".to_string(),
+        })
+        .expect("automation event");
+
+        assert_eq!(event.kind, EventKind::ExternalMessage);
+        assert_eq!(event.source, "discord:shack");
+        assert_eq!(event.fields.get("author").map(String::as_str), Some("W1AW"));
+        assert_eq!(
+            event.fields.get("message").map(String::as_str),
+            Some("!rig")
+        );
+        assert_eq!(
+            event.fields.get("channel").map(String::as_str),
+            Some("#qsonaut")
+        );
+    }
+
+    #[test]
+    fn parse_tx_target_from_compose_uses_operator_role() {
+        assert_eq!(
+            parse_tx_target_from_compose("K1ABC N0CALL -10", "N0CALL").as_deref(),
+            Some("K1ABC")
+        );
+        assert_eq!(
+            parse_tx_target_from_compose("N0CALL K1ABC -12", "N0CALL").as_deref(),
+            Some("K1ABC")
+        );
+        assert_eq!(
+            parse_tx_target_from_compose("CQ N0CALL FN20", "N0CALL"),
+            None
+        );
+    }
+
+    #[test]
+    fn configured_external_transports_extracts_declared_source_kinds() {
+        let config = RuleComponentConfig {
+            component: qsonaut_automation::ComponentManifest {
+                id: "test.component".to_string(),
+                name: "Test".to_string(),
+                version: "0.1.0".to_string(),
+                description: String::new(),
+                subscriptions: Default::default(),
+                requests: Default::default(),
+            },
+            sources: vec![
+                ExternalSourceConfig::Discord {
+                    token_env: "QSONAUT_DISCORD_TOKEN".to_string(),
+                    guild_id: None,
+                    channel_ids: vec!["1".to_string()],
+                },
+                ExternalSourceConfig::Irc {
+                    server: "irc.libera.chat".to_string(),
+                    port: 6697,
+                    tls: true,
+                    nickname: "QSONautBot".to_string(),
+                    channels: vec!["#qsonaut".to_string()],
+                    password_env: None,
+                },
+            ],
+            rules: vec![],
+        };
+
+        let transports = configured_external_transports(&config);
+        assert!(transports.contains("discord"));
+        assert!(transports.contains("irc"));
+        assert_eq!(transports.len(), 2);
+    }
+
+    #[test]
+    fn external_source_transport_requires_transport_prefix() {
+        assert_eq!(
+            external_source_transport("discord:shack").as_deref(),
+            Some("discord")
+        );
+        assert_eq!(
+            external_source_transport("irc:#qsonaut").as_deref(),
+            Some("irc")
+        );
+        assert_eq!(external_source_transport("bare-source"), None);
+    }
+
+    #[test]
+    fn parse_workspace_mode_token_recognizes_supported_labels() {
+        assert_eq!(parse_workspace_mode_token("FT8"), Some(WorkspaceMode::Ft8));
+        assert_eq!(parse_workspace_mode_token("ft4"), Some(WorkspaceMode::Ft4));
+        assert_eq!(
+            parse_workspace_mode_token("JT65"),
+            Some(WorkspaceMode::Jt65)
+        );
+        assert_eq!(parse_workspace_mode_token("unknown"), None);
+    }
+
+    #[test]
+    fn workspace_mode_supports_native_tx_matches_current_backends() {
+        assert!(workspace_mode_supports_native_tx(WorkspaceMode::Ft4));
+        assert!(workspace_mode_supports_native_tx(WorkspaceMode::Jt9));
+        assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Ft8));
+        assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Wspr));
     }
 }

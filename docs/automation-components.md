@@ -26,7 +26,7 @@ radio / decoder / QSO log / Discord / IRC
        approved             denied + logged
 ```
 
-Events currently cover decodes, callsign hits, logged QSOs, radio state, commands, external messages, and timers. Fields are intentionally open-ended so protocol- or connector-specific metadata can be added without changing every component.
+Events currently cover decodes, callsign hits, logged QSOs, radio state, contest state, operator profile changes, commands, external messages, and timers. Fields are intentionally open-ended so protocol- or connector-specific metadata can be added without changing every component.
 
 ## Capabilities
 
@@ -45,6 +45,7 @@ A capability must appear in the component manifest and in the operator's grant s
 [`automation.example.toml`](../automation.example.toml) demonstrates:
 
 - a callsign-hit notification;
+- a qso-logged confirmation notification;
 - forwarding that hit to Discord;
 - responding locally to an `!rig` external command;
 - Discord and IRC source declarations that reference environment variables rather than storing tokens.
@@ -57,15 +58,31 @@ Templates use `${field}` placeholders. `${source}` and `${timestamp_ms}` are alw
 
 The source declarations are configuration contracts, not active connector implementations yet. That keeps the first layer testable and avoids coupling the automation model to a specific Discord or IRC library.
 
-## Next integration seam
+## Integration status
 
-The GUI should own an `AutomationHost` and publish normalized events after:
+The GUI now owns an `AutomationHost` and dispatches normalized events for:
 
-1. a decode is accepted;
-2. the configured callsign is detected;
-3. a QSO is logged;
-4. radio state materially changes;
-5. an external adapter receives a message.
+1. configured callsign detections (`callsign_hit`);
+2. QSO logging transitions (`qso_logged`);
+3. contest profile transitions (`contest_state`);
+4. operator profile transitions (`operator_profile`);
+5. material radio state transitions (`radio_state`).
 
-Approved actions then go through GUI-owned executors. UI notifications and compose changes are low risk. External sends require a configured adapter. Radio control and TX must additionally pass the same global armed/disarmed safety gate used by the operator controls.
+Current runtime grants are intentionally conservative:
+
+- `ui_notification` is granted to the sample component by default;
+- external send, radio control, and transmit actions remain denied unless explicit grants and executors are wired.
+
+Still pending:
+
+6. live external adapter polling and transport wiring (Discord/IRC runtime connectors).
+
+Safety-gated execution is now wired for approved `radio_command` and `request_transmit` actions:
+
+- radio commands are blocked while TX/PTT is active and disallow direct PTT control;
+- TX requests are blocked unless the operator has already armed a TX path and no TX/PTT is active.
+
+External receive-path publication is available today through a GUI-local ingress simulator that emits typed `external_message` events (`source`, `author`, `message`, `channel`) into the same automation pipeline used by future adapters.
+
+Approved actions continue to flow through GUI-owned executors. UI notifications and compose changes are low risk. Radio control and TX must pass the same global armed/disarmed safety gate used by operator controls.
 

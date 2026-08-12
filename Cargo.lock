@@ -2446,6 +2446,7 @@ dependencies = [
  "mfsk-core",
  "qsonaut-accelerate",
  "qsonaut-audio",
+ "qsonaut-automation",
  "qsonaut-core",
  "qsonaut-dsp",
  "qsonaut-log",

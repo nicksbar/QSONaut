@@ -461,6 +461,50 @@ mod tests {
     }
 
     #[test]
+    fn reply_deadline_boundary_is_inclusive_then_rolls_forward() {
+        let source_period = 220;
+        let eps = 1e-6;
+        assert_eq!(
+            next_reply_period(
+                221.0 * SLOT_SECONDS + (REPLY_DEADLINE_SECONDS - eps),
+                source_period,
+                DEFAULT_PTT_LEAD_SECONDS,
+            ),
+            221
+        );
+        assert_eq!(
+            next_reply_period(
+                221.0 * SLOT_SECONDS + REPLY_DEADLINE_SECONDS + 0.001,
+                source_period,
+                DEFAULT_PTT_LEAD_SECONDS,
+            ),
+            223
+        );
+    }
+
+    #[test]
+    fn next_tx_period_rejects_candidate_once_ptt_window_opens() {
+        let candidate = 301u64;
+        let ptt_lead = 0.25;
+        let ptt_start = candidate as f64 * SLOT_SECONDS + AUDIO_START_SECONDS - ptt_lead;
+
+        assert_eq!(
+            next_tx_period(ptt_start - 0.001, Some((candidate % 2) as u8), ptt_lead),
+            candidate
+        );
+        assert_eq!(
+            next_tx_period(ptt_start, Some((candidate % 2) as u8), ptt_lead),
+            candidate + 2
+        );
+    }
+
+    #[test]
+    fn retry_guard_is_saturating_and_never_wraps_period_math() {
+        assert!(should_retry_after_decode(Some(u64::MAX), u64::MAX));
+        assert!(!should_retry_after_decode(Some(u64::MAX), u64::MAX - 1));
+    }
+
+    #[test]
     fn advances_standard_qso_exchange() {
         let mut session = Ft8Session::start("K1ABC".into(), 100);
         let grid = parse_message("N7UF K1ABC FN42").unwrap();
