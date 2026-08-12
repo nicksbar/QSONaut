@@ -127,10 +127,11 @@ Acceptance criteria:
 - [x] Connect GUI event stream to runtime automation host
   - GUI owns `AutomationHost`, normalizes app events, and dispatches rule components.
   - Status: runtime dispatch active for contest/profile plus structured `callsign_hit` and `qso_logged` events.
-- [ ] Map approved automation actions to existing safety gates
 - [x] Map approved automation actions to existing safety gates
   - TX/radio-control actions must respect global disarm/armed guardrails.
   - Status: GUI now executes approved `radio_command` and `request_transmit` actions through TX-active/disarmed guard checks; default grants still keep high-risk actions off unless explicitly enabled.
+- [x] Publish external adapter receive path into the same event stream (`external_message`)
+  - Status: GUI local ingress simulator publishes typed `ExternalMessageReceived` app events (`source`, `author`, `message`, `channel`) into the automation pipeline; live Discord/IRC adapter transport remains follow-up.
 - [x] Add sample automation recipes for contest workflow assists
   - Examples: serial nudge notifications, dupe warnings, Run↔S&P context prompts.
   - Status: `automation.example.toml` includes a contest-state activation notification rule.

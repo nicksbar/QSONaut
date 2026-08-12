@@ -31,6 +31,13 @@ pub enum AppEvent {
         band: String,
         frequency_hz: u64,
     },
+    ExternalMessageReceived {
+        source: String,
+        author: String,
+        message: String,
+        #[allow(dead_code)]
+        channel: String,
+    },
     AutomationHook {
         kind: String,
         source: String,

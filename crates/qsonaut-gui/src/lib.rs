@@ -382,6 +382,18 @@ fn normalize_app_event_for_automation(event: AppEvent) -> Option<AutomationEvent
                 .field("band", band)
                 .field("frequency_hz", frequency_hz.to_string()),
         ),
+        AppEvent::ExternalMessageReceived {
+            source,
+            author,
+            message,
+            channel,
+        } => Some(
+            AutomationEvent::new(EventKind::ExternalMessage, source.clone())
+                .field("source", source)
+                .field("author", author)
+                .field("message", message)
+                .field("channel", channel),
+        ),
         AppEvent::AutomationHook {
             kind,
             source,
@@ -1597,6 +1609,10 @@ struct QsonautGuiApp {
     automation_host: AutomationHost,
     automation_status: String,
     last_radio_state_signature: Option<String>,
+    external_ingress_source: String,
+    external_ingress_author: String,
+    external_ingress_channel: String,
+    external_ingress_message: String,
     state: Arc<Mutex<GuiState>>,
     command_tx: Option<mpsc::Sender<GuiCommand>>,
     worker_stop: Arc<AtomicBool>,
@@ -1987,6 +2003,10 @@ impl QsonautGuiApp {
             automation_host,
             automation_status,
             last_radio_state_signature: None,
+            external_ingress_source: "discord:shack".to_string(),
+            external_ingress_author: "operator".to_string(),
+            external_ingress_channel: "#qsonaut".to_string(),
+            external_ingress_message: "!rig".to_string(),
             state,
             command_tx,
             worker_stop,
@@ -3088,6 +3108,32 @@ impl QsonautGuiApp {
         });
     }
 
+    fn publish_external_ingress_message(&mut self) {
+        let source = self.external_ingress_source.trim();
+        let author = self.external_ingress_author.trim();
+        let channel = self.external_ingress_channel.trim();
+        let message = self.external_ingress_message.trim();
+        if source.is_empty() || author.is_empty() || message.is_empty() {
+            self.automation_status =
+                "🤖 External ingress blocked: source, author, and message are required".to_string();
+            return;
+        }
+
+        self.app_events.publish(AppEvent::ExternalMessageReceived {
+            source: source.to_string(),
+            author: author.to_string(),
+            message: message.to_string(),
+            channel: if channel.is_empty() {
+                "(unspecified)".to_string()
+            } else {
+                channel.to_string()
+            },
+        });
+        self.automation_status =
+            format!("🤖 External message injected from {source} as {author}: {message}");
+        self.external_ingress_message.clear();
+    }
+
     fn pump_automation_events(&mut self) {
         loop {
             match self.automation_event_rx.try_recv() {
@@ -3538,6 +3584,49 @@ impl QsonautGuiApp {
                     .color(Color32::GRAY),
             );
         }
+
+        ui.add_space(8.0);
+        egui::CollapsingHeader::new("💬 External automation ingress (local simulator)")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(
+                        "Publish an external_message event locally to validate rules before wiring live adapters.",
+                    )
+                    .small()
+                    .color(Color32::GRAY),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Source");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.external_ingress_source)
+                            .desired_width(130.0)
+                            .hint_text("discord:shack"),
+                    );
+                    ui.label("Author");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.external_ingress_author)
+                            .desired_width(120.0)
+                            .hint_text("K1ABC"),
+                    );
+                    ui.label("Channel");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.external_ingress_channel)
+                            .desired_width(120.0)
+                            .hint_text("#qsonaut"),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.external_ingress_message)
+                            .desired_width((ui.available_width() - 150.0).max(120.0))
+                            .hint_text("!rig"),
+                    );
+                    if ui.button("Inject event").clicked() {
+                        self.publish_external_ingress_message();
+                    }
+                });
+            });
 
         ui.add_space(4.0);
         ui.label(
@@ -9398,6 +9487,29 @@ mod tests {
         assert_eq!(
             event.fields.get("split_policy").map(String::as_str),
             Some("off")
+        );
+    }
+
+    #[test]
+    fn normalize_external_message_event_for_automation() {
+        let event = normalize_app_event_for_automation(AppEvent::ExternalMessageReceived {
+            source: "discord:shack".to_string(),
+            author: "W1AW".to_string(),
+            message: "!rig".to_string(),
+            channel: "#qsonaut".to_string(),
+        })
+        .expect("automation event");
+
+        assert_eq!(event.kind, EventKind::ExternalMessage);
+        assert_eq!(event.source, "discord:shack");
+        assert_eq!(event.fields.get("author").map(String::as_str), Some("W1AW"));
+        assert_eq!(
+            event.fields.get("message").map(String::as_str),
+            Some("!rig")
+        );
+        assert_eq!(
+            event.fields.get("channel").map(String::as_str),
+            Some("#qsonaut")
         );
     }
 

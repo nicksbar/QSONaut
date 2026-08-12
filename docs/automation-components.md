@@ -75,12 +75,14 @@ Current runtime grants are intentionally conservative:
 
 Still pending:
 
-6. external adapter receive-path publication;
+6. live external adapter polling and transport wiring (Discord/IRC runtime connectors).
 
 Safety-gated execution is now wired for approved `radio_command` and `request_transmit` actions:
 
 - radio commands are blocked while TX/PTT is active and disallow direct PTT control;
 - TX requests are blocked unless the operator has already armed a TX path and no TX/PTT is active.
+
+External receive-path publication is available today through a GUI-local ingress simulator that emits typed `external_message` events (`source`, `author`, `message`, `channel`) into the same automation pipeline used by future adapters.
 
 Approved actions continue to flow through GUI-owned executors. UI notifications and compose changes are low risk. Radio control and TX must pass the same global armed/disarmed safety gate used by operator controls.
 
