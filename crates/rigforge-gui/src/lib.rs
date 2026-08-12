@@ -12,6 +12,9 @@ use mfsk_core::{
     },
 };
 use rigforge_audio::{play_pcm_blocking, AudioService};
+use rigforge_accelerate::{
+    AccelerationReport, ActiveBackend, ComputePreference, DecodeTelemetry, DecodeTrace,
+};
 use rigforge_core::AppConfig;
 use rigforge_dsp::resample::Decimator;
 use rigforge_log::{QsoLog, QsoRecord};
@@ -209,6 +212,8 @@ struct OperatorProfile {
     radio_serial_port: Option<String>,
     #[serde(default = "default_gui_scale")]
     gui_scale: f32,
+    #[serde(default)]
+    compute_preference: ComputePreference,
 }
 
 fn default_gui_scale() -> f32 {
@@ -812,6 +817,7 @@ fn monitor_ft8_tx_waterfall(
             snapshot.audio_waterfall_rows.pop_front();
         }
         snapshot.audio_waterfall_rows.push_back(bins);
+        snapshot.audio_waterfall_revision = snapshot.audio_waterfall_revision.wrapping_add(1);
         snapshot.audio_spectrum_status = "TX OUTPUT".to_string();
         drop(snapshot);
         if let Some(ctx) = repaint_ctx.get() {
@@ -1103,8 +1109,10 @@ struct GuiState {
     radio_spectrum_enabled: bool,
     radio_waterfall_status: String,
     radio_waterfall_rows: VecDeque<Vec<u8>>,
+    radio_waterfall_revision: u64,
     audio_spectrum_status: String,
     audio_waterfall_rows: VecDeque<Vec<u8>>,
+    audio_waterfall_revision: u64,
     audio_level_dbfs: Option<f32>,
     audio_clip_percent: f32,
     ft8_decode_status: String,
@@ -1120,6 +1128,9 @@ struct GuiState {
     ft4_last_decode_period: Option<u64>,
     digital_tx_period: Option<(WorkspaceMode, u64)>,
     selected_audio_hz: u32,
+    compute_backend: ActiveBackend,
+    ft8_compute_telemetry: Option<DecodeTelemetry>,
+    digital_compute_telemetry: Option<DecodeTelemetry>,
     last_error: Option<String>,
     last_update: Option<Instant>,
 }
@@ -1139,8 +1150,10 @@ impl Default for GuiState {
             radio_spectrum_enabled: false,
             radio_waterfall_status: "OFF".to_string(),
             radio_waterfall_rows: VecDeque::with_capacity(RADIO_WF_HEIGHT),
+            radio_waterfall_revision: 0,
             audio_spectrum_status: "INIT".to_string(),
             audio_waterfall_rows: VecDeque::with_capacity(AUDIO_WF_HEIGHT),
+            audio_waterfall_revision: 0,
             audio_level_dbfs: None,
             audio_clip_percent: 0.0,
             ft8_decode_status: "STARTING".to_string(),
@@ -1156,6 +1169,9 @@ impl Default for GuiState {
             ft4_last_decode_period: None,
             digital_tx_period: None,
             selected_audio_hz: default_rx_tone_hz(),
+            compute_backend: ActiveBackend::CpuSimd,
+            ft8_compute_telemetry: None,
+            digital_compute_telemetry: None,
             last_error: None,
             last_update: None,
         }
@@ -1209,6 +1225,8 @@ pub fn run_gui(config: AppConfig) -> Result<()> {
         wayland_value = ?std::env::var("WAYLAND_DISPLAY").ok(),
         winit_backend_value = ?std::env::var("WINIT_UNIX_BACKEND").ok(),
         wgpu_backend_value = ?std::env::var("WGPU_BACKEND").ok(),
+        gallium_driver = ?std::env::var("GALLIUM_DRIVER").ok(),
+        mesa_d3d12_adapter = ?std::env::var("MESA_D3D12_DEFAULT_ADAPTER_NAME").ok(),
         "GUI environment after configuration"
     );
 
@@ -1248,6 +1266,7 @@ fn configure_unix_gui_environment() {
         if std::env::var_os("NO_AT_BRIDGE").is_none() {
             std::env::set_var("NO_AT_BRIDGE", "1");
         }
+
     }
 }
 
@@ -1259,7 +1278,10 @@ struct RigforgeGuiApp {
     radio_worker_handle: Option<std::thread::JoinHandle<()>>,
     audio_worker_handle: Option<std::thread::JoinHandle<()>>,
     radio_waterfall_texture: Option<TextureHandle>,
+    radio_waterfall_texture_revision: u64,
     audio_waterfall_texture: Option<TextureHandle>,
+    audio_waterfall_texture_revision: u64,
+    audio_waterfall_texture_bins: usize,
     workspace_mode: WorkspaceMode,
     display_tuning: Arc<Mutex<DisplayTuning>>,
     repaint_ctx: Arc<OnceLock<egui::Context>>,
@@ -1341,6 +1363,8 @@ struct RigforgeGuiApp {
     show_device_settings: bool,
     device_restart_required: bool,
     gui_scale: f32,
+    compute_preference: ComputePreference,
+    acceleration_report: AccelerationReport,
 }
 
 impl RigforgeGuiApp {
@@ -1445,6 +1469,7 @@ impl RigforgeGuiApp {
         let mut ptt_lead_ms = default_ptt_lead_ms();
         let mut ptt_tail_ms = default_ptt_tail_ms();
         let mut gui_scale = default_gui_scale();
+        let mut compute_preference = ComputePreference::Auto;
         let profile_io_status: String;
 
         if let Some(p) = load_operator_profile() {
@@ -1485,6 +1510,7 @@ impl RigforgeGuiApp {
                 // v3 called this physical size 160%; it is the v4 100% baseline.
                 default_gui_scale()
             };
+            compute_preference = p.compute_preference;
             config.station.callsign = Some(station_callsign.clone());
             config.station.grid = Some(station_grid.clone());
             profile_io_status = format!("Loaded {}", OPERATOR_PROFILE_FILE);
@@ -1518,6 +1544,7 @@ impl RigforgeGuiApp {
                 audio_output_device: config.audio.output_device.clone(),
                 radio_serial_port: config.radio.serial_port.clone(),
                 gui_scale,
+                compute_preference,
             };
             match save_operator_profile(&bootstrap) {
                 Ok(_) => {
@@ -1539,6 +1566,8 @@ impl RigforgeGuiApp {
             Err(error) => (QsoLog::default(), format!("Log load failed: {error}")),
         };
 
+        let acceleration_report = AccelerationReport::probe(compute_preference);
+
         Self {
             config,
             state,
@@ -1547,7 +1576,10 @@ impl RigforgeGuiApp {
             radio_worker_handle,
             audio_worker_handle,
             radio_waterfall_texture: None,
+            radio_waterfall_texture_revision: 0,
             audio_waterfall_texture: None,
+            audio_waterfall_texture_revision: 0,
+            audio_waterfall_texture_bins: 0,
             workspace_mode: WorkspaceMode::Ft8,
             display_tuning,
             repaint_ctx,
@@ -1628,6 +1660,8 @@ impl RigforgeGuiApp {
             show_device_settings: false,
             device_restart_required: false,
             gui_scale,
+            compute_preference,
+            acceleration_report,
         }
     }
 
@@ -2149,7 +2183,7 @@ impl RigforgeGuiApp {
                     self.ft8_halt_after_tx = false;
                     self.ft8_seq_status = if stop_after_tx {
                         self.ft8_autoseq = false;
-                        "🧊 TX complete · automatic TX is paused".to_string()
+                        "🔒 TX complete · automatic TX is paused".to_string()
                     } else if self.ft8_last_tx_was_cq {
                         "📣 CQ away · listening for callers".to_string()
                     } else {
@@ -2326,7 +2360,7 @@ impl RigforgeGuiApp {
                         self.ft4_autoseq = false;
                         self.profile_dirty = true;
                         self.persist_profile("FT4 automatic TX paused");
-                        "🧊 FT4 TX complete · automatic TX is paused".to_string()
+                        "🔒 FT4 TX complete · automatic TX is paused".to_string()
                     } else {
                         "📡 TX complete · receiver back on watch".to_string()
                     }
@@ -2483,6 +2517,7 @@ impl RigforgeGuiApp {
             audio_output_device: self.config.audio.output_device.clone(),
             radio_serial_port: self.config.radio.serial_port.clone(),
             gui_scale: self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX),
+            compute_preference: self.compute_preference,
         }
     }
 
@@ -2930,46 +2965,187 @@ impl RigforgeGuiApp {
     }
 
     fn draw_status(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
-        ui.heading("Live Status");
-        ui.separator();
+        ui.heading("📡 Station Health");
+        ui.label(
+            RichText::new("What matters right now—not a wall of driver diagnostics.")
+                .small()
+                .color(Color32::GRAY),
+        );
+        ui.add_space(4.0);
 
-        let freq = snapshot
-            .frequency_hz
-            .map(|v| format!("{v} Hz"))
-            .unwrap_or_else(|| "(unavailable)".to_string());
+        let update_age = snapshot.last_update.map(|last| last.elapsed().as_secs_f32());
+        let (radio_value, radio_detail, radio_color) = match update_age {
+            Some(age) if age < 3.0 => (
+                "CONNECTED".to_string(),
+                format!("Radio answered {:.1}s ago", age),
+                Color32::LIGHT_GREEN,
+            ),
+            Some(age) => (
+                "STALE".to_string(),
+                format!("No fresh radio state for {:.1}s", age),
+                Color32::YELLOW,
+            ),
+            None => (
+                "WAITING".to_string(),
+                "Waiting for the first radio update".to_string(),
+                Color32::GRAY,
+            ),
+        };
+        operator_status_card(ui, "📻 Radio link", &radio_value, &radio_detail, radio_color);
 
-        ui.label(format!("Frequency: {freq}"));
-        ui.label(format!("Mode: {}", snapshot.mode));
-        ui.label(format!(
-            "PTT: {}",
-            if snapshot.ptt_on { "ON" } else { "OFF" }
-        ));
-        ui.label(format!(
-            "Data mode: {}",
-            snapshot
-                .data_mode
-                .map(|v| if v { "ON" } else { "OFF" })
-                .unwrap_or("?")
-        ));
-        ui.label(format!(
-            "Filter: {}",
-            snapshot
-                .filter
-                .map(|v| format!("FIL{v}"))
-                .unwrap_or_else(|| "?".to_string())
-        ));
+        let (audio_value, audio_detail, audio_color) = snapshot.audio_level_dbfs.map_or_else(
+            || {
+                (
+                    "NO LEVEL".to_string(),
+                    snapshot.audio_spectrum_status.clone(),
+                    Color32::YELLOW,
+                )
+            },
+            |level| {
+                let clipped = snapshot.audio_clip_percent > 0.1;
+                (
+                    if clipped {
+                        "CLIPPING".to_string()
+                    } else {
+                        format!("{level:.0} dBFS")
+                    },
+                    format!(
+                        "{} · {:.1}% clipped",
+                        snapshot.audio_spectrum_status, snapshot.audio_clip_percent
+                    ),
+                    if clipped {
+                        Color32::from_rgb(255, 110, 100)
+                    } else if level < -45.0 {
+                        Color32::YELLOW
+                    } else {
+                        Color32::LIGHT_GREEN
+                    },
+                )
+            },
+        );
+        operator_status_card(ui, "🎧 Audio input", &audio_value, &audio_detail, audio_color);
 
-        ui.add_space(6.0);
+        let decode_status = match self.workspace_mode {
+            WorkspaceMode::Ft8 => snapshot.ft8_decode_status.as_str(),
+            _ => snapshot.digital_decode_status.as_str(),
+        };
+        operator_status_card(
+            ui,
+            "🔬 Decode engine",
+            self.workspace_mode.label(),
+            decode_status,
+            if decode_status.contains("failed") || decode_status.contains("NO INPUT") {
+                Color32::YELLOW
+            } else {
+                Color32::LIGHT_BLUE
+            },
+        );
 
-        ui.label(format!(
-            "AF: {}   RF: {}   Power: {}",
-            fmt_opt_u8(snapshot.af_gain),
-            fmt_opt_u8(snapshot.rf_gain),
-            fmt_opt_u8(snapshot.rf_power)
-        ));
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("⚙ Compute policy").strong());
+            let previous = self.compute_preference;
+            egui::ComboBox::from_id_salt("compute_preference")
+                .selected_text(self.compute_preference.label())
+                .show_ui(ui, |ui| {
+                    for preference in ComputePreference::ALL {
+                        ui.selectable_value(
+                            &mut self.compute_preference,
+                            preference,
+                            preference.label(),
+                        );
+                    }
+                });
+            if self.compute_preference != previous {
+                self.acceleration_report = AccelerationReport::probe(self.compute_preference);
+                self.profile_dirty = true;
+                self.persist_profile("Compute policy saved to");
+            }
+        });
+        let compute_detail = self
+            .acceleration_report
+            .fallback_reason
+            .as_deref()
+            .map(|reason| format!("{} · {reason}", self.acceleration_report.hardware_detail()))
+            .unwrap_or_else(|| self.acceleration_report.hardware_detail());
+        operator_status_card(
+            ui,
+            "🚀 Compute backend",
+            &self.acceleration_report.summary(),
+            &compute_detail,
+            if self.acceleration_report.active == ActiveBackend::GpuCompute {
+                Color32::from_rgb(210, 120, 255)
+            } else {
+                Color32::from_rgb(120, 210, 255)
+            },
+        );
 
+        let gui_driver = std::env::var("GALLIUM_DRIVER").unwrap_or_default();
+        let gui_adapter = std::env::var("MESA_D3D12_DEFAULT_ADAPTER_NAME")
+            .unwrap_or_else(|_| "automatic adapter".to_string());
+        let gui_renderer_detail = if gui_driver.eq_ignore_ascii_case("d3d12") {
+            format!("{gui_adapter} preference · Mesa/WSLg")
+        } else {
+            "Override with GALLIUM_DRIVER; software rendering raises CPU load".to_string()
+        };
+        operator_status_card(
+            ui,
+            "🎨 GUI renderer",
+            if gui_driver.eq_ignore_ascii_case("d3d12") {
+                "D3D12 HARDWARE"
+            } else if gui_driver.is_empty() {
+                "SYSTEM DEFAULT"
+            } else {
+                &gui_driver
+            },
+            &gui_renderer_detail,
+            if gui_driver.eq_ignore_ascii_case("d3d12") {
+                Color32::LIGHT_GREEN
+            } else {
+                Color32::YELLOW
+            },
+        );
+
+        let telemetry = if self.workspace_mode == WorkspaceMode::Ft8 {
+            snapshot.ft8_compute_telemetry.as_ref()
+        } else {
+            snapshot.digital_compute_telemetry.as_ref()
+        };
+        if let Some(telemetry) = telemetry {
+            operator_status_card(
+                ui,
+                "⏱ Last decode",
+                &telemetry.concise(),
+                &telemetry.stage_detail(),
+                if telemetry.realtime_percent() > 80.0 {
+                    Color32::YELLOW
+                } else {
+                    Color32::LIGHT_GREEN
+                },
+            );
+        }
+
+        operator_status_card(
+            ui,
+            "📊 Radio levels",
+            &format!("AF {} · RF {} · PWR {}", fmt_opt_u8(snapshot.af_gain), fmt_opt_u8(snapshot.rf_gain), fmt_opt_u8(snapshot.rf_power)),
+            &format!(
+                "{} · {}",
+                snapshot
+                    .filter
+                    .map(|value| format!("FIL{value}"))
+                    .unwrap_or_else(|| "filter unknown".to_string()),
+                if snapshot.data_mode == Some(true) {
+                    "data mode"
+                } else {
+                    "voice/CW mode"
+                }
+            ),
+            Color32::from_rgb(210, 190, 110),
+        );
+
+        ui.add_space(4.0);
         if ui
-            .checkbox(&mut self.civ_spectrum_on, "CI-V spectrum waterfall")
+            .checkbox(&mut self.civ_spectrum_on, "📈 Radio scope waterfall")
             .changed()
         {
             self.profile_dirty = true;
@@ -2983,45 +3159,17 @@ impl RigforgeGuiApp {
         } else {
             Color32::YELLOW
         };
-        ui.label(
-            RichText::new(format!(
-                "Radio waterfall: {} ({})",
-                snapshot.radio_waterfall_status,
-                if snapshot.radio_spectrum_desired {
-                    if snapshot.radio_spectrum_enabled {
-                        "enabled"
-                    } else {
-                        "arming"
-                    }
-                } else {
-                    "disabled"
-                }
-            ))
-            .color(wf_color),
-        );
-
-        ui.label(
-            RichText::new(format!(
-                "Audio spectrum: {}",
-                snapshot.audio_spectrum_status
-            ))
-            .color(if snapshot.audio_spectrum_status.contains("LIVE") {
-                Color32::LIGHT_GREEN
-            } else {
-                Color32::YELLOW
-            }),
-        );
-
-        if let Some(last) = snapshot.last_update {
-            ui.label(format!(
-                "Last update: {:.1}s ago",
-                last.elapsed().as_secs_f32()
-            ));
-        }
+        ui.label(RichText::new(&snapshot.radio_waterfall_status).small().color(wf_color));
 
         if let Some(err) = &snapshot.last_error {
             ui.add_space(6.0);
-            ui.label(RichText::new(format!("Last error: {err}")).color(Color32::YELLOW));
+            egui::Frame::group(ui.style())
+                .fill(Color32::from_rgb(70, 42, 20))
+                .stroke(egui::Stroke::new(1.5, Color32::YELLOW))
+                .show(ui, |ui| {
+                    ui.label(RichText::new("⚠ NEEDS ATTENTION").strong().color(Color32::YELLOW));
+                    ui.label(err);
+                });
         }
     }
 
@@ -3044,18 +3192,25 @@ impl RigforgeGuiApp {
 
         let display_size = egui::vec2(ui.available_width(), RADIO_WF_HEIGHT as f32 * 1.9);
 
-        let image = build_waterfall_image(
-            &snapshot.radio_waterfall_rows,
-            RADIO_WF_WIDTH,
-            RADIO_WF_HEIGHT,
-            0.7,
-        );
-
-        if let Some(tex) = &mut self.radio_waterfall_texture {
-            tex.set(image, TextureOptions::LINEAR);
-        } else {
-            self.radio_waterfall_texture =
-                Some(ctx.load_texture("rigforge-radio-waterfall", image, TextureOptions::LINEAR));
+        if self.radio_waterfall_texture.is_none()
+            || self.radio_waterfall_texture_revision != snapshot.radio_waterfall_revision
+        {
+            let image = build_waterfall_image(
+                &snapshot.radio_waterfall_rows,
+                RADIO_WF_WIDTH,
+                RADIO_WF_HEIGHT,
+                0.7,
+            );
+            if let Some(tex) = &mut self.radio_waterfall_texture {
+                tex.set(image, TextureOptions::LINEAR);
+            } else {
+                self.radio_waterfall_texture = Some(ctx.load_texture(
+                    "rigforge-radio-waterfall",
+                    image,
+                    TextureOptions::LINEAR,
+                ));
+            }
+            self.radio_waterfall_texture_revision = snapshot.radio_waterfall_revision;
         }
 
         if let Some(tex) = &self.radio_waterfall_texture {
@@ -3085,17 +3240,27 @@ impl RigforgeGuiApp {
         // Capture layout geometry before texture ops — available_width() can change mid-frame.
         let display_size = egui::vec2(ui.available_width(), AUDIO_WF_HEIGHT as f32 * 1.9);
 
-        let image = build_waterfall_image(
-            &snapshot.audio_waterfall_rows,
-            display_bins,
-            AUDIO_WF_HEIGHT,
-            1.0,
-        );
-        if let Some(tex) = &mut self.audio_waterfall_texture {
-            tex.set(image, TextureOptions::LINEAR);
-        } else {
-            self.audio_waterfall_texture =
-                Some(ctx.load_texture("rigforge-audio-waterfall", image, TextureOptions::LINEAR));
+        if self.audio_waterfall_texture.is_none()
+            || self.audio_waterfall_texture_revision != snapshot.audio_waterfall_revision
+            || self.audio_waterfall_texture_bins != display_bins
+        {
+            let image = build_waterfall_image(
+                &snapshot.audio_waterfall_rows,
+                display_bins,
+                AUDIO_WF_HEIGHT,
+                1.0,
+            );
+            if let Some(tex) = &mut self.audio_waterfall_texture {
+                tex.set(image, TextureOptions::LINEAR);
+            } else {
+                self.audio_waterfall_texture = Some(ctx.load_texture(
+                    "rigforge-audio-waterfall",
+                    image,
+                    TextureOptions::LINEAR,
+                ));
+            }
+            self.audio_waterfall_texture_revision = snapshot.audio_waterfall_revision;
+            self.audio_waterfall_texture_bins = display_bins;
         }
         if let Some(tex) = &self.audio_waterfall_texture {
             let image_widget =
@@ -3616,7 +3781,7 @@ impl RigforgeGuiApp {
                 )
             } else {
                 (
-                    "🧊 FT8 AUTO DISARMED · CLICK TO ARM",
+                    "🔒 FT8 AUTO DISARMED · CLICK TO ARM",
                     Color32::from_rgb(28, 52, 70),
                     Color32::from_rgb(92, 174, 220),
                 )
@@ -3951,7 +4116,7 @@ impl RigforgeGuiApp {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_min_height(tx_h);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("🎙️ TX DECK").strong());
+                ui.label(RichText::new("📣 TX DECK").strong());
                 ui.separator();
                 let ptt_color = if snapshot.ptt_on {
                     Color32::from_rgb(200, 60, 60)
@@ -3980,7 +4145,7 @@ impl RigforgeGuiApp {
                 }
                 let tx_active = self.ft8_tx_active.load(Ordering::Relaxed);
                 if ui
-                    .button(RichText::new("🛑 STOP + DISARM ALL").strong().color(if tx_active {
+                    .button(RichText::new("⛔ STOP + DISARM ALL").strong().color(if tx_active {
                         Color32::from_rgb(255, 130, 130)
                     } else {
                         Color32::from_gray(120)
@@ -4372,7 +4537,7 @@ impl RigforgeGuiApp {
                 {
                     self.ft4_halt_after_tx = !self.ft4_halt_after_tx;
                     self.digital_tx_status = if self.ft4_halt_after_tx {
-                        "🧊 FT4 will pause after the next transmission".to_string()
+                        "🔒 FT4 will pause after the next transmission".to_string()
                     } else {
                         "Stop-after-TX canceled".to_string()
                     };
@@ -4427,7 +4592,7 @@ impl RigforgeGuiApp {
                 )
             } else {
                 (
-                    "🧊 FT4 AUTO DISARMED · CLICK TO ARM",
+                    "🔒 FT4 AUTO DISARMED · CLICK TO ARM",
                     Color32::from_rgb(28, 52, 70),
                     Color32::from_rgb(92, 174, 220),
                 )
@@ -4713,7 +4878,7 @@ impl RigforgeGuiApp {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_min_height(tx_h);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("🎙️ FT4 TX DECK").strong());
+                ui.label(RichText::new("📣 FT4 TX DECK").strong());
                 ui.add_enabled(
                     !tx_active,
                     egui::TextEdit::singleline(&mut self.digital_compose)
@@ -4744,7 +4909,7 @@ impl RigforgeGuiApp {
                 if ui
                     .add(
                         egui::Button::new(
-                            RichText::new("🛑 STOP + DISARM ALL")
+                            RichText::new("⛔ STOP + DISARM ALL")
                                 .strong()
                                 .color(Color32::WHITE),
                         )
@@ -5017,7 +5182,7 @@ impl RigforgeGuiApp {
             (
                 Color32::from_rgb(22, 48, 59),
                 Color32::from_rgb(77, 184, 211),
-                "🧊 ALL TX DISARMED",
+                "🔒 ALL TX DISARMED",
                 "Safe state · arm from the FT8 or FT4 workspace",
             )
         };
@@ -5034,7 +5199,7 @@ impl RigforgeGuiApp {
                         .add_sized(
                             [ui.available_width(), 34.0],
                             egui::Button::new(
-                                RichText::new("🛑 STOP + DISARM ALL TX")
+                                RichText::new("⛔ STOP + DISARM ALL TX")
                                     .strong()
                                     .color(Color32::WHITE),
                             )
@@ -5196,6 +5361,7 @@ impl eframe::App for RigforgeGuiApp {
             s.ft8_deep_decode = self.ft8_deep_decode;
             s.ft4_deep_decode = self.ft4_deep_decode;
             s.selected_audio_hz = self.rx_tone_hz;
+            s.compute_backend = self.acceleration_report.active;
             s.radio_spectrum_desired = self.civ_spectrum_on;
             (
                 s.ft8_pending.drain(..).collect::<Vec<_>>(),
@@ -5243,12 +5409,94 @@ impl eframe::App for RigforgeGuiApp {
 
         egui::TopBottomPanel::top("header")
             .resizable(true)
-            .min_height(34.0)
-            .max_height(110.0)
+            .min_height(72.0)
+            .max_height(160.0)
             .show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.heading("⚡ RigForge");
                 ui.separator();
+                let frequency = snapshot
+                    .frequency_hz
+                    .map(|hz| format!("{:.6} MHz", hz as f64 / 1_000_000.0))
+                    .unwrap_or_else(|| "RADIO OFFLINE".to_string());
+                ui.label(
+                    RichText::new(frequency)
+                        .monospace()
+                        .strong()
+                        .size(19.0)
+                        .color(if snapshot.frequency_hz.is_some() {
+                            Color32::from_rgb(120, 225, 255)
+                        } else {
+                            Color32::YELLOW
+                        }),
+                );
+                if let Some(hz) = snapshot.frequency_hz {
+                    ui.label(
+                        RichText::new(band_for_frequency(hz))
+                            .strong()
+                            .color(Color32::from_rgb(220, 190, 100)),
+                    );
+                }
+                ui.separator();
+                ui.label(
+                    RichText::new(&snapshot.mode)
+                        .monospace()
+                        .strong()
+                        .color(Color32::WHITE),
+                );
+                ui.label(
+                    RichText::new(
+                        snapshot
+                            .filter
+                            .map(|filter| format!("FIL{filter}"))
+                            .unwrap_or_else(|| "FIL?".to_string()),
+                    )
+                    .monospace()
+                    .color(Color32::GRAY),
+                );
+                ui.label(
+                    RichText::new(self.workspace_mode.label())
+                        .strong()
+                        .color(Color32::LIGHT_BLUE),
+                );
+                ui.separator();
+                ui.label(
+                    RichText::new(format!("RX {} · TX {} Hz", self.rx_tone_hz, self.tx_tone_hz))
+                        .monospace()
+                        .color(Color32::from_rgb(135, 220, 145)),
+                );
+                let armed = self.any_tx_armed(&snapshot);
+                ui.label(
+                    RichText::new(if snapshot.ptt_on {
+                        "🔥 ON AIR"
+                    } else if armed {
+                        "⚠ TX ARMED"
+                    } else {
+                        "🔒 TX SAFE"
+                    })
+                    .strong()
+                    .color(if snapshot.ptt_on {
+                        Color32::from_rgb(255, 95, 85)
+                    } else if armed {
+                        Color32::from_rgb(255, 170, 75)
+                    } else {
+                        Color32::from_rgb(100, 205, 225)
+                    }),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "📍 {} · {}",
+                            self.station_callsign_or_default(),
+                            self.station_grid_or_default()
+                        ))
+                        .strong()
+                        .color(Color32::from_rgb(255, 210, 110)),
+                    );
+                });
+            });
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
                 if ui
                     .selectable_label(self.show_signal_panel, "Signals")
                     .on_hover_text("Show or hide the resizable monitoring panel")
@@ -5286,12 +5534,6 @@ impl eframe::App for RigforgeGuiApp {
                     ctx.set_zoom_factor(self.gui_scale);
                     self.profile_dirty = true;
                     self.persist_profile("Auto-saved");
-                }
-                ui.separator();
-                ui.label(format!("Callsign: {}", self.station_callsign_or_default()));
-                ui.label(format!("Grid: {}", self.station_grid_or_default()));
-                if !self.station_qth.trim().is_empty() {
-                    ui.label(format!("QTH: {}", self.station_qth.trim()));
                 }
                 ui.separator();
                 if ui.small_button("Save Profile").clicked() {
@@ -5335,6 +5577,9 @@ impl eframe::App for RigforgeGuiApp {
                             } else {
                                 default_gui_scale()
                             };
+                            self.compute_preference = p.compute_preference;
+                            self.acceleration_report =
+                                AccelerationReport::probe(self.compute_preference);
                             if p.profile_version >= 3 {
                                 self.config.audio.input_device = p.audio_input_device;
                                 self.config.audio.output_device = p.audio_output_device;
@@ -5388,7 +5633,7 @@ impl eframe::App for RigforgeGuiApp {
                                 ui.group(|ui| self.draw_device_settings(ui));
                                 ui.add_space(4.0);
                             }
-                            egui::CollapsingHeader::new("Live status")
+                            egui::CollapsingHeader::new("📡 Station health")
                                 .default_open(true)
                                 .show(ui, |ui| self.draw_status(ui, &snapshot));
                             egui::CollapsingHeader::new("Radio waterfall")
@@ -5494,6 +5739,7 @@ fn spawn_radio_worker(
                         s.radio_spectrum_enabled = false;
                         s.radio_waterfall_status = "OFF".to_string();
                         s.radio_waterfall_rows.clear();
+                        s.radio_waterfall_revision = s.radio_waterfall_revision.wrapping_add(1);
                     }
                     thread::sleep(Duration::from_millis(250));
                     continue;
@@ -5562,26 +5808,7 @@ fn spawn_radio_worker(
                         .expect("ui state lock poisoned")
                         .mode
                         .clone();
-                    let speed = if t.auto_visual {
-                        let m = mode.to_ascii_uppercase();
-                        if m.contains("DATA")
-                            || m.contains("FT8")
-                            || m.contains("JS8")
-                            || m.contains("RTTY")
-                            || m.contains("CW")
-                        {
-                            WaterfallSpeed::Fast
-                        } else {
-                            WaterfallSpeed::Mid
-                        }
-                    } else {
-                        t.waterfall_speed
-                    };
-                    match speed {
-                        WaterfallSpeed::Fast => 42,
-                        WaterfallSpeed::Mid => 83,
-                        WaterfallSpeed::Slow => 167,
-                    }
+                    effective_visual_profile(&t, &mode).0
                 };
                 thread::sleep(Duration::from_millis(interval_ms));
 
@@ -5809,6 +6036,7 @@ fn apply_waterfall_bins(next: &mut GuiState, bins: &[u8]) {
         next.radio_waterfall_rows.pop_front();
     }
     next.radio_waterfall_rows.push_back(row);
+    next.radio_waterfall_revision = next.radio_waterfall_revision.wrapping_add(1);
 }
 
 fn read_u8_control(
@@ -5982,6 +6210,28 @@ fn ft8_stat_chip(ui: &mut egui::Ui, label: &str, value: String, detail: String) 
         });
 }
 
+fn operator_status_card(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &str,
+    detail: &str,
+    accent: Color32,
+) {
+    egui::Frame::group(ui.style())
+        .fill(Color32::from_rgb(24, 29, 36))
+        .stroke(egui::Stroke::new(1.0, accent.gamma_multiply(0.7)))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(label).strong().color(Color32::LIGHT_GRAY));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(value).strong().monospace().color(accent));
+                });
+            });
+            ui.label(RichText::new(detail).small().color(Color32::GRAY));
+        });
+    ui.add_space(3.0);
+}
+
 fn qso_stage_label(stage: QsoStage) -> &'static str {
     match stage {
         QsoStage::Calling => "Calling",
@@ -6085,26 +6335,8 @@ fn spawn_audio_spectrum_worker(
                     let s = state.lock().expect("ui state lock poisoned");
                     s.mode.clone()
                 };
-                let speed = if t.auto_visual {
-                    let m = mode.to_ascii_uppercase();
-                    if m.contains("DATA")
-                        || m.contains("FT8")
-                        || m.contains("JS8")
-                        || m.contains("RTTY")
-                        || m.contains("CW")
-                    {
-                        WaterfallSpeed::Fast
-                    } else {
-                        WaterfallSpeed::Mid
-                    }
-                } else {
-                    t.waterfall_speed
-                };
-                match speed {
-                    WaterfallSpeed::Fast => (sample_rate_hz / 24) as usize,
-                    WaterfallSpeed::Mid => (sample_rate_hz / 12) as usize,
-                    WaterfallSpeed::Slow => (sample_rate_hz / 6) as usize,
-                }
+                let interval_ms = effective_visual_profile(&t, &mode).0;
+                ((sample_rate_hz as u64 * interval_ms / 1_000) as usize).max(256)
             };
             let chunk_bytes = (chunk_samples * 2).max(512);
             match stream.read_chunk(chunk_bytes) {
@@ -6159,6 +6391,8 @@ fn spawn_audio_spectrum_worker(
                                 s.audio_waterfall_rows.pop_front();
                             }
                             s.audio_waterfall_rows.push_back(bins);
+                            s.audio_waterfall_revision =
+                                s.audio_waterfall_revision.wrapping_add(1);
                             s.audio_spectrum_status = "LIVE RX".to_string();
                         }
                         s.audio_level_dbfs = Some(20.0 * rms.max(1e-9).log10());
@@ -6601,7 +6835,12 @@ fn run_native_digital_decode(
     deep_decode: bool,
     state: Arc<Mutex<GuiState>>,
 ) {
-    let started = Instant::now();
+    let backend = state
+        .lock()
+        .expect("ui state lock poisoned")
+        .compute_backend;
+    let budget = Duration::from_secs_f64(mode.core_slot_seconds().unwrap_or(15.0));
+    let mut trace = DecodeTrace::new(mode.label(), backend, samples.len(), budget);
     let mut decoded = Vec::new();
     let mut push = |snr_db: f32, dt_s: f32, freq_hz: f32, message: String| {
         decoded.push(DigitalDecodeEntry {
@@ -6615,7 +6854,7 @@ fn run_native_digital_decode(
         });
     };
 
-    match mode {
+    trace.measure("protocol decode", || match mode {
         WorkspaceMode::Ft4 | WorkspaceMode::Fst4 => {
             let audio: Vec<i16> = samples
                 .iter()
@@ -6718,9 +6957,10 @@ fn run_native_digital_decode(
             }
         }
         WorkspaceMode::Ft8 | WorkspaceMode::Cw | WorkspaceMode::Fldigi => {}
-    }
+    });
 
-    let elapsed_ms = started.elapsed().as_millis();
+    let telemetry = trace.finish(decoded.len());
+    let elapsed_ms = telemetry.total.as_millis();
     info!(
         mode = mode.label(),
         decoded = decoded.len(),
@@ -6728,6 +6968,7 @@ fn run_native_digital_decode(
         "digital decode pass complete"
     );
     let mut shared = state.lock().expect("ui state lock poisoned");
+    shared.digital_compute_telemetry = Some(telemetry);
     if mode == WorkspaceMode::Ft4 {
         shared.ft4_last_decode_period = Some(period);
     }
@@ -6863,18 +7104,29 @@ fn run_ft8_decode(
     deep_decode: bool,
     alignment_s: f32,
 ) -> u128 {
-    let started = Instant::now();
-    let audio_i16: Vec<i16> = samples
-        .iter()
-        .map(|&x| {
-            let s = x.clamp(-1.0, 1.0);
-            (s * i16::MAX as f32).round() as i16
-        })
-        .collect();
+    let backend = state
+        .lock()
+        .expect("ui state lock poisoned")
+        .compute_backend;
+    let mut trace = DecodeTrace::new(
+        "FT8",
+        backend,
+        samples.len(),
+        Duration::from_millis(FT8_SLOT_MS as u64),
+    );
+    let audio_i16: Vec<i16> = trace.measure("prepare PCM", || {
+        samples
+            .iter()
+            .map(|&x| {
+                let s = x.clamp(-1.0, 1.0);
+                (s * i16::MAX as f32).round() as i16
+            })
+            .collect()
+    });
 
     // mfsk-core FT8 decode (12 kHz slot-aligned audio), mapped to the
     // library's WSJT-X depth presets for clearer latency/recall behavior.
-    let outcome = if deep_decode {
+    let outcome = trace.measure("protocol decode", || if deep_decode {
         // D2: staged early decode (`sic_early`) with WSJT-X-style profile.
         DecodeRequest::<Ft8>::wsjtx_depth(
             &audio_i16,
@@ -6898,28 +7150,32 @@ fn run_ft8_decode(
             None,
         )
         .decode()
-    };
+    });
 
-    let mut results: Vec<Ft8DecodeEntry> = Vec::new();
-    for r in &outcome.results {
-        if let Some(msg) = unpack77(r.message77()) {
-            let is_cq = msg.starts_with("CQ");
-            let snr = r.snr_db.round() as i8;
-            let absolute_dt_s = alignment_s + r.dt_sec;
-            debug!(freq = r.freq_hz, dt_s = absolute_dt_s, snr, msg, "FT8 decode OK");
-            results.push(Ft8DecodeEntry {
-                period,
-                utc: utc.clone(),
-                snr_db: snr,
-                dt_s: absolute_dt_s,
-                freq_hz: r.freq_hz.max(0.0).round() as u32,
-                message: msg,
-                is_cq,
-            });
+    let results: Vec<Ft8DecodeEntry> = trace.measure("unpack results", || {
+        let mut results = Vec::new();
+        for r in &outcome.results {
+            if let Some(msg) = unpack77(r.message77()) {
+                let is_cq = msg.starts_with("CQ");
+                let snr = r.snr_db.round() as i8;
+                let absolute_dt_s = alignment_s + r.dt_sec;
+                debug!(freq = r.freq_hz, dt_s = absolute_dt_s, snr, msg, "FT8 decode OK");
+                results.push(Ft8DecodeEntry {
+                    period,
+                    utc: utc.clone(),
+                    snr_db: snr,
+                    dt_s: absolute_dt_s,
+                    freq_hz: r.freq_hz.max(0.0).round() as u32,
+                    message: msg,
+                    is_cq,
+                });
+            }
         }
-    }
+        results
+    });
 
-    let elapsed_ms = started.elapsed().as_millis();
+    let telemetry = trace.finish(results.len());
+    let elapsed_ms = telemetry.total.as_millis();
     info!(
         deep_decode,
         decoded = results.len(),
@@ -6929,6 +7185,7 @@ fn run_ft8_decode(
     );
 
     let mut s = state.lock().expect("ui state lock poisoned");
+    s.ft8_compute_telemetry = Some(telemetry);
     s.ft8_last_decode_period = Some(period);
     if !results.is_empty() {
         let mut offsets: Vec<f32> = results.iter().map(|result| result.dt_s).collect();
@@ -7006,12 +7263,16 @@ fn effective_visual_profile(tuning: &DisplayTuning, mode: &str) -> (u64, u8) {
 
     let m = mode.to_ascii_uppercase();
     if m.contains("DATA")
+        || m.contains("-D")
         || m.contains("FT8")
         || m.contains("JS8")
         || m.contains("RTTY")
         || m.contains("CW")
     {
-        (45, 0)
+        // Timed digital modes do not benefit from a video-rate waterfall.
+        // Ten rows per second keeps tuning responsive while sharply reducing
+        // FFT, texture upload, and repaint work.
+        (100, 1)
     } else if m.contains("FM") {
         (120, 1)
     } else {
@@ -7188,6 +7449,13 @@ mod tests {
         }
         let bins = compute_audio_spectrum_bins(&[0i16; 256], AUDIO_BINS, 48_000);
         assert_eq!(bins.len(), AUDIO_BINS);
+    }
+
+    #[test]
+    fn automatic_digital_visuals_use_an_efficient_cadence() {
+        let tuning = DisplayTuning::default();
+        assert_eq!(effective_visual_profile(&tuning, "USB-D"), (100, 1));
+        assert_eq!(effective_visual_profile(&tuning, "FT8"), (100, 1));
     }
 
     #[test]

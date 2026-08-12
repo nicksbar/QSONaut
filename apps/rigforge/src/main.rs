@@ -165,8 +165,16 @@ struct Cli {
     gui: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    prepare_wsl_gui_environment()?;
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to start RigForge runtime")?
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     let launch_gui_by_default = std::env::args_os().len() == 1;
     let cli = Cli::parse();
 
@@ -424,6 +432,60 @@ async fn main() -> Result<()> {
     println!("No operation requested. Use --help for CLI commands or --gui for desktop console.");
 
     info!("RigForge clean shutdown");
+    Ok(())
+}
+
+/// Mesa reads its renderer selection during process startup. Under WSL, set
+/// the D3D12 policy and re-exec once so EGL never starts in llvmpipe and then
+/// observes a late driver change. Explicit operator choices remain untouched.
+fn prepare_wsl_gui_environment() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        use std::process::Command;
+
+        let args = std::env::args_os().collect::<Vec<_>>();
+        let wants_gui = args.len() == 1 || args.iter().skip(1).any(|arg| arg == "--gui");
+        if !wants_gui || std::env::var_os("RIGFORGE_GUI_ENV_READY").is_some() {
+            return Ok(());
+        }
+
+        let is_wsl = std::fs::read_to_string("/proc/version")
+            .map(|version| version.to_ascii_lowercase().contains("microsoft"))
+            .unwrap_or(false);
+        let d3d12_driver =
+            PathBuf::from("/usr/lib/x86_64-linux-gnu/dri/d3d12_dri.so").exists();
+        if !is_wsl || !PathBuf::from("/dev/dxg").exists() || !d3d12_driver {
+            return Ok(());
+        }
+
+        let gallium = std::env::var_os("GALLIUM_DRIVER");
+        let use_d3d12 = gallium
+            .as_deref()
+            .map(|driver| driver == "d3d12")
+            .unwrap_or(true);
+        let needs_driver = gallium.is_none();
+        let needs_adapter =
+            use_d3d12 && std::env::var_os("MESA_D3D12_DEFAULT_ADAPTER_NAME").is_none();
+        if !needs_driver && !needs_adapter {
+            return Ok(());
+        }
+
+        let executable = std::env::current_exe().context("failed to locate RigForge executable")?;
+        let mut command = Command::new(executable);
+        command.args(args.iter().skip(1));
+        command.env("RIGFORGE_GUI_ENV_READY", "1");
+        if needs_driver {
+            command.env("GALLIUM_DRIVER", "d3d12");
+        }
+        if needs_adapter {
+            command.env("MESA_D3D12_DEFAULT_ADAPTER_NAME", "AMD");
+        }
+        let error = command.exec();
+        return Err(error).context("failed to restart RigForge with WSL GPU rendering");
+    }
+
+    #[cfg(not(target_os = "linux"))]
     Ok(())
 }
 

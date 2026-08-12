@@ -16,6 +16,7 @@ toml.workspace = true
 mfsk-core = { path = "../../../mfsk-core/mfsk-core", default-features = false, features = ["full"] }
 
 rigforge-audio = { path = "../rigforge-audio" }
+rigforge-accelerate = { path = "../rigforge-accelerate" }
 rigforge-dsp   = { path = "../rigforge-dsp" }
 rigforge-core = { path = "../rigforge-core" }
 rigforge-log = { path = "../rigforge-log" }

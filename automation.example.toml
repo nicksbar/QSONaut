@@ -1,0 +1,56 @@
+[component]
+id = "shack.spark"
+name = "Shack Spark"
+version = "0.1.0"
+description = "A playful callsign notifier and chat bridge starter."
+subscriptions = ["callsign_hit", "external_message"]
+requests = ["ui_notification", "external_send"]
+
+[[sources]]
+type = "discord"
+token_env = "RIGFORGE_DISCORD_TOKEN"
+guild_id = "123456789012345678"
+channel_ids = ["234567890123456789"]
+
+[[sources]]
+type = "irc"
+server = "irc.libera.chat"
+port = 6697
+tls = true
+nickname = "RigForgeBot"
+channels = ["#rigforge"]
+password_env = "RIGFORGE_IRC_PASSWORD"
+
+[[rules]]
+on = "callsign_hit"
+
+[[rules.when]]
+match = "has_tag"
+tag = "directed_to_me"
+
+[[rules.actions]]
+action = "notify"
+title = "📡 ${call} is calling you"
+body = "${mode} · ${snr} dB · ${message}"
+accent = "magenta"
+
+[[rules.actions]]
+action = "send_external"
+source = "discord:shack"
+target = "234567890123456789"
+message = "✨ ${call} reached ${operator_call} on ${mode}: `${message}`"
+
+[[rules]]
+on = "external_message"
+
+[[rules.when]]
+match = "field_contains"
+field = "message"
+value = "!rig"
+
+[[rules.actions]]
+action = "notify"
+title = "💬 Shack chat"
+body = "${author}: ${message}"
+accent = "cyan"
+
