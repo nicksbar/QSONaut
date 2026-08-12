@@ -45,6 +45,7 @@ A capability must appear in the component manifest and in the operator's grant s
 [`automation.example.toml`](../automation.example.toml) demonstrates:
 
 - a callsign-hit notification;
+- a qso-logged confirmation notification;
 - forwarding that hit to Discord;
 - responding locally to an `!rig` external command;
 - Discord and IRC source declarations that reference environment variables rather than storing tokens.

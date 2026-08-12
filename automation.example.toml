@@ -3,7 +3,7 @@ id = "shack.spark"
 name = "Shack Spark"
 version = "0.1.0"
 description = "A playful callsign notifier and chat bridge starter."
-subscriptions = ["callsign_hit", "contest_state", "external_message"]
+subscriptions = ["callsign_hit", "contest_state", "qso_logged", "external_message"]
 requests = ["ui_notification", "external_send"]
 
 [[sources]]
@@ -67,4 +67,13 @@ action = "notify"
 title = "🏁 Contest profile active"
 body = "${operating_mode} · split=${split_policy} · role=${fox_hound_role}"
 accent = "orange"
+
+[[rules]]
+on = "qso_logged"
+
+[[rules.actions]]
+action = "notify"
+title = "✅ Logged ${call}"
+body = "${mode} · ${band} · ${frequency_hz} Hz"
+accent = "green"
 

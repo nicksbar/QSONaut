@@ -3065,10 +3065,9 @@ impl QsonautGuiApp {
 
     fn emit_radio_state_hook_if_changed(&mut self, snapshot: &GuiState) {
         let frequency_hz = snapshot.frequency_hz.unwrap_or_default();
-        let data_mode =
-            snapshot
-                .data_mode
-                .map_or("unknown", |value| if value { "true" } else { "false" });
+        let data_mode = snapshot
+            .data_mode
+            .map_or("unknown", |value| if value { "true" } else { "false" });
         let filter = snapshot
             .filter
             .map(|value| value.to_string())
