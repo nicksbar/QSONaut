@@ -13,6 +13,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 - Windows release builds now launch as native GUI applications instead of console-first binaries.
 - GUI state, operator profile, and QSO logs now resolve through one central platform app directory path.
+- UI scaling baseline was rebased so the previous physical 75% size now corresponds to 100% in the scale selector.
+- Renderer selection is now explicit and logged (`wgpu` default on Windows, `glow` on non-Windows, override via `QSONAUT_RENDERER`).
 
 ### Fixed
 - Fatal GUI startup failures now preserve diagnostics in the log file and surface a user-visible error path instead of silently exiting.

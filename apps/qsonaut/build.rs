@@ -14,7 +14,8 @@ fn main() {
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     let ico_path = out_dir.join("qsonaut-icon.ico");
 
-    let image = image::open(&png_path).expect("failed to load qsonaut icon PNG for Windows resource embedding");
+    let image = image::open(&png_path)
+        .expect("failed to load qsonaut icon PNG for Windows resource embedding");
     image
         .save_with_format(&ico_path, image::ImageFormat::Ico)
         .expect("failed to generate qsonaut ICO for Windows resource embedding");

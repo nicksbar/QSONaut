@@ -1,4 +1,7 @@
-#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
 
 use std::{path::PathBuf, time::Duration};
 
@@ -476,7 +479,12 @@ fn show_fatal_dialog(title: &str, message: &str) {
     let title = wide(title);
     let message = wide(message);
     unsafe {
-        MessageBoxW(0, message.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR);
+        MessageBoxW(
+            std::ptr::null_mut(),
+            message.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
     }
 }
 

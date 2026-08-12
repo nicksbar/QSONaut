@@ -44,6 +44,13 @@ Startup and runtime diagnostics are written to `logs/qsonaut.log` below that
 same platform app directory. For bug reports, especially startup failures,
 attach the log file captured from the affected machine.
 
+For graphics backend debugging, QSONaut accepts `QSONAUT_RENDERER=wgpu` or
+`QSONAUT_RENDERER=glow`. The chosen renderer is logged during startup and on
+the first rendered frame.
+
+UI scale presets use a rebased baseline where the previous physical 75% size
+is now represented as 100%.
+
 `mfsk-core` remains a sibling source dependency during active modem development.
 The workflow checks out the current `main` branch alongside QSONaut and
 packages its GPL-3.0-or-later license plus QSONaut's third-party notice with

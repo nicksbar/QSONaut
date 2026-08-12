@@ -34,7 +34,7 @@ toml = "0.8"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "wayland"] }
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "wgpu", "wayland"] }
 rustfft = "6"
 cpal = "0.15"
 wgpu = { version = "27", default-features = false, features = ["std", "vulkan"] }
