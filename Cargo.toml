@@ -1,17 +1,17 @@
 [workspace]
 members = [
-    "apps/rigforge",
-    "crates/rigforge-core",
-    "crates/rigforge-audio",
-    "crates/rigforge-dsp",
-    "crates/rigforge-radio",
-    "crates/rigforge-modes",
-    "crates/rigforge-log",
-    "crates/rigforge-ai",
-    "crates/rigforge-accelerate",
-    "crates/rigforge-automation",
-    "crates/rigforge-pskreporter",
-    "crates/rigforge-gui",
+    "apps/qsonaut",
+    "crates/qsonaut-core",
+    "crates/qsonaut-audio",
+    "crates/qsonaut-dsp",
+    "crates/qsonaut-radio",
+    "crates/qsonaut-modes",
+    "crates/qsonaut-log",
+    "crates/qsonaut-ai",
+    "crates/qsonaut-accelerate",
+    "crates/qsonaut-automation",
+    "crates/qsonaut-pskreporter",
+    "crates/qsonaut-gui",
 ]
 resolver = "2"
 
@@ -19,7 +19,7 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-authors = ["RigForge Contributors"]
+authors = ["QSONaut Contributors"]
 
 [workspace.dependencies]
 dotenvy = "0.15"
@@ -44,13 +44,13 @@ debug = false
 debug-assertions = false
 overflow-checks = false
 
-[profile.dev.package."rigforge-dsp"]
+[profile.dev.package."qsonaut-dsp"]
 opt-level = 3
 debug = false
 debug-assertions = false
 overflow-checks = false
 
-[profile.dev.package."rigforge-modes"]
+[profile.dev.package."qsonaut-modes"]
 opt-level = 3
 debug = false
 debug-assertions = false

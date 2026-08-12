@@ -2329,6 +2329,128 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
+name = "qsonaut"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "qsonaut-ai",
+ "qsonaut-audio",
+ "qsonaut-core",
+ "qsonaut-gui",
+ "qsonaut-log",
+ "qsonaut-radio",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "qsonaut-accelerate"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "wgpu",
+]
+
+[[package]]
+name = "qsonaut-ai"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+]
+
+[[package]]
+name = "qsonaut-audio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cpal",
+ "tokio",
+]
+
+[[package]]
+name = "qsonaut-automation"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+ "toml",
+]
+
+[[package]]
+name = "qsonaut-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dotenvy",
+ "serde",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "qsonaut-dsp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "qsonaut-modes",
+ "rustfft",
+]
+
+[[package]]
+name = "qsonaut-gui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "eframe",
+ "mfsk-core",
+ "qsonaut-accelerate",
+ "qsonaut-audio",
+ "qsonaut-core",
+ "qsonaut-dsp",
+ "qsonaut-log",
+ "qsonaut-pskreporter",
+ "qsonaut-radio",
+ "rustfft",
+ "serde",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "qsonaut-log"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "toml",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "qsonaut-modes"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
+name = "qsonaut-pskreporter"
+version = "0.1.0"
+
+[[package]]
+name = "qsonaut-radio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serialport",
+]
+
+[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2460,128 +2582,6 @@ name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
-
-[[package]]
-name = "rigforge"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "rigforge-ai",
- "rigforge-audio",
- "rigforge-core",
- "rigforge-gui",
- "rigforge-log",
- "rigforge-radio",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "rigforge-accelerate"
-version = "0.1.0"
-dependencies = [
- "serde",
- "wgpu",
-]
-
-[[package]]
-name = "rigforge-ai"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "serde",
-]
-
-[[package]]
-name = "rigforge-audio"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cpal",
- "tokio",
-]
-
-[[package]]
-name = "rigforge-automation"
-version = "0.1.0"
-dependencies = [
- "serde",
- "thiserror 2.0.20",
- "toml",
-]
-
-[[package]]
-name = "rigforge-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "dotenvy",
- "serde",
- "tokio",
- "toml",
-]
-
-[[package]]
-name = "rigforge-dsp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "rigforge-modes",
- "rustfft",
-]
-
-[[package]]
-name = "rigforge-gui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "eframe",
- "mfsk-core",
- "rigforge-accelerate",
- "rigforge-audio",
- "rigforge-core",
- "rigforge-dsp",
- "rigforge-log",
- "rigforge-pskreporter",
- "rigforge-radio",
- "rustfft",
- "serde",
- "tokio",
- "toml",
- "tracing",
-]
-
-[[package]]
-name = "rigforge-log"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "toml",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "rigforge-modes"
-version = "0.1.0"
-dependencies = [
- "anyhow",
-]
-
-[[package]]
-name = "rigforge-pskreporter"
-version = "0.1.0"
-
-[[package]]
-name = "rigforge-radio"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "serialport",
-]
 
 [[package]]
 name = "rustc-hash"

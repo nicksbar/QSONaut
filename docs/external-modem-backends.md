@@ -1,12 +1,14 @@
 # External Modem Backends (time-saver shortlist)
 
-This project is intentionally moving toward **integration-first** modem strategy: use maintained external backends where possible, keep RigForge focused on UX + radio orchestration.
+This project is intentionally moving toward **integration-first** modem strategy: use maintained external backends where possible, keep QSONaut focused on UX + radio orchestration.
 
 ## Integrated now
 
 - `mfsk-core` (local path sibling clone)
   - FT8/FT4/FST4/WSPR/JT9/JT65/Q65/MSK144 support
-  - RigForge currently wires FT8 decode path through this backend.
+  - QSONaut wires mode-specific receive adapters for each of those families.
+  - FT8, FT4, FST4-60, JT9, JT65, and Q65-30A also have scheduled transmit
+    synthesis. WSPR and MSK144 are receive-only in the current UI.
 
 ## Next targets
 
@@ -34,13 +36,13 @@ Candidate Rust bridge:
 
 1. Active maintenance cadence (recent commits/issues).
 2. Clear API surface for library embedding (not app-only).
-3. License compatibility with RigForge distribution strategy.
+3. License compatibility with QSONaut distribution strategy.
 4. Proven real-world decode behavior or strong test corpus.
 5. Low integration complexity (streaming audio + callback model).
 
 ## Planned architecture
 
-- Keep RigForge GUI/workspaces mode-oriented.
+- Keep QSONaut GUI/workspaces mode-oriented.
 - Route each mode to a backend adapter (e.g., `MfskBackend`, `CwBackend`, `FldigiBridge`).
 - Avoid mode-specific DSP logic in GUI crate.
 - Contribute bugfixes/perf improvements upstream where practical.

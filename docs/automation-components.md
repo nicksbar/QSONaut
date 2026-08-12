@@ -1,8 +1,8 @@
-# RigForge automation components
+# QSONaut automation components
 
-RigForge automation is an event-driven component layer inspired by the playful utility of mIRC scripts. Components subscribe to typed events, match rules, render templates, and propose actions. The host decides which actions are allowed.
+QSONaut automation is an event-driven component layer inspired by the playful utility of mIRC scripts. Components subscribe to typed events, match rules, render templates, and propose actions. The host decides which actions are allowed.
 
-The initial foundation lives in `rigforge-automation`. It does not make network connections or key a radio by itself.
+The initial foundation lives in `qsonaut-automation`. It does not make network connections or key a radio by itself.
 
 ## Event flow
 

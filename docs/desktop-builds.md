@@ -1,6 +1,6 @@
 # Desktop builds
 
-RigForge supports native desktop builds for these release targets:
+QSONaut supports native desktop builds for these release targets:
 
 | Operating system | Architecture | Rust target | Distribution |
 | --- | --- | --- | --- |
@@ -33,12 +33,12 @@ Debian package after the binary matrix is stable.
 
 Open **Devices** in the application header to choose the audio input, audio
 output, and radio USB/serial endpoint reported by the current operating system.
-Selections are stored in the OS user configuration directory (`%APPDATA%\RigForge`
-on Windows and `$XDG_CONFIG_HOME/rigforge` or `~/.config/rigforge` on Linux).
+Selections are stored in the OS user configuration directory (`%APPDATA%\QSONaut`
+on Windows and `$XDG_CONFIG_HOME/qsonaut` or `~/.config/qsonaut` on Linux).
 Audio output changes apply to the next transmission; input and radio changes
-apply after restarting RigForge. Existing `.rigforge_profile.toml` files are
-read as a migration fallback.
+apply after restarting QSONaut. The pre-rename `.rigforge_profile.toml` file is
+read as a one-way migration fallback.
 
 `mfsk-core` remains a sibling source dependency during active modem development.
-The workflow checks it out alongside RigForge. Pin its checkout to a release tag
+The workflow checks it out alongside QSONaut. Pin its checkout to a release tag
 before publishing production binaries so builds remain reproducible.

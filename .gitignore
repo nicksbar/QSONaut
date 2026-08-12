@@ -2,7 +2,14 @@ target/
 **/*.rs.bk
 .DS_Store
 .env
+.env.*
+!.env.example
+.qsonaut_profile.toml
 .rigforge_profile.toml
+qsonaut.toml
+automation.toml
+*.pem
+*.key
 
 # local runtime artifacts
 recordings/*.wav

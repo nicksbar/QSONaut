@@ -1,119 +1,124 @@
-# RigForge
+<p align="center">
+  <img src="assets/branding/qsonaut-icon.png" width="180" alt="QSONaut astronaut radio icon">
+</p>
 
-RigForge is a modern radio operating platform with a strict architectural rule:
+# QSONaut
 
-**DSP and radio control must never depend on the LLM.**
+**A very early, enthusiast-built amateur-radio mission control experiment.**
 
-AI is advisory and tool-driven, not part of the realtime signal/control path.
+QSONaut combines radio control, live audio and spectrum views, WSJT-family
+digital modes, contact logging, and operator-assist experiments in one native
+Rust desktop app.
 
-## Current status
+> [!CAUTION]
+> QSONaut is pre-alpha, vibe coded, and changing quickly. Much of it was built
+> through iterative human/AI collaboration. It has not had broad radio,
+> platform, or on-air validation. Review your radio settings, power, audio,
+> frequency, band plan, and transmit state yourself. Do not trust it for
+> unattended operation or as a safety interlock.
 
-This repository is initialized to **M0 (Bootstrap)** as a Rust workspace with:
+The hard architectural rule is that DSP, radio control, and TX safety do not
+depend on an LLM. AI-facing pieces are optional advisory boundaries, not part
+of the real-time signal path.
 
-- App shell (`apps/rigforge`)
-- Core configuration + event bus (`crates/rigforge-core`)
-- Structured logging (`crates/rigforge-log`)
-- Native GUI shell (`crates/rigforge-gui`)
-- Device/audio abstraction (`crates/rigforge-audio`)
-- Radio abstraction (`crates/rigforge-radio`)
-- DSP and modes placeholders (`crates/rigforge-dsp`, `crates/rigforge-modes`)
-- AI provider abstraction (`crates/rigforge-ai`)
+## What works today
 
-Recent architecture update:
+This is an honest snapshot, not a compatibility promise:
 
-- Native `mfsk-core` receive pipelines are active for FT8, FT4, FST4-60, WSPR, JT9, JT65, Q65-30A, and MSK144 with mode-specific UTC slot capture and decode tables.
-- Scheduled transmit synthesis is active for FT8, FT4, FST4-60, JT9, JT65, and Q65-30A. WSPR and MSK144 remain receive-only while their specialized operator controls are built.
-- CW and FLDIGI tabs are intentionally integration surfaces: CW still needs a keyer/decoder backend, while FLDIGI will use its external modem control interface.
-- Decode log UX includes auto-follow toggle, configurable trimming, and clearer row grouping.
-- Operator profile inputs (callsign/grid/QTH) are now editable in-app and shared across modem workspaces.
-- FT8 automatic operation supports standard QSO sequencing and deterministic caller selection by first decoded, strongest, weakest, or closest RX tone.
-- FT8 TX now confirms CI-V PTT before audio and applies configurable lead/tail timing with visible failure reporting.
-- Completed FT8 contacts are saved to an editable local QSO log with ADIF export for future service integrations.
+| Area | Current maturity |
+| --- | --- |
+| FT8 | Native RX/TX workflow, sequencing, highlighted callsign hits, logging, and explicit global TX disarm; still needs broader on-air testing |
+| FT4 | Native RX/TX workflow using the same safety model; younger and less exercised than FT8 |
+| FST4-60, JT9, JT65, Q65-30A | Native receive and scheduled transmit paths exist; experimental |
+| WSPR, MSK144 | Receive-only integration |
+| CW, FLDIGI | UI/integration surfaces only; no native working modem is claimed |
+| Radio control | Direct Icom CI-V work is centered on an IC-7300; other radios are not yet supported |
+| PSK Reporter | Optional, off by default, batched UDP reporting for decoded stations |
+| Automation | Permission-gated component model and Discord/IRC configuration contracts; connectors are not live yet |
+| GPU/NPU compute | Hardware detection and validation policy exist; decoders currently use CPU SIMD because GPU kernels are not validated |
 
-## Architecture boundaries
+The primary development environment is Linux/WSL with USB audio and Icom CI-V.
+Windows and ARM build jobs exist, but a green build is not the same as hardware
+validation.
 
-- **Realtime path:** device I/O, DSP, decoders, timing, radio control.
-- **Advisory path:** station intelligence, recommendations, operator-assist workflows.
+## Build and run
 
-In practical terms: with AI disabled, RigForge remains fully functional.
+QSONaut currently uses
+[`mfsk-core`](https://github.com/jl1nie/mfsk-core) as a sibling source checkout:
 
-## Repository context docs
-
-The `docs/` directory contains curated research imported from an adjacent project and should be treated as foundational context for protocol and radio-control implementation planning.
-
-See also:
-
-- `docs/external-modem-backends.md` for backend selection and integration strategy.
-- `docs/progress/2026-08-10-reactive-gui-audio-stability.md` for stability milestones.
-
-## Run
-
-```text
-cargo run -p rigforge -- --help
+```bash
+git clone https://github.com/nicksbar/QSONaut.git
+git clone https://github.com/jl1nie/mfsk-core.git
+cd QSONaut
+cargo run --release -p qsonaut -- --gui
 ```
 
-Launch the native operator console (recommended):
+Use a release build for live decoding. Debug builds are substantially slower.
 
-```text
-cargo run -p rigforge -- --gui
+On Ubuntu/WSL, native build dependencies include:
+
+```bash
+sudo apt-get install libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
 ```
 
-## Environment and hardware config
+For WSL systems where Mesa otherwise selects software rendering, this is the
+known-good launch pattern used during development:
 
-RigForge now supports a `.env` file and hardware toggles so you can keep the app usable even when radios are unplugged.
-
-Copy the example file:
-
-```text
-cp .env.example .env
+```bash
+GALLIUM_DRIVER=d3d12 \
+MESA_D3D12_DEFAULT_ADAPTER_NAME=AMD \
+cargo run --release -p qsonaut -- --gui
 ```
 
-Useful variables:
+QSONaut also offers hardware discovery and lower-level CI-V commands:
 
-```text
-RIGFORGE_AUDIO_ENABLED=true
-RIGFORGE_AUDIO_INPUT_DEVICE="USB Audio CODEC"
-RIGFORGE_AUDIO_OUTPUT_DEVICE="USB Audio CODEC"
-RIGFORGE_AUDIO_SAMPLE_RATE_HZ=48000
-RIGFORGE_AUDIO_CHANNELS=1
-
-RIGFORGE_RADIO_ENABLED=true
-RIGFORGE_RADIO_BACKEND="none"
-RIGFORGE_RADIO_SERIAL_PORT="/dev/ttyUSB0"
-RIGFORGE_RADIO_BAUD_RATE=115200
+```bash
+cargo run -p qsonaut -- --help
+cargo run -p qsonaut -- --list-audio
+cargo run -p qsonaut -- --list-radio
 ```
 
-With `RIGFORGE_AUDIO_ENABLED=false` or `RIGFORGE_RADIO_ENABLED=false`, RigForge will stay functional without requiring those devices.
+## Configuration and privacy
 
-Radio control defaults to `115200` baud unless overridden by `--radio-baud` or `RIGFORGE_RADIO_BAUD_RATE`.
+Copy `.env.example` for optional environment overrides or pass
+`--config qsonaut.toml.example`. Local `.env`, operator profile, QSO log, and
+recorded WAV files are ignored by Git.
 
-## Stage 1 (current) quick checks
+Reception data stays local unless you explicitly enable PSK Reporter. External
+automation source declarations reference environment-variable names rather
+than embedding Discord or IRC credentials.
 
-For native Windows/Linux x86_64 and ARM64 builds, in-window device selection,
-and release artifact details, see [`docs/desktop-builds.md`](docs/desktop-builds.md).
+## Repository map
 
-Discover audio capture devices:
+- `apps/qsonaut` — CLI and desktop entry point
+- `crates/qsonaut-gui` — operator console and timed mode workflows
+- `crates/qsonaut-radio` — radio HAL and direct Icom CI-V implementation
+- `crates/qsonaut-audio`, `qsonaut-dsp`, `qsonaut-modes` — real-time media and modem support
+- `crates/qsonaut-log`, `qsonaut-pskreporter` — local logging and opt-in reporting
+- `crates/qsonaut-accelerate` — measured compute-backend selection
+- `crates/qsonaut-automation` — sandboxed component and external-source foundation
+- `docs` — current implementation notes; historical scratch research was intentionally removed before publication
 
-```text
-cargo run -p rigforge -- --list-audio
-```
+## Before transmitting
 
-Discover serial endpoints (CI-V candidates):
+At minimum:
 
-```text
-cargo run -p rigforge -- --list-radio
-```
+1. Confirm the selected audio input/output and CI-V serial device.
+2. Verify dial frequency, mode, filter, data mode, RF power, and TX audio level.
+3. Start into a dummy load or minimum safe power where practical.
+4. Confirm **TX SAFE** really means PTT is released on your own hardware.
+5. Keep the global **STOP + DISARM ALL TX** control visible and tested.
 
-Capture a WAV sample (10s default):
+You are responsible for lawful operation and for every transmission made with
+this software.
 
-```text
-cargo run -p rigforge -- --record-wav recordings/ic7300-test.wav --duration-secs 10
-```
+## Contributing
 
-## Milestones
+Bug reports with platform, radio, audio device, logs, and exact reproduction
+steps are especially useful. Tests and captured protocol fixtures are preferred
+over claims of compatibility. Please do not commit credentials, personal QSO
+logs, recordings, or proprietary manuals.
 
-- M0 — Bootstrap workspace + shell (current)
-- M1 — Audio capture from radio interface
-- M2 — Spectrum/waterfall + DSP metrics
-- M3 — CI-V radio control abstraction + implementation
-- M4+ — FT8 decode, station intelligence, and eventually safe AI assistant tooling
+## License
+
+MIT. See [`LICENSE`](LICENSE).

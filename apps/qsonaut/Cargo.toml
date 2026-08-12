@@ -1,0 +1,19 @@
+[package]
+name = "qsonaut"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+qsonaut-ai = { path = "../../crates/qsonaut-ai" }
+qsonaut-audio = { path = "../../crates/qsonaut-audio" }
+qsonaut-core = { path = "../../crates/qsonaut-core" }
+qsonaut-log = { path = "../../crates/qsonaut-log" }
+qsonaut-radio = { path = "../../crates/qsonaut-radio" }
+qsonaut-gui = { path = "../../crates/qsonaut-gui" }

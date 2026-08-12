@@ -1,6 +1,6 @@
 # PSK Reporter
 
-RigForge can opt in to reporting received stations to PSK Reporter. Reporting
+QSONaut can opt in to reporting received stations to PSK Reporter. Reporting
 is disabled by default and requires a real operator callsign and grid.
 
 Enable **Report decoded stations to PSK Reporter** in Operator Profile. Station
@@ -19,7 +19,7 @@ The reporter follows the service's IPFIX/UDP protocol:
 - randomized five-minute batching over one persistent UDP source socket;
 - no network work on decoder or GUI threads.
 
-RigForge uses the modern WSJT-X-style sender template: callsign, five-byte
+QSONaut uses the modern WSJT-X-style sender template: callsign, five-byte
 frequency, SNR, ADIF mode/submode, optional sender locator, information source,
 and reception time. It intentionally omits iMD. Classic iMD measures
 third-order products in modes such as PSK31 and is not a meaningful quality

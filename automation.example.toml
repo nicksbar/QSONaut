@@ -8,7 +8,7 @@ requests = ["ui_notification", "external_send"]
 
 [[sources]]
 type = "discord"
-token_env = "RIGFORGE_DISCORD_TOKEN"
+token_env = "QSONAUT_DISCORD_TOKEN"
 guild_id = "123456789012345678"
 channel_ids = ["234567890123456789"]
 
@@ -17,9 +17,9 @@ type = "irc"
 server = "irc.libera.chat"
 port = 6697
 tls = true
-nickname = "RigForgeBot"
-channels = ["#rigforge"]
-password_env = "RIGFORGE_IRC_PASSWORD"
+nickname = "QSONautBot"
+channels = ["#qsonaut"]
+password_env = "QSONAUT_IRC_PASSWORD"
 
 [[rules]]
 on = "callsign_hit"
