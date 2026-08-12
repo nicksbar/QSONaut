@@ -8,21 +8,20 @@ of upstream open-source radio projects.
 - Project: [`jl1nie/mfsk-core`](https://github.com/jl1nie/mfsk-core)
 - Contributors: [`mfsk-core` contributor history](https://github.com/jl1nie/mfsk-core/graphs/contributors)
 - License: [`GPL-3.0-or-later`](https://github.com/jl1nie/mfsk-core/blob/main/LICENSE)
-- Upstream version: post-`v0.9.1` development revision
-- Source revision: `ff9a04119cb8580ede6f2c943afdeee08e81777e`
+- Upstream channel: `main` branch (active development head)
 
 QSONaut directly links `mfsk-core` and uses its pure-Rust implementations of
 WSJT-family decoding, encoding, synthesis, DSP, synchronization, message
 codecs, and error-correction machinery. In QSONaut today, that work underpins
 FT8, FT4, FST4, WSPR, JT9, JT65, Q65, and MSK144 integration.
 
-The QSONaut release workflow pins the revision above and packages the upstream
-`mfsk-core` GPL license alongside desktop binaries. The complete corresponding
-upstream source for that revision is available at:
+The QSONaut release workflow tracks upstream `mfsk-core` `main` and packages
+the upstream `mfsk-core` GPL license alongside desktop binaries. The complete
+corresponding upstream source is available at:
 
-<https://github.com/jl1nie/mfsk-core/tree/ff9a04119cb8580ede6f2c943afdeee08e81777e>
+<https://github.com/jl1nie/mfsk-core/tree/main>
 
-This revision includes QSONaut's upstreamed FT8 coarse-sync bounds correction
+Recent upstream history includes QSONaut's FT8 coarse-sync bounds correction
 ([mfsk-core PR #279](https://github.com/jl1nie/mfsk-core/pull/279)) and the
 maintainer's follow-up restoration of WSJT-X's fixed-window primary sync
 channel ([PR #281](https://github.com/jl1nie/mfsk-core/pull/281)). QSONaut no

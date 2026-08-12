@@ -55,8 +55,8 @@ pub fn decode_llr_with_meta(
 pub fn symbol_magnitudes_to_llr(s8: &[[f32; 8]; N_SYM]) -> [f32; N] {
     let mut llr = [0f32; N];
     let mut data_idx = 0usize;
-    for sym in 0..N_SYM {
-        let is_sync = sym < 7 || (sym >= 36 && sym < 43) || sym >= 72;
+    for (sym, row) in s8.iter().enumerate().take(N_SYM) {
+        let is_sync = sym < 7 || (36..43).contains(&sym) || sym >= 72;
         if is_sync {
             continue;
         }
@@ -71,9 +71,9 @@ pub fn symbol_magnitudes_to_llr(s8: &[[f32; 8]; N_SYM]) -> [f32; N] {
                 let code = GRAY_INV[tone as usize];
                 let this_bit = (code >> (2 - bit)) & 1;
                 if this_bit == 0 {
-                    sum0 += s8[sym][tone as usize];
+                    sum0 += row[tone as usize];
                 } else {
-                    sum1 += s8[sym][tone as usize];
+                    sum1 += row[tone as usize];
                 }
             }
             let ratio = (sum0 + 1e-9) / (sum1 + 1e-9);

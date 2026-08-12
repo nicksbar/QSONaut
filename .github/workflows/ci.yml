@@ -1,0 +1,52 @@
+name: CI
+
+"on":
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Rust quality checks
+    runs-on: ubuntu-24.04
+
+    steps:
+      # The application currently consumes mfsk-core as a sibling workspace.
+      - name: Check out QSONaut
+        uses: actions/checkout@v6
+        with:
+          path: QSONaut
+
+      - name: Check out mfsk-core
+        uses: actions/checkout@v6
+        with:
+          repository: jl1nie/mfsk-core
+          # Track current upstream development head.
+          ref: main
+          path: mfsk-core
+
+      - name: Install Linux native libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+
+      - name: Install Rust components
+        run: rustup component add rustfmt clippy
+
+      - name: Check formatting
+        working-directory: QSONaut
+        run: cargo fmt --all -- --check
+
+      - name: Build workspace
+        working-directory: QSONaut
+        run: cargo check --workspace --all-targets
+
+      - name: Lint workspace
+        working-directory: QSONaut
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test workspace
+        working-directory: QSONaut
+        run: cargo test --workspace --all-targets

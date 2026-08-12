@@ -483,7 +483,7 @@ fn prepare_wsl_gui_environment() -> Result<()> {
             command.env("MESA_D3D12_DEFAULT_ADAPTER_NAME", "AMD");
         }
         let error = command.exec();
-        return Err(error).context("failed to restart QSONaut with WSL GPU rendering");
+        Err(error).context("failed to restart QSONaut with WSL GPU rendering")
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -495,7 +495,7 @@ fn parse_hex_bytes(input: &str) -> Result<Vec<u8>> {
     if compact.is_empty() {
         anyhow::bail!("hex input is empty")
     }
-    if compact.len() % 2 != 0 {
+    if !compact.len().is_multiple_of(2) {
         anyhow::bail!("hex input must contain an even number of hex digits")
     }
 
@@ -596,7 +596,7 @@ fn parse_bool_like(raw: &str) -> Result<bool> {
 
 fn format_control_value(value: &ControlValue) -> String {
     match value {
-        ControlValue::Bool(v) => format!("{}", if *v { "ON" } else { "OFF" }),
+        ControlValue::Bool(v) => (if *v { "ON" } else { "OFF" }).to_string(),
         ControlValue::U8(v) => v.to_string(),
         ControlValue::I32(v) => v.to_string(),
         ControlValue::U64(v) => v.to_string(),

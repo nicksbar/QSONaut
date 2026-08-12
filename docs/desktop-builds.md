@@ -10,9 +10,10 @@ QSONaut supports native desktop builds for these release targets:
 | Windows | ARM64 | `aarch64-pc-windows-msvc` | `.zip` |
 
 The release matrix is in `.github/workflows/release-builds.yml`. It runs for
-version tags and can also be started manually. ARM builds run on native ARM
-runners so audio, USB/serial, and desktop dependencies do not need a fragile
-cross-compilation setup.
+version tags and can also be started manually. When a `v*` tag is pushed, the
+workflow now also publishes the generated archives to a GitHub Release.
+ARM builds run on native ARM runners so audio, USB/serial, and desktop
+dependencies do not need a fragile cross-compilation setup.
 
 ## Native dependencies
 
@@ -40,7 +41,6 @@ apply after restarting QSONaut. The pre-rename `.rigforge_profile.toml` file is
 read as a one-way migration fallback.
 
 `mfsk-core` remains a sibling source dependency during active modem development.
-The workflow checks a pinned revision out alongside QSONaut and packages its
-GPL-3.0-or-later license plus QSONaut's third-party notice with every binary
-archive. The exact post-release revision is pinned so merged decoder fixes are
-reproducible. Update the pin and notice together when upgrading it.
+The workflow checks out the current `main` branch alongside QSONaut and
+packages its GPL-3.0-or-later license plus QSONaut's third-party notice with
+every binary archive.

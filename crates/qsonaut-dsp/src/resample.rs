@@ -16,7 +16,7 @@ fn fir_coeffs() -> &'static [f32; NTAPS] {
         let m = (NTAPS - 1) as f64;
         let i0a = bessel_i0(ALPHA);
         let mut h = [0f32; NTAPS];
-        for k in 0..NTAPS {
+        for (k, hk) in h.iter_mut().enumerate().take(NTAPS) {
             let n = k as f64 - m / 2.0;
             let sinc = if n == 0.0 {
                 2.0 * FC
@@ -26,7 +26,7 @@ fn fir_coeffs() -> &'static [f32; NTAPS] {
             let t = 2.0 * k as f64 / m - 1.0;
             let arg = ALPHA * (1.0 - t * t).max(0.0).sqrt();
             let w = bessel_i0(arg) / i0a;
-            h[k] = (sinc * w) as f32;
+            *hk = (sinc * w) as f32;
         }
         h
     })

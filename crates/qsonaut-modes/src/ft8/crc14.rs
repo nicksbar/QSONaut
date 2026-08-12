@@ -14,15 +14,15 @@ pub fn crc14(mc: &[u8]) -> u16 {
     for i in 0..steps {
         r[14] = mc.get(i + 14).copied().unwrap_or(0);
         if r[0] == 1 {
-            for k in 0..15 {
-                r[k] ^= POLY[k];
+            for (rk, pk) in r.iter_mut().zip(POLY.iter()) {
+                *rk ^= *pk;
             }
         }
         r.rotate_left(1);
     }
     let mut v: u16 = 0;
-    for k in 0..14 {
-        v = (v << 1) | r[k] as u16;
+    for &bit in r.iter().take(14) {
+        v = (v << 1) | bit as u16;
     }
     v
 }
@@ -33,8 +33,8 @@ pub fn crc14_bits(msg77: &[u8; 77]) -> [u8; 14] {
     mc[..77].copy_from_slice(msg77);
     let v = crc14(&mc);
     let mut out = [0u8; 14];
-    for i in 0..14 {
-        out[i] = ((v >> (13 - i)) & 1) as u8;
+    for (i, bit) in out.iter_mut().enumerate() {
+        *bit = ((v >> (13 - i)) & 1) as u8;
     }
     out
 }

@@ -137,9 +137,9 @@ pub fn pack28(call: &str) -> Option<u32> {
         "CQ" => return Some(2),
         _ => {}
     }
-    if call.starts_with("CQ_") {
+    if let Some(rest) = call.strip_prefix("CQ_") {
         // CQ_NNN
-        if let Ok(n) = call[3..].parse::<u32>() {
+        if let Ok(n) = rest.parse::<u32>() {
             if n <= 999 {
                 return Some(n + 3);
             }
@@ -232,16 +232,16 @@ fn decode_report(igrid4: u32) -> String {
 
 fn encode_report(report: &str) -> Option<u32> {
     match report.trim() {
-        "RRR" => return Some(MAXGRID4 + 2),
-        "RR73" => return Some(MAXGRID4 + 3),
-        "73" => return Some(MAXGRID4 + 4),
-        "" => return Some(MAXGRID4 + 1),
+        "RRR" => Some(MAXGRID4 + 2),
+        "RR73" => Some(MAXGRID4 + 3),
+        "73" => Some(MAXGRID4 + 4),
+        "" => Some(MAXGRID4 + 1),
         s => {
             let s = s.trim_start_matches('R');
             let snr: i32 = s.parse().ok()?;
             let snr = snr.clamp(-50, 50);
             let irpt = snr + 35;
-            return Some(MAXGRID4 + irpt as u32);
+            Some(MAXGRID4 + irpt as u32)
         }
     }
 }

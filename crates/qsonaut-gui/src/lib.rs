@@ -3465,8 +3465,8 @@ impl QsonautGuiApp {
 
             if let Some(pos) = response.interact_pointer_pos() {
                 let rel = ((pos.x - response.rect.left()) / response.rect.width()).clamp(0.0, 1.0);
-                let pick_hz = ((rel * bw_hz.min(AUDIO_MAX_FREQ_HZ) as f32).round() as u32)
-                    .clamp(100, bw_hz.min(AUDIO_MAX_FREQ_HZ).max(100));
+                let capped_bw = bw_hz.clamp(100, AUDIO_MAX_FREQ_HZ);
+                let pick_hz = ((rel * capped_bw as f32).round() as u32).clamp(100, capped_bw);
 
                 if response.clicked() {
                     self.rx_tone_hz = pick_hz;
@@ -3485,7 +3485,7 @@ impl QsonautGuiApp {
                 }
             }
 
-            let bw = bw_hz.min(AUDIO_MAX_FREQ_HZ).max(1) as f32;
+            let bw = bw_hz.clamp(1, AUDIO_MAX_FREQ_HZ) as f32;
             let rx_x = response.rect.left()
                 + (self.rx_tone_hz.min(bw as u32) as f32 / bw) * response.rect.width();
             let tx_x = response.rect.left()
@@ -4515,7 +4515,7 @@ impl QsonautGuiApp {
             .iter()
             .filter(|entry| entry.mode == WorkspaceMode::Ft4)
         {
-            let belongs = target.as_deref().map_or(true, |target| {
+            let belongs = target.as_deref().is_none_or(|target| {
                 parse_message(&entry.message).is_some_and(|message| {
                     message
                         .to
@@ -6180,7 +6180,7 @@ fn spawn_radio_worker(
                         let target = if delta.is_negative() {
                             current.saturating_sub(delta.unsigned_abs() as u8)
                         } else {
-                            current.saturating_add(delta as u8).min(255)
+                            current.saturating_add(delta as u8)
                         };
                         if let Err(err) = rt.block_on(
                             radio.set_control(ControlId::AfGain, ControlValue::U8(target)),
@@ -6474,6 +6474,7 @@ fn channel_waterfall_level(rows: &VecDeque<Vec<u8>>, frequency_hz: u32) -> u8 {
     row[start..=end].iter().copied().max().unwrap_or(0)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_audio_spectrum_worker(
     state: Arc<Mutex<GuiState>>,
     stop: Arc<AtomicBool>,
@@ -7671,7 +7672,7 @@ mod tests {
             bins: usize,
             sample_rate_hz: u32,
         ) -> Vec<u8> {
-            let n = samples.len().min(FFT_SIZE).max(2);
+            let n = samples.len().clamp(2, FFT_SIZE);
             let mut planner = FftPlanner::<f32>::new();
             let fft = planner.plan_fft_forward(n);
             let mut buf: Vec<Complex<f32>> = samples

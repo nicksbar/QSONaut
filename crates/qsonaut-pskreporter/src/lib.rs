@@ -164,7 +164,7 @@ fn run_worker(
                 sequence,
                 session_id,
                 unix_seconds(),
-                packets < 3 || packets % 12 == 0,
+                packets < 3 || packets.is_multiple_of(12),
             );
             let mut state = status.lock().expect("PSK status lock");
             match socket.send(&packet) {

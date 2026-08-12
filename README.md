@@ -4,10 +4,14 @@
 
 # QSONaut
 
+[![CI](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml)
+[![Release builds](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml/badge.svg)](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml)
+[![Latest release](https://img.shields.io/github/v/release/nicksbar/QSONaut?display_name=tag&sort=semver)](https://github.com/nicksbar/QSONaut/releases)
+
 **A very early, enthusiast-built amateur-radio mission control experiment.**
 
 QSONaut combines radio control, live audio and spectrum views, WSJT-family
-digital modes, contact logging, and operator-assist experiments in one native
+digital modes, contact logging, and early operator-assist scaffolding in one native
 Rust desktop app.
 
 > [!CAUTION]
@@ -23,9 +27,9 @@ Rust desktop app.
   <em>Early FT8 flight deck on Linux/WSL. Operator identity is intentionally blurred.</em>
 </p>
 
-The hard architectural rule is that DSP, radio control, and TX safety do not
-depend on an LLM. AI-facing pieces are optional advisory boundaries, not part
-of the real-time signal path.
+There is currently no end-user LLM feature to enable. The `qsonaut-ai` crate
+and related config knobs are placeholder scaffolding for future experiments,
+and they are not in QSONaut's active receive/transmit control path.
 
 ## What works today
 
@@ -55,10 +59,11 @@ QSONaut currently uses
 ```bash
 git clone https://github.com/nicksbar/QSONaut.git
 git clone https://github.com/jl1nie/mfsk-core.git
-git -C mfsk-core checkout ff9a04119cb8580ede6f2c943afdeee08e81777e # post-v0.9.1 fixes
 cd QSONaut
 cargo run --release -p qsonaut -- --gui
 ```
+
+By default, QSONaut tracks `mfsk-core` `main` during active integration.
 
 Use a release build for live decoding. Debug builds are substantially slower.
 
@@ -91,6 +96,9 @@ Copy `.env.example` for optional environment overrides or pass
 `--config qsonaut.toml.example`. Local `.env`, operator profile, QSO log, and
 recorded WAV files are ignored by Git.
 
+AI-related environment keys are currently inert placeholders and can be left at
+their defaults.
+
 Reception data stays local unless you explicitly enable PSK Reporter. External
 automation source declarations reference environment-variable names rather
 than embedding Discord or IRC credentials.
@@ -105,6 +113,15 @@ than embedding Discord or IRC credentials.
 - `crates/qsonaut-accelerate` — measured compute-backend selection
 - `crates/qsonaut-automation` — sandboxed component and external-source foundation
 - `docs` — current implementation notes; historical scratch research was intentionally removed before publication
+
+## Versioning and release process
+
+QSONaut uses SemVer tags (`vMAJOR.MINOR.PATCH`) and a curated
+[`CHANGELOG.md`](CHANGELOG.md). Release assets and release notes are generated
+from those tags and changelog entries.
+
+See [`docs/versioning-and-releases.md`](docs/versioning-and-releases.md) for
+the concrete policy and release checklist.
 
 ## Before transmitting
 

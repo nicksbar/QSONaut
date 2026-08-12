@@ -38,8 +38,8 @@ pub fn codeword_to_tones(codeword: &[u8; N]) -> [u8; N_SYM] {
     let mut tones = [0u8; N_SYM];
     // Symbol positions: 0..6 sync, 7..35 data(0..28), 36..42 sync, 43..71 data(29..57), 72..78 sync
     let mut data_idx = 0usize;
-    for sym in 0..N_SYM {
-        let is_sync = sym < 7 || (sym >= 36 && sym < 43) || sym >= 72;
+    for (sym, tone) in tones.iter_mut().enumerate().take(N_SYM) {
+        let is_sync = sym < 7 || (36..43).contains(&sym) || sym >= 72;
         if is_sync {
             let costas_idx = if sym < 7 {
                 sym
@@ -48,13 +48,13 @@ pub fn codeword_to_tones(codeword: &[u8; N]) -> [u8; N_SYM] {
             } else {
                 sym - 72
             };
-            tones[sym] = COSTAS[costas_idx];
+            *tone = COSTAS[costas_idx];
         } else {
             let b = data_idx * 3;
             let idx = (channel[b] as usize) << 2
                 | (channel[b + 1] as usize) << 1
                 | channel[b + 2] as usize;
-            tones[sym] = GRAY_MAP[idx];
+            *tone = GRAY_MAP[idx];
             data_idx += 1;
         }
     }
@@ -99,7 +99,7 @@ mod tests {
             assert_eq!(tones.len(), N_SYM);
             // Verify Costas positions
             for (i, &t) in tones.iter().enumerate() {
-                if i < 7 || (i >= 36 && i < 43) || i >= 72 {
+                if i < 7 || (36..43).contains(&i) || i >= 72 {
                     let ci = if i < 7 {
                         i
                     } else if i < 43 {

@@ -1,0 +1,6 @@
+# Default ownership
+* @nicksbar
+
+# Core CI/release governance
+/.github/workflows/ @nicksbar
+/CHANGELOG.md @nicksbar

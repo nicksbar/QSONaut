@@ -52,8 +52,8 @@ fn compute_spectra(samples: &[f32]) -> Vec<Vec<f32>> {
             };
         }
         fft.process(&mut buf);
-        for i in 1..NH {
-            s[i][step] = buf[i].norm_sqr();
+        for (i, row) in s.iter_mut().enumerate().take(NH).skip(1) {
+            row[step] = buf[i].norm_sqr();
         }
     }
     s

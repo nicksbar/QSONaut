@@ -49,7 +49,7 @@ pub fn extract_symbol_magnitudes(samples: &[f32], f0_hz: f32, t0_s: f32) -> [[f3
     let n = samples.len();
     let mut s8 = [[0f32; 8]; N_SYM];
 
-    for sym in 0..N_SYM {
+    for (sym, sym_row) in s8.iter_mut().enumerate().take(N_SYM) {
         let start = (i0 + (sym * SAMPLES_PER_SYM) as i64).max(0) as usize;
 
         for (k, b) in fbuf.iter_mut().enumerate() {
@@ -61,9 +61,9 @@ pub fn extract_symbol_magnitudes(samples: &[f32], f0_hz: f32, t0_s: f32) -> [[f3
 
         fft.process(&mut fbuf);
 
-        for tone in 0..8 {
+        for (tone, tone_power) in sym_row.iter_mut().enumerate() {
             let bin_pos = tone0_bin + tone as f32;
-            s8[sym][tone] = interp_power(&fbuf, bin_pos);
+            *tone_power = interp_power(&fbuf, bin_pos);
         }
     }
 

@@ -15,8 +15,9 @@ const CI_V_FRAME_START: u8 = 0xFE;
 const CI_V_FRAME_END: u8 = 0xFD;
 const MIN_SCOPE_BINS_FOR_DISPLAY: usize = 180;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
+    #[default]
     Usb,
     Lsb,
     Cw,
@@ -177,12 +178,6 @@ impl Radio for NullRadio {
 
     async fn ptt(&self, _enabled: bool) -> Result<()> {
         Ok(())
-    }
-}
-
-impl Default for Mode {
-    fn default() -> Self {
-        Self::Usb
     }
 }
 
@@ -1093,14 +1088,13 @@ impl IcomCiVRadio {
             }
 
             if let Some(bins) = parse_scope_waveform_bins(&response) {
-                if !bins.is_empty() {
-                    if best_fallback
+                if !bins.is_empty()
+                    && best_fallback
                         .as_ref()
                         .map(|b| bins.len() > b.len())
                         .unwrap_or(true)
-                    {
-                        best_fallback = Some(bins);
-                    }
+                {
+                    best_fallback = Some(bins);
                 }
             }
         }
@@ -1569,6 +1563,7 @@ fn decode_level_255_bcd(bytes: &[u8]) -> Option<u8> {
     Some(value)
 }
 
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod tests {
     use super::*;

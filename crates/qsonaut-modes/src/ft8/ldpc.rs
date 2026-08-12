@@ -47,7 +47,7 @@ pub fn bpdecode(llr: &[f32; N]) -> Option<[u8; 77]> {
             let s: u32 = (0..NRW[j] as usize)
                 .map(|i| cw[NM[j][i] as usize] as u32)
                 .sum();
-            if s % 2 != 0 {
+            if !s.is_multiple_of(2) {
                 ncheck += 1;
             }
         }

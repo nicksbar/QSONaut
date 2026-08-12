@@ -49,9 +49,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: jl1nie/mfsk-core
-          # Post-v0.9.1: includes QSONaut's merged FT8 lag-bounds fix
-          # (#279) and upstream's fixed-window/candidate follow-ups (#281).
-          ref: ff9a04119cb8580ede6f2c943afdeee08e81777e
+          # Track current upstream development head.
+          ref: main
           path: mfsk-core
 
       - name: Install Linux native libraries
@@ -72,7 +71,7 @@ jobs:
         run: |
           mkdir -p "dist/${{ matrix.artifact }}"
           cp "target/${{ matrix.target }}/release/qsonaut" "dist/${{ matrix.artifact }}/"
-          cp README.md LICENSE THIRD_PARTY_NOTICES.md qsonaut.toml.example "dist/${{ matrix.artifact }}/"
+          cp README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md qsonaut.toml.example "dist/${{ matrix.artifact }}/"
           cp ../mfsk-core/LICENSE "dist/${{ matrix.artifact }}/MFSK-CORE-LICENSE.txt"
           tar -C dist -czf "dist/${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"
 
@@ -83,7 +82,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force "dist/${{ matrix.artifact }}" | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/qsonaut.exe" "dist/${{ matrix.artifact }}/"
-          Copy-Item README.md,LICENSE,THIRD_PARTY_NOTICES.md,qsonaut.toml.example "dist/${{ matrix.artifact }}/"
+          Copy-Item README.md,CHANGELOG.md,LICENSE,THIRD_PARTY_NOTICES.md,qsonaut.toml.example "dist/${{ matrix.artifact }}/"
           Copy-Item ../mfsk-core/LICENSE "dist/${{ matrix.artifact }}/MFSK-CORE-LICENSE.txt"
           Compress-Archive -Path "dist/${{ matrix.artifact }}/*" -DestinationPath "dist/${{ matrix.artifact }}.zip"
 
@@ -93,3 +92,62 @@ jobs:
           name: ${{ matrix.artifact }}
           path: QSONaut/dist/${{ matrix.artifact }}.*
           if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out QSONaut
+        uses: actions/checkout@v6
+
+      - name: Verify SemVer tag and changelog entry
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag '$GITHUB_REF_NAME' is not SemVer (expected vMAJOR.MINOR.PATCH)."
+            exit 1
+          fi
+          if ! grep -Eq "^## \[$TAG\] - " CHANGELOG.md; then
+            echo "CHANGELOG.md is missing section: ## [$TAG] - YYYY-MM-DD"
+            exit 1
+          fi
+
+      - name: Build release notes from changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          awk -v tag="$TAG" '
+            $0 ~ "^## \\[" tag "\\] - " {capture=1; next}
+            capture && $0 ~ "^## \\[" {exit}
+            capture {print}
+          ' CHANGELOG.md > RELEASE_NOTES.md
+
+          if [[ ! -s RELEASE_NOTES.md ]]; then
+            cat > RELEASE_NOTES.md <<EOF
+          Release v${TAG}
+
+          See CHANGELOG.md for details.
+          EOF
+          fi
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: dist
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: |
+            dist/**/*.tar.gz
+            dist/**/*.zip
+          fail_on_unmatched_files: true

@@ -306,7 +306,7 @@ fn select_config(
                 sample_format_preference(range.sample_format()),
             )
         })
-        .map(|range| range.clone().with_sample_rate(requested_rate))
+        .map(|range| (*range).with_sample_rate(requested_rate))
         .with_context(|| {
             format!(
                 "{} audio device does not support {} Hz",
