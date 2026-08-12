@@ -16,8 +16,8 @@ use qsonaut_accelerate::{
 };
 use qsonaut_audio::{play_pcm_blocking, AudioService};
 use qsonaut_automation::{
-    Action, AutomationEvent, AutomationHost, Capability, CapabilitySet, EventKind, RuleComponent,
-    RuleComponentConfig,
+    Action, AutomationEvent, AutomationHost, Capability, CapabilitySet, EventKind,
+    ExternalSourceConfig, RuleComponent, RuleComponentConfig,
 };
 use qsonaut_core::{
     AppConfig, AppEvent, AppEventBus, ContestOperatingMode, ContestProfile, FoxHoundRole,
@@ -446,32 +446,86 @@ fn workspace_mode_supports_native_tx(mode: WorkspaceMode) -> bool {
     )
 }
 
-fn bootstrap_automation_host() -> (AutomationHost, String) {
+fn parse_bool_env(var: &str) -> bool {
+    std::env::var(var)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on" | "enabled"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn external_source_transport(source: &str) -> Option<String> {
+    let (transport, _) = source.trim().split_once(':')?;
+    let transport = transport.trim();
+    if transport.is_empty() {
+        None
+    } else {
+        Some(transport.to_ascii_lowercase())
+    }
+}
+
+fn configured_external_transports(config: &RuleComponentConfig) -> HashSet<String> {
+    config
+        .sources
+        .iter()
+        .map(|source| match source {
+            ExternalSourceConfig::Discord { .. } => "discord",
+            ExternalSourceConfig::Irc { .. } => "irc",
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+#[derive(Debug, Clone)]
+struct ExternalSendRecord {
+    utc: String,
+    source: String,
+    target: String,
+    message: String,
+}
+
+fn bootstrap_automation_host() -> (AutomationHost, String, HashSet<String>) {
     let mut host = AutomationHost::default();
     let source = include_str!("../../../automation.example.toml");
 
     match RuleComponentConfig::from_toml(source) {
         Ok(config) => {
+            let configured_transports = configured_external_transports(&config);
             let component_id = config.component.id.clone();
             if let Err(error) = host.register(RuleComponent::new(config)) {
                 return (
                     host,
                     format!("Automation host active, component registration failed: {error}"),
+                    HashSet::new(),
                 );
             }
 
-            host.set_grants(
-                component_id.clone(),
-                CapabilitySet::new([Capability::UiNotification]),
-            );
+            let external_send_enabled = parse_bool_env("QSONAUT_AUTOMATION_ENABLE_EXTERNAL_SEND");
+            let grants = if external_send_enabled {
+                CapabilitySet::new([Capability::UiNotification, Capability::ExternalSend])
+            } else {
+                CapabilitySet::new([Capability::UiNotification])
+            };
+            host.set_grants(component_id.clone(), grants);
+
+            let grant_status = if external_send_enabled {
+                "ui_notification, external_send (env-enabled)"
+            } else {
+                "ui_notification"
+            };
             (
                 host,
-                format!("Automation component loaded: {component_id} (granted: ui_notification)"),
+                format!("Automation component loaded: {component_id} (granted: {grant_status})"),
+                configured_transports,
             )
         }
         Err(error) => (
             host,
             format!("Automation config parse failed; runtime hooks paused: {error}"),
+            HashSet::new(),
         ),
     }
 }
@@ -1609,6 +1663,8 @@ struct QsonautGuiApp {
     automation_host: AutomationHost,
     automation_status: String,
     last_radio_state_signature: Option<String>,
+    automation_external_transports: HashSet<String>,
+    automation_external_outbox: VecDeque<ExternalSendRecord>,
     external_ingress_source: String,
     external_ingress_author: String,
     external_ingress_channel: String,
@@ -1760,7 +1816,8 @@ impl QsonautGuiApp {
         let state = Arc::new(Mutex::new(GuiState::default()));
         let app_events = AppEventBus::new(256);
         let automation_event_rx = app_events.subscribe();
-        let (automation_host, automation_status) = bootstrap_automation_host();
+        let (automation_host, automation_status, automation_external_transports) =
+            bootstrap_automation_host();
         let worker_stop = Arc::new(AtomicBool::new(false));
         let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
 
@@ -2003,6 +2060,8 @@ impl QsonautGuiApp {
             automation_host,
             automation_status,
             last_radio_state_signature: None,
+            automation_external_transports,
+            automation_external_outbox: VecDeque::new(),
             external_ingress_source: "discord:shack".to_string(),
             external_ingress_author: "operator".to_string(),
             external_ingress_channel: "#qsonaut".to_string(),
@@ -3134,6 +3193,64 @@ impl QsonautGuiApp {
         self.external_ingress_message.clear();
     }
 
+    fn execute_automation_external_send(
+        &mut self,
+        source: &str,
+        target: &str,
+        message: &str,
+    ) -> String {
+        let source = source.trim();
+        let target = target.trim();
+        let message = message.trim();
+
+        if source.is_empty() || target.is_empty() || message.is_empty() {
+            return "External send rejected: source, target, and message are required".to_string();
+        }
+
+        let Some(transport) = external_source_transport(source) else {
+            return format!(
+                "External send rejected: source '{source}' must use '<transport>:<id>'"
+            );
+        };
+        if !self.automation_external_transports.contains(&transport) {
+            let mut configured: Vec<_> = self
+                .automation_external_transports
+                .iter()
+                .cloned()
+                .collect();
+            configured.sort();
+            let known = if configured.is_empty() {
+                "none".to_string()
+            } else {
+                configured.join(",")
+            };
+            return format!(
+                "External send rejected: transport '{transport}' is not configured (known: {known})"
+            );
+        }
+
+        self.automation_external_outbox
+            .push_back(ExternalSendRecord {
+                utc: utc_hhmmss_millis(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|duration| duration.as_secs_f64())
+                        .unwrap_or_default(),
+                ),
+                source: source.to_string(),
+                target: target.to_string(),
+                message: message.to_string(),
+            });
+        while self.automation_external_outbox.len() > 32 {
+            self.automation_external_outbox.pop_front();
+        }
+
+        format!(
+            "Queued external send via {source} -> {target} ({} chars)",
+            message.chars().count()
+        )
+    }
+
     fn pump_automation_events(&mut self) {
         loop {
             match self.automation_event_rx.try_recv() {
@@ -3168,9 +3285,14 @@ impl QsonautGuiApp {
                                     );
                                 }
                             }
-                            Action::SendExternal { source, target, .. } => {
+                            Action::SendExternal {
+                                source,
+                                target,
+                                message,
+                            } => {
                                 self.automation_status = format!(
-                                    "🤖 External send approved for {source} -> {target}, adapter execution pending"
+                                    "🤖 {}",
+                                    self.execute_automation_external_send(source, target, message)
                                 );
                             }
                             Action::RadioCommand { command, value } => {
@@ -3626,6 +3748,47 @@ impl QsonautGuiApp {
                         self.publish_external_ingress_message();
                     }
                 });
+
+                ui.add_space(6.0);
+                let transport_summary = if self.automation_external_transports.is_empty() {
+                    "none".to_string()
+                } else {
+                    let mut transports: Vec<_> =
+                        self.automation_external_transports.iter().cloned().collect();
+                    transports.sort();
+                    transports.join(", ")
+                };
+                ui.label(
+                    RichText::new(format!(
+                        "Configured external transports: {transport_summary}"
+                    ))
+                    .small()
+                    .color(Color32::GRAY),
+                );
+                if let Some(last) = self.automation_external_outbox.back() {
+                    ui.label(
+                        RichText::new(format!(
+                            "Last queued send {} · {} → {} · {}",
+                            last.utc, last.source, last.target, last.message
+                        ))
+                        .small()
+                        .color(Color32::from_rgb(158, 217, 255)),
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "Outbox depth: {} (adapter polling still pending)",
+                            self.automation_external_outbox.len()
+                        ))
+                        .small()
+                        .color(Color32::GRAY),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new("Outbox is empty")
+                            .small()
+                            .color(Color32::GRAY),
+                    );
+                }
             });
 
         ui.add_space(4.0);
@@ -3681,6 +3844,22 @@ impl QsonautGuiApp {
                 match self.qso_log.export_adif(&qso_adif_path()) {
                     Ok(()) => self.qso_log_status = format!("Exported {}", QSO_ADIF_FILE),
                     Err(error) => self.qso_log_status = format!("ADIF export failed: {error}"),
+                }
+            }
+            if ui.small_button("Import ADIF").clicked() {
+                match self.qso_log.import_adif(&qso_adif_path()) {
+                    Ok(summary) => {
+                        self.qso_log_status = format!(
+                            "ADIF import: {} added · {} duplicate(s) · {} invalid",
+                            summary.imported, summary.duplicates, summary.invalid
+                        );
+                        if summary.imported > 0 {
+                            self.qso_selected = Some(self.qso_log.contacts.len() - 1);
+                            self.qso_log_dirty = true;
+                            self.persist_qso_log("Imported + saved");
+                        }
+                    }
+                    Err(error) => self.qso_log_status = format!("ADIF import failed: {error}"),
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -9511,6 +9690,54 @@ mod tests {
             event.fields.get("channel").map(String::as_str),
             Some("#qsonaut")
         );
+    }
+
+    #[test]
+    fn configured_external_transports_extracts_declared_source_kinds() {
+        let config = RuleComponentConfig {
+            component: qsonaut_automation::ComponentManifest {
+                id: "test.component".to_string(),
+                name: "Test".to_string(),
+                version: "0.1.0".to_string(),
+                description: String::new(),
+                subscriptions: Default::default(),
+                requests: Default::default(),
+            },
+            sources: vec![
+                ExternalSourceConfig::Discord {
+                    token_env: "QSONAUT_DISCORD_TOKEN".to_string(),
+                    guild_id: None,
+                    channel_ids: vec!["1".to_string()],
+                },
+                ExternalSourceConfig::Irc {
+                    server: "irc.libera.chat".to_string(),
+                    port: 6697,
+                    tls: true,
+                    nickname: "QSONautBot".to_string(),
+                    channels: vec!["#qsonaut".to_string()],
+                    password_env: None,
+                },
+            ],
+            rules: vec![],
+        };
+
+        let transports = configured_external_transports(&config);
+        assert!(transports.contains("discord"));
+        assert!(transports.contains("irc"));
+        assert_eq!(transports.len(), 2);
+    }
+
+    #[test]
+    fn external_source_transport_requires_transport_prefix() {
+        assert_eq!(
+            external_source_transport("discord:shack").as_deref(),
+            Some("discord")
+        );
+        assert_eq!(
+            external_source_transport("irc:#qsonaut").as_deref(),
+            Some("irc")
+        );
+        assert_eq!(external_source_transport("bare-source"), None);
     }
 
     #[test]

@@ -106,8 +106,9 @@ Acceptance criteria:
 ## C) Logging + interoperability hardening
 
 - [ ] Expand ADIF writer to complete required/common contest fields where available.
-- [ ] Add ADIF import with validation and conflict policy
+- [x] Add ADIF import with validation and conflict policy
   - duplicate strategy, normalization rules, and bad-record reporting.
+  - Status: `qsonaut-log` now imports ADIF with record normalization, duplicate suppression (`call+date+time+band+mode`), and import summary counters (imported/duplicates/invalid); GUI log panel includes `Import ADIF` action.
 - [ ] Add filtered export slices
   - by date range, mode, band, and contest profile.
 - [ ] Add LoTW-prep export path
