@@ -446,6 +446,26 @@ fn workspace_mode_supports_native_tx(mode: WorkspaceMode) -> bool {
     )
 }
 
+fn parse_tx_target_from_compose(compose: &str, operator_call: &str) -> Option<String> {
+    let parsed = parse_message(compose)?;
+    if parsed.is_cq {
+        return None;
+    }
+
+    let operator_call = operator_call.trim();
+    if ft8_ops::callsign_eq(&parsed.from, operator_call) {
+        return parsed.to;
+    }
+    if parsed
+        .to
+        .as_deref()
+        .is_some_and(|to| ft8_ops::callsign_eq(to, operator_call))
+    {
+        return Some(parsed.from);
+    }
+    parsed.to.or(Some(parsed.from))
+}
+
 fn parse_bool_env(var: &str) -> bool {
     std::env::var(var)
         .map(|value| {
@@ -2449,6 +2469,10 @@ impl QsonautGuiApp {
             self.ft8_seq_status = "TX not queued: compose is empty".to_string();
             return;
         }
+        let compose = self.ft8_compose.clone();
+        if self.block_duplicate_tx_if_needed(WorkspaceMode::Ft8, &compose) {
+            return;
+        }
         let Some(command_tx) = self.command_tx.clone() else {
             self.ft8_seq_status = "TX unavailable: radio control is disabled".to_string();
             return;
@@ -2628,6 +2652,49 @@ impl QsonautGuiApp {
             || self.digital_tx_active.load(Ordering::Acquire)
     }
 
+    fn has_logged_contact_with(&self, target_call: &str, mode: &str, band: &str) -> bool {
+        self.qso_log.contacts.iter().any(|contact| {
+            ft8_ops::callsign_eq(&contact.callsign, target_call)
+                && contact.mode.eq_ignore_ascii_case(mode)
+                && contact.band.eq_ignore_ascii_case(band)
+        })
+    }
+
+    fn block_duplicate_tx_if_needed(&mut self, mode: WorkspaceMode, compose: &str) -> bool {
+        if !self.contest_dupe_check {
+            return false;
+        }
+
+        let Some(frequency_hz) = self
+            .state
+            .lock()
+            .expect("ui state lock poisoned")
+            .frequency_hz
+        else {
+            return false;
+        };
+        let band = band_for_frequency(frequency_hz);
+
+        let operator_call = self.station_callsign_or_default().to_string();
+        let Some(target_call) = parse_tx_target_from_compose(compose, &operator_call) else {
+            return false;
+        };
+        if ft8_ops::callsign_eq(&target_call, &operator_call) {
+            return false;
+        }
+
+        if self.has_logged_contact_with(&target_call, mode.label(), band) {
+            let status = format!(
+                "Dupe check blocked TX: {target_call} already worked on {band} {}",
+                mode.label()
+            );
+            self.ft8_seq_status = status.clone();
+            self.digital_tx_status = status;
+            return true;
+        }
+        false
+    }
+
     fn disarm_all_tx(&mut self, reason: &str) {
         self.force_stop_tx();
         self.stop_native_digital_tx();
@@ -2778,6 +2845,10 @@ impl QsonautGuiApp {
     }
 
     fn queue_native_digital_tx(&mut self, mode: WorkspaceMode) {
+        let compose = self.digital_compose.clone();
+        if self.block_duplicate_tx_if_needed(mode, &compose) {
+            return;
+        }
         if self.digital_suppress_canceled_tx_events {
             self.digital_tx_status = "TX cancellation is still settling; try again".to_string();
             return;
@@ -9689,6 +9760,22 @@ mod tests {
         assert_eq!(
             event.fields.get("channel").map(String::as_str),
             Some("#qsonaut")
+        );
+    }
+
+    #[test]
+    fn parse_tx_target_from_compose_uses_operator_role() {
+        assert_eq!(
+            parse_tx_target_from_compose("K1ABC N0CALL -10", "N0CALL").as_deref(),
+            Some("K1ABC")
+        );
+        assert_eq!(
+            parse_tx_target_from_compose("N0CALL K1ABC -12", "N0CALL").as_deref(),
+            Some("K1ABC")
+        );
+        assert_eq!(
+            parse_tx_target_from_compose("CQ N0CALL FN20", "N0CALL"),
+            None
         );
     }
 

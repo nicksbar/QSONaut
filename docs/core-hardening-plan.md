@@ -93,6 +93,7 @@ Acceptance criteria:
   - Guided states, constraints, and contextual actions (instead of hidden assumptions).
 - [ ] Add dupe and worked-status engine
   - Real-time call matching against log, per-band/per-mode views.
+  - Status: pre-TX duplicate guard is now enforced in GUI TX queue paths (FT8 + native digital) using `call+band+mode` matching when contest dupe-check is enabled.
 - [ ] Add serial/CQ number workflow
   - Increment/decrement rules, resend behavior, and persistence across restart.
 - [ ] Add macro-friendly Run/S&P helper actions
