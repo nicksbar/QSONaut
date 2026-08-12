@@ -14,3 +14,6 @@ automation.toml
 # local runtime artifacts
 recordings/*.wav
 !recordings/.gitkeep
+
+# Keep the private source capture local; publish only the redacted derivative.
+assets/branding/qsonaut-screen.png

@@ -17,6 +17,12 @@ Rust desktop app.
 > frequency, band plan, and transmit state yourself. Do not trust it for
 > unattended operation or as a safety interlock.
 
+<p align="center">
+  <img src="assets/branding/qsonaut-screen-redacted.png" alt="QSONaut FT8 mission-control interface with operator identity redacted">
+  <br>
+  <em>Early FT8 flight deck on Linux/WSL. Operator identity is intentionally blurred.</em>
+</p>
+
 The hard architectural rule is that DSP, radio control, and TX safety do not
 depend on an LLM. AI-facing pieces are optional advisory boundaries, not part
 of the real-time signal path.
