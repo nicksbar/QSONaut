@@ -123,7 +123,7 @@ Acceptance criteria:
 
 - [x] Publish automation events for contest/profile state transitions
   - `contest_state` and `operator_profile` event streams should be emitted with stable fields.
-  - Status: event kinds and app events added; GUI now emits hook events on profile/contest changes.
+  - Status: event kinds and app events added; GUI now emits hook events on profile/contest/radio-state changes.
 - [x] Connect GUI event stream to runtime automation host
   - GUI owns `AutomationHost`, normalizes app events, and dispatches rule components.
   - Status: runtime dispatch active for contest/profile plus structured `callsign_hit` and `qso_logged` events.

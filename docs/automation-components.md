@@ -64,7 +64,8 @@ The GUI now owns an `AutomationHost` and dispatches normalized events for:
 1. configured callsign detections (`callsign_hit`);
 2. QSO logging transitions (`qso_logged`);
 3. contest profile transitions (`contest_state`);
-4. operator profile transitions (`operator_profile`).
+4. operator profile transitions (`operator_profile`);
+5. material radio state transitions (`radio_state`).
 
 Current runtime grants are intentionally conservative:
 
@@ -73,7 +74,6 @@ Current runtime grants are intentionally conservative:
 
 Still pending:
 
-5. radio-state change publication;
 6. external adapter receive-path publication;
 
 Safety-gated execution is now wired for approved `radio_command` and `request_transmit` actions:

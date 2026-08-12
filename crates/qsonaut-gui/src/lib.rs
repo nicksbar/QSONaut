@@ -392,6 +392,7 @@ fn normalize_app_event_for_automation(event: AppEvent) -> Option<AutomationEvent
                 "operator_profile" => EventKind::OperatorProfile,
                 "callsign_hit" => EventKind::CallsignHit,
                 "qso_logged" => EventKind::QsoLogged,
+                "radio_state" => EventKind::RadioState,
                 _ => return None,
             };
             let mut event = AutomationEvent::new(event_kind, source)
@@ -1595,6 +1596,7 @@ struct QsonautGuiApp {
     automation_event_rx: tokio::sync::broadcast::Receiver<AppEvent>,
     automation_host: AutomationHost,
     automation_status: String,
+    last_radio_state_signature: Option<String>,
     state: Arc<Mutex<GuiState>>,
     command_tx: Option<mpsc::Sender<GuiCommand>>,
     worker_stop: Arc<AtomicBool>,
@@ -1984,6 +1986,7 @@ impl QsonautGuiApp {
             automation_event_rx,
             automation_host,
             automation_status,
+            last_radio_state_signature: None,
             state,
             command_tx,
             worker_stop,
@@ -3057,6 +3060,32 @@ impl QsonautGuiApp {
                 self.contest_serial_step,
                 self.contest_dupe_check
             ),
+        });
+    }
+
+    fn emit_radio_state_hook_if_changed(&mut self, snapshot: &GuiState) {
+        let frequency_hz = snapshot.frequency_hz.unwrap_or_default();
+        let data_mode =
+            snapshot
+                .data_mode
+                .map_or("unknown", |value| if value { "true" } else { "false" });
+        let filter = snapshot
+            .filter
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let signature = format!(
+            "frequency_hz={frequency_hz} mode={} data_mode={data_mode} filter={filter} ptt_on={}",
+            snapshot.mode, snapshot.ptt_on
+        );
+
+        if self.last_radio_state_signature.as_deref() == Some(signature.as_str()) {
+            return;
+        }
+        self.last_radio_state_signature = Some(signature.clone());
+        self.app_events.publish(AppEvent::AutomationHook {
+            kind: "radio_state".to_string(),
+            source: "gui.radio".to_string(),
+            detail: signature,
         });
     }
 
@@ -6580,6 +6609,7 @@ impl eframe::App for QsonautGuiApp {
         }
 
         let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
+        self.emit_radio_state_hook_if_changed(&snapshot);
 
         egui::TopBottomPanel::top("header")
             .resizable(true)
