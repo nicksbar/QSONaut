@@ -1154,6 +1154,8 @@ struct GuiState {
     radio_waterfall_status: String,
     radio_waterfall_rows: VecDeque<Vec<u8>>,
     radio_waterfall_revision: u64,
+    radio_scope_auto_contrast: bool,
+    radio_scope_contrast: f32,
     audio_spectrum_status: String,
     audio_waterfall_rows: VecDeque<Vec<u8>>,
     audio_waterfall_revision: u64,
@@ -1196,6 +1198,8 @@ impl Default for GuiState {
             radio_waterfall_status: "OFF".to_string(),
             radio_waterfall_rows: VecDeque::with_capacity(RADIO_WF_HEIGHT),
             radio_waterfall_revision: 0,
+            radio_scope_auto_contrast: true,
+            radio_scope_contrast: 1.6,
             audio_spectrum_status: "INIT".to_string(),
             audio_waterfall_rows: VecDeque::with_capacity(AUDIO_WF_HEIGHT),
             audio_waterfall_revision: 0,
@@ -1451,6 +1455,8 @@ struct QsonautGuiApp {
     radio_serial_ports: Vec<String>,
     radio_serial_port_labels: HashMap<String, String>,
     radio_detected_models: Vec<String>,
+    radio_scope_auto_contrast: bool,
+    radio_scope_contrast: f32,
     show_signal_panel: bool,
     show_device_settings: bool,
     device_restart_required: bool,
@@ -1777,6 +1783,8 @@ impl QsonautGuiApp {
             radio_serial_ports,
             radio_serial_port_labels,
             radio_detected_models,
+            radio_scope_auto_contrast: true,
+            radio_scope_contrast: 1.6,
             show_signal_panel: true,
             show_device_settings: false,
             device_restart_required: false,
@@ -3457,8 +3465,24 @@ impl QsonautGuiApp {
         ctx: &egui::Context,
         snapshot: &GuiState,
     ) {
-        ui.heading("Radio Waterfall (CI-V Scope)");
+        ui.heading("Radio Waterfall (CI-V Scope · RF/IF view)");
         ui.separator();
+
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut self.radio_scope_auto_contrast, "Auto contrast");
+            ui.add(
+                egui::Slider::new(&mut self.radio_scope_contrast, 0.7..=3.0)
+                    .text("contrast")
+                    .clamping(egui::SliderClamping::Always),
+            );
+        });
+        ui.label(
+            RichText::new(
+                "Tip: CI-V scope is RF/IF activity. Audio Waterfall below is AF/baseband detail.",
+            )
+            .small()
+            .color(Color32::GRAY),
+        );
 
         if !snapshot.radio_spectrum_desired {
             ui.label(
@@ -5662,6 +5686,8 @@ impl eframe::App for QsonautGuiApp {
             s.selected_audio_hz = self.rx_tone_hz;
             s.compute_backend = self.acceleration_report.active;
             s.radio_spectrum_desired = self.civ_spectrum_on;
+            s.radio_scope_auto_contrast = self.radio_scope_auto_contrast;
+            s.radio_scope_contrast = self.radio_scope_contrast;
             (
                 s.ft8_pending.drain(..).collect::<Vec<_>>(),
                 s.ft8_last_decode_period,
@@ -6348,11 +6374,14 @@ fn poll_radio_core_state(
 }
 
 fn apply_waterfall_bins(next: &mut GuiState, bins: &[u8]) {
-    let row = if bins.len() > MAX_RADIO_WF_BINS {
+    let mut row = if bins.len() > MAX_RADIO_WF_BINS {
         downsample_bins(bins, MAX_RADIO_WF_BINS)
     } else {
         bins.to_vec()
     };
+    if next.radio_scope_auto_contrast {
+        row = autocontrast_scope_row(&row, next.radio_scope_contrast);
+    }
     if next.radio_waterfall_rows.len() >= RADIO_WF_HEIGHT {
         next.radio_waterfall_rows.pop_front();
     }
@@ -7674,6 +7703,59 @@ fn fmt_civ_level_percent(v: Option<u8>) -> String {
     .unwrap_or_else(|| "?".to_string())
 }
 
+fn autocontrast_scope_row(row: &[u8], contrast: f32) -> Vec<u8> {
+    if row.len() < 8 {
+        return row.to_vec();
+    }
+
+    let mut histogram = [0usize; 256];
+    for &value in row {
+        histogram[value as usize] += 1;
+    }
+
+    let total = row.len();
+    let low_target = ((total as f32) * 0.08).round() as usize;
+    let high_target = ((total as f32) * 0.98).round() as usize;
+
+    let mut cumulative = 0usize;
+    let mut low = 0u8;
+    for (idx, &count) in histogram.iter().enumerate() {
+        cumulative += count;
+        if cumulative >= low_target {
+            low = idx as u8;
+            break;
+        }
+    }
+
+    cumulative = 0;
+    let mut high = 255u8;
+    for (idx, &count) in histogram.iter().enumerate() {
+        cumulative += count;
+        if cumulative >= high_target {
+            high = idx as u8;
+            break;
+        }
+    }
+
+    if high <= low.saturating_add(3) {
+        return row.to_vec();
+    }
+
+    let gamma = (1.0 / contrast.max(0.1)).clamp(0.2, 2.0);
+    row.iter()
+        .map(|&value| {
+            let normalized = if value <= low {
+                0.0
+            } else if value >= high {
+                1.0
+            } else {
+                (value - low) as f32 / (high - low) as f32
+            };
+            (normalized.powf(gamma) * 255.0).round().clamp(0.0, 255.0) as u8
+        })
+        .collect()
+}
+
 fn radio_port_inventory(
     descriptors: Vec<SerialPortDescriptor>,
 ) -> (Vec<String>, HashMap<String, String>, Vec<String>) {
@@ -7859,6 +7941,24 @@ mod tests {
             Some("/dev/ttyUSB0 — Icom IC-7300 (CI-V)")
         );
         assert_eq!(models, vec!["Icom IC-7300 (CI-V)"]);
+    }
+
+    #[test]
+    fn autocontrast_scope_row_stretches_signal_range() {
+        let row = vec![
+            8, 10, 12, 13, 14, 16, 18, 20, 22, 24, 25, 27, 29, 31, 33, 34,
+        ];
+        let contrasted = autocontrast_scope_row(&row, 1.8);
+        let original_range = row.iter().max().unwrap() - row.iter().min().unwrap();
+        let contrasted_range = contrasted.iter().max().unwrap() - contrasted.iter().min().unwrap();
+        assert!(contrasted_range > original_range);
+    }
+
+    #[test]
+    fn autocontrast_scope_row_keeps_flat_rows_stable() {
+        let row = vec![17u8; 64];
+        let contrasted = autocontrast_scope_row(&row, 2.0);
+        assert_eq!(contrasted, row);
     }
 
     #[test]
