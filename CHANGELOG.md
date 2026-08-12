@@ -7,6 +7,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-12
+
+### Added
+- Contest workflow profile with split policy, Fox/Hound role guidance, serial cursor controls, and operator-visible exchange previews.
+- Fake-split transmit offset handling for contest operation when the radio itself does not expose split control.
+- Achievement Hunter persistence with built-in unlocks and custom operator-defined achievements.
+- ADIF export filtering for the current mode/band view.
+
+### Changed
+- Contest QSOs now preserve serial/exchange metadata through the log model and ADIF import/export.
+- GUI contest status now advertises role-aware guidance and serial progress in the TX compose deck.
+- Workspace release version advanced to `0.2.0` for the new hardening milestone.
+
+### Fixed
+- Release workflow now has the contest/logging changes needed to build the full desktop matrix from the tagged release.
+
 ## [0.1.1] - 2026-08-12
 
 ### Added
