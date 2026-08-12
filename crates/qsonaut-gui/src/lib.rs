@@ -17,7 +17,7 @@ use qsonaut_accelerate::{
 use qsonaut_audio::{play_pcm_blocking, AudioService};
 use qsonaut_core::AppConfig;
 use qsonaut_dsp::resample::Decimator;
-use qsonaut_log::{QsoLog, QsoRecord};
+use qsonaut_log::{app_config_dir, QsoLog, QsoRecord};
 use qsonaut_pskreporter::{ReceptionReport, ReportSender, Reporter, ReporterConfig};
 use qsonaut_radio::{
     enumerate_serial_ports, BaseMode, ControlId, ControlValue, IcomCiVRadio, Mode, Radio, RadioHal,
@@ -28,6 +28,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::f32::consts::PI;
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
@@ -50,8 +51,8 @@ const AUDIO_MAX_FREQ_HZ: u32 = 4_000;
 const FFT_SIZE: usize = 8192;
 const OPERATOR_PROFILE_FILE: &str = "profile.toml";
 const OPERATOR_PROFILE_VERSION: u32 = 4;
-const GUI_SCALE_BASE: f32 = 1.6;
-const GUI_SCALE_MIN: f32 = 1.2;
+const GUI_SCALE_BASE: f32 = 1.2;
+const GUI_SCALE_MIN: f32 = 0.9;
 const GUI_SCALE_MAX: f32 = 2.0;
 const QSO_LOG_FILE: &str = "log.toml";
 const QSO_ADIF_FILE: &str = "log.adi";
@@ -224,6 +225,15 @@ struct OperatorProfile {
 fn default_gui_scale() -> f32 {
     GUI_SCALE_BASE
 }
+
+fn gui_scale_from_percent(percent: u32) -> f32 {
+    (GUI_SCALE_BASE * percent as f32 / 100.0).clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
+}
+
+fn gui_scale_percent(scale: f32) -> f32 {
+    scale / GUI_SCALE_BASE * 100.0
+}
+
 fn default_follow_log() -> bool {
     true
 }
@@ -314,32 +324,15 @@ fn should_move_tx_to_decode(message: &ft8_ops::ParsedMessage, continuing_exchang
 }
 
 fn operator_profile_path() -> PathBuf {
-    qsonaut_data_dir().join(OPERATOR_PROFILE_FILE)
+    app_config_dir().join(OPERATOR_PROFILE_FILE)
 }
 
 fn qso_log_path() -> PathBuf {
-    qsonaut_data_dir().join(QSO_LOG_FILE)
+    app_config_dir().join(QSO_LOG_FILE)
 }
 
 fn qso_adif_path() -> PathBuf {
-    qsonaut_data_dir().join(QSO_ADIF_FILE)
-}
-
-fn qsonaut_data_dir() -> PathBuf {
-    #[cfg(target_os = "windows")]
-    if let Some(root) = std::env::var_os("APPDATA") {
-        return PathBuf::from(root).join("QSONaut");
-    }
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(root) = std::env::var_os("XDG_CONFIG_HOME") {
-            return PathBuf::from(root).join("qsonaut");
-        }
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(".config").join("qsonaut");
-        }
-    }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    app_config_dir().join(QSO_ADIF_FILE)
 }
 
 fn load_operator_profile() -> Option<OperatorProfile> {
@@ -1283,6 +1276,7 @@ pub fn run_gui(config: AppConfig) -> Result<()> {
 
     let app_icon = eframe::icon_data::from_png_bytes(QSONAUT_ICON_PNG)
         .context("embedded QSONaut icon is not a valid PNG")?;
+    let renderer = preferred_renderer()?;
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 860.0])
@@ -1290,19 +1284,22 @@ pub fn run_gui(config: AppConfig) -> Result<()> {
             .with_title("QSONaut — Amateur Radio Mission Control")
             .with_icon(app_icon.clone())
             .with_resizable(true),
+        renderer,
         ..Default::default()
     };
 
     let app_config = config.clone();
-    info!(title = "QSONaut", "Calling eframe::run_native");
+    info!(title = "QSONaut", renderer = %renderer, "Calling eframe::run_native");
     let result = eframe::run_native(
         "QSONaut",
         options,
         Box::new(move |cc| {
+            info!(renderer = %renderer, "eframe app creation callback entered");
             Ok(Box::new(QsonautGuiApp::new(
                 app_config.clone(),
                 &cc.egui_ctx,
                 &app_icon,
+                renderer,
             )))
         }),
     );
@@ -1318,6 +1315,37 @@ pub fn run_gui(config: AppConfig) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn preferred_renderer() -> Result<eframe::Renderer> {
+    if let Some(raw) = std::env::var_os("QSONAUT_RENDERER") {
+        let raw = raw.to_string_lossy();
+        let parsed = eframe::Renderer::from_str(&raw).map_err(|error| {
+            anyhow!("invalid QSONAUT_RENDERER value '{raw}' (expected 'wgpu' or 'glow'): {error}")
+        })?;
+        info!(renderer = %parsed, source = "env:QSONAUT_RENDERER", "Using explicit GUI renderer override");
+        return Ok(parsed);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        info!(
+            renderer = "wgpu",
+            source = "platform-default",
+            "Selecting Windows GUI renderer"
+        );
+        return Ok(eframe::Renderer::Wgpu);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        info!(
+            renderer = "glow",
+            source = "platform-default",
+            "Selecting non-Windows GUI renderer"
+        );
+        Ok(eframe::Renderer::Glow)
+    }
 }
 
 fn configure_unix_gui_environment() {
@@ -1427,10 +1455,17 @@ struct QsonautGuiApp {
     psk_reporter_enabled: bool,
     psk_reporter: Option<Reporter>,
     brand_icon: TextureHandle,
+    selected_renderer: eframe::Renderer,
+    first_frame_logged: bool,
 }
 
 impl QsonautGuiApp {
-    fn new(mut config: AppConfig, ctx: &egui::Context, app_icon: &egui::IconData) -> Self {
+    fn new(
+        mut config: AppConfig,
+        ctx: &egui::Context,
+        app_icon: &egui::IconData,
+        selected_renderer: eframe::Renderer,
+    ) -> Self {
         let brand_image = ColorImage::from_rgba_unmultiplied(
             [app_icon.width as usize, app_icon.height as usize],
             &app_icon.rgba,
@@ -1742,6 +1777,8 @@ impl QsonautGuiApp {
             psk_reporter_enabled,
             psk_reporter,
             brand_icon,
+            selected_renderer,
+            first_frame_logged: false,
         }
     }
 
@@ -5542,6 +5579,15 @@ impl QsonautGuiApp {
 
 impl eframe::App for QsonautGuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if !self.first_frame_logged {
+            self.first_frame_logged = true;
+            info!(
+                renderer = %self.selected_renderer,
+                zoom_factor = ctx.zoom_factor(),
+                pixels_per_point = ctx.pixels_per_point(),
+                "QSONaut first GUI frame reached"
+            );
+        }
         // Zoom is layered on top of the OS DPI scale, so text, controls,
         // spacing, hit targets, and custom drawings stay in proportion.
         if (ctx.zoom_factor() - self.gui_scale).abs() > 0.001 {
@@ -5733,14 +5779,11 @@ impl eframe::App for QsonautGuiApp {
                     ui.separator();
                     let previous_scale = self.gui_scale;
                     egui::ComboBox::from_id_salt("gui_scale")
-                        .selected_text(format!(
-                            "UI {:.0}%",
-                            self.gui_scale / GUI_SCALE_BASE * 100.0
-                        ))
+                        .selected_text(format!("UI {:.0}%", gui_scale_percent(self.gui_scale)))
                         .width(82.0)
                         .show_ui(ui, |ui| {
                             for percent in [75_u32, 85, 100, 110, 125] {
-                                let scale = GUI_SCALE_BASE * percent as f32 / 100.0;
+                                let scale = gui_scale_from_percent(percent);
                                 ui.selectable_value(
                                     &mut self.gui_scale,
                                     scale,
@@ -7571,6 +7614,8 @@ fn fmt_opt_u8(v: Option<u8>) -> String {
 mod tests {
     use super::*;
 
+    const LEGACY_GUI_SCALE_BASE: f32 = 1.6;
+
     fn decode_pcm_samples(bytes: &[u8]) -> Vec<i16> {
         bytes
             .chunks_exact(2)
@@ -7696,6 +7741,19 @@ mod tests {
         let tuning = DisplayTuning::default();
         assert_eq!(effective_visual_profile(&tuning, "USB-D"), (100, 1));
         assert_eq!(effective_visual_profile(&tuning, "FT8"), (100, 1));
+    }
+
+    #[test]
+    fn gui_scale_baseline_is_rebased_so_legacy_75_is_now_100() {
+        let legacy_75 = LEGACY_GUI_SCALE_BASE * 0.75;
+        assert!((gui_scale_percent(legacy_75) - 100.0).abs() < 0.01);
+        assert!((gui_scale_from_percent(100) - legacy_75).abs() < 0.001);
+    }
+
+    #[test]
+    fn gui_scale_percent_mapping_clamps_to_supported_range() {
+        assert_eq!(gui_scale_from_percent(10), GUI_SCALE_MIN);
+        assert_eq!(gui_scale_from_percent(500), GUI_SCALE_MAX);
     }
 
     #[test]

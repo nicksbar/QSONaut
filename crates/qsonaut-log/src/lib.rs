@@ -1,18 +1,114 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
-use tracing_subscriber::{fmt, EnvFilter};
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+const APP_DIR_DESKTOP: &str = "QSONaut";
+#[cfg(target_os = "linux")]
+const APP_DIR_UNIX: &str = "qsonaut";
+const LOG_DIR: &str = "logs";
+const LOG_FILE: &str = "qsonaut.log";
+
+pub fn app_config_dir() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    if let Some(root) = std::env::var_os("APPDATA") {
+        return PathBuf::from(root).join(APP_DIR_DESKTOP);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(root) = std::env::var_os("XDG_CONFIG_HOME") {
+            return PathBuf::from(root).join(APP_DIR_UNIX);
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(".config").join(APP_DIR_UNIX);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join(APP_DIR_DESKTOP);
+        }
+    }
+
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+pub fn log_dir() -> PathBuf {
+    app_config_dir().join(LOG_DIR)
+}
+
+pub fn log_file_path() -> PathBuf {
+    log_dir().join(LOG_FILE)
+}
 
 pub fn init(default_filter: &str) -> Result<()> {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
-    fmt()
-        .with_env_filter(filter)
-        .with_target(false)
+
+    let log_path = log_file_path();
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+
+    let file_name = log_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(LOG_FILE);
+    let file_appender = tracing_appender::rolling::never(log_dir(), file_name);
+    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+    let _ = LOG_GUARD.set(guard);
+
+    let file_layer = fmt::layer()
+        .with_ansi(false)
+        .with_target(true)
+        .with_file(true)
+        .with_line_number(true)
         .compact()
-        .init();
+        .with_writer(file_writer);
+
+    #[cfg(debug_assertions)]
+    let stderr_layer = fmt::layer().with_target(false).compact();
+
+    let registry = tracing_subscriber::registry().with(filter).with(file_layer);
+
+    #[cfg(debug_assertions)]
+    registry.with(stderr_layer).try_init()?;
+
+    #[cfg(not(debug_assertions))]
+    registry.try_init()?;
+
+    install_panic_hook();
+    tracing::info!(log_path = %log_path.display(), "QSONaut logging initialized");
     Ok(())
+}
+
+fn install_panic_hook() {
+    let log_path = log_file_path();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let location = panic_info
+            .location()
+            .map(|location| format!("{}:{}", location.file(), location.line()))
+            .unwrap_or_else(|| "unknown".to_string());
+        let message = if let Some(message) = panic_info.payload().downcast_ref::<&str>() {
+            (*message).to_string()
+        } else if let Some(message) = panic_info.payload().downcast_ref::<String>() {
+            message.clone()
+        } else {
+            "non-string panic payload".to_string()
+        };
+
+        tracing::error!(%location, %message, log_path = %log_path.display(), "QSONaut panic");
+    }));
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
