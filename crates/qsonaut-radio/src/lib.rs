@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use serialport::SerialPort;
+use serialport::{SerialPort, SerialPortType};
 use std::{
     io::ErrorKind,
     io::Read,
@@ -182,14 +182,100 @@ impl Radio for NullRadio {
 }
 
 pub fn enumerate_serial_ports() -> Result<Vec<String>> {
-    let mut ports = serialport::available_ports()
-        .context("failed to enumerate serial ports")?
+    let mut ports = enumerate_serial_port_descriptors()?
         .into_iter()
         .map(|port| port.port_name)
         .collect::<Vec<_>>();
     ports.sort();
     ports.dedup();
     Ok(ports)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SerialPortDescriptor {
+    pub port_name: String,
+    pub display_name: String,
+    pub likely_radio: Option<String>,
+}
+
+pub fn enumerate_serial_port_descriptors() -> Result<Vec<SerialPortDescriptor>> {
+    let mut ports = serialport::available_ports().context("failed to enumerate serial ports")?;
+    ports.sort_by(|left, right| left.port_name.cmp(&right.port_name));
+
+    let descriptors = ports
+        .into_iter()
+        .map(|port| {
+            let port_name = port.port_name;
+            let (extra_label, likely_radio) = describe_port_type(&port.port_type);
+            let display_name = if extra_label.is_empty() {
+                port_name.clone()
+            } else {
+                format!("{} — {}", port_name, extra_label)
+            };
+
+            SerialPortDescriptor {
+                port_name,
+                display_name,
+                likely_radio,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Ok(descriptors)
+}
+
+fn describe_port_type(port_type: &SerialPortType) -> (String, Option<String>) {
+    match port_type {
+        SerialPortType::UsbPort(info) => {
+            let manufacturer = info.manufacturer.as_deref().unwrap_or("").trim();
+            let product = info.product.as_deref().unwrap_or("").trim();
+
+            let likely_radio = detect_likely_radio_model(info.vid, info.pid, manufacturer, product);
+
+            let usb_label = if !manufacturer.is_empty() && !product.is_empty() {
+                format!(
+                    "{} {} (VID:{:04X} PID:{:04X})",
+                    manufacturer, product, info.vid, info.pid
+                )
+            } else if !product.is_empty() {
+                format!("{} (VID:{:04X} PID:{:04X})", product, info.vid, info.pid)
+            } else if !manufacturer.is_empty() {
+                format!(
+                    "{} (VID:{:04X} PID:{:04X})",
+                    manufacturer, info.vid, info.pid
+                )
+            } else {
+                format!("USB serial (VID:{:04X} PID:{:04X})", info.vid, info.pid)
+            };
+
+            if let Some(model) = &likely_radio {
+                (format!("{} [{}]", usb_label, model), likely_radio)
+            } else {
+                (usb_label, None)
+            }
+        }
+        _ => ("serial device".to_string(), None),
+    }
+}
+
+fn detect_likely_radio_model(
+    vid: u16,
+    _pid: u16,
+    manufacturer: &str,
+    product: &str,
+) -> Option<String> {
+    let manufacturer_lc = manufacturer.to_ascii_lowercase();
+    let product_lc = product.to_ascii_lowercase();
+
+    if product_lc.contains("ic-7300") || (vid == 0x0C26 && product_lc.contains("7300")) {
+        return Some("Icom IC-7300 (CI-V)".to_string());
+    }
+
+    if manufacturer_lc.contains("icom") || product_lc.contains("icom") {
+        return Some("Icom CI-V radio".to_string());
+    }
+
+    None
 }
 
 #[derive(Clone)]
@@ -802,6 +888,51 @@ impl IcomCiVRadio {
         // 0x00=FAST, 0x01=MID, 0x02=SLOW
         let sweep = speed.min(2);
         let _ = self.transact(&[0x27, 0x1A, sweep], false)?;
+        Ok(())
+    }
+
+    pub async fn set_scope_center_fixed_mode(&self, fixed_mode: bool) -> Result<()> {
+        // 0x00=Center mode, 0x01=Fixed mode
+        let value = if fixed_mode { 0x01 } else { 0x00 };
+        let _ = self.transact(&[0x27, 0x14, value], false)?;
+        Ok(())
+    }
+
+    pub async fn set_scope_fixed_edge_number(&self, edge_number: u8) -> Result<()> {
+        // 0x01..0x03 => edge presets 1..3.
+        let value = edge_number.clamp(1, 3);
+        let _ = self.transact(&[0x27, 0x16, value], false)?;
+        Ok(())
+    }
+
+    pub async fn set_scope_fixed_edge_frequencies(
+        &self,
+        edge_number: u8,
+        lower_hz: u64,
+        upper_hz: u64,
+    ) -> Result<()> {
+        // 100 Hz and smaller digits are ignored by the radio.
+        let mut payload = Vec::with_capacity(2 + 1 + 5 + 5);
+        payload.push(0x27);
+        payload.push(0x1E);
+        payload.push(edge_number.clamp(1, 3));
+        payload.extend_from_slice(&encode_civ_frequency_bcd(lower_hz));
+        payload.extend_from_slice(&encode_civ_frequency_bcd(upper_hz));
+        let _ = self.transact(&payload, false)?;
+        Ok(())
+    }
+
+    pub async fn set_scope_span_code(&self, span_code: u8) -> Result<()> {
+        // 0x00..0x07 => 2.5k,5k,10k,25k,50k,100k,250k,500k
+        let value = span_code.min(7);
+        let _ = self.transact(&[0x27, 0x15, value], false)?;
+        Ok(())
+    }
+
+    pub async fn set_scope_vbw_wide(&self, wide: bool) -> Result<()> {
+        // 0x00=Narrow, 0x01=Wide
+        let value = if wide { 0x01 } else { 0x00 };
+        let _ = self.transact(&[0x27, 0x1D, value], false)?;
         Ok(())
     }
 
@@ -1601,6 +1732,21 @@ mod tests {
     }
 
     #[test]
+    fn encodes_fixed_scope_edge_frequencies() {
+        let mut payload = Vec::new();
+        payload.push(0x27);
+        payload.push(0x1E);
+        payload.push(0x01);
+        payload.extend_from_slice(&encode_civ_frequency_bcd(14_000_000));
+        payload.extend_from_slice(&encode_civ_frequency_bcd(14_350_000));
+
+        assert_eq!(
+            payload,
+            vec![0x27, 0x1E, 0x01, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x35, 0x14, 0x00,]
+        );
+    }
+
+    #[test]
     fn maps_mode_to_from_civ() {
         assert_eq!(mode_to_civ_mode(Mode::Lsb).ok(), Some(0x00));
         assert_eq!(mode_to_civ_mode(Mode::Usb).ok(), Some(0x01));
@@ -1714,6 +1860,22 @@ mod tests {
     fn rejects_non_scope_waveform_frame_for_bins() {
         let frame = [0xFE, 0xFE, 0xE0, 0x94, 0x04, 0x01, 0x01, 0xFD];
         assert!(parse_scope_waveform_bins(&frame).is_none());
+    }
+
+    #[test]
+    fn detects_ic7300_from_usb_identity() {
+        assert_eq!(
+            detect_likely_radio_model(0x0C26, 0x0000, "Icom Inc.", "IC-7300"),
+            Some("Icom IC-7300 (CI-V)".to_string())
+        );
+    }
+
+    #[test]
+    fn detects_generic_icom_when_model_is_unknown() {
+        assert_eq!(
+            detect_likely_radio_model(0x0C26, 0x0001, "Icom Inc.", "USB Audio CODEC"),
+            Some("Icom CI-V radio".to_string())
+        );
     }
 
     fn parse_hex_line(line: &str) -> Vec<u8> {
