@@ -18,6 +18,7 @@ use rigforge_accelerate::{
 use rigforge_core::AppConfig;
 use rigforge_dsp::resample::Decimator;
 use rigforge_log::{QsoLog, QsoRecord};
+use rigforge_pskreporter::{ReceptionReport, ReportSender, Reporter, ReporterConfig};
 use rigforge_radio::{
     enumerate_serial_ports, BaseMode, ControlId, ControlValue, IcomCiVRadio, Mode, Radio, RadioHal,
 };
@@ -214,6 +215,8 @@ struct OperatorProfile {
     gui_scale: f32,
     #[serde(default)]
     compute_preference: ComputePreference,
+    #[serde(default)]
+    psk_reporter_enabled: bool,
 }
 
 fn default_gui_scale() -> f32 {
@@ -243,6 +246,59 @@ fn default_ptt_lead_ms() -> u64 {
 }
 fn default_ptt_tail_ms() -> u64 {
     100
+}
+
+fn start_psk_reporter(
+    enabled: bool,
+    callsign: &str,
+    grid: &str,
+    state: &Arc<Mutex<GuiState>>,
+) -> Option<Reporter> {
+    state.lock().expect("ui state lock poisoned").psk_report_sender = None;
+    if !enabled || callsign.trim().is_empty() || callsign == "N0CALL" || grid == "AA00" {
+        return None;
+    }
+    let reporter = Reporter::start(ReporterConfig::production(callsign, grid));
+    state.lock().expect("ui state lock poisoned").psk_report_sender = Some(reporter.sender());
+    Some(reporter)
+}
+
+fn submit_psk_report(
+    sender: &Option<ReportSender>,
+    dial_frequency_hz: Option<u64>,
+    audio_frequency_hz: u32,
+    snr_db: f32,
+    message: &str,
+    mode: &str,
+    received_at: u32,
+) {
+    let Some(sender) = sender else { return };
+    let parsed = parse_message(message);
+    let sender_locator = parsed
+        .as_ref()
+        .and_then(|parsed| match &parsed.exchange {
+            ft8_ops::Exchange::Grid(grid) => Some(grid.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let callsign = parsed.map(|parsed| parsed.from).or_else(|| {
+            message
+                .split_whitespace()
+                .find(|token| ft8_ops::is_probable_callsign(token))
+                .map(|token| token.trim_matches(['<', '>']).to_ascii_uppercase())
+        });
+    let (Some(callsign), Some(dial)) = (callsign, dial_frequency_hz) else {
+        return;
+    };
+    let frequency_hz = dial.saturating_add(u64::from(audio_frequency_hz));
+    sender.submit(ReceptionReport {
+        sender_callsign: callsign,
+        frequency_hz,
+        snr_db: snr_db.round().clamp(-127.0, 127.0) as i8,
+        mode: mode.to_string(),
+        sender_locator,
+        received_at,
+    });
 }
 
 fn should_move_tx_to_decode(message: &ft8_ops::ParsedMessage, continuing_exchange: bool) -> bool {
@@ -1131,6 +1187,7 @@ struct GuiState {
     compute_backend: ActiveBackend,
     ft8_compute_telemetry: Option<DecodeTelemetry>,
     digital_compute_telemetry: Option<DecodeTelemetry>,
+    psk_report_sender: Option<ReportSender>,
     last_error: Option<String>,
     last_update: Option<Instant>,
 }
@@ -1172,6 +1229,7 @@ impl Default for GuiState {
             compute_backend: ActiveBackend::CpuSimd,
             ft8_compute_telemetry: None,
             digital_compute_telemetry: None,
+            psk_report_sender: None,
             last_error: None,
             last_update: None,
         }
@@ -1365,6 +1423,8 @@ struct RigforgeGuiApp {
     gui_scale: f32,
     compute_preference: ComputePreference,
     acceleration_report: AccelerationReport,
+    psk_reporter_enabled: bool,
+    psk_reporter: Option<Reporter>,
 }
 
 impl RigforgeGuiApp {
@@ -1470,6 +1530,7 @@ impl RigforgeGuiApp {
         let mut ptt_tail_ms = default_ptt_tail_ms();
         let mut gui_scale = default_gui_scale();
         let mut compute_preference = ComputePreference::Auto;
+        let mut psk_reporter_enabled = false;
         let profile_io_status: String;
 
         if let Some(p) = load_operator_profile() {
@@ -1511,6 +1572,7 @@ impl RigforgeGuiApp {
                 default_gui_scale()
             };
             compute_preference = p.compute_preference;
+            psk_reporter_enabled = p.psk_reporter_enabled;
             config.station.callsign = Some(station_callsign.clone());
             config.station.grid = Some(station_grid.clone());
             profile_io_status = format!("Loaded {}", OPERATOR_PROFILE_FILE);
@@ -1545,6 +1607,7 @@ impl RigforgeGuiApp {
                 radio_serial_port: config.radio.serial_port.clone(),
                 gui_scale,
                 compute_preference,
+                psk_reporter_enabled,
             };
             match save_operator_profile(&bootstrap) {
                 Ok(_) => {
@@ -1567,6 +1630,12 @@ impl RigforgeGuiApp {
         };
 
         let acceleration_report = AccelerationReport::probe(compute_preference);
+        let psk_reporter = start_psk_reporter(
+            psk_reporter_enabled,
+            &station_callsign,
+            &station_grid,
+            &state,
+        );
 
         Self {
             config,
@@ -1662,6 +1731,8 @@ impl RigforgeGuiApp {
             gui_scale,
             compute_preference,
             acceleration_report,
+            psk_reporter_enabled,
+            psk_reporter,
         }
     }
 
@@ -2518,6 +2589,7 @@ impl RigforgeGuiApp {
             radio_serial_port: self.config.radio.serial_port.clone(),
             gui_scale: self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX),
             compute_preference: self.compute_preference,
+            psk_reporter_enabled: self.psk_reporter_enabled,
         }
     }
 
@@ -2537,6 +2609,16 @@ impl RigforgeGuiApp {
         } else {
             v
         }
+    }
+
+    fn restart_psk_reporter(&mut self) {
+        self.psk_reporter = None;
+        self.psk_reporter = start_psk_reporter(
+            self.psk_reporter_enabled,
+            self.station_callsign.trim(),
+            self.station_grid.trim(),
+            &self.state,
+        );
     }
 
     fn draw_station_profile(&mut self, ui: &mut egui::Ui) {
@@ -2561,6 +2643,7 @@ impl RigforgeGuiApp {
                 } else {
                     Some(val.to_string())
                 };
+                self.restart_psk_reporter();
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
             }
@@ -2582,6 +2665,7 @@ impl RigforgeGuiApp {
                 } else {
                     Some(val.to_string())
                 };
+                self.restart_psk_reporter();
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
             }
@@ -2602,6 +2686,46 @@ impl RigforgeGuiApp {
                 self.persist_profile("Auto-saved");
             }
         });
+
+        ui.add_space(6.0);
+        let changed = ui
+            .checkbox(
+                &mut self.psk_reporter_enabled,
+                "📡 Report decoded stations to PSK Reporter",
+            )
+            .on_hover_text(
+                "Opt-in: batches reception reports to report.pskreporter.info over UDP about every five minutes",
+            )
+            .changed();
+        if changed {
+            self.restart_psk_reporter();
+            self.profile_dirty = true;
+            self.persist_profile("PSK Reporter preference saved to");
+        }
+        if self.psk_reporter_enabled {
+            if let Some(reporter) = &self.psk_reporter {
+                let status = reporter.status();
+                let detail = status
+                    .last_error
+                    .map(|error| format!("network error: {error}"))
+                    .unwrap_or_else(|| {
+                        format!("{} queued · {} sent · five-minute batching", status.queued, status.sent)
+                    });
+                ui.label(RichText::new(detail).small().color(Color32::LIGHT_GREEN));
+            } else {
+                ui.label(
+                    RichText::new("Set a real callsign and grid before reporting")
+                        .small()
+                        .color(Color32::YELLOW),
+                );
+            }
+        } else {
+            ui.label(
+                RichText::new("Private by default · no reception data leaves RigForge")
+                    .small()
+                    .color(Color32::GRAY),
+            );
+        }
 
         ui.add_space(4.0);
         ui.label(
@@ -3039,6 +3163,41 @@ impl RigforgeGuiApp {
             } else {
                 Color32::LIGHT_BLUE
             },
+        );
+
+        let (psk_value, psk_detail, psk_color) = if !self.psk_reporter_enabled {
+            (
+                "OFF",
+                "Private by default · enable in Operator Profile".to_string(),
+                Color32::GRAY,
+            )
+        } else if let Some(reporter) = &self.psk_reporter {
+            let status = reporter.status();
+            if let Some(error) = status.last_error {
+                ("ERROR", error, Color32::from_rgb(255, 110, 100))
+            } else {
+                (
+                    "ARMED",
+                    format!(
+                        "{} queued · {} sent · randomized five-minute batches",
+                        status.queued, status.sent
+                    ),
+                    Color32::LIGHT_GREEN,
+                )
+            }
+        } else {
+            (
+                "WAITING",
+                "Set a real callsign and grid in Operator Profile".to_string(),
+                Color32::YELLOW,
+            )
+        };
+        operator_status_card(
+            ui,
+            "📡 PSK Reporter",
+            psk_value,
+            &psk_detail,
+            psk_color,
         );
 
         ui.horizontal(|ui| {
@@ -5578,6 +5737,7 @@ impl eframe::App for RigforgeGuiApp {
                                 default_gui_scale()
                             };
                             self.compute_preference = p.compute_preference;
+                            self.psk_reporter_enabled = p.psk_reporter_enabled;
                             self.acceleration_report =
                                 AccelerationReport::probe(self.compute_preference);
                             if p.profile_version >= 3 {
@@ -5587,6 +5747,7 @@ impl eframe::App for RigforgeGuiApp {
                             }
                             self.config.station.callsign = Some(self.station_callsign.clone());
                             self.config.station.grid = Some(self.station_grid.clone());
+                            self.restart_psk_reporter();
                             self.profile_io_status = format!("Loaded {}", OPERATOR_PROFILE_FILE);
                             self.profile_dirty = false;
                         }
@@ -6967,6 +7128,22 @@ fn run_native_digital_decode(
         elapsed_ms = elapsed_ms as u64,
         "digital decode pass complete"
     );
+    let (psk_sender, dial_frequency_hz) = {
+        let shared = state.lock().expect("ui state lock poisoned");
+        (shared.psk_report_sender.clone(), shared.frequency_hz)
+    };
+    let received_at = (period as f64 * mode.core_slot_seconds().unwrap_or(15.0)) as u32;
+    for result in &decoded {
+        submit_psk_report(
+            &psk_sender,
+            dial_frequency_hz,
+            result.freq_hz,
+            result.snr_db,
+            &result.message,
+            mode.label(),
+            received_at,
+        );
+    }
     let mut shared = state.lock().expect("ui state lock poisoned");
     shared.digital_compute_telemetry = Some(telemetry);
     if mode == WorkspaceMode::Ft4 {
@@ -7183,6 +7360,22 @@ fn run_ft8_decode(
         over_slot = elapsed_ms > FT8_SLOT_MS,
         "FT8 decode pass complete"
     );
+
+    let (psk_sender, dial_frequency_hz) = {
+        let shared = state.lock().expect("ui state lock poisoned");
+        (shared.psk_report_sender.clone(), shared.frequency_hz)
+    };
+    for result in &results {
+        submit_psk_report(
+            &psk_sender,
+            dial_frequency_hz,
+            result.freq_hz,
+            f32::from(result.snr_db),
+            &result.message,
+            "FT8",
+            period.saturating_mul(15).min(u64::from(u32::MAX)) as u32,
+        );
+    }
 
     let mut s = state.lock().expect("ui state lock poisoned");
     s.ft8_compute_telemetry = Some(telemetry);

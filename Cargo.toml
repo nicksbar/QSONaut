@@ -10,6 +10,7 @@ members = [
     "crates/rigforge-ai",
     "crates/rigforge-accelerate",
     "crates/rigforge-automation",
+    "crates/rigforge-pskreporter",
     "crates/rigforge-gui",
 ]
 resolver = "2"

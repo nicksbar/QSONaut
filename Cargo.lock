@@ -2544,6 +2544,7 @@ dependencies = [
  "rigforge-core",
  "rigforge-dsp",
  "rigforge-log",
+ "rigforge-pskreporter",
  "rigforge-radio",
  "rustfft",
  "serde",
@@ -2568,6 +2569,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
 ]
+
+[[package]]
+name = "rigforge-pskreporter"
+version = "0.1.0"
 
 [[package]]
 name = "rigforge-radio"

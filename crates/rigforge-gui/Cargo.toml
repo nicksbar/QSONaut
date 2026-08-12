@@ -21,3 +21,4 @@ rigforge-dsp   = { path = "../rigforge-dsp" }
 rigforge-core = { path = "../rigforge-core" }
 rigforge-log = { path = "../rigforge-log" }
 rigforge-radio = { path = "../rigforge-radio" }
+rigforge-pskreporter = { path = "../rigforge-pskreporter" }
