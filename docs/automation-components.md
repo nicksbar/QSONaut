@@ -75,7 +75,11 @@ Still pending:
 
 5. radio-state change publication;
 6. external adapter receive-path publication;
-7. safety-gated execution wiring for radio control and TX requests.
+
+Safety-gated execution is now wired for approved `radio_command` and `request_transmit` actions:
+
+- radio commands are blocked while TX/PTT is active and disallow direct PTT control;
+- TX requests are blocked unless the operator has already armed a TX path and no TX/PTT is active.
 
 Approved actions continue to flow through GUI-owned executors. UI notifications and compose changes are low risk. Radio control and TX must pass the same global armed/disarmed safety gate used by operator controls.
 

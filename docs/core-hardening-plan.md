@@ -128,8 +128,9 @@ Acceptance criteria:
   - GUI owns `AutomationHost`, normalizes app events, and dispatches rule components.
   - Status: runtime dispatch active for contest/profile plus structured `callsign_hit` and `qso_logged` events.
 - [ ] Map approved automation actions to existing safety gates
+- [x] Map approved automation actions to existing safety gates
   - TX/radio-control actions must respect global disarm/armed guardrails.
-  - Status: only `ui_notification` grant is enabled by default; radio/TX executors still pending safety-gated wiring.
+  - Status: GUI now executes approved `radio_command` and `request_transmit` actions through TX-active/disarmed guard checks; default grants still keep high-risk actions off unless explicitly enabled.
 - [x] Add sample automation recipes for contest workflow assists
   - Examples: serial nudge notifications, dupe warnings, Run↔S&P context prompts.
   - Status: `automation.example.toml` includes a contest-state activation notification rule.

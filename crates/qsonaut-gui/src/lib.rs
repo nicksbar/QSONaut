@@ -406,6 +406,33 @@ fn normalize_app_event_for_automation(event: AppEvent) -> Option<AutomationEvent
     }
 }
 
+fn parse_workspace_mode_token(mode: &str) -> Option<WorkspaceMode> {
+    match mode.trim().to_ascii_uppercase().as_str() {
+        "FT8" => Some(WorkspaceMode::Ft8),
+        "FT4" => Some(WorkspaceMode::Ft4),
+        "FST4" => Some(WorkspaceMode::Fst4),
+        "WSPR" => Some(WorkspaceMode::Wspr),
+        "JT9" => Some(WorkspaceMode::Jt9),
+        "JT65" => Some(WorkspaceMode::Jt65),
+        "Q65" => Some(WorkspaceMode::Q65),
+        "MSK144" => Some(WorkspaceMode::Msk144),
+        "CW" => Some(WorkspaceMode::Cw),
+        "FLDIGI" => Some(WorkspaceMode::Fldigi),
+        _ => None,
+    }
+}
+
+fn workspace_mode_supports_native_tx(mode: WorkspaceMode) -> bool {
+    matches!(
+        mode,
+        WorkspaceMode::Ft4
+            | WorkspaceMode::Fst4
+            | WorkspaceMode::Jt9
+            | WorkspaceMode::Jt65
+            | WorkspaceMode::Q65
+    )
+}
+
 fn bootstrap_automation_host() -> (AutomationHost, String) {
     let mut host = AutomationHost::default();
     let source = include_str!("../../../automation.example.toml");
@@ -3074,12 +3101,14 @@ impl QsonautGuiApp {
                             }
                             Action::RadioCommand { command, value } => {
                                 self.automation_status = format!(
-                                    "🤖 Radio command approved ({command}={value}), safety executor wiring pending"
+                                    "🤖 {}",
+                                    self.execute_automation_radio_command(command, value)
                                 );
                             }
-                            Action::RequestTransmit { mode, .. } => {
+                            Action::RequestTransmit { mode, message } => {
                                 self.automation_status = format!(
-                                    "🤖 TX request approved for {mode}, safety executor wiring pending"
+                                    "🤖 {}",
+                                    self.execute_automation_transmit_request(mode, message)
                                 );
                             }
                         }
@@ -3106,6 +3135,97 @@ impl QsonautGuiApp {
                     break;
                 }
             }
+        }
+    }
+
+    fn execute_automation_radio_command(&mut self, command: &str, value: &str) -> String {
+        let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
+        if snapshot.ptt_on
+            || self.ft8_tx_active.load(Ordering::Acquire)
+            || self.digital_tx_active.load(Ordering::Acquire)
+        {
+            return "Radio command blocked: transmitter is currently active".to_string();
+        }
+
+        match command.trim().to_ascii_lowercase().as_str() {
+            "tune_delta_hz" => match value.trim().parse::<i64>() {
+                Ok(delta_hz) => {
+                    self.send_command(GuiCommand::TuneDelta(delta_hz));
+                    format!("Applied radio tune delta of {delta_hz} Hz")
+                }
+                Err(_) => format!("Rejected radio command: invalid tune delta '{value}'"),
+            },
+            "set_filter" => match value.trim().parse::<u8>() {
+                Ok(filter @ 1..=3) => {
+                    self.send_command(GuiCommand::SetFilter(filter));
+                    format!("Applied radio filter FIL{filter}")
+                }
+                Ok(other) => {
+                    format!("Rejected radio command: filter {other} is outside 1..=3")
+                }
+                Err(_) => format!("Rejected radio command: invalid filter '{value}'"),
+            },
+            "tune_workspace_band_hz" => match value.trim().parse::<u64>() {
+                Ok(frequency_hz) if frequency_hz > 0 => {
+                    self.send_command(GuiCommand::TuneWorkspaceBand(frequency_hz));
+                    format!(
+                        "Applied workspace band tune to {:.3} MHz",
+                        frequency_hz as f64 / 1_000_000.0
+                    )
+                }
+                Ok(_) => "Rejected radio command: frequency must be > 0 Hz".to_string(),
+                Err(_) => format!("Rejected radio command: invalid frequency '{value}'"),
+            },
+            "cycle_mode" => {
+                self.send_command(GuiCommand::CycleMode);
+                "Applied radio mode cycle".to_string()
+            }
+            blocked @ "set_ptt" | blocked @ "toggle_ptt" => {
+                format!("Rejected radio command: {blocked} is TX-controlled and not allowed")
+            }
+            other => format!("Rejected radio command: unsupported command '{other}'"),
+        }
+    }
+
+    fn execute_automation_transmit_request(&mut self, mode: &str, message: &str) -> String {
+        let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
+        if !self.any_tx_armed(&snapshot) {
+            return "TX request blocked: all transmit paths are disarmed".to_string();
+        }
+        if snapshot.ptt_on
+            || self.ft8_tx_active.load(Ordering::Acquire)
+            || self.digital_tx_active.load(Ordering::Acquire)
+        {
+            return "TX request blocked: transmitter is currently active".to_string();
+        }
+
+        let Some(parsed_mode) = parse_workspace_mode_token(mode) else {
+            return format!("TX request rejected: unknown mode '{mode}'");
+        };
+        let trimmed_message = message.trim();
+        if trimmed_message.is_empty() {
+            return "TX request rejected: message is empty".to_string();
+        }
+
+        match parsed_mode {
+            WorkspaceMode::Ft8 => {
+                self.ft8_compose = trimmed_message.to_string();
+                self.queue_ft8_tx_from_compose(Ft8TxQueuePolicy::Standard, None);
+                format!("FT8 TX request accepted: {}", self.ft8_seq_status)
+            }
+            mode if workspace_mode_supports_native_tx(mode) => {
+                self.digital_compose = trimmed_message.to_string();
+                self.queue_native_digital_tx(mode);
+                format!(
+                    "{} TX request accepted: {}",
+                    mode.label(),
+                    self.digital_tx_status
+                )
+            }
+            unsupported => format!(
+                "TX request rejected: {} transmit path is not available",
+                unsupported.label()
+            ),
         }
     }
 
@@ -9250,5 +9370,24 @@ mod tests {
             event.fields.get("split_policy").map(String::as_str),
             Some("off")
         );
+    }
+
+    #[test]
+    fn parse_workspace_mode_token_recognizes_supported_labels() {
+        assert_eq!(parse_workspace_mode_token("FT8"), Some(WorkspaceMode::Ft8));
+        assert_eq!(parse_workspace_mode_token("ft4"), Some(WorkspaceMode::Ft4));
+        assert_eq!(
+            parse_workspace_mode_token("JT65"),
+            Some(WorkspaceMode::Jt65)
+        );
+        assert_eq!(parse_workspace_mode_token("unknown"), None);
+    }
+
+    #[test]
+    fn workspace_mode_supports_native_tx_matches_current_backends() {
+        assert!(workspace_mode_supports_native_tx(WorkspaceMode::Ft4));
+        assert!(workspace_mode_supports_native_tx(WorkspaceMode::Jt9));
+        assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Ft8));
+        assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Wspr));
     }
 }
