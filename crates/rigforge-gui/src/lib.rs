@@ -69,6 +69,11 @@ const FT8_TX_MONITOR_HOP_SAMPLES: usize = 500;
 const FT8_TX_AUDIO_START_S: f64 = ft8_ops::AUDIO_START_SECONDS;
 const FT8_MAX_AUDIO_LATE_S: f64 = 1.75;
 const FT8_ADAPTIVE_OFFSET_LIMIT_S: f32 = 2.5;
+const FT4_SLOT_SECONDS: f64 = 7.5;
+const FT4_SLOT_SAMPLES: usize = 12_000 * 15 / 2;
+// FT4 occupies 103 x 48 ms after its nominal +0.5 s start.
+const FT4_EARLY_DECODE_S: f64 = 6.6;
+const FT4_ADAPTIVE_OFFSET_LIMIT_S: f32 = 1.0;
 
 #[derive(Debug, Default)]
 struct Ft8SlotGate {
@@ -163,6 +168,18 @@ struct OperatorProfile {
     max_log_entries: usize,
     deep_decode: bool,
     #[serde(default)]
+    ft4_deep_decode: bool,
+    #[serde(default)]
+    ft4_autoseq: bool,
+    #[serde(default)]
+    ft4_auto_reply_policy: AutoReplyPolicy,
+    #[serde(default)]
+    ft4_cq_only_view: bool,
+    #[serde(default = "default_follow_log")]
+    ft4_follow_log: bool,
+    #[serde(default = "default_max_log_entries")]
+    ft4_max_log_entries: usize,
+    #[serde(default)]
     autoseq: bool,
     #[serde(default)]
     auto_reply_policy: AutoReplyPolicy,
@@ -196,6 +213,12 @@ struct OperatorProfile {
 
 fn default_gui_scale() -> f32 {
     GUI_SCALE_BASE
+}
+fn default_follow_log() -> bool {
+    true
+}
+fn default_max_log_entries() -> usize {
+    300
 }
 
 fn default_rx_tone_hz() -> u32 {
@@ -827,6 +850,9 @@ fn run_digital_tx_job(job: DigitalTxJob) {
             period = job.period,
             "digital TX audio starting"
         );
+        let _ = job
+            .event_tx
+            .send(DigitalTxEvent::AudioStarted(job.mode, job.period));
         let monitor_stop = Arc::new(AtomicBool::new(false));
         let monitor_handle = {
             let pcm = job.pcm.clone();
@@ -907,6 +933,74 @@ enum Ft8ChatDirection {
     Tx,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperatorCallHit {
+    DirectedToMe,
+    Mentioned,
+}
+
+fn operator_call_hit(message: &str, callsign: &str) -> Option<OperatorCallHit> {
+    let callsign = callsign
+        .trim_matches(|c| c == '<' || c == '>')
+        .trim()
+        .to_ascii_uppercase();
+    if callsign.is_empty() || callsign == "N0CALL" {
+        return None;
+    }
+    if parse_message(message).is_some_and(|parsed| parsed.directed_to(&callsign)) {
+        return Some(OperatorCallHit::DirectedToMe);
+    }
+    message
+        .split_whitespace()
+        .map(|token| {
+            token
+                .trim_matches(|c: char| c == '<' || c == '>' || c.is_ascii_punctuation())
+                .to_ascii_uppercase()
+        })
+        .any(|token| token == callsign)
+        .then_some(OperatorCallHit::Mentioned)
+}
+
+fn call_hit_badge(hit: OperatorCallHit) -> (&'static str, Color32, Color32) {
+    match hit {
+        OperatorCallHit::DirectedToMe => (
+            "📡 YOU!",
+            Color32::from_rgb(255, 66, 196),
+            Color32::from_rgb(73, 18, 69),
+        ),
+        OperatorCallHit::Mentioned => (
+            "✨ YOUR CALL",
+            Color32::from_rgb(87, 226, 255),
+            Color32::from_rgb(18, 56, 73),
+        ),
+    }
+}
+
+fn draw_operator_call_banner(
+    ui: &mut egui::Ui,
+    mode: &str,
+    callsign: &str,
+    message: &str,
+    hit: OperatorCallHit,
+) {
+    let (badge, accent, fill) = call_hit_badge(hit);
+    egui::Frame::group(ui.style())
+        .fill(fill)
+        .stroke(egui::Stroke::new(2.0, accent))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(badge).strong().size(16.0).color(accent));
+                ui.label(
+                    RichText::new(format!("{callsign} lit up the {mode} receiver"))
+                        .strong()
+                        .color(Color32::WHITE),
+                );
+                ui.separator();
+                ui.label(RichText::new(message).monospace().strong().color(accent));
+            });
+        });
+}
+
 #[derive(Debug, Clone)]
 struct Ft8ChatLine {
     period: u64,
@@ -924,6 +1018,14 @@ struct DigitalDecodeEntry {
     snr_db: f32,
     dt_s: f32,
     freq_hz: u32,
+    message: String,
+}
+
+#[derive(Debug, Clone)]
+struct DigitalTxChatEntry {
+    mode: WorkspaceMode,
+    period: u64,
+    utc: String,
     message: String,
 }
 
@@ -961,6 +1063,7 @@ enum Ft8TxEvent {
 
 #[derive(Debug)]
 enum DigitalTxEvent {
+    AudioStarted(WorkspaceMode, u64),
     Complete,
     Failed(String),
 }
@@ -1006,12 +1109,15 @@ struct GuiState {
     audio_clip_percent: f32,
     ft8_decode_status: String,
     ft8_clock_offset_s: Option<f32>,
+    ft4_clock_offset_s: Option<f32>,
     workspace_mode: WorkspaceMode,
     ft8_deep_decode: bool,
+    ft4_deep_decode: bool,
     ft8_pending: Vec<Ft8DecodeEntry>,
     ft8_last_decode_period: Option<u64>,
     digital_decode_status: String,
     digital_decodes: VecDeque<DigitalDecodeEntry>,
+    ft4_last_decode_period: Option<u64>,
     digital_tx_period: Option<(WorkspaceMode, u64)>,
     selected_audio_hz: u32,
     last_error: Option<String>,
@@ -1039,12 +1145,15 @@ impl Default for GuiState {
             audio_clip_percent: 0.0,
             ft8_decode_status: "STARTING".to_string(),
             ft8_clock_offset_s: None,
+            ft4_clock_offset_s: None,
             workspace_mode: WorkspaceMode::Ft8,
             ft8_deep_decode: false,
+            ft4_deep_decode: false,
             ft8_pending: Vec::new(),
             ft8_last_decode_period: None,
             digital_decode_status: "Select a native digital mode".to_string(),
             digital_decodes: VecDeque::with_capacity(300),
+            ft4_last_decode_period: None,
             digital_tx_period: None,
             selected_audio_hz: default_rx_tone_hz(),
             last_error: None,
@@ -1186,16 +1295,32 @@ struct RigforgeGuiApp {
     ft8_tx_event_rx: mpsc::Receiver<Ft8TxEvent>,
     ft8_last_tx_was_cq: bool,
     digital_compose: String,
+    digital_selected: Option<DigitalDecodeEntry>,
+    digital_seq_target: Option<String>,
+    ft4_session: Option<Ft8Session>,
+    ft4_seen_decodes: HashSet<(u64, u32, String)>,
+    digital_tx_chat: VecDeque<DigitalTxChatEntry>,
     digital_queued_tx_message: Option<String>,
     digital_last_tx_message: Option<String>,
     digital_tx_status: String,
+    digital_tx_started: Option<(WorkspaceMode, u64)>,
+    ft4_last_tx_period: Option<u64>,
+    ft4_seen_decode_period: Option<u64>,
     digital_tx_abort: Arc<AtomicBool>,
     digital_tx_active: Arc<AtomicBool>,
+    digital_suppress_canceled_tx_events: bool,
     digital_tx_event_tx: mpsc::Sender<DigitalTxEvent>,
     digital_tx_event_rx: mpsc::Receiver<DigitalTxEvent>,
     ft8_halt_after_tx: bool,
+    ft4_halt_after_tx: bool,
     ft8_hold_tx_freq: bool,
     ft8_deep_decode: bool,
+    ft4_deep_decode: bool,
+    ft4_autoseq: bool,
+    ft4_auto_reply_policy: AutoReplyPolicy,
+    ft4_cq_only_view: bool,
+    ft4_follow_log: bool,
+    ft4_max_log_entries: usize,
     ft8_cq_only_view: bool,
     ft8_follow_log: bool,
     ft8_max_log_entries: usize,
@@ -1302,6 +1427,12 @@ impl RigforgeGuiApp {
         let mut ft8_follow_log = true;
         let mut ft8_max_log_entries = 300usize;
         let mut ft8_deep_decode = false;
+        let mut ft4_deep_decode = false;
+        let mut ft4_autoseq = false;
+        let mut ft4_auto_reply_policy = AutoReplyPolicy::default();
+        let mut ft4_cq_only_view = false;
+        let mut ft4_follow_log = true;
+        let mut ft4_max_log_entries = 300usize;
         let mut ft8_autoseq = false;
         let mut ft8_auto_reply_policy = AutoReplyPolicy::default();
         let mut ft8_auto_answer_cq = false;
@@ -1323,6 +1454,12 @@ impl RigforgeGuiApp {
             ft8_follow_log = p.follow_log;
             ft8_max_log_entries = p.max_log_entries.clamp(80, 1000);
             ft8_deep_decode = p.deep_decode;
+            ft4_deep_decode = p.ft4_deep_decode;
+            ft4_autoseq = p.ft4_autoseq;
+            ft4_auto_reply_policy = p.ft4_auto_reply_policy;
+            ft4_cq_only_view = p.ft4_cq_only_view;
+            ft4_follow_log = p.ft4_follow_log;
+            ft4_max_log_entries = p.ft4_max_log_entries.clamp(80, 300);
             ft8_autoseq = p.autoseq;
             ft8_auto_reply_policy = p.auto_reply_policy;
             ft8_auto_answer_cq = p.auto_answer_cq;
@@ -1360,6 +1497,12 @@ impl RigforgeGuiApp {
                 follow_log: ft8_follow_log,
                 max_log_entries: ft8_max_log_entries,
                 deep_decode: ft8_deep_decode,
+                ft4_deep_decode,
+                ft4_autoseq,
+                ft4_auto_reply_policy,
+                ft4_cq_only_view,
+                ft4_follow_log,
+                ft4_max_log_entries,
                 autoseq: ft8_autoseq,
                 auto_reply_policy: ft8_auto_reply_policy,
                 auto_answer_cq: ft8_auto_answer_cq,
@@ -1423,7 +1566,7 @@ impl RigforgeGuiApp {
             ft8_session: None,
             ft8_seq_state: Ft8SeqState::Idle,
             ft8_seq_target: None,
-            ft8_seq_status: "Idle".to_string(),
+            ft8_seq_status: "🌙 RX deck ready · listening for signals".to_string(),
             ft8_last_click: None,
             ft8_tx_queued_period: None,
             ft8_tx_pcm: None,
@@ -1439,16 +1582,32 @@ impl RigforgeGuiApp {
             ft8_tx_event_rx,
             ft8_last_tx_was_cq: false,
             digital_compose: String::new(),
+            digital_selected: None,
+            digital_seq_target: None,
+            ft4_session: None,
+            ft4_seen_decodes: HashSet::new(),
+            digital_tx_chat: VecDeque::new(),
             digital_queued_tx_message: None,
             digital_last_tx_message: None,
-            digital_tx_status: "RX ready".to_string(),
+            digital_tx_status: "🌊 RX deck ready · listening for signals".to_string(),
+            digital_tx_started: None,
+            ft4_last_tx_period: None,
+            ft4_seen_decode_period: None,
             digital_tx_abort: Arc::new(AtomicBool::new(false)),
             digital_tx_active,
+            digital_suppress_canceled_tx_events: false,
             digital_tx_event_tx,
             digital_tx_event_rx,
             ft8_halt_after_tx,
+            ft4_halt_after_tx: false,
             ft8_hold_tx_freq,
             ft8_deep_decode,
+            ft4_deep_decode,
+            ft4_autoseq,
+            ft4_auto_reply_policy,
+            ft4_cq_only_view,
+            ft4_follow_log,
+            ft4_max_log_entries,
             ft8_cq_only_view,
             ft8_follow_log,
             ft8_max_log_entries,
@@ -1546,6 +1705,162 @@ impl RigforgeGuiApp {
             .map(format_signal_report)
             .unwrap_or_default();
         self.append_qso(record, "Auto-logged");
+    }
+
+    fn log_completed_ft4_session(&mut self, session: &Ft8Session) {
+        let frequency_hz = self
+            .state
+            .lock()
+            .expect("ui state lock poisoned")
+            .frequency_hz
+            .unwrap_or_default();
+        let started_at = (session.started_period as f64 * FT4_SLOT_SECONDS) as u64;
+        let ended_at = (session.last_rx_period.saturating_add(1) as f64 * FT4_SLOT_SECONDS) as u64;
+        let mut record = QsoRecord::new(
+            &session.target,
+            "FT4",
+            band_for_frequency(frequency_hz),
+            frequency_hz,
+            started_at,
+            ended_at,
+        );
+        record.grid = session.remote_grid.clone().unwrap_or_default();
+        record.report_sent = session
+            .report_sent
+            .map(format_signal_report)
+            .unwrap_or_default();
+        record.report_received = session
+            .report_received
+            .map(format_signal_report)
+            .unwrap_or_default();
+        self.append_qso(record, "Auto-logged FT4");
+    }
+
+    fn handle_ft4_decodes(
+        &mut self,
+        decodes: &[DigitalDecodeEntry],
+        completed_period: Option<u64>,
+    ) {
+        let fresh: Vec<DigitalDecodeEntry> = decodes
+            .iter()
+            .filter(|entry| {
+                entry.mode == WorkspaceMode::Ft4
+                    && self.ft4_seen_decodes.insert((
+                        entry.period,
+                        entry.freq_hz,
+                        entry.message.clone(),
+                    ))
+            })
+            .cloned()
+            .collect();
+        if self.ft4_seen_decodes.len() > 1_000 {
+            let latest = fresh
+                .iter()
+                .map(|entry| entry.period)
+                .max()
+                .unwrap_or_default();
+            self.ft4_seen_decodes
+                .retain(|(period, _, _)| *period + 100 >= latest);
+        }
+        if !self.ft4_autoseq || self.digital_tx_active.load(Ordering::Acquire) {
+            return;
+        }
+
+        let my_call = self.station_callsign_or_default().to_string();
+        let my_grid = self.station_grid_or_default().to_string();
+        let awaiting_cq_caller = self
+            .digital_last_tx_message
+            .as_deref()
+            .is_some_and(|message| message.starts_with("CQ "));
+        if self.ft4_session.is_none() {
+            let candidates = fresh.iter().enumerate().filter_map(|(index, entry)| {
+                let parsed = parse_message(&entry.message)?;
+                let eligible = (awaiting_cq_caller && parsed.directed_to(&my_call))
+                    || (self.ft8_auto_answer_cq && parsed.is_cq);
+                if !eligible || ft8_ops::callsign_eq(&parsed.from, &my_call) {
+                    return None;
+                }
+                Some(ReplyCandidate {
+                    index,
+                    snr_db: entry.snr_db.round() as i8,
+                    freq_hz: entry.freq_hz,
+                    parsed,
+                })
+            });
+            if let Some(chosen) =
+                select_candidate(candidates, self.ft4_auto_reply_policy, self.rx_tone_hz)
+            {
+                self.ft4_session = Some(Ft8Session::start(
+                    chosen.parsed.from.clone(),
+                    fresh[chosen.index].period,
+                ));
+                self.digital_seq_target = Some(chosen.parsed.from.clone());
+                self.digital_tx_status = format!(
+                    "🎯 {} selected by {} priority",
+                    chosen.parsed.from,
+                    self.ft4_auto_reply_policy.label()
+                );
+            }
+        }
+        let mut queued_response = false;
+        for entry in fresh {
+            let Some(parsed) = parse_message(&entry.message) else {
+                continue;
+            };
+            let Some(session) = self.ft4_session.as_mut() else {
+                continue;
+            };
+            let response = session.response_to(
+                &parsed,
+                &my_call,
+                &my_grid,
+                entry.snr_db.round() as i8,
+                entry.period,
+            );
+            if session.stage == QsoStage::Complete {
+                let completed = session.clone();
+                self.log_completed_ft4_session(&completed);
+                self.digital_tx_status =
+                    format!("🏁 FT4 QSO with {} complete · nice contact!", completed.target);
+                self.ft4_session = None;
+                self.digital_seq_target = None;
+                break;
+            }
+            if let Some(response) = response {
+                self.digital_compose = response;
+                self.rx_tone_hz = entry.freq_hz;
+                if !self.ft8_hold_tx_freq {
+                    self.tx_tone_hz = entry.freq_hz;
+                }
+                self.queue_native_digital_tx(WorkspaceMode::Ft4);
+                queued_response = true;
+                break;
+            }
+        }
+        if queued_response || self.ft4_session.is_none() {
+            return;
+        }
+        if completed_period.is_some_and(|period| {
+            self.ft4_last_tx_period
+                .is_some_and(|last_tx| period == last_tx.saturating_add(1))
+        }) {
+            let attempts = self
+                .ft4_session
+                .as_ref()
+                .map(|session| session.tx_attempts)
+                .unwrap_or_default();
+            if attempts >= MAX_ATTEMPTS_PER_EXCHANGE {
+                self.ft4_autoseq = false;
+                self.ft4_session = None;
+                self.digital_tx_status = format!(
+                    "FT4 stopped after {MAX_ATTEMPTS_PER_EXCHANGE} unanswered attempts"
+                );
+            } else if !self.digital_compose.trim().is_empty() {
+                self.digital_tx_status =
+                    "🔁 No FT4 reply yet · repeating the last exchange".to_string();
+                self.queue_native_digital_tx(WorkspaceMode::Ft4);
+            }
+        }
     }
 
     fn queue_ft8_tx_from_compose(&mut self, policy: Ft8TxQueuePolicy, rx_period: Option<u64>) {
@@ -1724,6 +2039,32 @@ impl RigforgeGuiApp {
         self.persist_profile("Automatic operation stopped");
     }
 
+    fn any_tx_armed(&self, snapshot: &GuiState) -> bool {
+        snapshot.ptt_on
+            || self.ft8_autoseq
+            || self.ft4_autoseq
+            || self.ft8_tx_active.load(Ordering::Acquire)
+            || self.ft8_tx_queued_period.is_some()
+            || self.digital_tx_active.load(Ordering::Acquire)
+    }
+
+    fn disarm_all_tx(&mut self, reason: &str) {
+        self.force_stop_tx();
+        self.stop_native_digital_tx();
+        self.ft8_autoseq = false;
+        self.ft4_autoseq = false;
+        self.ft8_halt_after_tx = false;
+        self.ft4_halt_after_tx = false;
+        self.ft4_session = None;
+        self.digital_seq_target = None;
+        self.digital_tx_started = None;
+        self.digital_last_tx_message = None;
+        self.ft8_seq_status = reason.to_string();
+        self.digital_tx_status = reason.to_string();
+        self.profile_dirty = true;
+        self.persist_profile("All TX disarmed");
+    }
+
     fn arm_manual_ft8_reply(&mut self, reply: PendingManualFt8Reply) {
         self.ft8_compose = reply.compose;
         let tx_moved = self.retune_from_decode_pick(reply.freq_hz, reply.move_tx_to_remote);
@@ -1767,7 +2108,8 @@ impl RigforgeGuiApp {
             }
             match event {
                 Ft8TxEvent::PttConfirmed => {
-                    self.ft8_seq_status = "PTT confirmed; holding for FT8 audio start".to_string();
+                    self.ft8_seq_status =
+                        "⚡ PTT confirmed · waveform launch is locked in".to_string();
                 }
                 Ft8TxEvent::AudioStarted => {
                     self.ft8_tx_started_period = self.ft8_tx_queued_period;
@@ -1795,7 +2137,7 @@ impl RigforgeGuiApp {
                             }
                         }
                     }
-                    self.ft8_seq_status = "FT8 audio transmitting".to_string();
+                    self.ft8_seq_status = "🔥 FT8 waveform on the air".to_string();
                 }
                 Ft8TxEvent::Complete => {
                     let completed_session = self
@@ -1807,11 +2149,11 @@ impl RigforgeGuiApp {
                     self.ft8_halt_after_tx = false;
                     self.ft8_seq_status = if stop_after_tx {
                         self.ft8_autoseq = false;
-                        "TX complete; automatic TX paused".to_string()
+                        "🧊 TX complete · automatic TX is paused".to_string()
                     } else if self.ft8_last_tx_was_cq {
-                        "CQ complete; listening for callers".to_string()
+                        "📣 CQ away · listening for callers".to_string()
                     } else {
-                        "TX complete; waiting for reply".to_string()
+                        "📡 TX complete · ears open for the reply".to_string()
                     };
                     self.ft8_last_tx_period = self.ft8_tx_started_period;
                     self.ft8_seq_state = if self.ft8_autoseq {
@@ -1835,13 +2177,14 @@ impl RigforgeGuiApp {
                     if let Some(session) = completed_session {
                         let target = session.target.clone();
                         self.log_completed_ft8_session(&session);
-                        self.ft8_seq_status = format!("QSO with {target} complete and logged");
+                        self.ft8_seq_status =
+                            format!("🏁 QSO with {target} complete and logged · beautiful!");
                         self.ft8_seq_target = None;
                         self.ft8_session = None;
                     }
                 }
                 Ft8TxEvent::Failed(error) => {
-                    self.ft8_seq_status = format!("TX failed: {error}");
+                    self.ft8_seq_status = format!("⚠ TX failed · {error}");
                     self.ft8_seq_state = Ft8SeqState::Idle;
                     self.ft8_tx_queued_period = None;
                     self.ft8_tx_started_period = None;
@@ -1856,6 +2199,10 @@ impl RigforgeGuiApp {
     }
 
     fn queue_native_digital_tx(&mut self, mode: WorkspaceMode) {
+        if self.digital_suppress_canceled_tx_events {
+            self.digital_tx_status = "TX cancellation is still settling; try again".to_string();
+            return;
+        }
         if self.ft8_tx_active.load(Ordering::Acquire)
             || self.digital_tx_active.load(Ordering::Acquire)
         {
@@ -1914,6 +2261,12 @@ impl RigforgeGuiApp {
     }
 
     fn stop_native_digital_tx(&mut self) {
+        let had_scheduled_tx = self.digital_tx_active.load(Ordering::Acquire)
+            || self.digital_tx_started.is_some()
+            || self.digital_queued_tx_message.is_some();
+        if had_scheduled_tx {
+            self.digital_suppress_canceled_tx_events = true;
+        }
         self.digital_tx_abort.store(true, Ordering::Release);
         self.digital_tx_active.store(false, Ordering::Release);
         if let Some(tx) = &self.command_tx {
@@ -1929,14 +2282,59 @@ impl RigforgeGuiApp {
 
     fn process_native_digital_tx_pipeline(&mut self) {
         while let Ok(event) = self.digital_tx_event_rx.try_recv() {
+            if self.digital_suppress_canceled_tx_events {
+                if matches!(event, DigitalTxEvent::Complete | DigitalTxEvent::Failed(_)) {
+                    self.digital_suppress_canceled_tx_events = false;
+                    self.digital_tx_abort.store(false, Ordering::Release);
+                }
+                continue;
+            }
             self.digital_tx_status = match event {
+                DigitalTxEvent::AudioStarted(mode, period) => {
+                    self.digital_tx_started = Some((mode, period));
+                    if mode == WorkspaceMode::Ft4 {
+                        if let Some(session) = self.ft4_session.as_mut() {
+                            session.tx_attempts = session.tx_attempts.saturating_add(1);
+                        }
+                    }
+                    if let Some(message) = self.digital_queued_tx_message.clone() {
+                        let utc = utc_hhmmss_millis(
+                            period as f64 * mode.core_slot_seconds().unwrap_or(1.0),
+                        );
+                        self.digital_tx_chat.push_back(DigitalTxChatEntry {
+                            mode,
+                            period,
+                            utc,
+                            message,
+                        });
+                        while self.digital_tx_chat.len() > 100 {
+                            self.digital_tx_chat.pop_front();
+                        }
+                    }
+                    format!("🔥 {} waveform on the air", mode.label())
+                }
                 DigitalTxEvent::Complete => {
+                    let completed_mode = self.digital_tx_started.take().map(|(mode, period)| {
+                        if mode == WorkspaceMode::Ft4 {
+                            self.ft4_last_tx_period = Some(period);
+                        }
+                        mode
+                    });
                     self.digital_last_tx_message = self.digital_queued_tx_message.take();
-                    "TX complete; receiving".to_string()
+                    if completed_mode == Some(WorkspaceMode::Ft4) && self.ft4_halt_after_tx {
+                        self.ft4_halt_after_tx = false;
+                        self.ft4_autoseq = false;
+                        self.profile_dirty = true;
+                        self.persist_profile("FT4 automatic TX paused");
+                        "🧊 FT4 TX complete · automatic TX is paused".to_string()
+                    } else {
+                        "📡 TX complete · receiver back on watch".to_string()
+                    }
                 }
                 DigitalTxEvent::Failed(error) => {
+                    self.digital_tx_started = None;
                     self.digital_queued_tx_message = None;
-                    format!("TX failed: {error}")
+                    format!("⚠ TX failed · {error}")
                 }
             };
         }
@@ -2000,7 +2398,7 @@ impl RigforgeGuiApp {
                 .is_some_and(|period| should_retry_after_decode(self.ft8_last_tx_period, period))
             {
                 let period = completed_period.expect("checked above");
-                self.ft8_seq_status = format!("No reply from {target}; retrying");
+                self.ft8_seq_status = format!("🔁 No reply from {target} yet · trying again");
                 self.queue_ft8_tx_from_compose(Ft8TxQueuePolicy::ReplyAsap, Some(period));
             }
             return;
@@ -2063,6 +2461,12 @@ impl RigforgeGuiApp {
             follow_log: self.ft8_follow_log,
             max_log_entries: self.ft8_max_log_entries.clamp(80, 1000),
             deep_decode: self.ft8_deep_decode,
+            ft4_deep_decode: self.ft4_deep_decode,
+            ft4_autoseq: self.ft4_autoseq,
+            ft4_auto_reply_policy: self.ft4_auto_reply_policy,
+            ft4_cq_only_view: self.ft4_cq_only_view,
+            ft4_follow_log: self.ft4_follow_log,
+            ft4_max_log_entries: self.ft4_max_log_entries.clamp(80, 300),
             autoseq: self.ft8_autoseq,
             auto_reply_policy: self.ft8_auto_reply_policy,
             auto_answer_cq: self.ft8_auto_answer_cq,
@@ -2798,7 +3202,7 @@ impl RigforgeGuiApp {
         let band_plan = workspace_band_plan(self.workspace_mode);
 
         // Band buttons — 3 per row
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             for &(label, freq_hz) in band_plan {
                 let on_band = (current_hz as i64 - freq_hz as i64).unsigned_abs() < 200_000;
                 if ui
@@ -2862,7 +3266,11 @@ impl RigforgeGuiApp {
     fn draw_ft8_activity_stats(&self, ui: &mut egui::Ui) {
         let stats = ft8_activity_stats(&self.ft8_log);
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("ACTIVITY").strong().color(Color32::LIGHT_BLUE));
+            ui.label(
+                RichText::new("📊 BAND PULSE")
+                    .strong()
+                    .color(Color32::LIGHT_BLUE),
+            );
             ft8_stat_chip(
                 ui,
                 "This cycle",
@@ -2905,6 +3313,7 @@ impl RigforgeGuiApp {
         height: f32,
     ) {
         let target = self.ft8_conversation_target();
+        let operator_call = self.station_callsign_or_default().to_string();
         let rx_level = channel_waterfall_level(&snapshot.audio_waterfall_rows, self.rx_tone_hz);
         let tx_level = channel_waterfall_level(&snapshot.audio_waterfall_rows, self.tx_tone_hz);
         let mut lines = Vec::new();
@@ -2964,8 +3373,8 @@ impl RigforgeGuiApp {
                 ui.horizontal_wrapped(|ui| {
                     let title = target
                         .as_deref()
-                        .map(|call| format!("ACTIVE QSO · {call}"))
-                        .unwrap_or_else(|| format!("CHANNEL CHAT · {} Hz", self.rx_tone_hz));
+                        .map(|call| format!("💬 ACTIVE QSO · {call}"))
+                        .unwrap_or_else(|| format!("🎧 CHANNEL CHAT · {} Hz", self.rx_tone_hz));
                     ui.label(RichText::new(title).strong().color(Color32::LIGHT_BLUE));
                     if let Some(session) = &self.ft8_session {
                         ui.label(
@@ -3004,9 +3413,9 @@ impl RigforgeGuiApp {
                             ui.centered_and_justified(|ui| {
                                 ui.label(
                                     RichText::new(if target.is_some() {
-                                        "Waiting for this station…"
+                                        "📡 Listening for this station’s next move…"
                                     } else {
-                                        "Select a decode or tune a channel to start a conversation view."
+                                        "✨ Select a decode or tune a channel to open a conversation."
                                     })
                                     .color(Color32::GRAY),
                                 );
@@ -3014,19 +3423,39 @@ impl RigforgeGuiApp {
                         }
                         for line in lines {
                             let is_tx = line.direction == Ft8ChatDirection::Tx;
+                            let call_hit = (!is_tx)
+                                .then(|| operator_call_hit(&line.message, &operator_call))
+                                .flatten();
                             let layout = if is_tx {
                                 egui::Layout::right_to_left(egui::Align::Min)
                             } else {
                                 egui::Layout::left_to_right(egui::Align::Min)
                             };
                             ui.with_layout(layout, |ui| {
+                                let (fill, stroke) = call_hit.map_or_else(
+                                    || {
+                                        (
+                                            if is_tx {
+                                                Color32::from_rgb(53, 43, 25)
+                                            } else {
+                                                Color32::from_rgb(25, 49, 38)
+                                            },
+                                            egui::Stroke::NONE,
+                                        )
+                                    },
+                                    |hit| {
+                                        let (_, accent, fill) = call_hit_badge(hit);
+                                        (fill, egui::Stroke::new(2.0, accent))
+                                    },
+                                );
                                 egui::Frame::group(ui.style())
-                                    .fill(if is_tx {
-                                        Color32::from_rgb(53, 43, 25)
-                                    } else {
-                                        Color32::from_rgb(25, 49, 38)
-                                    })
+                                    .fill(fill)
+                                    .stroke(stroke)
                                     .show(ui, |ui| {
+                                        if let Some(hit) = call_hit {
+                                            let (badge, accent, _) = call_hit_badge(hit);
+                                            ui.label(RichText::new(badge).strong().color(accent));
+                                        }
                                         ui.label(
                                             RichText::new(&line.message).monospace().strong(),
                                         );
@@ -3179,19 +3608,45 @@ impl RigforgeGuiApp {
         });
 
         ui.horizontal_wrapped(|ui| {
+            let (auto_label, auto_fill, auto_stroke) = if self.ft8_autoseq {
+                (
+                    "🔥 FT8 TX ARMED · CLICK TO DISARM ALL",
+                    Color32::from_rgb(92, 43, 25),
+                    Color32::from_rgb(255, 151, 72),
+                )
+            } else {
+                (
+                    "🧊 FT8 AUTO DISARMED · CLICK TO ARM",
+                    Color32::from_rgb(28, 52, 70),
+                    Color32::from_rgb(92, 174, 220),
+                )
+            };
             if ui
-                .checkbox(&mut self.ft8_autoseq, "Automatic operation")
-                .changed()
+                .add(
+                    egui::Button::new(RichText::new(auto_label).strong().color(Color32::WHITE))
+                        .fill(auto_fill)
+                        .stroke(egui::Stroke::new(1.5, auto_stroke)),
+                )
+                .on_hover_text(if self.ft8_autoseq {
+                    "Cancel queued/active TX, drop PTT, and disarm FT8 and FT4"
+                } else {
+                    "Arm FT8 automatic sequencing; no transmission is sent until an exchange is started"
+                })
+                .clicked()
             {
                 if self.ft8_autoseq {
+                    self.disarm_all_tx("All TX stopped and disarmed by operator");
+                } else {
+                    self.ft8_autoseq = true;
                     if self.ft8_session.is_some() {
                         self.ft8_seq_state = Ft8SeqState::ReplyArmed;
                         self.ft8_seq_status = "Automatic TX resumed; waiting for reply".to_string();
+                    } else {
+                        self.ft8_seq_status =
+                            "FT8 automatic operation armed; waiting for an exchange".to_string();
                     }
                     self.profile_dirty = true;
-                    self.persist_profile("Auto-saved");
-                } else {
-                    self.cancel_ft8_sequence("Automatic operation stopped by operator".to_string());
+                    self.persist_profile("FT8 TX armed");
                 }
             }
             ui.label("Select caller:");
@@ -3261,13 +3716,25 @@ impl RigforgeGuiApp {
         let conversation_h = (panel_h * 0.28).clamp(150.0, 260.0);
         let decode_h = (panel_h * 0.38).max(170.0);
         let tx_h = (panel_h * 0.20).max(120.0);
+        let operator_call = self.station_callsign_or_default().to_string();
+
+        if let Some((entry, hit)) = self.ft8_log.iter().rev().find_map(|entry| {
+            operator_call_hit(&entry.message, &operator_call).map(|hit| (entry, hit))
+        }) {
+            draw_operator_call_banner(ui, "FT8", &operator_call, &entry.message, hit);
+            ui.add_space(4.0);
+        }
 
         // ── Decode log ───────────────────────────────────────────────────────
         egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
             ui.set_min_height(decode_h);
             ui.set_max_height(decode_h);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("DECODES").strong());
+                ui.label(
+                    RichText::new("📡 LIVE DECODES")
+                        .strong()
+                        .color(Color32::LIGHT_BLUE),
+                );
                 ui.separator();
                 if ui.checkbox(&mut self.ft8_cq_only_view, "CQ only").changed() {
                     self.profile_dirty = true;
@@ -3322,7 +3789,7 @@ impl RigforgeGuiApp {
                         ui.add_space(10.0);
                         ui.centered_and_justified(|ui| {
                             ui.label(
-                                RichText::new("Listening… decodes will appear here.")
+                                RichText::new("🌌 Listening… the band is quiet for the moment.")
                                     .color(Color32::from_gray(100)),
                             );
                         });
@@ -3350,7 +3817,10 @@ impl RigforgeGuiApp {
                         prev_utc = Some(&entry.utc);
 
                         let is_sel = selected == Some(i);
-                        let text_color = if entry.is_cq {
+                        let call_hit = operator_call_hit(&entry.message, &operator_call);
+                        let text_color = if let Some(hit) = call_hit {
+                            call_hit_badge(hit).1
+                        } else if entry.is_cq {
                             Color32::from_rgb(100, 220, 100)
                         } else if entry.snr_db >= -5 {
                             Color32::from_rgb(220, 220, 140)
@@ -3364,7 +3834,22 @@ impl RigforgeGuiApp {
                         .monospace()
                         .color(text_color);
 
-                        let resp = ui.selectable_label(is_sel, row);
+                        let resp = if let Some(hit) = call_hit {
+                            let (badge, accent, fill) = call_hit_badge(hit);
+                            egui::Frame::group(ui.style())
+                                .fill(fill)
+                                .stroke(egui::Stroke::new(1.5, accent))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new(badge).strong().color(accent));
+                                        ui.selectable_label(is_sel, row)
+                                    })
+                                    .inner
+                                })
+                                .inner
+                        } else {
+                            ui.selectable_label(is_sel, row)
+                        };
                         if resp.clicked() {
                             let now = Instant::now();
                             let synthetic_double = self
@@ -3466,7 +3951,7 @@ impl RigforgeGuiApp {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_min_height(tx_h);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("TX").strong());
+                ui.label(RichText::new("🎙️ TX DECK").strong());
                 ui.separator();
                 let ptt_color = if snapshot.ptt_on {
                     Color32::from_rgb(200, 60, 60)
@@ -3484,23 +3969,28 @@ impl RigforgeGuiApp {
                     )
                     .clicked()
                 {
-                    if snapshot.ptt_on || self.ft8_tx_active.load(Ordering::Acquire) {
-                        self.cancel_ft8_sequence("TX/PTT stopped by operator".to_string());
+                    if snapshot.ptt_on
+                        || self.ft8_tx_active.load(Ordering::Acquire)
+                        || self.digital_tx_active.load(Ordering::Acquire)
+                    {
+                        self.disarm_all_tx("TX/PTT stopped and all modes disarmed");
                     } else {
                         self.send_command(GuiCommand::TogglePtt);
                     }
                 }
                 let tx_active = self.ft8_tx_active.load(Ordering::Relaxed);
                 if ui
-                    .button(RichText::new("FORCE STOP TX").color(if tx_active {
+                    .button(RichText::new("🛑 STOP + DISARM ALL").strong().color(if tx_active {
                         Color32::from_rgb(255, 130, 130)
                     } else {
                         Color32::from_gray(120)
                     }))
-                    .on_hover_text("Drop PTT, cancel queued TX, and stop active audio output")
+                    .on_hover_text(
+                        "Drop PTT, cancel queued TX, and disarm FT8/FT4 automatic operation",
+                    )
                     .clicked()
                 {
-                    self.cancel_ft8_sequence("TX force-stopped by operator".to_string());
+                    self.disarm_all_tx("All TX stopped and disarmed by operator");
                 }
             });
 
@@ -3617,6 +4107,697 @@ impl RigforgeGuiApp {
                 });
             }
         }
+    }
+
+    fn draw_ft4_conversation(
+        &self,
+        ui: &mut egui::Ui,
+        snapshot: &GuiState,
+        height: f32,
+    ) {
+        let operator_call = self.station_callsign_or_default().to_string();
+        let target = self
+            .digital_seq_target
+            .clone()
+            .or_else(|| {
+                self.digital_selected
+                    .as_ref()
+                    .and_then(|entry| parse_message(&entry.message))
+                    .map(|message| message.from)
+            });
+        let mut lines = Vec::new();
+        for entry in snapshot
+            .digital_decodes
+            .iter()
+            .filter(|entry| entry.mode == WorkspaceMode::Ft4)
+        {
+            let belongs = target.as_deref().map_or_else(
+                || entry.freq_hz.abs_diff(self.rx_tone_hz) <= 15,
+                |target| {
+                    parse_message(&entry.message)
+                        .is_some_and(|message| ft8_ops::callsign_eq(&message.from, target))
+                },
+            );
+            if belongs {
+                lines.push(Ft8ChatLine {
+                    period: entry.period,
+                    utc: entry.utc.clone(),
+                    message: entry.message.clone(),
+                    detail: format!(
+                        "RX {:+.1} dB · {:+.2}s · {} Hz",
+                        entry.snr_db, entry.dt_s, entry.freq_hz
+                    ),
+                    direction: Ft8ChatDirection::Rx,
+                });
+            }
+        }
+        for entry in self
+            .digital_tx_chat
+            .iter()
+            .filter(|entry| entry.mode == WorkspaceMode::Ft4)
+        {
+            let belongs = target.as_deref().map_or(true, |target| {
+                parse_message(&entry.message).is_some_and(|message| {
+                    message
+                        .to
+                        .as_deref()
+                        .is_some_and(|to| ft8_ops::callsign_eq(to, target))
+                })
+            });
+            if belongs {
+                lines.push(Ft8ChatLine {
+                    period: entry.period,
+                    utc: entry.utc.clone(),
+                    message: entry.message.clone(),
+                    detail: format!("TX · {} Hz", self.tx_tone_hz),
+                    direction: Ft8ChatDirection::Tx,
+                });
+            }
+        }
+        lines.sort_by_key(|line| (line.period, line.direction == Ft8ChatDirection::Tx));
+        if lines.len() > 30 {
+            lines.drain(..lines.len() - 30);
+        }
+        let rx_level = channel_waterfall_level(&snapshot.audio_waterfall_rows, self.rx_tone_hz);
+        let tx_level = channel_waterfall_level(&snapshot.audio_waterfall_rows, self.tx_tone_hz);
+
+        egui::Frame::group(ui.style())
+            .fill(Color32::from_rgb(20, 23, 28))
+            .show(ui, |ui| {
+                ui.set_min_height(height);
+                ui.set_max_height(height);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(
+                            target
+                                .as_deref()
+                                .map(|call| format!("💬 ACTIVE FT4 QSO · {call}"))
+                                .unwrap_or_else(|| {
+                                    format!("🎧 FT4 CHANNEL CHAT · {} Hz", self.rx_tone_hz)
+                                }),
+                        )
+                        .strong()
+                        .color(Color32::LIGHT_BLUE),
+                    );
+                    if let Some(session) = &self.ft4_session {
+                        ui.label(
+                            RichText::new(qso_stage_label(session.stage))
+                                .small()
+                                .color(Color32::from_rgb(220, 180, 90)),
+                        );
+                    }
+                    ui.separator();
+                    ui.label(
+                        RichText::new(format!("RX {} Hz", self.rx_tone_hz))
+                            .monospace()
+                            .color(Color32::from_rgb(120, 220, 120)),
+                    );
+                    ui.add(egui::ProgressBar::new(rx_level as f32 / 255.0).desired_width(70.0));
+                    ui.label(
+                        RichText::new(format!("TX {} Hz", self.tx_tone_hz))
+                            .monospace()
+                            .color(Color32::from_rgb(220, 160, 80)),
+                    );
+                    ui.add(egui::ProgressBar::new(tx_level as f32 / 255.0).desired_width(70.0));
+                });
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .id_salt("ft4_conversation")
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        if lines.is_empty() {
+                            ui.centered_and_justified(|ui| {
+                                ui.label(
+                                    RichText::new(
+                                        "✨ Select a decode or tune FT4 to open a conversation.",
+                                    )
+                                        .color(Color32::GRAY),
+                                );
+                            });
+                        }
+                        for line in lines {
+                            let is_tx = line.direction == Ft8ChatDirection::Tx;
+                            let call_hit = (!is_tx)
+                                .then(|| operator_call_hit(&line.message, &operator_call))
+                                .flatten();
+                            let layout = if is_tx {
+                                egui::Layout::right_to_left(egui::Align::Min)
+                            } else {
+                                egui::Layout::left_to_right(egui::Align::Min)
+                            };
+                            ui.with_layout(layout, |ui| {
+                                let (fill, stroke) = call_hit.map_or_else(
+                                    || {
+                                        (
+                                            if is_tx {
+                                                Color32::from_rgb(53, 43, 25)
+                                            } else {
+                                                Color32::from_rgb(25, 49, 38)
+                                            },
+                                            egui::Stroke::NONE,
+                                        )
+                                    },
+                                    |hit| {
+                                        let (_, accent, fill) = call_hit_badge(hit);
+                                        (fill, egui::Stroke::new(2.0, accent))
+                                    },
+                                );
+                                egui::Frame::group(ui.style())
+                                    .fill(fill)
+                                    .stroke(stroke)
+                                    .show(ui, |ui| {
+                                        if let Some(hit) = call_hit {
+                                            let (badge, accent, _) = call_hit_badge(hit);
+                                            ui.label(RichText::new(badge).strong().color(accent));
+                                        }
+                                        ui.label(
+                                            RichText::new(&line.message).monospace().strong(),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{} · {}",
+                                                line.utc, line.detail
+                                            ))
+                                            .small()
+                                            .color(Color32::GRAY),
+                                        );
+                                    });
+                            });
+                            ui.add_space(2.0);
+                        }
+                    });
+            });
+    }
+
+    fn draw_ft4_workspace(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        let now_s = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64())
+            .unwrap_or_default();
+        let progress = (now_s % FT4_SLOT_SECONDS) / FT4_SLOT_SECONDS;
+        let tx_active = self.digital_tx_active.load(Ordering::Acquire);
+        ui.horizontal_wrapped(|ui| {
+            ui.heading("FT4");
+            ui.separator();
+            let phase_label = if snapshot.ptt_on {
+                "TX NOW"
+            } else if tx_active {
+                "TX QUEUED"
+            } else if self.ft4_autoseq {
+                "AUTO TX ARMED"
+            } else {
+                "RX · DISARMED"
+            };
+            ui.label(
+                RichText::new(phase_label)
+                    .strong()
+                    .color(if snapshot.ptt_on || tx_active {
+                        Color32::from_rgb(210, 90, 60)
+                    } else if self.ft4_autoseq {
+                        Color32::from_rgb(255, 170, 75)
+                    } else {
+                        Color32::from_rgb(105, 190, 225)
+                    }),
+            );
+            ui.add(
+                egui::ProgressBar::new(progress as f32)
+                    .desired_width(150.0)
+                    .text(format!("{:.1}s", FT4_SLOT_SECONDS * (1.0 - progress))),
+            );
+            if let Some(hz) = snapshot.frequency_hz {
+                ui.label(
+                    RichText::new(format!("{:.3} MHz", hz as f64 / 1_000_000.0))
+                        .monospace()
+                        .strong(),
+                );
+            }
+            ui.label(RichText::new(&snapshot.mode).monospace());
+            ui.separator();
+            ui.label(
+                RichText::new(format!("RX {} Hz", self.rx_tone_hz))
+                    .monospace()
+                    .color(Color32::from_rgb(120, 220, 120)),
+            );
+            ui.label(
+                RichText::new(format!("TX {} Hz", self.tx_tone_hz))
+                    .monospace()
+                    .color(Color32::from_rgb(220, 160, 80)),
+            );
+            ui.separator();
+            let seq_label = self
+                .ft4_session
+                .as_ref()
+                .map(|session| qso_stage_label(session.stage))
+                .unwrap_or(if self.ft4_autoseq { "ARMED" } else { "IDLE" });
+            ui.label(
+                RichText::new(format!("SEQ {seq_label}"))
+                    .monospace()
+                    .color(Color32::LIGHT_BLUE),
+            );
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let halt_label = if self.ft4_halt_after_tx {
+                    "STOP AFTER THIS TX"
+                } else {
+                    "STOP AFTER NEXT TX"
+                };
+                if ui
+                    .button(RichText::new(halt_label).color(if self.ft4_halt_after_tx {
+                        Color32::from_rgb(220, 180, 80)
+                    } else {
+                        Color32::GRAY
+                    }))
+                    .on_hover_text("Pause FT4 automatic transmissions after the next TX completes")
+                    .clicked()
+                {
+                    self.ft4_halt_after_tx = !self.ft4_halt_after_tx;
+                    self.digital_tx_status = if self.ft4_halt_after_tx {
+                        "🧊 FT4 will pause after the next transmission".to_string()
+                    } else {
+                        "Stop-after-TX canceled".to_string()
+                    };
+                }
+
+                let hold_label = if self.ft8_hold_tx_freq {
+                    "HOLD TX FREQ"
+                } else {
+                    "TX TRACKS RX"
+                };
+                if ui
+                    .button(RichText::new(hold_label).color(if self.ft8_hold_tx_freq {
+                        Color32::from_rgb(120, 200, 220)
+                    } else {
+                        Color32::from_rgb(120, 220, 120)
+                    }))
+                    .clicked()
+                {
+                    self.ft8_hold_tx_freq = !self.ft8_hold_tx_freq;
+                    if !self.ft8_hold_tx_freq {
+                        self.tx_tone_hz = self.rx_tone_hz;
+                    }
+                    self.profile_dirty = true;
+                    self.persist_profile("Auto-saved");
+                }
+
+                let deep_label = if self.ft4_deep_decode {
+                    "DECODE: DEEP"
+                } else {
+                    "DECODE: FAST"
+                };
+                if ui
+                    .button(RichText::new(deep_label).color(if self.ft4_deep_decode {
+                        Color32::YELLOW
+                    } else {
+                        Color32::LIGHT_GREEN
+                    }))
+                    .clicked()
+                {
+                    self.ft4_deep_decode = !self.ft4_deep_decode;
+                    self.profile_dirty = true;
+                    self.persist_profile("Auto-saved");
+                }
+            });
+        });
+        ui.horizontal_wrapped(|ui| {
+            let (auto_label, auto_fill, auto_stroke) = if self.ft4_autoseq {
+                (
+                    "🔥 FT4 TX ARMED · CLICK TO DISARM ALL",
+                    Color32::from_rgb(92, 43, 25),
+                    Color32::from_rgb(255, 151, 72),
+                )
+            } else {
+                (
+                    "🧊 FT4 AUTO DISARMED · CLICK TO ARM",
+                    Color32::from_rgb(28, 52, 70),
+                    Color32::from_rgb(92, 174, 220),
+                )
+            };
+            if ui
+                .add(
+                    egui::Button::new(RichText::new(auto_label).strong().color(Color32::WHITE))
+                        .fill(auto_fill)
+                        .stroke(egui::Stroke::new(1.5, auto_stroke)),
+                )
+                .clicked()
+            {
+                if self.ft4_autoseq {
+                    self.disarm_all_tx("All TX stopped and disarmed by operator");
+                } else {
+                    self.ft4_autoseq = true;
+                    self.digital_tx_status =
+                        "FT4 automatic operation armed; waiting for an exchange".to_string();
+                    self.profile_dirty = true;
+                    self.persist_profile("FT4 TX armed");
+                }
+            }
+            ui.label("Select caller:");
+            let previous_policy = self.ft4_auto_reply_policy;
+            egui::ComboBox::from_id_salt("ft4_auto_reply_policy")
+                .selected_text(self.ft4_auto_reply_policy.label())
+                .show_ui(ui, |ui| {
+                    for policy in AutoReplyPolicy::ALL {
+                        ui.selectable_value(
+                            &mut self.ft4_auto_reply_policy,
+                            policy,
+                            policy.label(),
+                        );
+                    }
+                });
+            if self.ft4_auto_reply_policy != previous_policy {
+                self.profile_dirty = true;
+                self.persist_profile("Auto-saved");
+            }
+            if ui
+                .checkbox(&mut self.ft8_auto_answer_cq, "Answer unattended CQs")
+                .on_hover_text("Shared FT8/FT4 policy; only active while this mode is armed")
+                .changed()
+            {
+                self.profile_dirty = true;
+                self.persist_profile("Auto-saved");
+            }
+            ui.separator();
+            ui.label(
+                RichText::new(&snapshot.digital_decode_status)
+                    .small()
+                    .color(Color32::GRAY),
+            );
+            if let Some(offset) = snapshot.ft4_clock_offset_s {
+                ui.label(
+                    RichText::new(format!("Adaptive clock dT {offset:+.2}s"))
+                        .small()
+                        .color(if offset.abs() > 0.5 {
+                            Color32::YELLOW
+                        } else {
+                            Color32::LIGHT_GREEN
+                        }),
+                );
+            }
+            if let Some(level) = snapshot.audio_level_dbfs {
+                ui.label(
+                    RichText::new(format!(
+                        "Input {level:.0} dBFS / clip {:.1}%",
+                        snapshot.audio_clip_percent
+                    ))
+                    .small()
+                    .color(Color32::GRAY),
+                );
+            }
+        });
+        ui.separator();
+
+        let stats = digital_activity_stats(&snapshot.digital_decodes, WorkspaceMode::Ft4);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new("📊 BAND PULSE")
+                    .strong()
+                    .color(Color32::LIGHT_BLUE),
+            );
+            ft8_stat_chip(
+                ui,
+                "This cycle",
+                stats.latest_cycle.to_string(),
+                format!("{} CQ", stats.cq_this_cycle),
+            );
+            ft8_stat_chip(
+                ui,
+                "Average",
+                format!("{:.1}/cycle", stats.average_per_cycle),
+                "rolling log".to_string(),
+            );
+            ft8_stat_chip(
+                ui,
+                "Stations",
+                stats.unique_stations.to_string(),
+                "unique heard".to_string(),
+            );
+            let (heard, detail) = stats
+                .most_heard
+                .map(|(call, count)| (call, format!("{count} decodes")))
+                .unwrap_or_else(|| ("—".to_string(), "waiting".to_string()));
+            ft8_stat_chip(ui, "Most heard", heard, detail);
+            ft8_stat_chip(
+                ui,
+                "Median SNR",
+                stats
+                    .median_snr
+                    .map(|snr| format!("{snr:+} dB"))
+                    .unwrap_or_else(|| "—".to_string()),
+                "rolling log".to_string(),
+            );
+        });
+        ui.add_space(4.0);
+
+        let panel_h = ui.available_height();
+        let decode_h = (panel_h * 0.38).max(170.0);
+        let conversation_h = (panel_h * 0.28).clamp(150.0, 260.0);
+        let tx_h = (panel_h * 0.20).max(120.0);
+        let mut entries: Vec<DigitalDecodeEntry> = snapshot
+            .digital_decodes
+            .iter()
+            .filter(|entry| {
+                entry.mode == WorkspaceMode::Ft4
+                    && (!self.ft4_cq_only_view || entry.message.starts_with("CQ "))
+            })
+            .cloned()
+            .collect();
+        if entries.len() > self.ft4_max_log_entries {
+            entries.drain(..entries.len() - self.ft4_max_log_entries);
+        }
+        let operator_call = self.station_callsign_or_default().to_string();
+
+        if let Some((entry, hit)) = entries.iter().rev().find_map(|entry| {
+            operator_call_hit(&entry.message, &operator_call).map(|hit| (entry, hit))
+        }) {
+            draw_operator_call_banner(ui, "FT4", &operator_call, &entry.message, hit);
+            ui.add_space(4.0);
+        }
+
+        egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
+            ui.set_min_height(decode_h);
+            ui.set_max_height(decode_h);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("⚡ FT4 LIVE DECODES")
+                        .strong()
+                        .color(Color32::LIGHT_BLUE),
+                );
+                ui.separator();
+                if ui.checkbox(&mut self.ft4_cq_only_view, "CQ only").changed() {
+                    self.profile_dirty = true;
+                    self.persist_profile("Auto-saved");
+                }
+                if ui.checkbox(&mut self.ft4_follow_log, "Follow").changed() {
+                    self.profile_dirty = true;
+                    self.persist_profile("Auto-saved");
+                }
+                ui.label("Keep");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.ft4_max_log_entries)
+                            .range(80..=300)
+                            .speed(5),
+                    )
+                    .changed()
+                {
+                    self.profile_dirty = true;
+                    self.persist_profile("Auto-saved");
+                }
+                ui.label("rows");
+                ui.label(format!("{} msgs", entries.len()));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("Clear").clicked() {
+                        self.state
+                            .lock()
+                            .expect("ui state lock poisoned")
+                            .digital_decodes
+                            .retain(|entry| entry.mode != WorkspaceMode::Ft4);
+                        self.digital_selected = None;
+                        self.digital_seq_target = None;
+                        self.ft4_session = None;
+                        self.digital_tx_chat
+                            .retain(|entry| entry.mode != WorkspaceMode::Ft4);
+                    }
+                });
+            });
+            ui.separator();
+            ui.label(
+                RichText::new("UTC          SNR     dT      Hz  Message")
+                    .monospace()
+                    .strong(),
+            );
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .id_salt("ft4_global_decodes")
+                .stick_to_bottom(self.ft4_follow_log)
+                .show(ui, |ui| {
+                    if entries.is_empty() {
+                        ui.label(
+                            RichText::new("🌊 Listening hard… collecting the next FT4 waveform.")
+                                .color(Color32::GRAY),
+                        );
+                    }
+                    for entry in &entries {
+                        let selected = self.digital_selected.as_ref().is_some_and(|selected| {
+                            selected.period == entry.period
+                                && selected.freq_hz == entry.freq_hz
+                                && selected.message == entry.message
+                        });
+                        let call_hit = operator_call_hit(&entry.message, &operator_call);
+                        let row = RichText::new(format!(
+                            "{:12}  {:+5.1}  {:+6.2}  {:>5}  {}",
+                            entry.utc, entry.snr_db, entry.dt_s, entry.freq_hz, entry.message
+                        ))
+                        .monospace()
+                        .color(if let Some(hit) = call_hit {
+                            call_hit_badge(hit).1
+                        } else if entry.message.starts_with("CQ ") {
+                            Color32::LIGHT_GREEN
+                        } else {
+                            Color32::LIGHT_GRAY
+                        });
+                        let response = if let Some(hit) = call_hit {
+                            let (badge, accent, fill) = call_hit_badge(hit);
+                            egui::Frame::group(ui.style())
+                                .fill(fill)
+                                .stroke(egui::Stroke::new(1.5, accent))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new(badge).strong().color(accent));
+                                        ui.selectable_label(selected, row)
+                                    })
+                                    .inner
+                                })
+                                .inner
+                        } else {
+                            ui.selectable_label(selected, row)
+                        };
+                        if response.clicked() {
+                            self.digital_selected = Some(entry.clone());
+                            self.digital_seq_target =
+                                parse_message(&entry.message).map(|message| message.from);
+                            self.rx_tone_hz = entry.freq_hz;
+                            if !self.ft8_hold_tx_freq {
+                                self.tx_tone_hz = entry.freq_hz;
+                            }
+                        }
+                        if response.double_clicked() {
+                            if let Some(message) = parse_message(&entry.message) {
+                                let my_call = self.station_callsign_or_default().to_string();
+                                let my_grid = self.station_grid_or_default().to_string();
+                                let mut session =
+                                    Ft8Session::start(message.from.clone(), entry.period);
+                                if let Some(reply) = session.response_to(
+                                    &message,
+                                    &my_call,
+                                    &my_grid,
+                                    entry.snr_db.round() as i8,
+                                    entry.period,
+                                ) {
+                                    self.digital_compose = reply;
+                                    self.digital_seq_target = Some(message.from);
+                                    self.ft4_session = Some(session);
+                                    self.ft4_autoseq = true;
+                                    self.queue_native_digital_tx(WorkspaceMode::Ft4);
+                                    self.profile_dirty = true;
+                                    self.persist_profile("Auto-saved");
+                                }
+                            }
+                        }
+                    }
+                });
+        });
+        ui.add_space(4.0);
+        self.draw_ft4_conversation(ui, snapshot, conversation_h);
+        ui.add_space(4.0);
+
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_min_height(tx_h);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("🎙️ FT4 TX DECK").strong());
+                ui.add_enabled(
+                    !tx_active,
+                    egui::TextEdit::singleline(&mut self.digital_compose)
+                        .desired_width((ui.available_width() - 260.0).max(180.0))
+                        .hint_text("CQ W1AW FN20")
+                        .font(egui::TextStyle::Monospace),
+                );
+                if ui.button("CALL CQ").clicked() {
+                    self.digital_compose = format!(
+                        "CQ {} {}",
+                        self.station_callsign_or_default(),
+                        self.station_grid_or_default()
+                    );
+                    self.digital_seq_target = None;
+                    self.ft4_session = None;
+                    self.ft4_autoseq = true;
+                    self.queue_native_digital_tx(WorkspaceMode::Ft4);
+                }
+                if ui
+                    .add_enabled(
+                        !tx_active && !self.digital_compose.trim().is_empty(),
+                        egui::Button::new("SEND NEXT SLOT"),
+                    )
+                    .clicked()
+                {
+                    self.queue_native_digital_tx(WorkspaceMode::Ft4);
+                }
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("🛑 STOP + DISARM ALL")
+                                .strong()
+                                .color(Color32::WHITE),
+                        )
+                        .fill(Color32::from_rgb(112, 30, 38))
+                        .stroke(egui::Stroke::new(1.5, Color32::from_rgb(255, 100, 110))),
+                    )
+                    .on_hover_text("Drop PTT and permanently cancel FT8/FT4 automatic TX until re-armed")
+                    .clicked()
+                {
+                    self.disarm_all_tx("All TX stopped and disarmed by operator");
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                if let Some(target) = self.digital_seq_target.clone() {
+                    let my = self.station_callsign_or_default().to_string();
+                    let grid = self.station_grid_or_default().to_string();
+                    for (label, exchange) in
+                        [("Grid", grid.as_str()), ("RR73", "RR73"), ("73", "73")]
+                    {
+                        if ui.small_button(label).clicked() {
+                            self.digital_compose = format!("{target} {my} {exchange}");
+                        }
+                    }
+                }
+                ui.label(RichText::new(&self.digital_tx_status).small().color(Color32::GRAY));
+            });
+            ui.horizontal(|ui| {
+                ui.label("PTT lead");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.ptt_lead_ms)
+                            .range(100..=1500)
+                            .suffix(" ms"),
+                    )
+                    .changed()
+                {
+                    self.profile_dirty = true;
+                    self.persist_profile("Auto-saved");
+                }
+                ui.label("tail");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.ptt_tail_ms)
+                            .range(0..=1000)
+                            .suffix(" ms"),
+                    )
+                    .changed()
+                {
+                    self.profile_dirty = true;
+                    self.persist_profile("Auto-saved");
+                }
+            });
+        });
     }
 
     fn draw_mfsk_mode_workspace(
@@ -3823,6 +5004,57 @@ impl RigforgeGuiApp {
         }
     }
 
+    fn draw_tx_safety_card(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        let armed = self.any_tx_armed(snapshot);
+        let (fill, border, status, detail) = if armed {
+            (
+                Color32::from_rgb(73, 35, 24),
+                Color32::from_rgb(255, 137, 61),
+                "🔥 TRANSMIT ARMED",
+                "FT8/FT4 automation, queued audio, or PTT can transmit",
+            )
+        } else {
+            (
+                Color32::from_rgb(22, 48, 59),
+                Color32::from_rgb(77, 184, 211),
+                "🧊 ALL TX DISARMED",
+                "Safe state · arm from the FT8 or FT4 workspace",
+            )
+        };
+
+        egui::Frame::group(ui.style())
+            .fill(fill)
+            .stroke(egui::Stroke::new(2.0, border))
+            .show(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.label(RichText::new(status).strong().size(17.0).color(Color32::WHITE));
+                    ui.label(RichText::new(detail).small().color(Color32::LIGHT_GRAY));
+                    ui.add_space(3.0);
+                    if ui
+                        .add_sized(
+                            [ui.available_width(), 34.0],
+                            egui::Button::new(
+                                RichText::new("🛑 STOP + DISARM ALL TX")
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(126, 25, 39))
+                            .stroke(egui::Stroke::new(
+                                1.5,
+                                Color32::from_rgb(255, 105, 115),
+                            )),
+                        )
+                        .on_hover_text(
+                            "Drop PTT, abort queued/active audio, and disarm every automatic sequence",
+                        )
+                        .clicked()
+                    {
+                        self.disarm_all_tx("All TX stopped and disarmed by global safety control");
+                    }
+                });
+            });
+    }
+
     fn draw_workspace(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, snapshot: &GuiState) {
         ui.horizontal_wrapped(|ui| {
             for mode in WORKSPACE_MODES {
@@ -3833,8 +5065,8 @@ impl RigforgeGuiApp {
 
         match self.workspace_mode {
             WorkspaceMode::Ft8 => self.draw_ft8_workspace(ui, ctx, snapshot),
-            WorkspaceMode::Ft4
-            | WorkspaceMode::Fst4
+            WorkspaceMode::Ft4 => self.draw_ft4_workspace(ui, snapshot),
+            WorkspaceMode::Fst4
             | WorkspaceMode::Wspr
             | WorkspaceMode::Jt9
             | WorkspaceMode::Jt65
@@ -3864,8 +5096,11 @@ impl RigforgeGuiApp {
                 .small_button(if snapshot.ptt_on { "PTT OFF" } else { "PTT ON" })
                 .clicked()
             {
-                if snapshot.ptt_on || self.ft8_tx_active.load(Ordering::Acquire) {
-                    self.cancel_ft8_sequence("TX/PTT stopped by operator".to_string());
+                if snapshot.ptt_on
+                    || self.ft8_tx_active.load(Ordering::Acquire)
+                    || self.digital_tx_active.load(Ordering::Acquire)
+                {
+                    self.disarm_all_tx("TX/PTT stopped and all modes disarmed");
                 } else {
                     self.send_command(GuiCommand::TogglePtt);
                 }
@@ -3959,6 +5194,7 @@ impl eframe::App for RigforgeGuiApp {
             let mut s = self.state.lock().expect("ui state lock poisoned");
             s.workspace_mode = self.workspace_mode;
             s.ft8_deep_decode = self.ft8_deep_decode;
+            s.ft4_deep_decode = self.ft4_deep_decode;
             s.selected_audio_hz = self.rx_tone_hz;
             s.radio_spectrum_desired = self.civ_spectrum_on;
             (
@@ -3973,6 +5209,24 @@ impl eframe::App for RigforgeGuiApp {
         }
         self.process_ft8_tx_pipeline();
         self.process_native_digital_tx_pipeline();
+        let (ft4_decodes, latest_ft4_period) = {
+            let shared = self.state.lock().expect("ui state lock poisoned");
+            (
+                shared
+                    .digital_decodes
+                    .iter()
+                    .filter(|entry| entry.mode == WorkspaceMode::Ft4)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                shared.ft4_last_decode_period,
+            )
+        };
+        let completed_ft4_period = latest_ft4_period
+            .filter(|period| self.ft4_seen_decode_period != Some(*period));
+        if completed_ft4_period.is_some() {
+            self.ft4_seen_decode_period = completed_ft4_period;
+        }
+        self.handle_ft4_decodes(&ft4_decodes, completed_ft4_period);
         self.handle_ft8_decodes(&new_decodes, completed_decode_period);
         self.ft8_log.extend(new_decodes);
         // Keep the log bounded.
@@ -3993,7 +5247,7 @@ impl eframe::App for RigforgeGuiApp {
             .max_height(110.0)
             .show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.heading("RigForge");
+                ui.heading("⚡ RigForge");
                 ui.separator();
                 if ui
                     .selectable_label(self.show_signal_panel, "Signals")
@@ -4052,6 +5306,12 @@ impl eframe::App for RigforgeGuiApp {
                             self.ft8_follow_log = p.follow_log;
                             self.ft8_max_log_entries = p.max_log_entries.clamp(80, 1000);
                             self.ft8_deep_decode = p.deep_decode;
+                            self.ft4_deep_decode = p.ft4_deep_decode;
+                            self.ft4_autoseq = p.ft4_autoseq;
+                            self.ft4_auto_reply_policy = p.ft4_auto_reply_policy;
+                            self.ft4_cq_only_view = p.ft4_cq_only_view;
+                            self.ft4_follow_log = p.ft4_follow_log;
+                            self.ft4_max_log_entries = p.ft4_max_log_entries.clamp(80, 300);
                             self.ft8_autoseq = p.autoseq;
                             self.ft8_auto_reply_policy = p.auto_reply_policy;
                             self.ft8_auto_answer_cq = p.auto_answer_cq;
@@ -4118,6 +5378,8 @@ impl eframe::App for RigforgeGuiApp {
                 .min_width(300.0)
                 .max_width(ctx.content_rect().width() * 0.72)
                 .show(ctx, |ui| {
+                    self.draw_tx_safety_card(ui, &snapshot);
+                    ui.add_space(6.0);
                     egui::ScrollArea::vertical()
                         .id_salt("signals_scroll")
                         .auto_shrink([false, false])
@@ -4658,6 +5920,56 @@ fn ft8_activity_stats(log: &[Ft8DecodeEntry]) -> Ft8ActivityStats {
     }
 }
 
+fn digital_activity_stats(
+    log: &VecDeque<DigitalDecodeEntry>,
+    mode: WorkspaceMode,
+) -> Ft8ActivityStats {
+    let entries: Vec<&DigitalDecodeEntry> =
+        log.iter().filter(|entry| entry.mode == mode).collect();
+    let mut per_cycle: HashMap<u64, usize> = HashMap::new();
+    let mut station_counts: HashMap<String, usize> = HashMap::new();
+    let mut stations = HashSet::new();
+    let mut snrs = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        *per_cycle.entry(entry.period).or_default() += 1;
+        snrs.push(entry.snr_db.round() as i8);
+        if let Some(message) = parse_message(&entry.message) {
+            stations.insert(message.from.clone());
+            *station_counts.entry(message.from).or_default() += 1;
+        }
+    }
+    let latest_period = entries.iter().map(|entry| entry.period).max();
+    let latest_cycle = latest_period
+        .and_then(|period| per_cycle.get(&period).copied())
+        .unwrap_or_default();
+    let cq_this_cycle = latest_period.map_or(0, |period| {
+        entries
+            .iter()
+            .filter(|entry| entry.period == period && entry.message.starts_with("CQ "))
+            .count()
+    });
+    let average_per_cycle = if per_cycle.is_empty() {
+        0.0
+    } else {
+        entries.len() as f32 / per_cycle.len() as f32
+    };
+    let most_heard = station_counts.into_iter().max_by(|left, right| {
+        left.1
+            .cmp(&right.1)
+            .then_with(|| right.0.cmp(&left.0))
+    });
+    snrs.sort_unstable();
+    let median_snr = snrs.get(snrs.len() / 2).copied();
+    Ft8ActivityStats {
+        latest_cycle,
+        average_per_cycle,
+        cq_this_cycle,
+        unique_stations: stations.len(),
+        most_heard,
+        median_snr,
+    }
+}
+
 fn ft8_stat_chip(ui: &mut egui::Ui, label: &str, value: String, detail: String) {
     egui::Frame::group(ui.style())
         .fill(Color32::from_rgb(28, 32, 38))
@@ -4763,6 +6075,7 @@ fn spawn_audio_spectrum_worker(
         let mut ft8_slot_gate = Ft8SlotGate::default();
         let mut digital_buf: Vec<f32> = Vec::with_capacity(12_000 * 120);
         let mut digital_slot_gate = DigitalSlotGate::default();
+        let mut ft4_slot_gate = Ft8SlotGate::default();
         let mut decode_workspace_last: Option<WorkspaceMode> = None;
 
         while !stop.load(Ordering::Relaxed) {
@@ -4861,6 +6174,7 @@ fn spawn_audio_spectrum_worker(
                             ft8_buf.clear();
                             digital_buf.clear();
                             ft8_slot_gate.reset();
+                            ft4_slot_gate.reset();
                             digital_slot_gate.reset();
                             *dec = Decimator::new(sample_rate_hz);
                             let mut s = state.lock().expect("ui state lock poisoned");
@@ -4984,6 +6298,135 @@ fn spawn_audio_spectrum_worker(
                                     );
                                 }
                             }
+                        } else if active_workspace_mode == WorkspaceMode::Ft4 {
+                            digital_buf.extend_from_slice(&ds);
+                            let max_buf = 12_000 * 10;
+                            if digital_buf.len() > max_buf {
+                                digital_buf.drain(..digital_buf.len() - max_buf);
+                            }
+                            let now_s = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .map(|duration| duration.as_secs_f64())
+                                .unwrap_or(0.0);
+                            let current_period = (now_s / FT4_SLOT_SECONDS) as u64;
+                            let slot_position_s = now_s % FT4_SLOT_SECONDS;
+                            let captured_samples = (slot_position_s * 12_000.0).round() as usize;
+                            let alignment_s = state
+                                .lock()
+                                .expect("ui state lock poisoned")
+                                .ft4_clock_offset_s
+                                .unwrap_or(0.0)
+                                .clamp(
+                                    -FT4_ADAPTIVE_OFFSET_LIMIT_S,
+                                    FT4_ADAPTIVE_OFFSET_LIMIT_S,
+                                );
+                            let decode_at_s = (FT4_EARLY_DECODE_S
+                                + alignment_s.max(0.0) as f64)
+                                .min(7.1);
+                            let buffer_ready = captured_samples >= 12_000 * 5
+                                && digital_buf.len() >= captured_samples;
+                            if (tx_active.load(Ordering::Acquire)
+                                || digital_tx_active.load(Ordering::Acquire))
+                                && slot_position_s >= FT4_EARLY_DECODE_S
+                            {
+                                ft4_slot_gate.skip(current_period);
+                                state
+                                    .lock()
+                                    .expect("ui state lock poisoned")
+                                    .digital_decode_status =
+                                    "FT4 TX SLOT: decode skipped".to_string();
+                            } else if ft4_slot_gate.observe_at(
+                                current_period,
+                                slot_position_s,
+                                decode_at_s,
+                                buffer_ready,
+                            ) {
+                                let decoded_period = current_period;
+                                let skip_own_tx = {
+                                    let mut shared =
+                                        state.lock().expect("ui state lock poisoned");
+                                    let skip = shared.digital_tx_period
+                                        == Some((WorkspaceMode::Ft4, decoded_period));
+                                    if skip {
+                                        shared.digital_tx_period = None;
+                                        shared.digital_decode_status =
+                                            "FT4 TX slot complete; receiving".to_string();
+                                    }
+                                    skip
+                                };
+                                if skip_own_tx {
+                                    continue;
+                                }
+                                let samples = prepare_early_digital_slot(
+                                    &digital_buf,
+                                    captured_samples,
+                                    FT4_SLOT_SAMPLES,
+                                    alignment_s,
+                                );
+                                let in_progress = digital_decode_in_progress.clone();
+                                if in_progress
+                                    .compare_exchange(
+                                        false,
+                                        true,
+                                        Ordering::AcqRel,
+                                        Ordering::Relaxed,
+                                    )
+                                    .is_ok()
+                                {
+                                    let state_d = state.clone();
+                                    let utc = utc_hhmmss_millis(
+                                        decoded_period as f64 * FT4_SLOT_SECONDS,
+                                    );
+                                    let selected_audio_hz = state
+                                        .lock()
+                                        .expect("ui state lock poisoned")
+                                        .selected_audio_hz;
+                                    let deep_decode = state
+                                        .lock()
+                                        .expect("ui state lock poisoned")
+                                        .ft4_deep_decode;
+                                    let rms = (samples
+                                        .iter()
+                                        .map(|sample| sample * sample)
+                                        .sum::<f32>()
+                                        / samples.len().max(1) as f32)
+                                        .sqrt();
+                                    let peak = samples
+                                        .iter()
+                                        .map(|sample| sample.abs())
+                                        .fold(0.0_f32, f32::max);
+                                    info!(
+                                        mode = "FT4",
+                                        period = decoded_period,
+                                        slot_position_ms =
+                                            (slot_position_s * 1_000.0).round() as u64,
+                                        alignment_s,
+                                        deep_decode,
+                                        slot_rms_dbfs = 20.0 * rms.max(1e-9).log10(),
+                                        slot_peak_dbfs = 20.0 * peak.max(1e-9).log10(),
+                                        "FT4 early decode triggered"
+                                    );
+                                    thread::spawn(move || {
+                                        run_native_digital_decode(
+                                            WorkspaceMode::Ft4,
+                                            samples,
+                                            decoded_period,
+                                            utc,
+                                            selected_audio_hz,
+                                            deep_decode,
+                                            state_d,
+                                        );
+                                        in_progress.store(false, Ordering::Release);
+                                    });
+                                } else {
+                                    state
+                                        .lock()
+                                        .expect("ui state lock poisoned")
+                                        .digital_decode_status =
+                                        "FT4 decode deferred: previous pass still running"
+                                            .to_string();
+                                }
+                            }
                         } else if let Some(slot_seconds) = active_workspace_mode.core_slot_seconds()
                         {
                             digital_buf.extend_from_slice(&ds);
@@ -5051,6 +6494,7 @@ fn spawn_audio_spectrum_worker(
                                             decoded_period,
                                             utc,
                                             selected_audio_hz,
+                                            false,
                                             state_d,
                                         );
                                         in_progress.store(false, Ordering::Release);
@@ -5125,12 +6569,36 @@ fn prepare_early_ft8_slot(
     slot
 }
 
+fn prepare_early_digital_slot(
+    rolling: &[f32],
+    captured_samples: usize,
+    slot_samples: usize,
+    alignment_s: f32,
+) -> Vec<f32> {
+    let mut slot = vec![0.0; slot_samples];
+    let local_boundary = rolling.len() as isize - captured_samples.min(rolling.len()) as isize;
+    let alignment_samples = (alignment_s * 12_000.0).round() as isize;
+    let requested_start = local_boundary + alignment_samples;
+    let source_start = requested_start.max(0) as usize;
+    let destination_start = requested_start.min(0).unsigned_abs().min(slot_samples);
+    let copy_len = rolling
+        .len()
+        .saturating_sub(source_start)
+        .min(slot_samples.saturating_sub(destination_start));
+    if copy_len > 0 {
+        slot[destination_start..destination_start + copy_len]
+            .copy_from_slice(&rolling[source_start..source_start + copy_len]);
+    }
+    slot
+}
+
 fn run_native_digital_decode(
     mode: WorkspaceMode,
     samples: Vec<f32>,
     period: u64,
     utc: String,
     selected_audio_hz: u32,
+    deep_decode: bool,
     state: Arc<Mutex<GuiState>>,
 ) {
     let started = Instant::now();
@@ -5154,9 +6622,20 @@ fn run_native_digital_decode(
                 .map(|sample| (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16)
                 .collect();
             if mode == WorkspaceMode::Ft4 {
-                let outcome =
-                    DecodeRequest::<mfsk_core::ft4::Ft4>::new(&audio, 100.0, 3_000.0, 0.6, 100)
-                        .decode();
+                let sync_min = if deep_decode { 0.45 } else { 0.6 };
+                let request = DecodeRequest::<mfsk_core::ft4::Ft4>::new(
+                    &audio,
+                    100.0,
+                    3_000.0,
+                    sync_min,
+                    160,
+                )
+                .freq_hint(selected_audio_hz as f32);
+                let outcome = if deep_decode {
+                    request.sic_rounds(3).decode()
+                } else {
+                    request.decode()
+                };
                 for result in outcome.results {
                     if let Some(message) = unpack77(result.message77()) {
                         push(result.snr_db, result.dt_sec, result.freq_hz, message);
@@ -5249,13 +6728,34 @@ fn run_native_digital_decode(
         "digital decode pass complete"
     );
     let mut shared = state.lock().expect("ui state lock poisoned");
+    if mode == WorkspaceMode::Ft4 {
+        shared.ft4_last_decode_period = Some(period);
+    }
+    if mode == WorkspaceMode::Ft4 && !decoded.is_empty() {
+        let mut offsets: Vec<f32> = decoded.iter().map(|result| result.dt_s).collect();
+        offsets.sort_by(f32::total_cmp);
+        let measured = offsets[offsets.len() / 2].clamp(
+            -FT4_ADAPTIVE_OFFSET_LIMIT_S,
+            FT4_ADAPTIVE_OFFSET_LIMIT_S,
+        );
+        shared.ft4_clock_offset_s = Some(shared.ft4_clock_offset_s.map_or(measured, |previous| {
+            previous + 0.35 * (measured - previous)
+        }));
+    }
     shared.digital_decode_status = if decoded.is_empty() {
         format!("LIVE: no {} decodes in {elapsed_ms} ms", mode.label())
     } else {
+        let timing = if mode == WorkspaceMode::Ft4 {
+            shared
+                .ft4_clock_offset_s
+                .map(|offset| format!(" | adaptive dT {offset:+.2}s"))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         format!(
-            "LIVE: {} {} decoded in {elapsed_ms} ms",
-            decoded.len(),
-            mode.label()
+            "LIVE: {} {} decoded in {elapsed_ms} ms{timing}",
+            decoded.len(), mode.label()
         )
     };
     shared.digital_decodes.extend(decoded);
@@ -5585,6 +7085,20 @@ mod tests {
     }
 
     #[test]
+    fn operator_callsign_highlight_distinguishes_calls_from_mentions() {
+        assert_eq!(
+            operator_call_hit("W1AW N7XYZ -12", "W1AW"),
+            Some(OperatorCallHit::DirectedToMe)
+        );
+        assert_eq!(
+            operator_call_hit("CQ TEST N7XYZ W1AW", "W1AW"),
+            Some(OperatorCallHit::Mentioned)
+        );
+        assert_eq!(operator_call_hit("CQ W1A FN42", "W1AW"), None);
+        assert_eq!(operator_call_hit("CQ N7XYZ FN42", "N0CALL"), None);
+    }
+
+    #[test]
     fn apply_waterfall_bins_caps_rows_and_preserves_latest() {
         let mut state = GuiState::default();
         for i in 0..RADIO_WF_HEIGHT + 3 {
@@ -5756,10 +7270,52 @@ mod tests {
             10,
             "00:01:15.000".to_string(),
             1_500,
+            false,
             state.clone(),
         );
         let shared = state.lock().expect("state");
         assert!(shared
+            .digital_decodes
+            .iter()
+            .any(|entry| entry.message == "CQ W1AW AA00"));
+    }
+
+    #[test]
+    fn early_ft4_capture_contains_a_deliberately_late_decodable_waveform() {
+        let (pcm, _) = build_native_digital_tx_pcm(
+            WorkspaceMode::Ft4,
+            "CQ W1AW AA00",
+            1_500,
+        )
+        .expect("FT4 synthesis");
+        let captured = (FT4_EARLY_DECODE_S * 12_000.0).round() as usize;
+        let prehistory = 12_000 * 2;
+        let mut rolling = vec![0.0f32; prehistory + captured];
+        // Start 0.7 s later than the nominal +0.5 s. The old 5.5 s
+        // trigger truncated this frame; the guarded early window must not.
+        let start = prehistory + (1.2_f32 * 12_000.0).round() as usize;
+        for (dst, sample) in rolling[start..].iter_mut().zip(pcm) {
+            *dst = sample as f32 / i16::MAX as f32;
+        }
+        let slot = prepare_early_digital_slot(
+            &rolling,
+            captured,
+            FT4_SLOT_SAMPLES,
+            0.0,
+        );
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        run_native_digital_decode(
+            WorkspaceMode::Ft4,
+            slot,
+            10,
+            "00:01:15.000".to_string(),
+            1_500,
+            false,
+            state.clone(),
+        );
+        assert!(state
+            .lock()
+            .expect("state")
             .digital_decodes
             .iter()
             .any(|entry| entry.message == "CQ W1AW AA00"));
