@@ -20,7 +20,8 @@ use qsonaut_dsp::resample::Decimator;
 use qsonaut_log::{app_config_dir, QsoLog, QsoRecord};
 use qsonaut_pskreporter::{ReceptionReport, ReportSender, Reporter, ReporterConfig};
 use qsonaut_radio::{
-    enumerate_serial_ports, BaseMode, ControlId, ControlValue, IcomCiVRadio, Mode, Radio, RadioHal,
+    enumerate_serial_port_descriptors, BaseMode, ControlId, ControlValue, IcomCiVRadio, Mode,
+    Radio, RadioHal, SerialPortDescriptor,
 };
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Deserialize, Serialize};
@@ -44,6 +45,7 @@ use ft8_ops::{
 
 const RADIO_WF_WIDTH: usize = 360;
 const RADIO_WF_HEIGHT: usize = 180;
+const MAX_RADIO_WF_BINS: usize = 1_024;
 const AUDIO_BINS: usize = 512;
 const AUDIO_WF_HEIGHT: usize = 120;
 const AUDIO_MAX_FREQ_HZ: u32 = 4_000;
@@ -1366,6 +1368,7 @@ struct QsonautGuiApp {
     audio_worker_handle: Option<std::thread::JoinHandle<()>>,
     radio_waterfall_texture: Option<TextureHandle>,
     radio_waterfall_texture_revision: u64,
+    radio_waterfall_texture_bins: usize,
     audio_waterfall_texture: Option<TextureHandle>,
     audio_waterfall_texture_revision: u64,
     audio_waterfall_texture_bins: usize,
@@ -1446,6 +1449,8 @@ struct QsonautGuiApp {
     audio_input_devices: Vec<String>,
     audio_output_devices: Vec<String>,
     radio_serial_ports: Vec<String>,
+    radio_serial_port_labels: HashMap<String, String>,
+    radio_detected_models: Vec<String>,
     show_signal_panel: bool,
     show_device_settings: bool,
     device_restart_required: bool,
@@ -1482,7 +1487,8 @@ impl QsonautGuiApp {
 
         let audio_input_devices = AudioService::input_devices().unwrap_or_default();
         let audio_output_devices = AudioService::output_devices().unwrap_or_default();
-        let radio_serial_ports = enumerate_serial_ports().unwrap_or_default();
+        let (radio_serial_ports, radio_serial_port_labels, radio_detected_models) =
+            radio_port_inventory(enumerate_serial_port_descriptors().unwrap_or_default());
         let state = Arc::new(Mutex::new(GuiState::default()));
         let worker_stop = Arc::new(AtomicBool::new(false));
         let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
@@ -1689,6 +1695,7 @@ impl QsonautGuiApp {
             audio_worker_handle,
             radio_waterfall_texture: None,
             radio_waterfall_texture_revision: 0,
+            radio_waterfall_texture_bins: 0,
             audio_waterfall_texture: None,
             audio_waterfall_texture_revision: 0,
             audio_waterfall_texture_bins: 0,
@@ -1768,6 +1775,8 @@ impl QsonautGuiApp {
             audio_input_devices,
             audio_output_devices,
             radio_serial_ports,
+            radio_serial_port_labels,
+            radio_detected_models,
             show_signal_panel: true,
             show_device_settings: false,
             device_restart_required: false,
@@ -3002,7 +3011,11 @@ impl QsonautGuiApp {
     fn refresh_device_lists(&mut self) {
         self.audio_input_devices = AudioService::input_devices().unwrap_or_default();
         self.audio_output_devices = AudioService::output_devices().unwrap_or_default();
-        self.radio_serial_ports = enumerate_serial_ports().unwrap_or_default();
+        let (ports, labels, models) =
+            radio_port_inventory(enumerate_serial_port_descriptors().unwrap_or_default());
+        self.radio_serial_ports = ports;
+        self.radio_serial_port_labels = labels;
+        self.radio_detected_models = models;
     }
 
     fn draw_device_settings(&mut self, ui: &mut egui::Ui) {
@@ -3088,13 +3101,14 @@ impl QsonautGuiApp {
 
                 ui.label("Radio / USB serial");
                 egui::ComboBox::from_id_salt("radio_serial_port")
-                    .selected_text(
-                        self.config
-                            .radio
-                            .serial_port
-                            .as_deref()
-                            .unwrap_or("Auto detect"),
-                    )
+                    .selected_text(match self.config.radio.serial_port.as_deref() {
+                        Some(port) => self
+                            .radio_serial_port_labels
+                            .get(port)
+                            .map(String::as_str)
+                            .unwrap_or(port),
+                        None => "Auto detect",
+                    })
                     .width(ui.available_width().max(180.0))
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
@@ -3103,15 +3117,43 @@ impl QsonautGuiApp {
                             "Auto detect",
                         );
                         for name in &serial_ports {
+                            let label = self
+                                .radio_serial_port_labels
+                                .get(name)
+                                .map(String::as_str)
+                                .unwrap_or(name.as_str());
                             ui.selectable_value(
                                 &mut self.config.radio.serial_port,
                                 Some(name.clone()),
-                                name,
+                                label,
                             );
                         }
                     });
                 ui.end_row();
             });
+
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new("Supported radio profiles: Icom IC-7300 (CI-V)")
+                .small()
+                .color(Color32::GRAY),
+        );
+        if self.radio_detected_models.is_empty() {
+            ui.label(
+                RichText::new("Detected radios: none recognized yet (serial bridge only or unsupported model)")
+                    .small()
+                    .color(Color32::YELLOW),
+            );
+        } else {
+            ui.label(
+                RichText::new(format!(
+                    "Detected radios: {}",
+                    self.radio_detected_models.join(", ")
+                ))
+                .small()
+                .color(Color32::LIGHT_GREEN),
+            );
+        }
 
         if old_input != self.config.audio.input_device
             || old_output != self.config.audio.output_device
@@ -3349,12 +3391,12 @@ impl QsonautGuiApp {
             "📊 Radio levels",
             &format!(
                 "AF {} · RF {} · PWR {}",
-                fmt_opt_u8(snapshot.af_gain),
-                fmt_opt_u8(snapshot.rf_gain),
-                fmt_opt_u8(snapshot.rf_power)
+                fmt_civ_level_percent(snapshot.af_gain),
+                fmt_civ_level_percent(snapshot.rf_gain),
+                fmt_civ_level_percent(snapshot.rf_power)
             ),
             &format!(
-                "{} · {}",
+                "{} · {} · raw AF/RF/PWR: {}/{}/{}",
                 snapshot
                     .filter
                     .map(|value| format!("FIL{value}"))
@@ -3363,7 +3405,10 @@ impl QsonautGuiApp {
                     "data mode"
                 } else {
                     "voice/CW mode"
-                }
+                },
+                fmt_opt_u8(snapshot.af_gain),
+                fmt_opt_u8(snapshot.rf_gain),
+                fmt_opt_u8(snapshot.rf_power)
             ),
             Color32::from_rgb(210, 190, 110),
         );
@@ -3425,34 +3470,44 @@ impl QsonautGuiApp {
 
         let display_size = egui::vec2(ui.available_width(), RADIO_WF_HEIGHT as f32 * 1.9);
 
+        let display_bins = snapshot
+            .radio_waterfall_rows
+            .back()
+            .map(|row| row.len())
+            .unwrap_or(RADIO_WF_WIDTH)
+            .clamp(64, MAX_RADIO_WF_BINS);
+
         if self.radio_waterfall_texture.is_none()
             || self.radio_waterfall_texture_revision != snapshot.radio_waterfall_revision
+            || self.radio_waterfall_texture_bins != display_bins
         {
             let image = build_waterfall_image(
                 &snapshot.radio_waterfall_rows,
-                RADIO_WF_WIDTH,
+                display_bins,
                 RADIO_WF_HEIGHT,
                 0.7,
             );
             if let Some(tex) = &mut self.radio_waterfall_texture {
-                tex.set(image, TextureOptions::LINEAR);
+                tex.set(image, TextureOptions::NEAREST);
             } else {
                 self.radio_waterfall_texture = Some(ctx.load_texture(
                     "qsonaut-radio-waterfall",
                     image,
-                    TextureOptions::LINEAR,
+                    TextureOptions::NEAREST,
                 ));
             }
             self.radio_waterfall_texture_revision = snapshot.radio_waterfall_revision;
+            self.radio_waterfall_texture_bins = display_bins;
         }
 
         if let Some(tex) = &self.radio_waterfall_texture {
             ui.image((tex.id(), display_size));
         }
 
-        ui.label(
-            "Toggleable CI-V scope stream. Palette: blue\u{2192}cyan\u{2192}yellow\u{2192}white",
-        );
+        ui.label(format!(
+            "CI-V scope bins: {} · Palette: blue\u{2192}cyan\u{2192}yellow\u{2192}white",
+            display_bins
+        ));
     }
 
     fn draw_audio_waterfall(
@@ -5669,7 +5724,7 @@ impl eframe::App for QsonautGuiApp {
                                 .color(Color32::from_rgb(109, 224, 255)),
                         );
                         ui.label(
-                            RichText::new("🛰️ AMATEUR RADIO MISSION CONTROL")
+                            RichText::new("AMATEUR RADIO MISSION CONTROL")
                                 .strong()
                                 .size(10.0)
                                 .color(Color32::from_rgb(255, 137, 108)),
@@ -5999,12 +6054,9 @@ fn spawn_radio_worker(
 
                 if !spectrum_desired {
                     if spectrum_enabled {
-                        let _ = rt.block_on(stream_radio.disable_spectrum_stream());
                         let mut s = stream_state.lock().expect("ui state lock poisoned");
                         s.radio_spectrum_enabled = false;
-                        s.radio_waterfall_status = "OFF".to_string();
-                        s.radio_waterfall_rows.clear();
-                        s.radio_waterfall_revision = s.radio_waterfall_revision.wrapping_add(1);
+                        s.radio_waterfall_status = "OFF (radio scope left unchanged)".to_string();
                     }
                     thread::sleep(Duration::from_millis(250));
                     continue;
@@ -6035,9 +6087,9 @@ fn spawn_radio_worker(
                     continue;
                 }
 
-                // 300 ms gives enough headroom for two-segment frame assembly.
+                // Allow enough time to assemble segmented IC-7300 scope payloads.
                 match rt.block_on(
-                    stream_radio.try_scope_waveform_bins_stream(Duration::from_millis(300)),
+                    stream_radio.try_scope_waveform_bins_stream(Duration::from_millis(700)),
                 ) {
                     Ok(Some(bins)) if !bins.is_empty() => {
                         *scope_writer.lock().expect("scope lock") = Some(bins);
@@ -6296,7 +6348,11 @@ fn poll_radio_core_state(
 }
 
 fn apply_waterfall_bins(next: &mut GuiState, bins: &[u8]) {
-    let row = downsample_bins(bins, RADIO_WF_WIDTH);
+    let row = if bins.len() > MAX_RADIO_WF_BINS {
+        downsample_bins(bins, MAX_RADIO_WF_BINS)
+    } else {
+        bins.to_vec()
+    };
     if next.radio_waterfall_rows.len() >= RADIO_WF_HEIGHT {
         next.radio_waterfall_rows.pop_front();
     }
@@ -7610,6 +7666,36 @@ fn fmt_opt_u8(v: Option<u8>) -> String {
     v.map(|n| n.to_string()).unwrap_or_else(|| "?".to_string())
 }
 
+fn fmt_civ_level_percent(v: Option<u8>) -> String {
+    v.map(|raw| {
+        let percent = (raw as f32 * 100.0 / 255.0).round() as u8;
+        format!("{percent}%")
+    })
+    .unwrap_or_else(|| "?".to_string())
+}
+
+fn radio_port_inventory(
+    descriptors: Vec<SerialPortDescriptor>,
+) -> (Vec<String>, HashMap<String, String>, Vec<String>) {
+    let mut ports = Vec::with_capacity(descriptors.len());
+    let mut labels = HashMap::with_capacity(descriptors.len());
+    let mut models = Vec::new();
+
+    for descriptor in descriptors {
+        ports.push(descriptor.port_name.clone());
+        labels.insert(descriptor.port_name, descriptor.display_name);
+        if let Some(model) = descriptor.likely_radio {
+            models.push(model);
+        }
+    }
+
+    ports.sort();
+    ports.dedup();
+    models.sort();
+    models.dedup();
+    (ports, labels, models)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7741,6 +7827,38 @@ mod tests {
         let tuning = DisplayTuning::default();
         assert_eq!(effective_visual_profile(&tuning, "USB-D"), (100, 1));
         assert_eq!(effective_visual_profile(&tuning, "FT8"), (100, 1));
+    }
+
+    #[test]
+    fn ci_v_levels_are_presented_as_percentages() {
+        assert_eq!(fmt_civ_level_percent(Some(0)), "0%");
+        assert_eq!(fmt_civ_level_percent(Some(128)), "50%");
+        assert_eq!(fmt_civ_level_percent(Some(255)), "100%");
+        assert_eq!(fmt_civ_level_percent(None), "?");
+    }
+
+    #[test]
+    fn radio_port_inventory_collects_labels_and_detected_models() {
+        let descriptors = vec![
+            SerialPortDescriptor {
+                port_name: "/dev/ttyUSB0".to_string(),
+                display_name: "/dev/ttyUSB0 — Icom IC-7300 (CI-V)".to_string(),
+                likely_radio: Some("Icom IC-7300 (CI-V)".to_string()),
+            },
+            SerialPortDescriptor {
+                port_name: "/dev/ttyUSB1".to_string(),
+                display_name: "/dev/ttyUSB1 — USB serial".to_string(),
+                likely_radio: None,
+            },
+        ];
+
+        let (ports, labels, models) = radio_port_inventory(descriptors);
+        assert_eq!(ports, vec!["/dev/ttyUSB0", "/dev/ttyUSB1"]);
+        assert_eq!(
+            labels.get("/dev/ttyUSB0").map(String::as_str),
+            Some("/dev/ttyUSB0 — Icom IC-7300 (CI-V)")
+        );
+        assert_eq!(models, vec!["Icom IC-7300 (CI-V)"]);
     }
 
     #[test]

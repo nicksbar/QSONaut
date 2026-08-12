@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use serialport::SerialPort;
+use serialport::{SerialPort, SerialPortType};
 use std::{
     io::ErrorKind,
     io::Read,
@@ -182,14 +182,100 @@ impl Radio for NullRadio {
 }
 
 pub fn enumerate_serial_ports() -> Result<Vec<String>> {
-    let mut ports = serialport::available_ports()
-        .context("failed to enumerate serial ports")?
+    let mut ports = enumerate_serial_port_descriptors()?
         .into_iter()
         .map(|port| port.port_name)
         .collect::<Vec<_>>();
     ports.sort();
     ports.dedup();
     Ok(ports)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SerialPortDescriptor {
+    pub port_name: String,
+    pub display_name: String,
+    pub likely_radio: Option<String>,
+}
+
+pub fn enumerate_serial_port_descriptors() -> Result<Vec<SerialPortDescriptor>> {
+    let mut ports = serialport::available_ports().context("failed to enumerate serial ports")?;
+    ports.sort_by(|left, right| left.port_name.cmp(&right.port_name));
+
+    let descriptors = ports
+        .into_iter()
+        .map(|port| {
+            let port_name = port.port_name;
+            let (extra_label, likely_radio) = describe_port_type(&port.port_type);
+            let display_name = if extra_label.is_empty() {
+                port_name.clone()
+            } else {
+                format!("{} — {}", port_name, extra_label)
+            };
+
+            SerialPortDescriptor {
+                port_name,
+                display_name,
+                likely_radio,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Ok(descriptors)
+}
+
+fn describe_port_type(port_type: &SerialPortType) -> (String, Option<String>) {
+    match port_type {
+        SerialPortType::UsbPort(info) => {
+            let manufacturer = info.manufacturer.as_deref().unwrap_or("").trim();
+            let product = info.product.as_deref().unwrap_or("").trim();
+
+            let likely_radio = detect_likely_radio_model(info.vid, info.pid, manufacturer, product);
+
+            let usb_label = if !manufacturer.is_empty() && !product.is_empty() {
+                format!(
+                    "{} {} (VID:{:04X} PID:{:04X})",
+                    manufacturer, product, info.vid, info.pid
+                )
+            } else if !product.is_empty() {
+                format!("{} (VID:{:04X} PID:{:04X})", product, info.vid, info.pid)
+            } else if !manufacturer.is_empty() {
+                format!(
+                    "{} (VID:{:04X} PID:{:04X})",
+                    manufacturer, info.vid, info.pid
+                )
+            } else {
+                format!("USB serial (VID:{:04X} PID:{:04X})", info.vid, info.pid)
+            };
+
+            if let Some(model) = &likely_radio {
+                (format!("{} [{}]", usb_label, model), likely_radio)
+            } else {
+                (usb_label, None)
+            }
+        }
+        _ => ("serial device".to_string(), None),
+    }
+}
+
+fn detect_likely_radio_model(
+    vid: u16,
+    _pid: u16,
+    manufacturer: &str,
+    product: &str,
+) -> Option<String> {
+    let manufacturer_lc = manufacturer.to_ascii_lowercase();
+    let product_lc = product.to_ascii_lowercase();
+
+    if product_lc.contains("ic-7300") || (vid == 0x0C26 && product_lc.contains("7300")) {
+        return Some("Icom IC-7300 (CI-V)".to_string());
+    }
+
+    if manufacturer_lc.contains("icom") || product_lc.contains("icom") {
+        return Some("Icom CI-V radio".to_string());
+    }
+
+    None
 }
 
 #[derive(Clone)]
@@ -1714,6 +1800,22 @@ mod tests {
     fn rejects_non_scope_waveform_frame_for_bins() {
         let frame = [0xFE, 0xFE, 0xE0, 0x94, 0x04, 0x01, 0x01, 0xFD];
         assert!(parse_scope_waveform_bins(&frame).is_none());
+    }
+
+    #[test]
+    fn detects_ic7300_from_usb_identity() {
+        assert_eq!(
+            detect_likely_radio_model(0x0C26, 0x0000, "Icom Inc.", "IC-7300"),
+            Some("Icom IC-7300 (CI-V)".to_string())
+        );
+    }
+
+    #[test]
+    fn detects_generic_icom_when_model_is_unknown() {
+        assert_eq!(
+            detect_likely_radio_model(0x0C26, 0x0001, "Icom Inc.", "USB Audio CODEC"),
+            Some("Icom CI-V radio".to_string())
+        );
     }
 
     fn parse_hex_line(line: &str) -> Vec<u8> {
