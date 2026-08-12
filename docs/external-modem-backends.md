@@ -4,7 +4,8 @@ This project is intentionally moving toward **integration-first** modem strategy
 
 ## Integrated now
 
-- `mfsk-core` (local path sibling clone)
+- [`mfsk-core`](https://github.com/jl1nie/mfsk-core) (GPL-3.0-or-later,
+  developed by its upstream contributors; local path sibling clone)
   - FT8/FT4/FST4/WSPR/JT9/JT65/Q65/MSK144 support
   - QSONaut wires mode-specific receive adapters for each of those families.
   - FT8, FT4, FST4-60, JT9, JT65, and Q65-30A also have scheduled transmit
@@ -36,7 +37,7 @@ Candidate Rust bridge:
 
 1. Active maintenance cadence (recent commits/issues).
 2. Clear API surface for library embedding (not app-only).
-3. License compatibility with QSONaut distribution strategy.
+3. License compatibility and complete attribution in QSONaut distributions.
 4. Proven real-world decode behavior or strong test corpus.
 5. Low integration complexity (streaming audio + callback model).
 

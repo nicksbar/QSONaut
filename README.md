@@ -49,6 +49,7 @@ QSONaut currently uses
 ```bash
 git clone https://github.com/nicksbar/QSONaut.git
 git clone https://github.com/jl1nie/mfsk-core.git
+git -C mfsk-core checkout b70ad5ceecb45ddbdd05ba6f3bd4ef090c010bf7 # v0.9.1
 cd QSONaut
 cargo run --release -p qsonaut -- --gui
 ```
@@ -119,6 +120,23 @@ steps are especially useful. Tests and captured protocol fixtures are preferred
 over claims of compatibility. Please do not commit credentials, personal QSO
 logs, recordings, or proprietary manuals.
 
+## Acknowledgements
+
+QSONaut's WSJT-family decode and synthesis engine is powered by
+**[`mfsk-core`](https://github.com/jl1nie/mfsk-core)**, developed and maintained
+by the [`mfsk-core` contributors](https://github.com/jl1nie/mfsk-core/graphs/contributors).
+It provides the protocol, DSP, message-codec, and waveform machinery behind
+QSONaut's FT8, FT4, FST4, WSPR, JT9, JT65, Q65, and MSK144 integrations.
+
+We are grateful to that project for making a serious pure-Rust WSJT-family
+engine available to the amateur-radio community. `mfsk-core` is licensed
+**GPL-3.0-or-later** and carries its own attribution to WSJT-X, Joe Taylor
+K1JT, and collaborators. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
+for the exact source revision and license details used by QSONaut releases.
+
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+QSONaut's original source code is offered under the MIT license; see
+[`LICENSE`](LICENSE). QSONaut currently links with GPL-3.0-or-later
+`mfsk-core`, so distributed combined binaries are also subject to the
+applicable GPL terms. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

@@ -3182,11 +3182,12 @@ impl QsonautGuiApp {
             WorkspaceMode::Ft8 => snapshot.ft8_decode_status.as_str(),
             _ => snapshot.digital_decode_status.as_str(),
         };
+        let decode_detail = format!("mfsk-core · {decode_status}");
         operator_status_card(
             ui,
             "🔬 Decode engine",
             self.workspace_mode.label(),
-            decode_status,
+            &decode_detail,
             if decode_status.contains("failed") || decode_status.contains("NO INPUT") {
                 Color32::YELLOW
             } else {

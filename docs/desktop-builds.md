@@ -40,5 +40,6 @@ apply after restarting QSONaut. The pre-rename `.rigforge_profile.toml` file is
 read as a one-way migration fallback.
 
 `mfsk-core` remains a sibling source dependency during active modem development.
-The workflow checks it out alongside QSONaut. Pin its checkout to a release tag
-before publishing production binaries so builds remain reproducible.
+The workflow checks a pinned revision out alongside QSONaut and packages its
+GPL-3.0-or-later license plus QSONaut's third-party notice with every binary
+archive. Update the pinned revision and notice together when upgrading it.
