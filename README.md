@@ -99,6 +99,15 @@ recorded WAV files are ignored by Git.
 AI-related environment keys are currently inert placeholders and can be left at
 their defaults.
 
+Runtime logs are written to `qsonaut.log` under the platform app directory:
+
+- Windows: `%APPDATA%\QSONaut\logs\qsonaut.log`
+- Linux: `$XDG_CONFIG_HOME/qsonaut/logs/qsonaut.log` (or `~/.config/qsonaut/logs/qsonaut.log`)
+- macOS: `~/Library/Application Support/QSONaut/logs/qsonaut.log`
+
+If QSONaut fails to open a window or crashes during startup, attach that log
+file to the issue report.
+
 Reception data stays local unless you explicitly enable PSK Reporter. External
 automation source declarations reference environment-variable names rather
 than embedding Discord or IRC credentials.

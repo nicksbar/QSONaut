@@ -17,7 +17,7 @@ use qsonaut_accelerate::{
 use qsonaut_audio::{play_pcm_blocking, AudioService};
 use qsonaut_core::AppConfig;
 use qsonaut_dsp::resample::Decimator;
-use qsonaut_log::{QsoLog, QsoRecord};
+use qsonaut_log::{app_config_dir, QsoLog, QsoRecord};
 use qsonaut_pskreporter::{ReceptionReport, ReportSender, Reporter, ReporterConfig};
 use qsonaut_radio::{
     enumerate_serial_ports, BaseMode, ControlId, ControlValue, IcomCiVRadio, Mode, Radio, RadioHal,
@@ -314,32 +314,15 @@ fn should_move_tx_to_decode(message: &ft8_ops::ParsedMessage, continuing_exchang
 }
 
 fn operator_profile_path() -> PathBuf {
-    qsonaut_data_dir().join(OPERATOR_PROFILE_FILE)
+    app_config_dir().join(OPERATOR_PROFILE_FILE)
 }
 
 fn qso_log_path() -> PathBuf {
-    qsonaut_data_dir().join(QSO_LOG_FILE)
+    app_config_dir().join(QSO_LOG_FILE)
 }
 
 fn qso_adif_path() -> PathBuf {
-    qsonaut_data_dir().join(QSO_ADIF_FILE)
-}
-
-fn qsonaut_data_dir() -> PathBuf {
-    #[cfg(target_os = "windows")]
-    if let Some(root) = std::env::var_os("APPDATA") {
-        return PathBuf::from(root).join("QSONaut");
-    }
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(root) = std::env::var_os("XDG_CONFIG_HOME") {
-            return PathBuf::from(root).join("qsonaut");
-        }
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(".config").join("qsonaut");
-        }
-    }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    app_config_dir().join(QSO_ADIF_FILE)
 }
 
 fn load_operator_profile() -> Option<OperatorProfile> {

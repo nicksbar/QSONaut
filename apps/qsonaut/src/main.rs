@@ -1,13 +1,16 @@
+#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use qsonaut_core::AppConfig;
 use qsonaut_gui::run_gui;
+use qsonaut_log::log_file_path;
 use qsonaut_radio::{
     enumerate_serial_ports, ControlId, ControlValue, IcomCiVRadio, Mode, Radio, RadioHal,
 };
-use tracing::info;
+use tracing::{error, info};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliMode {
@@ -165,8 +168,32 @@ struct Cli {
     gui: bool,
 }
 
-fn main() -> Result<()> {
+fn main() {
+    let wants_gui = wants_gui_launch();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(real_main));
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            report_fatal_error(wants_gui, "QSONaut failed to start", &format!("{error:#}"));
+            std::process::exit(1);
+        }
+        Err(panic) => {
+            let message = if let Some(message) = panic.downcast_ref::<&str>() {
+                (*message).to_string()
+            } else if let Some(message) = panic.downcast_ref::<String>() {
+                message.clone()
+            } else {
+                "non-string panic payload".to_string()
+            };
+            report_fatal_error(wants_gui, "QSONaut panicked during startup", &message);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn real_main() -> Result<()> {
     prepare_wsl_gui_environment()?;
+    qsonaut_log::init("info")?;
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -177,8 +204,6 @@ fn main() -> Result<()> {
 async fn async_main() -> Result<()> {
     let launch_gui_by_default = std::env::args_os().len() == 1;
     let cli = Cli::parse();
-
-    qsonaut_log::init("info")?;
 
     let config_path = cli.config.as_deref();
     let mut config = AppConfig::load(config_path)?;
@@ -400,33 +425,9 @@ async fn async_main() -> Result<()> {
             "GUI launch requested"
         );
 
-        let gui_result =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_gui(config.clone())));
-        match gui_result {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                println!("GUI launch failed: {err}");
-                println!(
-                    "If you are on a headless shell, run from a desktop session with DISPLAY/Wayland configured."
-                );
-                println!(
-                    "WSL tip: ensure WSLg is active and WAYLAND_DISPLAY is set; if needed install wl-clipboard and xclip."
-                );
-                return Ok(());
-            }
-            Err(_) => {
-                println!(
-                    "GUI backend panicked during startup. This is commonly caused by missing/invalid desktop graphics context."
-                );
-                println!(
-                    "Run from a desktop session with DISPLAY/Wayland configured, or check GPU/GL driver availability."
-                );
-                println!(
-                    "WSL tip: ensure WSLg is active and WAYLAND_DISPLAY is set; if needed install wl-clipboard and xclip."
-                );
-                return Ok(());
-            }
-        }
+        run_gui(config.clone()).context(
+            "GUI launch failed. Confirm a working desktop graphics session and attach qsonaut.log when filing an issue.",
+        )?;
         info!("QSONaut GUI closed");
         return Ok(());
     }
@@ -435,6 +436,53 @@ async fn async_main() -> Result<()> {
 
     info!("QSONaut clean shutdown");
     Ok(())
+}
+
+fn wants_gui_launch() -> bool {
+    let args = std::env::args_os().collect::<Vec<_>>();
+    args.len() == 1 || args.iter().skip(1).any(|arg| arg == "--gui")
+}
+
+fn report_fatal_error(wants_gui: bool, title: &str, detail: &str) {
+    let log_path = log_file_path();
+    let message = format!(
+        "{detail}\n\nDiagnostic log: {}\nPlease attach this log when filing an issue.",
+        log_path.display()
+    );
+    error!(title, detail, log_path = %log_path.display(), "fatal startup error");
+
+    if wants_gui {
+        show_fatal_dialog(title, &message);
+    } else {
+        eprintln!("{title}: {detail}");
+        eprintln!("Diagnostic log: {}", log_path.display());
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn show_fatal_dialog(title: &str, message: &str) {
+    use std::ffi::OsStr;
+    use std::iter;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+
+    let wide = |text: &str| {
+        OsStr::new(text)
+            .encode_wide()
+            .chain(iter::once(0))
+            .collect::<Vec<u16>>()
+    };
+
+    let title = wide(title);
+    let message = wide(message);
+    unsafe {
+        MessageBoxW(0, message.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn show_fatal_dialog(title: &str, message: &str) {
+    eprintln!("{title}: {message}");
 }
 
 /// Mesa reads its renderer selection during process startup. Under WSL, set

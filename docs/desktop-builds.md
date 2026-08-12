@@ -40,6 +40,10 @@ Audio output changes apply to the next transmission; input and radio changes
 apply after restarting QSONaut. The pre-rename `.rigforge_profile.toml` file is
 read as a one-way migration fallback.
 
+Startup and runtime diagnostics are written to `logs/qsonaut.log` below that
+same platform app directory. For bug reports, especially startup failures,
+attach the log file captured from the affected machine.
+
 `mfsk-core` remains a sibling source dependency during active modem development.
 The workflow checks out the current `main` branch alongside QSONaut and
 packages its GPL-3.0-or-later license plus QSONaut's third-party notice with

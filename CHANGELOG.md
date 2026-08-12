@@ -8,7 +8,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
-- Placeholder for upcoming changes.
+- Platform log file output (`qsonaut.log`) for startup/runtime diagnostics that users can attach to issue reports.
+
+### Changed
+- Windows release builds now launch as native GUI applications instead of console-first binaries.
+- GUI state, operator profile, and QSO logs now resolve through one central platform app directory path.
+
+### Fixed
+- Fatal GUI startup failures now preserve diagnostics in the log file and surface a user-visible error path instead of silently exiting.
 
 ## [0.1.0] - 2026-08-12
 
