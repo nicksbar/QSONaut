@@ -71,6 +71,7 @@ This supports many commands without hardcoding every one into the trait.
 - QSONaut can select Rigwright profiles for popular Icom, Yaesu, and Kenwood radios.
 - Common frequency, mode, and PTT operations route through the selected protocol driver.
 - Native window geometry and expanded/collapsed section state persist between launches.
+- IC-7300 scope data is accepted only as complete ordered 475-bin USB sweeps; narrow center and active-band fixed views apply documented CI-V settings with acknowledgement.
 - Implemented live CI-V write paths for:
    - set frequency (`0x05` + BCD Hz)
    - set mode (`0x06`)
