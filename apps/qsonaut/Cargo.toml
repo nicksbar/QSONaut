@@ -16,7 +16,7 @@ qsonaut-ai = { path = "../../crates/qsonaut-ai" }
 qsonaut-audio = { path = "../../crates/qsonaut-audio" }
 qsonaut-core = { path = "../../crates/qsonaut-core" }
 qsonaut-log = { path = "../../crates/qsonaut-log" }
-qsonaut-radio = { package = "rigwright", git = "https://github.com/nicksbar/rigwright", rev = "651432a443d7ee1d07d20e8ca0f8baf5cc73246e" }
+qsonaut-radio = { package = "rigwright", git = "https://github.com/nicksbar/rigwright" }
 qsonaut-gui = { path = "../../crates/qsonaut-gui" }
 
 [target.'cfg(windows)'.dependencies]

@@ -127,6 +127,13 @@ than embedding Discord or IRC credentials.
 - `apps/qsonaut` — CLI and desktop entry point
 - `crates/qsonaut-gui` — operator console and timed mode workflows
 - [`rigwright`](https://github.com/nicksbar/rigwright) — sibling radio HAL and native Icom CI-V implementation
+
+QSONaut normally resolves `rigwright` from its GitHub repository. `Cargo.lock`
+pins the exact source revision for reproducible builds. For
+local development against a sibling checkout, copy `.cargo/config.toml.example`
+to `.cargo/config.toml`; the local file is ignored by Git and overrides the
+Git dependency with `../rigwright` without changing committed manifests. Run
+`cargo update -p rigwright` when you intentionally want the latest GitHub head.
 - `crates/qsonaut-audio`, `qsonaut-dsp`, `qsonaut-modes` — real-time media and modem support
 - `crates/qsonaut-log`, `qsonaut-pskreporter` — local logging and opt-in reporting
 - `crates/qsonaut-accelerate` — measured compute-backend selection

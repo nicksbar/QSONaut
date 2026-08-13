@@ -174,7 +174,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
  "x11rb",
 ]
 
@@ -2618,7 +2618,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 [[package]]
 name = "rigwright"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/rigwright?rev=651432a443d7ee1d07d20e8ca0f8baf5cc73246e#651432a443d7ee1d07d20e8ca0f8baf5cc73246e"
+source = "git+https://github.com/nicksbar/rigwright#0b9c83dac31bfbb2d171ed700c7645e1ee0b45b4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2670,7 +2670,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

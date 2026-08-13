@@ -9,6 +9,7 @@ dist/
 .rigforge_profile.toml
 qsonaut.toml
 automation.toml
+.cargo/config.toml
 *.pem
 *.key
 
