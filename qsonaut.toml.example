@@ -12,6 +12,7 @@ channels = 1
 [radio]
 enabled = true
 backend = "none"
+model = "IC-7300"
 serial_port = "/dev/ttyUSB0"
 baud_rate = 115200
 civ_address = 148

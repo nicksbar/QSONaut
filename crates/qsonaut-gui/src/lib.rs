@@ -27,8 +27,10 @@ use qsonaut_dsp::resample::Decimator;
 use qsonaut_log::{app_config_dir, AdifExportFilter, QsoLog, QsoRecord};
 use qsonaut_pskreporter::{ReceptionReport, ReportSender, Reporter, ReporterConfig};
 use qsonaut_radio::{
-    enumerate_serial_port_descriptors, BaseMode, ControlId, ControlValue, IcomCiVRadio, Mode,
-    Radio, RadioHal, SerialPortDescriptor,
+    drivers::{open_model_with_radio_address, ConfiguredRadio},
+    enumerate_serial_port_descriptors,
+    models::{find_model, Protocol, SupportLevel, POPULAR_RADIOS},
+    BaseMode, ControlId, ControlValue, Mode, RadioHal, SerialPortDescriptor,
 };
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Deserialize, Serialize};
@@ -60,7 +62,7 @@ const AUDIO_MAX_FREQ_HZ: u32 = 4_000;
 // 8192 samples @ 48 kHz = 170 ms window, ~5.9 Hz/bin, ~683 useful bins for 0-4 kHz.
 const FFT_SIZE: usize = 8192;
 const OPERATOR_PROFILE_FILE: &str = "profile.toml";
-const OPERATOR_PROFILE_VERSION: u32 = 7;
+const OPERATOR_PROFILE_VERSION: u32 = 8;
 const GUI_SCALE_BASE: f32 = 1.2;
 const GUI_SCALE_MAX: f32 = 2.0;
 const GUI_SCALE_MIN: f32 = 0.9;
@@ -224,6 +226,10 @@ struct OperatorProfile {
     audio_output_device: Option<String>,
     #[serde(default)]
     radio_serial_port: Option<String>,
+    #[serde(default = "default_radio_model")]
+    radio_model: String,
+    #[serde(default = "default_radio_baud_rate")]
+    radio_baud_rate: u32,
     #[serde(default = "default_gui_scale")]
     gui_scale: f32,
     #[serde(default)]
@@ -258,6 +264,14 @@ struct OperatorProfile {
 
 fn default_gui_scale() -> f32 {
     GUI_SCALE_BASE
+}
+
+fn default_radio_model() -> String {
+    "IC-7300".to_string()
+}
+
+fn default_radio_baud_rate() -> u32 {
+    115_200
 }
 
 fn default_true() -> bool {
@@ -1667,6 +1681,9 @@ pub fn run_gui(config: AppConfig) -> Result<()> {
             .with_icon(app_icon.clone())
             .with_resizable(true),
         renderer,
+        // With eframe's persistence feature this restores native window
+        // position/size and egui memory, including collapsing-header state.
+        persist_window: true,
         ..Default::default()
     };
 
@@ -1903,6 +1920,10 @@ impl QsonautGuiApp {
                 config.audio.input_device = profile.audio_input_device;
                 config.audio.output_device = profile.audio_output_device;
                 config.radio.serial_port = profile.radio_serial_port;
+                if profile.profile_version >= 8 {
+                    config.radio.model = profile.radio_model;
+                    config.radio.baud_rate = profile.radio_baud_rate;
+                }
             }
         }
 
@@ -1922,28 +1943,35 @@ impl QsonautGuiApp {
 
         let (command_tx, radio_worker_handle) = if config.radio.enabled {
             let port = config.radio.serial_port.clone().unwrap_or_default();
-            let radio = IcomCiVRadio::new(
+            let radio = open_model_with_radio_address(
+                &config.radio.model,
                 port.clone(),
                 config.radio.baud_rate,
                 config.radio.controller_civ_address,
-            )
-            .with_radio_address(config.radio.civ_address);
-            let (tx, rx) = mpsc::channel::<GuiCommand>();
-            let display_port = if port.is_empty() {
-                "auto".to_string()
-            } else {
-                port.clone()
-            };
-            info!(port = %display_port, baud = config.radio.baud_rate, "Starting GUI radio worker");
-            let handle = spawn_radio_worker(
-                radio,
-                state.clone(),
-                worker_stop.clone(),
-                display_tuning.clone(),
-                rx,
-                repaint_ctx.clone(),
+                Some(config.radio.civ_address),
             );
-            (Some(tx), Some(handle))
+            match radio {
+                Ok(radio) => {
+                    let (tx, rx) = mpsc::channel::<GuiCommand>();
+                    let display_port = if port.is_empty() { "auto" } else { &port };
+                    info!(model = %config.radio.model, port = %display_port, baud = config.radio.baud_rate, "Starting GUI radio worker");
+                    let handle = spawn_radio_worker(
+                        radio,
+                        state.clone(),
+                        worker_stop.clone(),
+                        display_tuning.clone(),
+                        rx,
+                        repaint_ctx.clone(),
+                    );
+                    (Some(tx), Some(handle))
+                }
+                Err(error) => {
+                    let mut s = state.lock().expect("ui state lock poisoned");
+                    s.last_error = Some(error.to_string());
+                    s.radio_waterfall_status = "UNAVAILABLE (invalid radio profile)".to_string();
+                    (None, None)
+                }
+            }
         } else {
             {
                 let mut s = state.lock().expect("ui state lock poisoned");
@@ -2118,6 +2146,8 @@ impl QsonautGuiApp {
                 audio_input_device: config.audio.input_device.clone(),
                 audio_output_device: config.audio.output_device.clone(),
                 radio_serial_port: config.radio.serial_port.clone(),
+                radio_model: config.radio.model.clone(),
+                radio_baud_rate: config.radio.baud_rate,
                 gui_scale,
                 compute_preference,
                 psk_reporter_enabled,
@@ -2142,6 +2172,10 @@ impl QsonautGuiApp {
                     profile_io_status = format!("Profile init failed: {err}");
                 }
             }
+        }
+
+        if !find_model(&config.radio.model).is_some_and(|profile| profile.capabilities.spectrum) {
+            civ_spectrum_on = false;
         }
 
         let (ft8_tx_event_tx, ft8_tx_event_rx) = mpsc::channel();
@@ -3289,6 +3323,8 @@ impl QsonautGuiApp {
             audio_input_device: self.config.audio.input_device.clone(),
             audio_output_device: self.config.audio.output_device.clone(),
             radio_serial_port: self.config.radio.serial_port.clone(),
+            radio_model: self.config.radio.model.clone(),
+            radio_baud_rate: self.config.radio.baud_rate,
             gui_scale: self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX),
             compute_preference: self.compute_preference,
             psk_reporter_enabled: self.psk_reporter_enabled,
@@ -4012,6 +4048,13 @@ impl QsonautGuiApp {
                 }
                 Err(_) => format!("Rejected radio command: invalid tune delta '{value}'"),
             },
+            "set_filter"
+                if !find_model(&self.config.radio.model).is_some_and(|profile| {
+                    matches!(profile.protocol, Protocol::IcomCiV { .. })
+                }) =>
+            {
+                "Rejected radio command: selected profile has no CI-V filter control".to_string()
+            }
             "set_filter" => match value.trim().parse::<u8>() {
                 Ok(filter @ 1..=3) => {
                     self.send_command(GuiCommand::SetFilter(filter));
@@ -4843,11 +4886,33 @@ impl QsonautGuiApp {
         let old_input = self.config.audio.input_device.clone();
         let old_output = self.config.audio.output_device.clone();
         let old_port = self.config.radio.serial_port.clone();
+        let old_model = self.config.radio.model.clone();
+        let old_baud = self.config.radio.baud_rate;
 
         egui::Grid::new("device_settings_grid")
             .num_columns(2)
             .spacing([10.0, 6.0])
             .show(ui, |ui| {
+                ui.label("Radio model");
+                egui::ComboBox::from_id_salt("radio_model")
+                    .selected_text(&self.config.radio.model)
+                    .width(ui.available_width().max(180.0))
+                    .show_ui(ui, |ui| {
+                        for profile in POPULAR_RADIOS {
+                            let maturity = if profile.support == SupportLevel::HardwareValidated {
+                                "validated"
+                            } else {
+                                "experimental"
+                            };
+                            ui.selectable_value(
+                                &mut self.config.radio.model,
+                                profile.model.to_string(),
+                                format!("{} — {maturity}", profile.model),
+                            );
+                        }
+                    });
+                ui.end_row();
+
                 ui.label("Audio input");
                 egui::ComboBox::from_id_salt("audio_input_device")
                     .selected_text(
@@ -4931,14 +4996,41 @@ impl QsonautGuiApp {
                         }
                     });
                 ui.end_row();
+
+                ui.label("CAT baud rate");
+                ui.add(
+                    egui::DragValue::new(&mut self.config.radio.baud_rate)
+                        .range(1_200..=230_400)
+                        .speed(1_200),
+                );
+                ui.end_row();
             });
 
         ui.add_space(6.0);
-        ui.label(
-            RichText::new("Supported radio profiles: Icom IC-7300 (CI-V)")
+        if let Some(profile) = find_model(&self.config.radio.model) {
+            let maturity = if profile.support == SupportLevel::HardwareValidated {
+                "hardware validated"
+            } else {
+                "experimental — hardware validation pending"
+            };
+            let scope = if profile.capabilities.spectrum {
+                "radio scope available"
+            } else {
+                "audio waterfall only"
+            };
+            ui.label(
+                RichText::new(format!(
+                    "Selected profile: {} · {maturity} · {scope}",
+                    profile.model
+                ))
                 .small()
-                .color(Color32::GRAY),
-        );
+                .color(if profile.support == SupportLevel::HardwareValidated {
+                    Color32::LIGHT_GREEN
+                } else {
+                    Color32::YELLOW
+                }),
+            );
+        }
         if self.radio_detected_models.is_empty() {
             ui.label(
                 RichText::new("Detected radios: none recognized yet (serial bridge only or unsupported model)")
@@ -4959,7 +5051,25 @@ impl QsonautGuiApp {
         if old_input != self.config.audio.input_device
             || old_output != self.config.audio.output_device
             || old_port != self.config.radio.serial_port
+            || old_model != self.config.radio.model
+            || old_baud != self.config.radio.baud_rate
         {
+            if old_model != self.config.radio.model {
+                if let Some(profile) = find_model(&self.config.radio.model) {
+                    self.config.radio.baud_rate = match profile.protocol {
+                        Protocol::YaesuLegacyCat => 4_800,
+                        Protocol::YaesuCat => 38_400,
+                        Protocol::IcomCiV { default_address } => {
+                            self.config.radio.civ_address = default_address;
+                            115_200
+                        }
+                        Protocol::KenwoodCat => 115_200,
+                    };
+                    if !profile.capabilities.spectrum {
+                        self.civ_spectrum_on = false;
+                    }
+                }
+            }
             self.device_restart_required = true;
             self.profile_dirty = true;
             self.persist_profile("Saved devices to");
@@ -5215,8 +5325,13 @@ impl QsonautGuiApp {
         );
 
         ui.add_space(4.0);
+        let supports_scope = find_model(&self.config.radio.model)
+            .is_some_and(|profile| profile.capabilities.spectrum);
         if ui
-            .checkbox(&mut self.civ_spectrum_on, "📈 Radio scope waterfall")
+            .add_enabled(
+                supports_scope,
+                egui::Checkbox::new(&mut self.civ_spectrum_on, "📈 Radio scope waterfall"),
+            )
             .changed()
         {
             self.profile_dirty = true;
@@ -5619,13 +5734,16 @@ impl QsonautGuiApp {
         ui.add_space(4.0);
 
         // Filter selector
+        let supports_filter = find_model(&self.config.radio.model)
+            .is_some_and(|profile| matches!(profile.protocol, Protocol::IcomCiV { .. }));
         ui.horizontal(|ui| {
             ui.label(RichText::new("BW").strong());
             for fil in 1u8..=3 {
                 let active = snapshot.filter == Some(fil);
                 let label = format!("FIL{fil}");
                 if ui
-                    .add(
+                    .add_enabled(
+                        supports_filter,
                         egui::Button::new(RichText::new(&label).monospace()).fill(if active {
                             Color32::from_rgb(20, 60, 120)
                         } else {
@@ -7584,6 +7702,8 @@ impl QsonautGuiApp {
     }
 
     fn draw_radio_control_strip(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        let supports_levels = find_model(&self.config.radio.model)
+            .is_some_and(|profile| matches!(profile.protocol, Protocol::IcomCiV { .. }));
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Radio").strong());
 
@@ -7609,10 +7729,16 @@ impl QsonautGuiApp {
                     self.send_command(GuiCommand::TogglePtt);
                 }
             }
-            if ui.small_button("AF-").clicked() {
+            if ui
+                .add_enabled(supports_levels, egui::Button::new("AF-").small())
+                .clicked()
+            {
                 self.send_command(GuiCommand::AfGainDelta(-5));
             }
-            if ui.small_button("AF+").clicked() {
+            if ui
+                .add_enabled(supports_levels, egui::Button::new("AF+").small())
+                .clicked()
+            {
                 self.send_command(GuiCommand::AfGainDelta(5));
             }
 
@@ -7966,6 +8092,10 @@ impl eframe::App for QsonautGuiApp {
                                     self.config.audio.input_device = p.audio_input_device;
                                     self.config.audio.output_device = p.audio_output_device;
                                     self.config.radio.serial_port = p.radio_serial_port;
+                                    if p.profile_version >= 8 {
+                                        self.config.radio.model = p.radio_model;
+                                        self.config.radio.baud_rate = p.radio_baud_rate;
+                                    }
                                 }
                                 self.config.station.callsign = Some(self.station_callsign.clone());
                                 self.config.station.grid = Some(self.station_grid.clone());
@@ -8083,7 +8213,7 @@ impl Drop for QsonautGuiApp {
 }
 
 fn spawn_radio_worker(
-    radio: IcomCiVRadio,
+    radio: ConfiguredRadio,
     state: Arc<Mutex<GuiState>>,
     stop: Arc<AtomicBool>,
     display_tuning: Arc<Mutex<DisplayTuning>>,
@@ -8107,7 +8237,7 @@ fn spawn_radio_worker(
         let latest_scope: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
 
         let stream_state = state.clone();
-        let stream_radio = radio.clone();
+        let stream_radio = radio.as_icom().cloned();
         let stream_stop = stop.clone();
         let scope_writer = latest_scope.clone();
         let _stream_handle = thread::spawn(move || {
@@ -8124,6 +8254,13 @@ fn spawn_radio_worker(
             };
 
             let mut last_scope_config: Option<RadioScopeStreamConfig> = None;
+
+            let Some(stream_radio) = stream_radio else {
+                let mut s = stream_state.lock().expect("ui state lock poisoned");
+                s.radio_spectrum_enabled = false;
+                s.radio_waterfall_status = "UNAVAILABLE (radio has no scope stream)".to_string();
+                return;
+            };
 
             while !stream_stop.load(Ordering::Relaxed) {
                 let (
@@ -8318,14 +8455,14 @@ fn spawn_radio_worker(
                 match cmd {
                     GuiCommand::Quit => return,
                     GuiCommand::TuneDelta(delta) => {
-                        let freq = rt.block_on(radio.frequency()).ok();
+                        let freq = rt.block_on(radio.get_frequency_hz()).ok();
                         if let Some(freq) = freq {
                             let target = if delta.is_negative() {
                                 freq.saturating_sub(delta.unsigned_abs())
                             } else {
                                 freq.saturating_add(delta as u64)
                             };
-                            if let Err(err) = rt.block_on(radio.set_frequency(target)) {
+                            if let Err(err) = rt.block_on(radio.set_frequency_hz(target)) {
                                 let mut s = state.lock().expect("ui state lock poisoned");
                                 s.last_error = Some(err.to_string());
                             }
@@ -8333,14 +8470,14 @@ fn spawn_radio_worker(
                         poll_radio_core_state(&rt, &radio, &state);
                     }
                     GuiCommand::CycleMode => {
-                        let current = rt.block_on(radio.mode()).unwrap_or(Mode::Usb);
+                        let current = rt.block_on(radio.get_mode()).unwrap_or(Mode::Usb);
                         let next = match current {
                             Mode::Usb => Mode::Lsb,
                             Mode::Lsb => Mode::Cw,
                             Mode::Cw => Mode::Data,
                             Mode::Data => Mode::Usb,
                         };
-                        if let Err(err) = rt.block_on(Radio::set_mode(&radio, next)) {
+                        if let Err(err) = rt.block_on(RadioHal::set_mode(&radio, next)) {
                             let mut s = state.lock().expect("ui state lock poisoned");
                             s.last_error = Some(err.to_string());
                         }
@@ -8404,12 +8541,25 @@ fn spawn_radio_worker(
                         };
                         let preset = workspace_radio_preset(workspace_mode);
                         let filter_to_keep = current_filter.unwrap_or(preset.filter).clamp(1, 3);
-                        let _ = rt.block_on(radio.set_frequency(freq_hz));
-                        let _ = rt.block_on(radio.set_operating_mode_details(
-                            preset.base_mode,
-                            preset.data_mode,
-                            filter_to_keep,
-                        ));
+                        let _ = rt.block_on(radio.set_frequency_hz(freq_hz));
+                        if let Some(icom) = radio.as_icom() {
+                            let _ = rt.block_on(icom.set_operating_mode_details(
+                                preset.base_mode,
+                                preset.data_mode,
+                                filter_to_keep,
+                            ));
+                        } else {
+                            let mode = if preset.data_mode {
+                                Mode::Data
+                            } else {
+                                match preset.base_mode {
+                                    BaseMode::Lsb => Mode::Lsb,
+                                    BaseMode::Cw | BaseMode::CwR => Mode::Cw,
+                                    _ => Mode::Usb,
+                                }
+                            };
+                            let _ = rt.block_on(RadioHal::set_mode(&radio, mode));
+                        }
                         poll_radio_core_state(&rt, &radio, &state);
                     }
                     GuiCommand::SetFilter(n) => {
@@ -8417,11 +8567,18 @@ fn spawn_radio_worker(
                             state.lock().expect("ui state lock poisoned").workspace_mode;
                         let preset = workspace_radio_preset(workspace_mode);
                         let target_filter = n.clamp(1, 3);
-                        if let Err(err) = rt.block_on(radio.set_operating_mode_details(
-                            preset.base_mode,
-                            preset.data_mode,
-                            target_filter,
-                        )) {
+                        let result = if let Some(icom) = radio.as_icom() {
+                            rt.block_on(icom.set_operating_mode_details(
+                                preset.base_mode,
+                                preset.data_mode,
+                                target_filter,
+                            ))
+                        } else {
+                            Err(anyhow::anyhow!(
+                                "filter selection is unavailable for this radio profile"
+                            ))
+                        };
+                        if let Err(err) = result {
                             let mut s = state.lock().expect("ui state lock poisoned");
                             s.last_error = Some(err.to_string());
                         }
@@ -8455,8 +8612,10 @@ fn spawn_radio_worker(
             if let Ok(mut s) = state.lock() {
                 let t = display_tuning.lock().expect("tuning lock poisoned").clone();
                 let (_, sweep_code) = effective_visual_profile(&t, &s.mode);
-                if let Err(err) = rt.block_on(radio.set_scope_sweep_speed(sweep_code)) {
-                    s.last_error = Some(err.to_string());
+                if let Some(icom) = radio.as_icom() {
+                    if let Err(err) = rt.block_on(icom.set_scope_sweep_speed(sweep_code)) {
+                        s.last_error = Some(err.to_string());
+                    }
                 }
             }
         }
@@ -8465,9 +8624,40 @@ fn spawn_radio_worker(
 
 fn poll_radio_core_state(
     rt: &tokio::runtime::Runtime,
-    radio: &IcomCiVRadio,
+    radio: &ConfiguredRadio,
     state: &Arc<Mutex<GuiState>>,
 ) {
+    if radio.as_icom().is_none() {
+        let frequency = rt.block_on(radio.get_frequency_hz());
+        let mode = rt.block_on(radio.get_mode());
+        let mut s = state.lock().expect("ui state lock poisoned");
+        match (frequency, mode) {
+            (Ok(frequency_hz), Ok(mode)) => {
+                s.frequency_hz = Some(frequency_hz);
+                s.mode = match mode {
+                    Mode::Usb => "USB",
+                    Mode::Lsb => "LSB",
+                    Mode::Cw => "CW",
+                    Mode::Data => "DATA",
+                }
+                .to_string();
+                s.data_mode = Some(mode == Mode::Data);
+                s.last_update = Some(Instant::now());
+                s.last_error = None;
+            }
+            (frequency, mode) => {
+                s.last_error = Some(
+                    frequency
+                        .err()
+                        .or_else(|| mode.err())
+                        .expect("one CAT operation failed")
+                        .to_string(),
+                );
+            }
+        }
+        return;
+    }
+    let radio = radio.as_icom().expect("checked Icom driver");
     // Read what we need under a brief lock, then do all I/O outside it.
     let spectrum_enabled = state
         .lock()
@@ -8531,9 +8721,9 @@ fn apply_waterfall_bins(next: &mut GuiState, bins: &[u8]) {
     next.radio_waterfall_revision = next.radio_waterfall_revision.wrapping_add(1);
 }
 
-fn read_u8_control(
+fn read_u8_control<R: RadioHal + ?Sized>(
     rt: &tokio::runtime::Runtime,
-    radio: &IcomCiVRadio,
+    radio: &R,
     id: ControlId,
 ) -> Option<u8> {
     match rt.block_on(radio.get_control(id)).ok().flatten() {

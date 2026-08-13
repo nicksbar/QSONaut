@@ -42,7 +42,7 @@ This is an honest snapshot, not a compatibility promise:
 | FST4-60, JT9, JT65, Q65-30A | Native receive and scheduled transmit paths exist; experimental |
 | WSPR, MSK144 | Receive-only integration |
 | CW, FLDIGI | UI/integration surfaces only; no native working modem is claimed |
-| Radio control | Direct Icom CI-V work is centered on an IC-7300; other radios are not yet supported |
+| Radio control | Selectable Rigwright profiles cover popular Icom, Yaesu (including FTdx101 and FT-857D), and Kenwood radios; IC-7300 is hardware-validated, while the other serial drivers remain experimental |
 | PSK Reporter | Optional, off by default, batched UDP reporting for decoded stations |
 | Automation | Permission-gated component model and Discord/IRC configuration contracts; connectors are not live yet |
 | GPU/NPU compute | Hardware detection and validation policy exist; decoders currently use CPU SIMD because GPU kernels are not validated |

@@ -33,6 +33,8 @@ pub struct AudioConfig {
 pub struct RadioConfig {
     pub enabled: bool,
     pub backend: String,
+    #[serde(default = "default_radio_model")]
+    pub model: String,
     pub serial_port: Option<String>,
     #[serde(default = "default_radio_baud_rate")]
     pub baud_rate: u32,
@@ -123,6 +125,7 @@ impl Default for AppConfig {
             radio: RadioConfig {
                 enabled: true,
                 backend: "none".to_string(),
+                model: default_radio_model(),
                 serial_port: None,
                 baud_rate: default_radio_baud_rate(),
                 civ_address: default_radio_civ_address(),
@@ -229,6 +232,9 @@ impl AppConfig {
         if let Ok(backend) = std::env::var("QSONAUT_RADIO_BACKEND") {
             cfg.radio.backend = backend;
         }
+        if let Ok(model) = std::env::var("QSONAUT_RADIO_MODEL") {
+            cfg.radio.model = model;
+        }
         if let Ok(port) = std::env::var("QSONAUT_RADIO_SERIAL_PORT") {
             cfg.radio.serial_port = Some(port);
         }
@@ -261,6 +267,10 @@ fn parse_bool(value: &str) -> bool {
 
 fn default_radio_baud_rate() -> u32 {
     115_200
+}
+
+fn default_radio_model() -> String {
+    "IC-7300".to_string()
 }
 
 fn default_radio_civ_address() -> u8 {
@@ -358,6 +368,7 @@ provider = "none"
 
         let cfg: AppConfig = toml::from_str(src).expect("config parse");
         assert_eq!(cfg.contest, ContestProfile::default());
+        assert_eq!(cfg.radio.model, "IC-7300");
     }
 
     #[test]
