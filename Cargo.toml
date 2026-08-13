@@ -4,7 +4,6 @@ members = [
     "crates/qsonaut-core",
     "crates/qsonaut-audio",
     "crates/qsonaut-dsp",
-    "crates/qsonaut-radio",
     "crates/qsonaut-modes",
     "crates/qsonaut-log",
     "crates/qsonaut-ai",

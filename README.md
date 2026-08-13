@@ -126,7 +126,7 @@ than embedding Discord or IRC credentials.
 
 - `apps/qsonaut` — CLI and desktop entry point
 - `crates/qsonaut-gui` — operator console and timed mode workflows
-- `crates/qsonaut-radio` — radio HAL and direct Icom CI-V implementation
+- [`rigwright`](https://github.com/nicksbar/rigwright) — sibling radio HAL and native Icom CI-V implementation
 - `crates/qsonaut-audio`, `qsonaut-dsp`, `qsonaut-modes` — real-time media and modem support
 - `crates/qsonaut-log`, `qsonaut-pskreporter` — local logging and opt-in reporting
 - `crates/qsonaut-accelerate` — measured compute-backend selection

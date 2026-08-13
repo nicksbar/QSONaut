@@ -16,7 +16,7 @@ qsonaut-ai = { path = "../../crates/qsonaut-ai" }
 qsonaut-audio = { path = "../../crates/qsonaut-audio" }
 qsonaut-core = { path = "../../crates/qsonaut-core" }
 qsonaut-log = { path = "../../crates/qsonaut-log" }
-qsonaut-radio = { path = "../../crates/qsonaut-radio" }
+qsonaut-radio = { package = "rigwright", path = "../../../rigwright" }
 qsonaut-gui = { path = "../../crates/qsonaut-gui" }
 
 [target.'cfg(windows)'.dependencies]

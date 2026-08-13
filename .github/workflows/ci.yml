@@ -29,6 +29,13 @@ jobs:
           ref: main
           path: mfsk-core
 
+      - name: Check out Rigwright
+        uses: actions/checkout@v6
+        with:
+          repository: nicksbar/rigwright
+          ref: main
+          path: rigwright
+
       - name: Install Linux native libraries
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
 

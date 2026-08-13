@@ -11,7 +11,7 @@
 
 1. **App Layer** (`apps/qsonaut`)
    - Uses a radio-agnostic HAL interface only.
-2. **HAL Layer** (`crates/qsonaut-radio`)
+2. **HAL Layer** ([Rigwright](https://github.com/nicksbar/rigwright))
    - Common traits, capabilities, control IDs, typed values.
 3. **Protocol Drivers**
    - `IcomCiVRadio` now, Yaesu/Kenwood later.
@@ -66,7 +66,7 @@ This supports many commands without hardcoding every one into the trait.
 
 - Deterministic CI-V frequency decode implemented (BCD little-endian bytes).
 - The live probe reports frequency and mode from compatible Icom radios.
-- HAL primitives added in `qsonaut-radio` to support multi-radio growth.
+- HAL primitives live in the independent `rigwright` crate to support multi-radio growth.
 - `IcomCiVRadio` now implements both `Radio` and `RadioHal` for live operations.
 - Implemented live CI-V write paths for:
    - set frequency (`0x05` + BCD Hz)

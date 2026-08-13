@@ -2375,7 +2375,7 @@ dependencies = [
  "qsonaut-core",
  "qsonaut-gui",
  "qsonaut-log",
- "qsonaut-radio",
+ "rigwright",
  "tokio",
  "tracing",
  "windows-sys 0.59.0",
@@ -2451,7 +2451,7 @@ dependencies = [
  "qsonaut-dsp",
  "qsonaut-log",
  "qsonaut-pskreporter",
- "qsonaut-radio",
+ "rigwright",
  "rustfft",
  "serde",
  "tokio",
@@ -2481,15 +2481,6 @@ dependencies = [
 [[package]]
 name = "qsonaut-pskreporter"
 version = "0.2.1"
-
-[[package]]
-name = "qsonaut-radio"
-version = "0.2.1"
-dependencies = [
- "anyhow",
- "async-trait",
- "serialport",
-]
 
 [[package]]
 name = "quick-error"
@@ -2623,6 +2614,15 @@ name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
+
+[[package]]
+name = "rigwright"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serialport",
+]
 
 [[package]]
 name = "rustc-hash"
