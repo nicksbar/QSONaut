@@ -771,7 +771,16 @@ impl WaterfallTheme {
     }
 }
 
-type RadioScopeStreamConfig = (RadioScopeView, u8, bool, Option<(u64, u64)>, u8, bool, i16);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RadioScopeStreamConfig {
+    view: RadioScopeView,
+    span_code: u8,
+    vbw_wide: bool,
+    edges: Option<(u64, u64)>,
+    sweep_code: u8,
+    hold: bool,
+    reference_tenths_db: i16,
+}
 
 #[derive(Debug, Clone)]
 struct DisplayTuning {
@@ -5616,7 +5625,7 @@ impl QsonautGuiApp {
                         egui::pos2(dial_x, response.rect.top()),
                         egui::pos2(dial_x, response.rect.bottom()),
                     ],
-                    egui::Stroke::new(1.0, Color32::from_rgb(245, 190, 70)),
+                    egui::Stroke::new(1.0_f32, Color32::from_rgb(245, 190, 70)),
                 );
                 ui.painter().text(
                     egui::pos2(dial_x + 4.0, response.rect.top() + 3.0),
@@ -8508,35 +8517,33 @@ fn spawn_radio_worker(
                         let tuning = stream_display_tuning.lock().expect("tuning lock poisoned");
                         effective_visual_profile(&tuning, &mode).1
                     };
-                    let config = (
-                        scope_view,
+                    let config = RadioScopeStreamConfig {
+                        view: scope_view,
                         span_code,
                         vbw_wide,
-                        scope_edges,
+                        edges: scope_edges,
                         sweep_code,
-                        scope_hold,
-                        scope_reference_tenths_db,
-                    );
+                        hold: scope_hold,
+                        reference_tenths_db: scope_reference_tenths_db,
+                    };
                     if last_scope_config != Some(config) {
                         let geometry_changed = last_scope_config.is_none_or(|previous| {
-                            previous.0 != scope_view
-                                || previous.1 != span_code
-                                || previous.3 != scope_edges
+                            previous.view != config.view
+                                || previous.span_code != config.span_code
+                                || previous.edges != config.edges
                         });
                         let hold_update = last_scope_config
-                            .filter(|previous| previous.5 != scope_hold)
-                            .map(|_| scope_hold);
+                            .filter(|previous| previous.hold != config.hold)
+                            .map(|_| config.hold);
                         let reference_update = last_scope_config
-                            .filter(|previous| previous.6 != scope_reference_tenths_db)
-                            .map(|_| scope_reference_tenths_db);
+                            .filter(|previous| {
+                                previous.reference_tenths_db != config.reference_tenths_db
+                            })
+                            .map(|_| config.reference_tenths_db);
                         match configure_radio_scope(
                             &rt,
                             &stream_radio,
-                            scope_view,
-                            span_code,
-                            vbw_wide,
-                            scope_edges,
-                            sweep_code,
+                            &config,
                             hold_update,
                             reference_update,
                         ) {
@@ -8931,21 +8938,17 @@ fn apply_waterfall_bins(next: &mut GuiState, bins: &[u8]) {
 fn configure_radio_scope(
     rt: &tokio::runtime::Runtime,
     radio: &IcomCiVRadio,
-    view: RadioScopeView,
-    span_code: u8,
-    vbw_wide: bool,
-    scope_edges: Option<(u64, u64)>,
-    sweep_code: u8,
+    config: &RadioScopeStreamConfig,
     hold_update: Option<bool>,
     reference_tenths_db_update: Option<i16>,
 ) -> Result<()> {
-    rt.block_on(radio.set_scope_sweep_speed(sweep_code))?;
+    rt.block_on(radio.set_scope_sweep_speed(config.sweep_code))?;
     if let Some(reference_tenths_db) = reference_tenths_db_update {
         rt.block_on(radio.set_scope_reference_level_tenths_db(reference_tenths_db))?;
     }
-    match view {
+    match config.view {
         RadioScopeView::Narrow => {
-            if let Some((low_hz, high_hz)) = scope_edges {
+            if let Some((low_hz, high_hz)) = config.edges {
                 // Edge 4 is reserved for QSONaut's mode-aware passband window,
                 // leaving the operator's first three radio edge memories alone.
                 rt.block_on(radio.set_scope_fixed_edge_frequencies(4, low_hz, high_hz))?;
@@ -8953,12 +8956,12 @@ fn configure_radio_scope(
                 rt.block_on(radio.set_scope_center_fixed_mode(true))?;
             } else {
                 rt.block_on(radio.set_scope_center_fixed_mode(false))?;
-                rt.block_on(radio.set_scope_span_hz(scope_span_hz(span_code)))?;
+                rt.block_on(radio.set_scope_span_hz(scope_span_hz(config.span_code)))?;
             }
-            rt.block_on(radio.set_scope_vbw_wide(vbw_wide))?;
+            rt.block_on(radio.set_scope_vbw_wide(config.vbw_wide))?;
         }
         RadioScopeView::Overview => {
-            let (low_hz, high_hz) = scope_edges.context("active band edges unavailable")?;
+            let (low_hz, high_hz) = config.edges.context("active band edges unavailable")?;
             rt.block_on(radio.set_scope_fixed_edge_frequencies(1, low_hz, high_hz))?;
             rt.block_on(radio.set_scope_fixed_edge_number(1))?;
             rt.block_on(radio.set_scope_center_fixed_mode(true))?;
