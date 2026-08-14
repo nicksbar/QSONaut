@@ -14,7 +14,7 @@
 2. **HAL Layer** ([Rigwright](https://github.com/nicksbar/rigwright))
    - Common traits, capabilities, control IDs, typed values.
 3. **Protocol Drivers**
-   - `IcomCiVRadio` now, Yaesu/Kenwood later.
+   - Rigwright CI-V, modern Yaesu CAT, legacy Yaesu CAT, and Kenwood CAT drivers.
 4. **Transport Layer**
    - Serial (USB/TTY), TCP (future), mock transport for tests.
 
@@ -52,7 +52,7 @@ This supports many commands without hardcoding every one into the trait.
 
 1. Keep typed core controls first (freq/mode/PTT + common knobs).
 2. Add CI-V command registry for advanced feature parity.
-3. Introduce per-radio capability profiles (IC-7300 first).
+3. Grow and validate Rigwright's per-radio capability profiles (IC-7300 first).
 4. Add integration tests with captured byte frames.
 5. Add optional rigctl parity checks as diagnostics, not primary driver path.
 
@@ -68,6 +68,10 @@ This supports many commands without hardcoding every one into the trait.
 - The live probe reports frequency and mode from compatible Icom radios.
 - HAL primitives live in the independent `rigwright` crate to support multi-radio growth.
 - `IcomCiVRadio` now implements both `Radio` and `RadioHal` for live operations.
+- QSONaut can select Rigwright profiles for popular Icom, Yaesu, and Kenwood radios.
+- Common frequency, mode, and PTT operations route through the selected protocol driver.
+- Native window geometry and expanded/collapsed section state persist between launches.
+- IC-7300 scope data is accepted only as complete ordered 475-bin USB sweeps; narrow center and active-band fixed views apply documented CI-V settings with acknowledgement.
 - Implemented live CI-V write paths for:
    - set frequency (`0x05` + BCD Hz)
    - set mode (`0x06`)
@@ -82,4 +86,5 @@ This supports many commands without hardcoding every one into the trait.
 2. Captured-frame coverage is incomplete for the wider control registry.
 3. Unsupported controls still need stronger per-radio capability gating.
 4. USB reconnect and radio reboot behavior needs broader hardware testing.
-5. Other Icom models, Hamlib, Yaesu, and Kenwood support are not claimed.
+5. Non-IC-7300 profiles and the Yaesu/Kenwood serial drivers are experimental until tested against physical radios.
+6. Icom-only spectrum and advanced CI-V controls stay disabled for radios that do not expose them.

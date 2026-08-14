@@ -11,7 +11,8 @@ use qsonaut_core::AppConfig;
 use qsonaut_gui::run_gui;
 use qsonaut_log::log_file_path;
 use qsonaut_radio::{
-    enumerate_serial_ports, ControlId, ControlValue, IcomCiVRadio, Mode, Radio, RadioHal,
+    drivers::open_model_with_radio_address, enumerate_serial_ports, ControlId, ControlValue,
+    IcomCiVRadio, Mode, RadioHal,
 };
 use tracing::{error, info};
 
@@ -263,13 +264,14 @@ async fn async_main() -> Result<()> {
             .or_else(|| config.radio.serial_port.clone())
             .unwrap_or_else(|| "/dev/ttyUSB0".to_string());
         let radio_baud = cli.radio_baud.unwrap_or(config.radio.baud_rate);
-        info!(port = %port, radio_baud, "Using CI-V serial settings");
-        let radio = IcomCiVRadio::new(
+        info!(model = %config.radio.model, port = %port, radio_baud, "Using radio serial settings");
+        let radio = open_model_with_radio_address(
+            &config.radio.model,
             port.clone(),
             radio_baud,
             config.radio.controller_civ_address,
-        )
-        .with_radio_address(config.radio.civ_address);
+            Some(config.radio.civ_address),
+        )?;
 
         if cli.enable_spectrum_stream && cli.disable_spectrum_stream {
             anyhow::bail!(
@@ -278,7 +280,10 @@ async fn async_main() -> Result<()> {
         }
 
         if let Some(profile) = cli.apply_profile {
-            apply_profile(&radio, profile)
+            let icom = radio
+                .as_icom()
+                .context("CLI profiles currently require an Icom CI-V radio")?;
+            apply_profile(icom, profile)
                 .await
                 .with_context(|| format!("failed to apply profile {profile:?} on {port}"))?;
             println!("Applied profile: {profile:?}");
@@ -286,7 +291,7 @@ async fn async_main() -> Result<()> {
 
         if let Some(hz) = cli.set_frequency_hz {
             radio
-                .set_frequency(hz)
+                .set_frequency_hz(hz)
                 .await
                 .with_context(|| format!("failed to set frequency to {hz} Hz on {port}"))?;
             println!("Set frequency_hz: {hz}");
@@ -294,7 +299,7 @@ async fn async_main() -> Result<()> {
 
         if let Some(mode) = cli.set_mode {
             let target: Mode = mode.into();
-            Radio::set_mode(&radio, target)
+            RadioHal::set_mode(&radio, target)
                 .await
                 .with_context(|| format!("failed to set mode on {port}"))?;
             println!("Set mode: {mode:?}");
@@ -303,7 +308,7 @@ async fn async_main() -> Result<()> {
         if let Some(ptt) = cli.ptt {
             let enabled = ptt.as_enabled();
             radio
-                .ptt(enabled)
+                .set_ptt(enabled)
                 .await
                 .with_context(|| format!("failed to set ptt={} on {port}", enabled))?;
             println!("Set ptt: {}", if enabled { "ON" } else { "OFF" });
@@ -346,6 +351,9 @@ async fn async_main() -> Result<()> {
         }
 
         if cli.enable_spectrum_stream {
+            let radio = radio
+                .as_icom()
+                .context("spectrum streaming requires an Icom CI-V profile")?;
             let timeout = Duration::from_millis(cli.spectrum_timeout_ms);
             let first_frame = radio
                 .enable_spectrum_stream(timeout)
@@ -359,6 +367,9 @@ async fn async_main() -> Result<()> {
         }
 
         if cli.disable_spectrum_stream {
+            let radio = radio
+                .as_icom()
+                .context("spectrum streaming requires an Icom CI-V profile")?;
             radio
                 .disable_spectrum_stream()
                 .await
@@ -373,8 +384,8 @@ async fn async_main() -> Result<()> {
             || cli.set_control.is_some();
 
         if should_verify {
-            let verify_mode = radio.mode().await.ok();
-            let verify_freq = radio.frequency().await.ok();
+            let verify_mode = radio.get_mode().await.ok();
+            let verify_freq = radio.get_frequency_hz().await.ok();
             println!("Verification readback:");
             if let Some(freq) = verify_freq {
                 println!("  frequency_hz: {freq}");
@@ -389,29 +400,49 @@ async fn async_main() -> Result<()> {
         }
 
         if cli.radio_status {
-            match radio.probe() {
-                Ok(status) => {
-                    println!("Radio status:");
-                    if let Some(freq) = status.frequency_hz {
-                        println!("  frequency_hz: {freq}");
-                    }
-                    if let Some(ref mode) = status.mode {
-                        println!("  mode: {mode}");
-                    }
-                    if let Some(details) = status.mode_details {
-                        println!("  mode_base: {:?}", details.base);
-                        println!("  data_mode: {}", details.data_mode);
-                        if let Some(filter) = details.filter {
-                            println!("  filter: FIL{filter}");
+            if let Some(radio) = radio.as_icom() {
+                match radio.probe() {
+                    Ok(status) => {
+                        println!("Radio status:");
+                        if let Some(freq) = status.frequency_hz {
+                            println!("  frequency_hz: {freq}");
+                        }
+                        if let Some(ref mode) = status.mode {
+                            println!("  mode: {mode}");
+                        }
+                        if let Some(details) = status.mode_details {
+                            println!("  mode_base: {:?}", details.base);
+                            println!("  data_mode: {}", details.data_mode);
+                            if let Some(filter) = details.filter {
+                                println!("  filter: FIL{filter}");
+                            }
+                        }
+                        if status.frequency_hz.is_none() && status.mode.is_none() {
+                            println!("  (no CI-V response received; verify the serial port and command framing)");
                         }
                     }
-                    if status.frequency_hz.is_none() && status.mode.is_none() {
-                        println!("  (no CI-V response received; verify the serial port and command framing)");
+                    Err(err) => {
+                        println!("Radio status query failed: {err}");
                     }
                 }
-                Err(err) => {
-                    println!("Radio status query failed: {err}");
-                }
+            } else {
+                println!("Radio status:");
+                println!(
+                    "  frequency_hz: {}",
+                    radio
+                        .get_frequency_hz()
+                        .await
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|_| "(unavailable)".to_string())
+                );
+                println!(
+                    "  mode_core: {}",
+                    radio
+                        .get_mode()
+                        .await
+                        .map(format_core_mode)
+                        .unwrap_or("(unavailable)")
+                );
             }
         }
 
@@ -608,8 +639,8 @@ fn format_core_mode(mode: Mode) -> &'static str {
 async fn apply_profile(radio: &IcomCiVRadio, profile: CliProfile) -> Result<()> {
     match profile {
         CliProfile::Ft8_20m => {
-            radio.set_frequency(14_074_000).await?;
-            Radio::set_mode(radio, Mode::Data).await?;
+            radio.set_frequency_hz(14_074_000).await?;
+            RadioHal::set_mode(radio, Mode::Data).await?;
             radio.set_ptt(false).await?;
         }
     }
