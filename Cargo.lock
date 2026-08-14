@@ -2415,7 +2415,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "qsonaut"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2434,7 +2434,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-accelerate"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde",
  "wgpu",
@@ -2442,7 +2442,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-ai"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2451,7 +2451,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-audio"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "cpal",
@@ -2460,7 +2460,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-automation"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -2469,7 +2469,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "dotenvy",
@@ -2480,7 +2480,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-dsp"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "qsonaut-modes",
@@ -2489,7 +2489,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-gui"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "eframe",
@@ -2511,7 +2511,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-log"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "serde",
@@ -2523,14 +2523,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-modes"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "qsonaut-pskreporter"
-version = "0.2.1"
+version = "0.2.2"
 
 [[package]]
 name = "quick-error"
