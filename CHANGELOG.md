@@ -7,6 +7,29 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-14
+
+### Added
+- Optional QSONaut Server integration over authenticated, proxy-friendly WebSockets.
+- Server synchronization for event and contest-catalog snapshots, station presence,
+  idempotent QSO log publication, diagnostics, and shared channel messages.
+- Server connection settings, operator presence/privacy controls, diagnostic snapshot
+  controls, connection status, reconnect handling, and heartbeat traffic.
+- Automation events and permission-gated actions for server synchronization and channel
+  publishing.
+
+### Changed
+- Added the `qsonaut-server-client` crate for the stable `v1` server contract.
+- Extended the operator profile/configuration model with server integration settings.
+- Preserved standalone desktop operation: server connectivity remains optional and disabled
+  by default.
+
+### Safety
+- Radio control, transmit, and external-send automation executors remain disabled by default.
+- Presence sharing and diagnostic sharing are independently opt-in.
+- Device tokens are supplied through local configuration and are not embedded in source or
+  automation manifests.
+
 ## [0.2.2] - 2026-08-13
 
 ### Added
