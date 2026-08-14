@@ -19,6 +19,7 @@ pub enum EventKind {
     OperatorProfile,
     Command,
     ExternalMessage,
+    ServerMessage,
     Timer,
 }
 
@@ -61,6 +62,8 @@ impl AutomationEvent {
 pub enum Capability {
     UiNotification,
     ExternalSend,
+    ServerRead,
+    ServerPublish,
     SetCompose,
     RadioControl,
     Transmit,
@@ -157,6 +160,11 @@ pub enum Action {
         target: String,
         message: String,
     },
+    ServerSync,
+    ServerSendMessage {
+        channel: String,
+        message: String,
+    },
     SetCompose {
         mode: String,
         message: String,
@@ -176,6 +184,8 @@ impl Action {
         match self {
             Self::Notify { .. } => Capability::UiNotification,
             Self::SendExternal { .. } => Capability::ExternalSend,
+            Self::ServerSync => Capability::ServerRead,
+            Self::ServerSendMessage { .. } => Capability::ServerPublish,
             Self::SetCompose { .. } => Capability::SetCompose,
             Self::RadioCommand { .. } => Capability::RadioControl,
             Self::RequestTransmit { .. } => Capability::Transmit,
@@ -241,6 +251,11 @@ pub enum ActionTemplate {
         target: String,
         message: String,
     },
+    ServerSync,
+    ServerSendMessage {
+        channel: String,
+        message: String,
+    },
     SetCompose {
         mode: String,
         message: String,
@@ -275,6 +290,11 @@ impl ActionTemplate {
             } => Action::SendExternal {
                 source: render(source),
                 target: render(target),
+                message: render(message),
+            },
+            Self::ServerSync => Action::ServerSync,
+            Self::ServerSendMessage { channel, message } => Action::ServerSendMessage {
+                channel: render(channel),
                 message: render(message),
             },
             Self::SetCompose { mode, message } => Action::SetCompose {
@@ -515,7 +535,7 @@ mod tests {
         let source = include_str!("../../../automation.example.toml");
         let config = RuleComponentConfig::from_toml(source).unwrap();
         assert_eq!(config.sources.len(), 2);
-        assert_eq!(config.rules.len(), 4);
+        assert_eq!(config.rules.len(), 7);
         assert!(config
             .component
             .subscriptions
@@ -524,5 +544,28 @@ mod tests {
             .component
             .subscriptions
             .contains(&EventKind::QsoLogged));
+    }
+
+    #[test]
+    fn server_publish_requires_its_own_operator_grant() {
+        let component = component_with(
+            ActionTemplate::ServerSendMessage {
+                channel: "ops".to_string(),
+                message: "${message}".to_string(),
+            },
+            CapabilitySet::new([Capability::ServerPublish]),
+        );
+        let event = AutomationEvent::new(EventKind::CallsignHit, "ft8")
+            .field("message", "W1AW N0ABC -10")
+            .tag("directed_to_me");
+        let mut host = AutomationHost::default();
+        host.register(component).unwrap();
+        assert_eq!(host.dispatch(&event).denied.len(), 1);
+
+        host.set_grants(
+            "spark.callout",
+            CapabilitySet::new([Capability::ServerPublish]),
+        );
+        assert_eq!(host.dispatch(&event).approved.len(), 1);
     }
 }

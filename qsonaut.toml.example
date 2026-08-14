@@ -22,6 +22,14 @@ controller_civ_address = 224
 enabled = false
 provider = "none"
 
+[server]
+enabled = false
+url = "https://radio.example.net"
+device_token = "" # Secret issued by POST /api/v1/auth/device; prefer QSONAUT_SERVER_DEVICE_TOKEN
+share_presence = false
+share_radio_details = false
+share_logs = false
+
 [contest]
 enabled = false
 operating_mode = "Run" # Run | SearchAndPounce
