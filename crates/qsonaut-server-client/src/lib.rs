@@ -1,6 +1,7 @@
 //! Optional QSONaut Server connection over proxy-friendly WebSockets.
 
 use std::{
+    collections::{BTreeMap, VecDeque},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -82,17 +83,25 @@ pub struct ConnectionStatus {
     pub last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerAutomationEvent {
+    pub kind: String,
+    pub fields: BTreeMap<String, String>,
+}
+
 #[derive(Debug)]
 enum Command {
     Presence(Box<Presence>),
     Log(Value),
     Sync,
+    ChannelMessage { channel: String, message: String },
     Shutdown,
 }
 
 pub struct ServerClient {
     commands: mpsc::UnboundedSender<Command>,
     status: Arc<Mutex<ConnectionStatus>>,
+    automation_events: Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
     stop: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
 }
@@ -106,6 +115,8 @@ impl ServerClient {
             ..ConnectionStatus::default()
         }));
         let worker_status = Arc::clone(&status);
+        let automation_events = Arc::new(Mutex::new(VecDeque::with_capacity(256)));
+        let worker_events = Arc::clone(&automation_events);
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let worker = thread::spawn(move || {
@@ -113,7 +124,13 @@ impl ServerClient {
                 .enable_all()
                 .build();
             match runtime {
-                Ok(runtime) => runtime.block_on(run(config, receiver, worker_status, worker_stop)),
+                Ok(runtime) => runtime.block_on(run(
+                    config,
+                    receiver,
+                    worker_status,
+                    worker_events,
+                    worker_stop,
+                )),
                 Err(error) => {
                     set_error(&worker_status, ConnectionState::Stopped, error.to_string())
                 }
@@ -122,6 +139,7 @@ impl ServerClient {
         Self {
             commands,
             status,
+            automation_events,
             stop,
             worker: Some(worker),
         }
@@ -137,6 +155,22 @@ impl ServerClient {
 
     pub fn request_sync(&self) {
         let _ = self.commands.send(Command::Sync);
+    }
+
+    pub fn publish_channel_message(&self, channel: impl Into<String>, message: impl Into<String>) {
+        let _ = self.commands.send(Command::ChannelMessage {
+            channel: channel.into(),
+            message: message.into(),
+        });
+    }
+
+    #[must_use]
+    pub fn drain_automation_events(&self) -> Vec<ServerAutomationEvent> {
+        self.automation_events
+            .lock()
+            .expect("server automation event lock poisoned")
+            .drain(..)
+            .collect()
     }
 
     #[must_use]
@@ -162,6 +196,7 @@ async fn run(
     config: ConnectionConfig,
     mut commands: mpsc::UnboundedReceiver<Command>,
     status: Arc<Mutex<ConnectionStatus>>,
+    automation_events: Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
     stop: Arc<AtomicBool>,
 ) {
     let mut delay = Duration::from_secs(1);
@@ -171,7 +206,7 @@ async fn run(
             return;
         }
         set_state(&status, ConnectionState::Connecting);
-        match connect(&config, &mut commands, &status).await {
+        match connect(&config, &mut commands, &status, &automation_events).await {
             Ok(ConnectionEnd::Shutdown) => {
                 set_state(&status, ConnectionState::Stopped);
                 return;
@@ -206,6 +241,7 @@ async fn connect(
     config: &ConnectionConfig,
     commands: &mut mpsc::UnboundedReceiver<Command>,
     status: &Arc<Mutex<ConnectionStatus>>,
+    automation_events: &Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
 ) -> Result<ConnectionEnd> {
     let socket_url = websocket_url(&config.server_url)?;
     let mut request = socket_url
@@ -249,6 +285,17 @@ async fn connect(
                 }
                 Some(Command::Log(log)) => send(&mut writer, ClientMessage::Log(log)).await?,
                 Some(Command::Sync) => send(&mut writer, ClientMessage::Sync).await?,
+                Some(Command::ChannelMessage { channel, message }) => {
+                    send(
+                        &mut writer,
+                        ClientMessage::ChannelMessage(ChannelMessageInput {
+                            event_id: None,
+                            channel,
+                            message,
+                            metadata: serde_json::json!({ "source": "qsonaut-automation" }),
+                        }),
+                    ).await?;
+                }
                 Some(Command::Shutdown) | None => {
                     if let Some(mut presence) = last_presence {
                         presence.status = "offline".to_owned();
@@ -259,7 +306,7 @@ async fn connect(
                 }
             },
             message = reader.next() => match message {
-                Some(Ok(Message::Text(text))) => receive(&text, status)?,
+                Some(Ok(Message::Text(text))) => receive(&text, status, automation_events)?,
                 Some(Ok(Message::Close(_))) | None => return Ok(ConnectionEnd::Disconnected),
                 Some(Err(error)) => return Err(error).context("WebSocket receive failed"),
                 _ => {}
@@ -298,31 +345,112 @@ where
     Ok(())
 }
 
-fn receive(text: &str, status: &Arc<Mutex<ConnectionStatus>>) -> Result<()> {
+fn receive(
+    text: &str,
+    status: &Arc<Mutex<ConnectionStatus>>,
+    automation_events: &Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+) -> Result<()> {
     let envelope: ServerEnvelope = serde_json::from_str(text).context("invalid server message")?;
     if envelope.protocol_version != PROTOCOL_VERSION {
         return Err(anyhow!("unsupported server protocol version"));
     }
-    let mut current = status.lock().expect("server status lock poisoned");
     match envelope.message {
-        ServerMessage::Welcome { user } => current.operator_callsign = Some(user.callsign),
+        ServerMessage::Welcome { user } => {
+            status
+                .lock()
+                .expect("server status lock poisoned")
+                .operator_callsign = Some(user.callsign.clone());
+            push_automation_event(
+                automation_events,
+                "connected",
+                [("callsign", user.callsign)],
+            );
+        }
         ServerMessage::Snapshot {
             events,
             contest_templates,
+            channel_messages,
         } => {
-            current.active_event_count = events
+            let active_event_count = events
                 .iter()
                 .filter(|event| event.status == "active")
                 .count();
-            current.catalog_size = contest_templates.len();
+            let catalog_size = contest_templates.len();
+            let message_count = channel_messages.len();
+            let mut current = status.lock().expect("server status lock poisoned");
+            current.active_event_count = active_event_count;
+            current.catalog_size = catalog_size;
+            drop(current);
+            push_automation_event(
+                automation_events,
+                "snapshot",
+                [
+                    ("active_events", active_event_count.to_string()),
+                    ("catalog_size", catalog_size.to_string()),
+                    ("message_count", message_count.to_string()),
+                ],
+            );
+            for message in channel_messages {
+                push_channel_event(automation_events, "channel_history", message);
+            }
         }
-        ServerMessage::Error { message } => current.last_error = Some(message),
+        ServerMessage::Error { message } => {
+            status
+                .lock()
+                .expect("server status lock poisoned")
+                .last_error = Some(message.clone());
+            push_automation_event(automation_events, "error", [("message", message)]);
+        }
+        ServerMessage::ChannelMessagePublished(message) => {
+            push_channel_event(automation_events, "channel_message", message);
+        }
+        ServerMessage::ChannelMessageAccepted(message) => {
+            push_channel_event(automation_events, "message_accepted", message);
+        }
         ServerMessage::PresenceAccepted(value) | ServerMessage::LogAccepted(value) => {
             drop(value);
         }
         ServerMessage::Ack | ServerMessage::Pong => {}
     }
     Ok(())
+}
+
+fn push_channel_event(
+    events: &Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    kind: &str,
+    message: ChannelMessage,
+) {
+    push_automation_event(
+        events,
+        kind,
+        [
+            ("id", message.id),
+            ("author", message.author_callsign),
+            ("channel", message.channel),
+            ("message", message.message),
+            ("created_at", message.created_at),
+        ],
+    );
+}
+
+fn push_automation_event<const N: usize>(
+    events: &Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    kind: impl Into<String>,
+    fields: [(&str, String); N],
+) {
+    let mut queue = events
+        .lock()
+        .expect("server automation event lock poisoned");
+    if queue.len() == 256 {
+        queue.pop_front();
+    }
+    queue.push_back(ServerAutomationEvent {
+        kind: kind.into(),
+        fields: fields
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect(),
+    });
 }
 
 fn set_state(status: &Arc<Mutex<ConnectionStatus>>, state: ConnectionState) {
@@ -357,7 +485,16 @@ enum ClientMessage {
     Sync,
     Presence(Box<Presence>),
     Log(Value),
+    ChannelMessage(ChannelMessageInput),
     Ping,
+}
+
+#[derive(Debug, Serialize)]
+struct ChannelMessageInput {
+    event_id: Option<Uuid>,
+    channel: String,
+    message: String,
+    metadata: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -378,14 +515,26 @@ enum ServerMessage {
     Snapshot {
         events: Vec<Event>,
         contest_templates: Vec<Value>,
+        channel_messages: Vec<ChannelMessage>,
     },
     PresenceAccepted(Value),
     LogAccepted(Value),
+    ChannelMessageAccepted(ChannelMessage),
+    ChannelMessagePublished(ChannelMessage),
     Ack,
     Pong,
     Error {
         message: String,
     },
+}
+
+#[derive(Debug, Deserialize)]
+struct ChannelMessage {
+    id: String,
+    author_callsign: String,
+    channel: String,
+    message: String,
+    created_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -426,5 +575,50 @@ mod tests {
         let json = serde_json::to_value(envelope).unwrap();
         assert_eq!(json["protocol_version"], "v1");
         assert_eq!(json["type"], "sync");
+    }
+
+    #[test]
+    fn shared_channel_messages_use_the_stable_server_contract() {
+        let envelope = ClientEnvelope {
+            protocol_version: PROTOCOL_VERSION.to_owned(),
+            event_id: Uuid::nil(),
+            message: ClientMessage::ChannelMessage(ChannelMessageInput {
+                event_id: None,
+                channel: "ops".to_string(),
+                message: "Band opening on 20m".to_string(),
+                metadata: serde_json::json!({ "source": "test" }),
+            }),
+        };
+        let json = serde_json::to_value(envelope).unwrap();
+        assert_eq!(json["type"], "channel_message");
+        assert_eq!(json["payload"]["channel"], "ops");
+        assert_eq!(json["payload"]["message"], "Band opening on 20m");
+    }
+
+    #[test]
+    fn published_channel_message_becomes_an_automation_event() {
+        let status = Arc::new(Mutex::new(ConnectionStatus::default()));
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        receive(
+            r#"{
+                "protocol_version":"v1",
+                "event_id":"00000000-0000-0000-0000-000000000000",
+                "type":"channel_message_published",
+                "payload":{
+                    "id":"3ecb975c-bd24-47fd-b230-5a79c0d5cad3",
+                    "author_callsign":"W1AW",
+                    "channel":"ops",
+                    "message":"Band opening on 20m",
+                    "created_at":"2026-08-14T12:00:00Z"
+                }
+            }"#,
+            &status,
+            &events,
+        )
+        .unwrap();
+        let event = events.lock().unwrap().pop_front().unwrap();
+        assert_eq!(event.kind, "channel_message");
+        assert_eq!(event.fields["author"], "W1AW");
+        assert_eq!(event.fields["channel"], "ops");
     }
 }

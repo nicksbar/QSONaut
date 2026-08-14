@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone)]
@@ -37,6 +38,10 @@ pub enum AppEvent {
         message: String,
         #[allow(dead_code)]
         channel: String,
+    },
+    ServerMessageReceived {
+        kind: String,
+        fields: BTreeMap<String, String>,
     },
     AutomationHook {
         kind: String,

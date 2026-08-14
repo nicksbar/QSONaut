@@ -442,6 +442,15 @@ fn normalize_app_event_for_automation(event: AppEvent) -> Option<AutomationEvent
                 .field("message", message)
                 .field("channel", channel),
         ),
+        AppEvent::ServerMessageReceived { kind, fields } => {
+            let mut event = AutomationEvent::new(EventKind::ServerMessage, "qsonaut-server")
+                .field("kind", kind.clone())
+                .tag(kind);
+            for (key, value) in fields {
+                event = event.field(key, value);
+            }
+            Some(event)
+        }
         AppEvent::AutomationHook {
             kind,
             source,
@@ -615,21 +624,30 @@ fn bootstrap_automation_host() -> (AutomationHost, String, HashSet<String>) {
             }
 
             let external_send_enabled = parse_bool_env("QSONAUT_AUTOMATION_ENABLE_EXTERNAL_SEND");
-            let grants = if external_send_enabled {
-                CapabilitySet::new([Capability::UiNotification, Capability::ExternalSend])
-            } else {
-                CapabilitySet::new([Capability::UiNotification])
-            };
+            let server_publish_enabled = parse_bool_env("QSONAUT_AUTOMATION_ENABLE_SERVER_PUBLISH");
+            let mut grants = vec![Capability::UiNotification, Capability::ServerRead];
+            if external_send_enabled {
+                grants.push(Capability::ExternalSend);
+            }
+            if server_publish_enabled {
+                grants.push(Capability::ServerPublish);
+            }
+            let grants = CapabilitySet::new(grants);
             host.set_grants(component_id.clone(), grants);
 
-            let grant_status = if external_send_enabled {
-                "ui_notification, external_send (env-enabled)"
-            } else {
-                "ui_notification"
-            };
+            let mut grant_status = vec!["ui_notification", "server_read"];
+            if external_send_enabled {
+                grant_status.push("external_send (env-enabled)");
+            }
+            if server_publish_enabled {
+                grant_status.push("server_publish (env-enabled)");
+            }
             (
                 host,
-                format!("Automation component loaded: {component_id} (granted: {grant_status})"),
+                format!(
+                    "Automation component loaded: {component_id} (granted: {})",
+                    grant_status.join(", ")
+                ),
                 configured_transports,
             )
         }
@@ -4188,6 +4206,34 @@ impl QsonautGuiApp {
                                     self.execute_automation_external_send(source, target, message)
                                 );
                             }
+                            Action::ServerSync => {
+                                self.automation_status = if let Some(client) = &self.server_client {
+                                    client.request_sync();
+                                    "🤖 Requested QSONaut Server sync".to_string()
+                                } else {
+                                    "🤖 Server sync unavailable: no configured connection"
+                                        .to_string()
+                                };
+                            }
+                            Action::ServerSendMessage { channel, message } => {
+                                self.automation_status = if channel.trim().is_empty()
+                                    || message.trim().is_empty()
+                                {
+                                    "🤖 Server publish rejected: channel and message are required"
+                                        .to_string()
+                                } else if channel.chars().count() > 80
+                                    || message.chars().count() > 2_000
+                                {
+                                    "🤖 Server publish rejected: message exceeds server limits"
+                                        .to_string()
+                                } else if let Some(client) = &self.server_client {
+                                    client.publish_channel_message(channel, message);
+                                    format!("🤖 Published automation message to #{channel}")
+                                } else {
+                                    "🤖 Server publish unavailable: no configured connection"
+                                        .to_string()
+                                };
+                            }
                             Action::RadioCommand { command, value } => {
                                 self.automation_status = format!(
                                     "🤖 {}",
@@ -4224,6 +4270,18 @@ impl QsonautGuiApp {
                     break;
                 }
             }
+        }
+    }
+
+    fn pump_server_automation_events(&self) {
+        let Some(client) = &self.server_client else {
+            return;
+        };
+        for event in client.drain_automation_events() {
+            self.app_events.publish(AppEvent::ServerMessageReceived {
+                kind: event.kind,
+                fields: event.fields,
+            });
         }
     }
 
@@ -8192,6 +8250,7 @@ impl eframe::App for QsonautGuiApp {
         }
         self.process_ft8_tx_pipeline();
         self.process_native_digital_tx_pipeline();
+        self.pump_server_automation_events();
         self.pump_automation_events();
         let (ft4_decodes, latest_ft4_period) = {
             let shared = self.state.lock().expect("ui state lock poisoned");

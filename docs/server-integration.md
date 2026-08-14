@@ -37,6 +37,26 @@ The switches are independent:
   mode, and grid metadata. It has no effect unless presence sharing is enabled.
 - `share_logs` publishes locally saved contacts with stable idempotency IDs.
 
-All are false by default. The server connection cannot control the radio,
-audio, modem, PTT, transmit scheduling, or automation. QSONaut shows connection
-state and the active-event/catalog counts in Operator Profile.
+All are false by default. QSONaut shows connection state and the
+active-event/catalog counts in Operator Profile.
+
+## Automation channels
+
+The same WebSocket carries persisted shared-channel messages. Automations can
+observe connection, snapshot, accepted-message, error, and live
+`channel_message` events. Recent snapshot traffic is exposed separately as
+`channel_history`, so requesting a sync cannot masquerade as new live traffic.
+Automations may request a fresh server snapshot with the
+`server_read` capability, which is granted to the bundled component by default.
+
+Publishing uses the separate `server_publish` capability and remains disabled
+until the operator starts QSONaut with:
+
+```bash
+QSONAUT_AUTOMATION_ENABLE_SERVER_PUBLISH=true cargo run -p qsonaut
+```
+
+Rule actions are `server_sync` and `server_send_message`; the latter accepts a
+templated `channel` and `message`. The server authenticates the device, records
+the author, persists the message, and broadcasts it to connected QSONaut
+clients over the normal proxy-friendly WebSocket.

@@ -7,7 +7,7 @@ The initial foundation lives in `qsonaut-automation`. It does not make network c
 ## Event flow
 
 ```text
-radio / decoder / QSO log / Discord / IRC
+radio / decoder / QSO log / QSONaut Server / connectors
                     |
                     v
              AutomationEvent
@@ -26,7 +26,7 @@ radio / decoder / QSO log / Discord / IRC
        approved             denied + logged
 ```
 
-Events currently cover decodes, callsign hits, logged QSOs, radio state, contest state, operator profile changes, commands, external messages, and timers. Fields are intentionally open-ended so protocol- or connector-specific metadata can be added without changing every component.
+Events currently cover decodes, callsign hits, logged QSOs, radio state, contest state, operator profile changes, commands, external messages, QSONaut Server messages, and timers. Fields are intentionally open-ended so protocol- or connector-specific metadata can be added without changing every component.
 
 ## Capabilities
 
@@ -34,6 +34,8 @@ Actions are split into explicit capabilities:
 
 - `ui_notification`: show a card, toast, sound request, or other local feedback.
 - `external_send`: send a message through a configured Discord, IRC, or future adapter.
+- `server_read`: request a fresh server snapshot; event observation still requires an explicit `server_message` subscription.
+- `server_publish`: publish a message into a persisted shared server channel.
 - `set_compose`: prepare text in a mode's compose box without transmitting it.
 - `radio_control`: request tuning or another non-PTT radio operation.
 - `transmit`: request an actual RF transmission.
@@ -48,6 +50,8 @@ A capability must appear in the component manifest and in the operator's grant s
 - a qso-logged confirmation notification;
 - forwarding that hit to Discord;
 - responding locally to an `!rig` external command;
+- requesting a server sync and publishing into `#ops` from matched commands;
+- reacting to live shared-channel messages;
 - Discord and IRC source declarations that reference environment variables rather than storing tokens.
 
 Templates use `${field}` placeholders. `${source}` and `${timestamp_ms}` are always available; other values come from the event fields.
@@ -71,7 +75,11 @@ The GUI now owns an `AutomationHost` and dispatches normalized events for:
 Current runtime grants are intentionally conservative:
 
 - `ui_notification` is granted to the sample component by default;
-- external send, radio control, and transmit actions remain denied unless explicit grants and executors are wired.
+- `server_read` is granted to the sample component by default;
+- `server_publish` requires `QSONAUT_AUTOMATION_ENABLE_SERVER_PUBLISH=true`;
+- other consequential actions remain denied unless explicitly granted.
+
+QSONaut Server channel receive and publish are live over the configured WebSocket. Messages are authenticated, persisted, broadcast, and normalized into `server_message` events. This is the extensible mIRC-like scripting seam for coordination features without giving a script blanket access to the whole application.
 
 Still pending:
 
@@ -85,4 +93,3 @@ Safety-gated execution is now wired for approved `radio_command` and `request_tr
 External receive-path publication is available today through a GUI-local ingress simulator that emits typed `external_message` events (`source`, `author`, `message`, `channel`) into the same automation pipeline used by future adapters.
 
 Approved actions continue to flow through GUI-owned executors. UI notifications and compose changes are low risk. Radio control and TX must pass the same global armed/disarmed safety gate used by operator controls.
-
