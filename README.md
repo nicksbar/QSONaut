@@ -44,6 +44,7 @@ This is an honest snapshot, not a compatibility promise:
 | CW, FLDIGI | UI/integration surfaces only; no native working modem is claimed |
 | Radio control | Selectable Rigwright profiles cover popular Icom, Yaesu (including FTdx101 and FT-857D), and Kenwood radios; IC-7300 is hardware-validated, while the other serial drivers remain experimental |
 | PSK Reporter | Optional, off by default, batched UDP reporting for decoded stations |
+| QSONaut Server | Optional WSS connection for event/catalog sync, presence, radio metadata, and idempotent log publication; every outbound data class is off by default |
 | Automation | Permission-gated component model and Discord/IRC configuration contracts; connectors are not live yet |
 | GPU/NPU compute | Hardware detection and validation policy exist; decoders currently use CPU SIMD because GPU kernels are not validated |
 
@@ -122,6 +123,10 @@ Reception data stays local unless you explicitly enable PSK Reporter. External
 automation source declarations reference environment-variable names rather
 than embedding Discord or IRC credentials.
 
+QSONaut Server connectivity and each sharing category are also disabled by
+default. See [`docs/server-integration.md`](docs/server-integration.md) for
+device enrollment and proxy-friendly WSS configuration.
+
 ## Repository map
 
 - `apps/qsonaut` — CLI and desktop entry point
@@ -136,6 +141,7 @@ Git dependency with `../rigwright` without changing committed manifests. Run
 `cargo update -p rigwright` when you intentionally want the latest GitHub head.
 - `crates/qsonaut-audio`, `qsonaut-dsp`, `qsonaut-modes` — real-time media and modem support
 - `crates/qsonaut-log`, `qsonaut-pskreporter` — local logging and opt-in reporting
+- `crates/qsonaut-server-client` — optional authenticated WSS synchronization
 - `crates/qsonaut-accelerate` — measured compute-backend selection
 - `crates/qsonaut-automation` — sandboxed component and external-source foundation
 - `docs` — current implementation notes; historical scratch research was intentionally removed before publication

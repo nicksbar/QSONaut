@@ -10,6 +10,8 @@ pub struct AppConfig {
     pub radio: RadioConfig,
     pub ai: AiConfig,
     #[serde(default)]
+    pub server: ServerConfig,
+    #[serde(default)]
     pub contest: ContestProfile,
 }
 
@@ -48,6 +50,22 @@ pub struct RadioConfig {
 pub struct AiConfig {
     pub enabled: bool,
     pub provider: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ServerConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub device_token: String,
+    #[serde(default)]
+    pub share_presence: bool,
+    #[serde(default)]
+    pub share_radio_details: bool,
+    #[serde(default)]
+    pub share_logs: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -135,6 +153,7 @@ impl Default for AppConfig {
                 enabled: false,
                 provider: "none".to_string(),
             },
+            server: ServerConfig::default(),
             contest: ContestProfile::default(),
         }
     }
@@ -168,6 +187,25 @@ impl AppConfig {
 
         if let Ok(enabled) = std::env::var("QSONAUT_CONTEST_ENABLED") {
             cfg.contest.enabled = parse_bool(&enabled);
+        }
+
+        if let Ok(enabled) = std::env::var("QSONAUT_SERVER_ENABLED") {
+            cfg.server.enabled = parse_bool(&enabled);
+        }
+        if let Ok(url) = std::env::var("QSONAUT_SERVER_URL") {
+            cfg.server.url = url;
+        }
+        if let Ok(token) = std::env::var("QSONAUT_SERVER_DEVICE_TOKEN") {
+            cfg.server.device_token = token;
+        }
+        if let Ok(enabled) = std::env::var("QSONAUT_SERVER_SHARE_PRESENCE") {
+            cfg.server.share_presence = parse_bool(&enabled);
+        }
+        if let Ok(enabled) = std::env::var("QSONAUT_SERVER_SHARE_RADIO_DETAILS") {
+            cfg.server.share_radio_details = parse_bool(&enabled);
+        }
+        if let Ok(enabled) = std::env::var("QSONAUT_SERVER_SHARE_LOGS") {
+            cfg.server.share_logs = parse_bool(&enabled);
         }
         if let Ok(mode) = std::env::var("QSONAUT_CONTEST_OPERATING_MODE") {
             if let Some(parsed) = parse_contest_operating_mode(&mode) {

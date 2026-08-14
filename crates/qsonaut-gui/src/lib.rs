@@ -32,6 +32,10 @@ use qsonaut_radio::{
     models::{find_model, Protocol, SupportLevel, POPULAR_RADIOS},
     BaseMode, ControlId, ControlValue, IcomCiVRadio, Mode, RadioHal, SerialPortDescriptor,
 };
+use qsonaut_server_client::{
+    log_idempotency_key, new_instance_id, ConnectionConfig as ServerConnectionConfig,
+    ConnectionState as ServerConnectionState, Presence as ServerPresence, ServerClient,
+};
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -240,6 +244,8 @@ struct OperatorProfile {
     compute_preference: ComputePreference,
     #[serde(default)]
     psk_reporter_enabled: bool,
+    #[serde(default)]
+    server_instance_id: String,
     #[serde(default)]
     contest_enabled: bool,
     #[serde(default)]
@@ -708,6 +714,28 @@ fn qso_log_path() -> PathBuf {
 
 fn qso_adif_path() -> PathBuf {
     app_config_dir().join(QSO_ADIF_FILE)
+}
+
+fn qso_timestamp(record: &QsoRecord) -> Option<String> {
+    let date = record.qso_date.trim();
+    let time = record.time_on.trim();
+    if date.len() != 8
+        || time.len() < 4
+        || !date.bytes().all(|byte| byte.is_ascii_digit())
+        || !time.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let seconds = if time.len() >= 6 { &time[4..6] } else { "00" };
+    Some(format!(
+        "{}-{}-{}T{}:{}:{}Z",
+        &date[0..4],
+        &date[4..6],
+        &date[6..8],
+        &time[0..2],
+        &time[2..4],
+        seconds
+    ))
 }
 
 fn load_operator_profile() -> Option<OperatorProfile> {
@@ -1937,6 +1965,9 @@ struct QsonautGuiApp {
     acceleration_report: AccelerationReport,
     psk_reporter_enabled: bool,
     psk_reporter: Option<Reporter>,
+    server_client: Option<ServerClient>,
+    server_instance_id: String,
+    server_last_presence: Instant,
     brand_icon: TextureHandle,
     selected_renderer: eframe::Renderer,
     first_frame_logged: bool,
@@ -2075,6 +2106,7 @@ impl QsonautGuiApp {
         let mut gui_scale = default_gui_scale();
         let mut compute_preference = ComputePreference::Auto;
         let mut psk_reporter_enabled = false;
+        let mut server_instance_id = new_instance_id();
         let mut contest_enabled = config.contest.enabled;
         let mut contest_operating_mode = config.contest.operating_mode;
         let mut contest_split_policy = config.contest.split_policy;
@@ -2132,6 +2164,7 @@ impl QsonautGuiApp {
             };
             compute_preference = p.compute_preference;
             psk_reporter_enabled = p.psk_reporter_enabled;
+            server_instance_id = p.server_instance_id;
             contest_enabled = p.contest_enabled;
             contest_operating_mode = p.contest_operating_mode;
             contest_split_policy = p.contest_split_policy;
@@ -2197,6 +2230,7 @@ impl QsonautGuiApp {
                 gui_scale,
                 compute_preference,
                 psk_reporter_enabled,
+                server_instance_id: server_instance_id.clone(),
                 contest_enabled,
                 contest_operating_mode,
                 contest_split_policy,
@@ -2219,6 +2253,21 @@ impl QsonautGuiApp {
                 }
             }
         }
+
+        if server_instance_id.is_empty() {
+            server_instance_id = new_instance_id();
+        }
+
+        let server_client = (config.server.enabled
+            && !config.server.url.trim().is_empty()
+            && !config.server.device_token.trim().is_empty())
+        .then(|| {
+            ServerClient::spawn(ServerConnectionConfig {
+                server_url: config.server.url.trim().to_string(),
+                device_token: config.server.device_token.trim().to_string(),
+                client_version: env!("CARGO_PKG_VERSION").to_string(),
+            })
+        });
 
         if !find_model(&config.radio.model).is_some_and(|profile| profile.capabilities.spectrum) {
             civ_spectrum_on = false;
@@ -2387,6 +2436,9 @@ impl QsonautGuiApp {
             acceleration_report,
             psk_reporter_enabled,
             psk_reporter,
+            server_client,
+            server_instance_id,
+            server_last_presence: Instant::now() - Duration::from_secs(60),
             brand_icon,
             selected_renderer,
             first_frame_logged: false,
@@ -2432,7 +2484,8 @@ impl QsonautGuiApp {
                 .saturating_add(1);
         }
         self.qso_log.contacts.push(record);
-        if let Some(last) = self.qso_log.contacts.last() {
+        let published = self.qso_log.contacts.last().cloned();
+        if let Some(last) = &published {
             self.app_events.publish(AppEvent::QsoLogged {
                 mode: last.mode.clone(),
                 call: last.callsign.clone(),
@@ -2443,6 +2496,95 @@ impl QsonautGuiApp {
         self.qso_selected = Some(self.qso_log.contacts.len() - 1);
         self.qso_log_dirty = true;
         self.persist_qso_log(status);
+        if let Some(record) = &published {
+            self.publish_qso_to_server(record);
+        }
+    }
+
+    fn publish_qso_to_server(&self, record: &QsoRecord) {
+        if !self.config.server.enabled || !self.config.server.share_logs {
+            return;
+        }
+        let Some(client) = &self.server_client else {
+            return;
+        };
+        let Some(occurred_at) = qso_timestamp(record) else {
+            return;
+        };
+        client.publish_log(serde_json::json!({
+            "event_id": null,
+            "idempotency_key": log_idempotency_key(record.id),
+            "callsign": record.callsign,
+            "band": record.band,
+            "mode": record.mode,
+            "frequency_hz": i64::try_from(record.frequency_hz).ok(),
+            "occurred_at": occurred_at,
+            "rst_sent": (!record.report_sent.is_empty()).then_some(&record.report_sent),
+            "rst_received": (!record.report_received.is_empty()).then_some(&record.report_received),
+            "exchange": {
+                "sent": record.contest_exchange_sent,
+                "received": record.contest_exchange_received,
+                "serial_sent": record.contest_serial_sent,
+                "serial_received": record.contest_serial_received,
+                "grid": record.grid,
+            },
+            "points": 0,
+            "source": "qsonaut",
+        }));
+    }
+
+    fn publish_server_presence(&mut self, snapshot: &GuiState) {
+        if !self.config.server.share_presence
+            || self.server_last_presence.elapsed() < Duration::from_secs(15)
+        {
+            return;
+        }
+        self.server_last_presence = Instant::now();
+        let Some(client) = &self.server_client else {
+            return;
+        };
+        let details = self.config.server.share_radio_details;
+        let frequency_hz = details
+            .then_some(snapshot.frequency_hz)
+            .flatten()
+            .and_then(|value| i64::try_from(value).ok());
+        let band = frequency_hz
+            .and_then(|value| u64::try_from(value).ok())
+            .map(band_for_frequency)
+            .filter(|band| !band.is_empty())
+            .map(str::to_owned);
+        let radio_model = details.then(|| self.config.radio.model.clone());
+        let radio_manufacturer = radio_model.as_deref().and_then(|model| {
+            if model.starts_with("IC-") {
+                Some("Icom".to_string())
+            } else if model.starts_with("FT-") || model.starts_with("FTDX") {
+                Some("Yaesu".to_string())
+            } else if model.starts_with("TS-") {
+                Some("Kenwood".to_string())
+            } else {
+                None
+            }
+        });
+        client.publish_presence(ServerPresence {
+            instance_id: self.server_instance_id.clone(),
+            station_label: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+            radio_manufacturer,
+            radio_model,
+            frequency_hz,
+            band,
+            mode: details.then(|| self.workspace_mode.label().to_string()),
+            qsonaut_version: env!("CARGO_PKG_VERSION").to_string(),
+            platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+            status: "online".to_string(),
+            metadata: if details {
+                serde_json::json!({
+                    "grid": self.station_grid_or_default(),
+                    "contest_enabled": self.contest_enabled,
+                })
+            } else {
+                serde_json::json!({})
+            },
+        });
     }
 
     fn log_completed_ft8_session(&mut self, session: &Ft8Session) {
@@ -3381,6 +3523,7 @@ impl QsonautGuiApp {
             gui_scale: self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX),
             compute_preference: self.compute_preference,
             psk_reporter_enabled: self.psk_reporter_enabled,
+            server_instance_id: self.server_instance_id.clone(),
             contest_enabled: self.contest_enabled,
             contest_operating_mode: self.contest_operating_mode,
             contest_split_policy: self.contest_split_policy,
@@ -4526,6 +4669,63 @@ impl QsonautGuiApp {
         }
 
         ui.add_space(8.0);
+        ui.group(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("🌐 QSONaut Server").strong());
+                if let Some(client) = &self.server_client {
+                    let status = client.status();
+                    let (label, color) = match status.state {
+                        ServerConnectionState::Connected => ("CONNECTED", Color32::LIGHT_GREEN),
+                        ServerConnectionState::Connecting => ("CONNECTING", Color32::YELLOW),
+                        ServerConnectionState::Reconnecting => ("RECONNECTING", Color32::YELLOW),
+                        ServerConnectionState::Disabled | ServerConnectionState::Stopped => {
+                            ("OFFLINE", Color32::GRAY)
+                        }
+                    };
+                    ui.label(RichText::new(label).monospace().strong().color(color));
+                    if ui.small_button("Refresh events").clicked() {
+                        client.request_sync();
+                    }
+                    ui.label(
+                        RichText::new(format!(
+                            "{} active · {} contest models",
+                            status.active_event_count, status.catalog_size
+                        ))
+                        .small()
+                        .color(Color32::GRAY),
+                    );
+                    if let Some(error) = status.last_error {
+                        ui.label(RichText::new(error).small().color(Color32::YELLOW));
+                    }
+                } else {
+                    ui.label(RichText::new("DISABLED").monospace().color(Color32::GRAY));
+                }
+            });
+            ui.label(
+                RichText::new(format!(
+                    "Presence: {} · radio details: {} · logs: {}",
+                    if self.config.server.share_presence {
+                        "shared"
+                    } else {
+                        "private"
+                    },
+                    if self.config.server.share_radio_details {
+                        "shared"
+                    } else {
+                        "private"
+                    },
+                    if self.config.server.share_logs {
+                        "shared"
+                    } else {
+                        "private"
+                    },
+                ))
+                .small()
+                .color(Color32::GRAY),
+            );
+        });
+
+        ui.add_space(8.0);
         egui::CollapsingHeader::new("💬 External automation ingress (local simulator)")
             .default_open(false)
             .show(ui, |ui| {
@@ -4656,7 +4856,14 @@ impl QsonautGuiApp {
                 .add_enabled(self.qso_log_dirty, egui::Button::new("Save"))
                 .clicked()
             {
+                let publish = self
+                    .qso_selected
+                    .and_then(|index| self.qso_log.contacts.get(index))
+                    .cloned();
                 self.persist_qso_log("Saved");
+                if let Some(record) = &publish {
+                    self.publish_qso_to_server(record);
+                }
             }
             if ui.small_button("Export ADIF").clicked() {
                 match self.qso_log.export_adif(&qso_adif_path()) {
@@ -8018,6 +8225,7 @@ impl eframe::App for QsonautGuiApp {
 
         let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
         self.emit_radio_state_hook_if_changed(&snapshot);
+        self.publish_server_presence(&snapshot);
 
         egui::TopBottomPanel::top("header")
             .resizable(true)
@@ -8219,6 +8427,9 @@ impl eframe::App for QsonautGuiApp {
                                 };
                                 self.compute_preference = p.compute_preference;
                                 self.psk_reporter_enabled = p.psk_reporter_enabled;
+                                if !p.server_instance_id.is_empty() {
+                                    self.server_instance_id = p.server_instance_id;
+                                }
                                 self.acceleration_report =
                                     AccelerationReport::probe(self.compute_preference);
                                 if p.profile_version >= 3 {

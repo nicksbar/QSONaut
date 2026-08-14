@@ -10,6 +10,7 @@ members = [
     "crates/qsonaut-accelerate",
     "crates/qsonaut-automation",
     "crates/qsonaut-pskreporter",
+    "crates/qsonaut-server-client",
     "crates/qsonaut-gui",
 ]
 resolver = "2"
@@ -26,9 +27,11 @@ anyhow = "1"
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 serialport = "4"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-appender = "0.2"
@@ -37,6 +40,9 @@ eframe = { version = "0.33", default-features = false, features = ["default_font
 rustfft = "6"
 cpal = "0.15"
 wgpu = { version = "27", default-features = false, features = ["std", "vulkan"] }
+futures-util = "0.3"
+url = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
 
 [profile.dev.package."mfsk-core"]
 opt-level = 3
