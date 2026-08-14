@@ -21,7 +21,7 @@ use qsonaut_automation::{
 };
 use qsonaut_core::{
     AppConfig, AppEvent, AppEventBus, ContestOperatingMode, ContestProfile, FoxHoundRole,
-    SplitPolicy,
+    ServerConfig, SplitPolicy,
 };
 use qsonaut_dsp::resample::Decimator;
 use qsonaut_log::{app_config_dir, AdifExportFilter, QsoLog, QsoRecord};
@@ -66,7 +66,8 @@ const AUDIO_MAX_FREQ_HZ: u32 = 4_000;
 // 8192 samples @ 48 kHz = 170 ms window, ~5.9 Hz/bin, ~683 useful bins for 0-4 kHz.
 const FFT_SIZE: usize = 8192;
 const OPERATOR_PROFILE_FILE: &str = "profile.toml";
-const OPERATOR_PROFILE_VERSION: u32 = 8;
+const OPERATOR_PROFILE_VERSION: u32 = 9;
+const GUI_SCALE_PROFILE_VERSION: u32 = 8;
 const GUI_SCALE_BASE: f32 = 1.2;
 const GUI_SCALE_MAX: f32 = 2.0;
 const GUI_SCALE_MIN: f32 = 0.9;
@@ -247,6 +248,8 @@ struct OperatorProfile {
     #[serde(default)]
     server_instance_id: String,
     #[serde(default)]
+    server: Option<ServerConfig>,
+    #[serde(default)]
     contest_enabled: bool,
     #[serde(default)]
     contest_operating_mode: ContestOperatingMode,
@@ -270,6 +273,17 @@ struct OperatorProfile {
     hunter_unlocked: Vec<AchievementKind>,
     #[serde(default)]
     hunter_custom_rules: Vec<CustomAchievementRule>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum SignalPanelTab {
+    #[default]
+    Status,
+    Profile,
+    Server,
+    Band,
+    Log,
+    Devices,
 }
 
 fn default_gui_scale() -> f32 {
@@ -774,6 +788,11 @@ fn save_operator_profile(profile: &OperatorProfile) -> Result<()> {
     }
     let body = toml::to_string_pretty(profile)?;
     fs::write(&path, body)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    }
     Ok(())
 }
 
@@ -1976,7 +1995,7 @@ struct QsonautGuiApp {
     waterfall_deck_height: f32,
     waterfall_deck_resize_pending: bool,
     show_signal_panel: bool,
-    show_device_settings: bool,
+    signal_panel_tab: SignalPanelTab,
     device_restart_required: bool,
     gui_scale: f32,
     compute_preference: ComputePreference,
@@ -2174,7 +2193,7 @@ impl QsonautGuiApp {
             }
             ptt_lead_ms = p.ptt_lead_ms.clamp(100, 1_500);
             ptt_tail_ms = p.ptt_tail_ms.clamp(0, 1_000);
-            gui_scale = if p.profile_version >= OPERATOR_PROFILE_VERSION {
+            gui_scale = if p.profile_version >= GUI_SCALE_PROFILE_VERSION {
                 p.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
             } else {
                 // v3 called this physical size 160%; it is the v4 100% baseline.
@@ -2183,6 +2202,9 @@ impl QsonautGuiApp {
             compute_preference = p.compute_preference;
             psk_reporter_enabled = p.psk_reporter_enabled;
             server_instance_id = p.server_instance_id;
+            if let Some(server) = p.server {
+                config.server = server;
+            }
             contest_enabled = p.contest_enabled;
             contest_operating_mode = p.contest_operating_mode;
             contest_split_policy = p.contest_split_policy;
@@ -2249,6 +2271,7 @@ impl QsonautGuiApp {
                 compute_preference,
                 psk_reporter_enabled,
                 server_instance_id: server_instance_id.clone(),
+                server: Some(config.server.clone()),
                 contest_enabled,
                 contest_operating_mode,
                 contest_split_policy,
@@ -2447,7 +2470,7 @@ impl QsonautGuiApp {
             waterfall_deck_height,
             waterfall_deck_resize_pending: false,
             show_signal_panel: true,
-            show_device_settings: false,
+            signal_panel_tab: SignalPanelTab::Status,
             device_restart_required: false,
             gui_scale,
             compute_preference,
@@ -2473,6 +2496,33 @@ impl QsonautGuiApp {
                 self.profile_io_status = format!("Save failed: {err}");
             }
         }
+    }
+
+    fn reconnect_server(&mut self) {
+        let enabled = self.config.server.enabled;
+        let url = self.config.server.url.trim();
+        let token = self.config.server.device_token.trim();
+        if enabled && (url.is_empty() || token.is_empty()) {
+            self.profile_io_status =
+                "Server needs both an endpoint and device token before connecting".to_string();
+            return;
+        }
+
+        let next_client = enabled.then(|| {
+            ServerClient::spawn(ServerConnectionConfig {
+                server_url: url.to_string(),
+                device_token: token.to_string(),
+                client_version: env!("CARGO_PKG_VERSION").to_string(),
+            })
+        });
+        self.server_client = next_client;
+        self.profile_dirty = true;
+        self.persist_profile(if enabled {
+            "Server settings saved to"
+        } else {
+            "Server disabled in"
+        });
+        self.server_last_presence = Instant::now() - Duration::from_secs(60);
     }
 
     fn persist_qso_log(&mut self, status_prefix: &str) {
@@ -2598,11 +2648,86 @@ impl QsonautGuiApp {
                 serde_json::json!({
                     "grid": self.station_grid_or_default(),
                     "contest_enabled": self.contest_enabled,
+                    "radio_backend": self.config.radio.backend,
+                    "radio_baud_rate": self.config.radio.baud_rate,
+                    "civ_address": self.config.radio.civ_address,
+                    "controller_civ_address": self.config.radio.controller_civ_address,
+                    "data_mode": snapshot.data_mode,
+                    "filter": snapshot.filter,
+                    "af_gain": snapshot.af_gain,
+                    "rf_gain": snapshot.rf_gain,
+                    "rf_power": snapshot.rf_power,
+                    "scope_enabled": snapshot.radio_spectrum_enabled,
+                    "scope_status": snapshot.radio_waterfall_status,
+                    "audio_status": snapshot.audio_spectrum_status,
+                    "audio_level_dbfs": snapshot.audio_level_dbfs,
+                    "audio_clip_percent": snapshot.audio_clip_percent,
+                    "compute_backend": format!("{:?}", snapshot.compute_backend),
                 })
             } else {
                 serde_json::json!({})
             },
         });
+    }
+
+    fn publish_diagnostic_snapshot(&mut self) {
+        if !self.config.server.enabled || !self.config.server.share_diagnostics {
+            self.profile_io_status =
+                "Enable manual diagnostic snapshots before sending".to_string();
+            return;
+        }
+        let Some(client) = &self.server_client else {
+            self.profile_io_status = "Connect to QSONaut Server before sending".to_string();
+            return;
+        };
+        let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
+        client.publish_diagnostic(serde_json::json!({
+            "instance_id": self.server_instance_id,
+            "category": "radio_snapshot",
+            "summary": format!("{} radio and runtime snapshot", self.config.radio.model),
+            "payload": {
+                "qsonaut": { "version": env!("CARGO_PKG_VERSION"), "platform": format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH) },
+                "radio_config": {
+                    "enabled": self.config.radio.enabled,
+                    "backend": self.config.radio.backend,
+                    "model": self.config.radio.model,
+                    "baud_rate": self.config.radio.baud_rate,
+                    "civ_address": self.config.radio.civ_address,
+                    "controller_civ_address": self.config.radio.controller_civ_address,
+                    "serial_port_configured": self.config.radio.serial_port.is_some(),
+                },
+                "radio_state": {
+                    "frequency_hz": snapshot.frequency_hz,
+                    "mode": snapshot.mode,
+                    "data_mode": snapshot.data_mode,
+                    "filter": snapshot.filter,
+                    "af_gain": snapshot.af_gain,
+                    "rf_gain": snapshot.rf_gain,
+                    "rf_power": snapshot.rf_power,
+                    "ptt_on": snapshot.ptt_on,
+                    "scope_enabled": snapshot.radio_spectrum_enabled,
+                    "scope_status": snapshot.radio_waterfall_status,
+                },
+                "audio": {
+                    "enabled": self.config.audio.enabled,
+                    "sample_rate_hz": self.config.audio.sample_rate_hz,
+                    "channels": self.config.audio.channels,
+                    "input_configured": self.config.audio.input_device.is_some(),
+                    "output_configured": self.config.audio.output_device.is_some(),
+                    "status": snapshot.audio_spectrum_status,
+                    "level_dbfs": snapshot.audio_level_dbfs,
+                    "clip_percent": snapshot.audio_clip_percent,
+                },
+                "decoder": {
+                    "workspace": self.workspace_mode.label(),
+                    "ft8_status": snapshot.ft8_decode_status,
+                    "digital_status": snapshot.digital_decode_status,
+                    "compute_backend": format!("{:?}", snapshot.compute_backend),
+                },
+                "last_error": snapshot.last_error,
+            }
+        }));
+        self.profile_io_status = "Diagnostic snapshot queued for QSONaut Server".to_string();
     }
 
     fn log_completed_ft8_session(&mut self, session: &Ft8Session) {
@@ -3542,6 +3667,7 @@ impl QsonautGuiApp {
             compute_preference: self.compute_preference,
             psk_reporter_enabled: self.psk_reporter_enabled,
             server_instance_id: self.server_instance_id.clone(),
+            server: Some(self.config.server.clone()),
             contest_enabled: self.contest_enabled,
             contest_operating_mode: self.contest_operating_mode,
             contest_split_policy: self.contest_split_policy,
@@ -4393,85 +4519,85 @@ impl QsonautGuiApp {
         );
     }
 
-    fn draw_station_profile(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Operator Profile");
-        ui.separator();
+    fn draw_profile_or_server_panel(&mut self, ui: &mut egui::Ui) {
+        if self.signal_panel_tab != SignalPanelTab::Server {
+            ui.heading("Operator Profile");
+            ui.separator();
 
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Call").strong());
-            let changed = ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.station_callsign)
-                        .desired_width(110.0)
-                        .hint_text("N0CALL")
-                        .font(egui::TextStyle::Monospace),
-                )
-                .changed();
-            if changed {
-                self.station_callsign = self.station_callsign.trim().to_ascii_uppercase();
-                let val = self.station_callsign.trim();
-                self.config.station.callsign = if val.is_empty() {
-                    None
-                } else {
-                    Some(val.to_string())
-                };
-                self.restart_psk_reporter();
-                self.profile_dirty = true;
-                self.persist_profile("Auto-saved");
-                self.emit_operator_profile_hook(format!(
-                    "callsign_changed={}",
-                    self.station_callsign_or_default()
-                ));
-            }
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Call").strong());
+                let changed = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.station_callsign)
+                            .desired_width(110.0)
+                            .hint_text("N0CALL")
+                            .font(egui::TextStyle::Monospace),
+                    )
+                    .changed();
+                if changed {
+                    self.station_callsign = self.station_callsign.trim().to_ascii_uppercase();
+                    let val = self.station_callsign.trim();
+                    self.config.station.callsign = if val.is_empty() {
+                        None
+                    } else {
+                        Some(val.to_string())
+                    };
+                    self.restart_psk_reporter();
+                    self.profile_dirty = true;
+                    self.persist_profile("Auto-saved");
+                    self.emit_operator_profile_hook(format!(
+                        "callsign_changed={}",
+                        self.station_callsign_or_default()
+                    ));
+                }
 
-            ui.label(RichText::new("Grid").strong());
-            let changed = ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.station_grid)
-                        .desired_width(90.0)
-                        .hint_text("AA00")
-                        .font(egui::TextStyle::Monospace),
-                )
-                .changed();
-            if changed {
-                self.station_grid = self.station_grid.trim().to_ascii_uppercase();
-                let val = self.station_grid.trim();
-                self.config.station.grid = if val.is_empty() {
-                    None
-                } else {
-                    Some(val.to_string())
-                };
-                self.restart_psk_reporter();
-                self.profile_dirty = true;
-                self.persist_profile("Auto-saved");
-                self.emit_operator_profile_hook(format!(
-                    "grid_changed={}",
-                    self.station_grid_or_default()
-                ));
-            }
-        });
+                ui.label(RichText::new("Grid").strong());
+                let changed = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.station_grid)
+                            .desired_width(90.0)
+                            .hint_text("AA00")
+                            .font(egui::TextStyle::Monospace),
+                    )
+                    .changed();
+                if changed {
+                    self.station_grid = self.station_grid.trim().to_ascii_uppercase();
+                    let val = self.station_grid.trim();
+                    self.config.station.grid = if val.is_empty() {
+                        None
+                    } else {
+                        Some(val.to_string())
+                    };
+                    self.restart_psk_reporter();
+                    self.profile_dirty = true;
+                    self.persist_profile("Auto-saved");
+                    self.emit_operator_profile_hook(format!(
+                        "grid_changed={}",
+                        self.station_grid_or_default()
+                    ));
+                }
+            });
 
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("QTH").strong());
-            let qth_changed = ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.station_qth)
-                        .desired_width(ui.available_width())
-                        .hint_text("City / locator notes")
-                        .font(egui::TextStyle::Monospace),
-                )
-                .changed();
-            if qth_changed {
-                self.profile_dirty = true;
-                self.persist_profile("Auto-saved");
-                self.emit_operator_profile_hook("qth_changed");
-            }
-        });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("QTH").strong());
+                let qth_changed = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.station_qth)
+                            .desired_width(ui.available_width())
+                            .hint_text("City / locator notes")
+                            .font(egui::TextStyle::Monospace),
+                    )
+                    .changed();
+                if qth_changed {
+                    self.profile_dirty = true;
+                    self.persist_profile("Auto-saved");
+                    self.emit_operator_profile_hook("qth_changed");
+                }
+            });
 
-        ui.add_space(8.0);
-        egui::CollapsingHeader::new("🏁 Contest profile")
-            .default_open(false)
-            .show(ui, |ui| {
+            ui.add_space(8.0);
+            ui.group(|ui| {
+                ui.heading("🏁 Contest profile");
                 if ui
                     .checkbox(&mut self.contest_enabled, "Enable contest workflow profile")
                     .changed()
@@ -4679,8 +4805,8 @@ impl QsonautGuiApp {
                 );
             });
 
-        ui.add_space(6.0);
-        let changed = ui
+            ui.add_space(6.0);
+            let changed = ui
             .checkbox(
                 &mut self.psk_reporter_enabled,
                 "📡 Report decoded stations to PSK Reporter",
@@ -4689,42 +4815,133 @@ impl QsonautGuiApp {
                 "Opt-in: batches reception reports to report.pskreporter.info over UDP about every five minutes",
             )
             .changed();
-        if changed {
-            self.restart_psk_reporter();
-            self.profile_dirty = true;
-            self.persist_profile("PSK Reporter preference saved to");
-            self.emit_operator_profile_hook(format!(
-                "psk_reporter_enabled={}",
-                self.psk_reporter_enabled
-            ));
-        }
-        if self.psk_reporter_enabled {
-            if let Some(reporter) = &self.psk_reporter {
-                let status = reporter.status();
-                let detail = status
-                    .last_error
-                    .map(|error| format!("network error: {error}"))
-                    .unwrap_or_else(|| {
-                        format!(
-                            "{} queued · {} sent · five-minute batching",
-                            status.queued, status.sent
-                        )
-                    });
-                ui.label(RichText::new(detail).small().color(Color32::LIGHT_GREEN));
+            if changed {
+                self.restart_psk_reporter();
+                self.profile_dirty = true;
+                self.persist_profile("PSK Reporter preference saved to");
+                self.emit_operator_profile_hook(format!(
+                    "psk_reporter_enabled={}",
+                    self.psk_reporter_enabled
+                ));
+            }
+            if self.psk_reporter_enabled {
+                if let Some(reporter) = &self.psk_reporter {
+                    let status = reporter.status();
+                    let detail = status
+                        .last_error
+                        .map(|error| format!("network error: {error}"))
+                        .unwrap_or_else(|| {
+                            format!(
+                                "{} queued · {} sent · five-minute batching",
+                                status.queued, status.sent
+                            )
+                        });
+                    ui.label(RichText::new(detail).small().color(Color32::LIGHT_GREEN));
+                } else {
+                    ui.label(
+                        RichText::new("Set a real callsign and grid before reporting")
+                            .small()
+                            .color(Color32::YELLOW),
+                    );
+                }
             } else {
                 ui.label(
-                    RichText::new("Set a real callsign and grid before reporting")
+                    RichText::new("Private by default · no reception data leaves QSONaut")
                         .small()
-                        .color(Color32::YELLOW),
+                        .color(Color32::GRAY),
                 );
             }
-        } else {
+
+            ui.add_space(4.0);
             ui.label(
-                RichText::new("Private by default · no reception data leaves QSONaut")
+                RichText::new(&self.profile_io_status)
                     .small()
                     .color(Color32::GRAY),
             );
+            return;
         }
+
+        ui.heading("🌐 QSONaut Server");
+        ui.separator();
+        ui.label(
+            RichText::new("Use http://localhost:8080 for local development, a LAN address when the server is on another machine, or the hosted HTTPS address. QSONaut selects WS/WSS automatically; reverse proxies require no specialty port.")
+                .small()
+                .color(Color32::GRAY),
+        );
+        let server_settings_before = self.config.server.clone();
+        ui.checkbox(
+            &mut self.config.server.enabled,
+            "Connect this QSONaut instance",
+        );
+        ui.horizontal(|ui| {
+            ui.label("Endpoint");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.config.server.url)
+                    .desired_width(ui.available_width())
+                    .hint_text("http://localhost:8080 or https://qsonaut.example.org"),
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label("Device token");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.config.server.device_token)
+                    .password(true)
+                    .desired_width(ui.available_width())
+                    .hint_text("Paste the token issued by QSONaut Server"),
+            );
+        });
+        ui.label(
+            RichText::new("The token is stored locally in profile.toml with owner-only permissions on Unix systems.")
+                .small()
+                .color(Color32::GRAY),
+        );
+        ui.add_space(5.0);
+        ui.label(RichText::new("Privacy controls").strong());
+        ui.checkbox(
+            &mut self.config.server.share_presence,
+            "Share online presence and operating mode",
+        );
+        ui.add_enabled_ui(self.config.server.share_presence, |ui| {
+            ui.checkbox(
+                &mut self.config.server.share_radio_details,
+                "Share radio, frequency, and operating metadata",
+            );
+        });
+        ui.checkbox(
+            &mut self.config.server.share_logs,
+            "Share contact/QSO logs with the server",
+        );
+        ui.checkbox(
+            &mut self.config.server.share_diagnostics,
+            "Allow manual radio/debug snapshots",
+        );
+        if self.config.server != server_settings_before {
+            self.profile_dirty = true;
+        }
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Save & reconnect").clicked() {
+                self.reconnect_server();
+            }
+            if ui.button("Disconnect").clicked() {
+                self.config.server.enabled = false;
+                self.reconnect_server();
+            }
+            if ui
+                .add_enabled(
+                    self.config.server.share_diagnostics,
+                    egui::Button::new("Send diagnostic snapshot now"),
+                )
+                .on_hover_text("Sends radio configuration, live state, audio/decoder health, and the latest error; never sends the server token or audio samples")
+                .clicked()
+            {
+                self.publish_diagnostic_snapshot();
+            }
+            ui.label(
+                RichText::new("Nothing is shared unless its control is enabled.")
+                    .small()
+                    .color(Color32::GRAY),
+            );
+        });
 
         ui.add_space(8.0);
         ui.group(|ui| {
@@ -4761,19 +4978,24 @@ impl QsonautGuiApp {
             });
             ui.label(
                 RichText::new(format!(
-                    "Presence: {} · radio details: {} · logs: {}",
+                    "Presence: {} · radio details: {} · QSO logs: {} · diagnostics: {}",
                     if self.config.server.share_presence {
                         "shared"
                     } else {
                         "private"
                     },
-                    if self.config.server.share_radio_details {
+                    if self.config.server.share_presence && self.config.server.share_radio_details {
                         "shared"
                     } else {
                         "private"
                     },
                     if self.config.server.share_logs {
                         "shared"
+                    } else {
+                        "private"
+                    },
+                    if self.config.server.share_diagnostics {
+                        "manual"
                     } else {
                         "private"
                     },
@@ -4784,9 +5006,8 @@ impl QsonautGuiApp {
         });
 
         ui.add_space(8.0);
-        egui::CollapsingHeader::new("💬 External automation ingress (local simulator)")
-            .default_open(false)
-            .show(ui, |ui| {
+        ui.group(|ui| {
+                ui.heading("💬 Automation ingress test bench");
                 ui.label(
                     RichText::new(
                         "Publish an external_message event locally to validate rules before wiring live adapters.",
@@ -8404,12 +8625,16 @@ impl eframe::App for QsonautGuiApp {
                         self.show_signal_panel = !self.show_signal_panel;
                     }
                     if ui
-                        .selectable_label(self.show_device_settings, "Devices")
+                        .selectable_label(
+                            self.show_signal_panel
+                                && self.signal_panel_tab == SignalPanelTab::Devices,
+                            "Devices",
+                        )
                         .on_hover_text("Choose OS audio and USB/serial devices")
                         .clicked()
                     {
-                        self.show_device_settings = !self.show_device_settings;
                         self.show_signal_panel = true;
+                        self.signal_panel_tab = SignalPanelTab::Devices;
                     }
                     ui.separator();
                     let previous_scale = self.gui_scale;
@@ -8479,7 +8704,7 @@ impl eframe::App for QsonautGuiApp {
                                     p.contest_fake_split_offset_hz.clamp(0, 2_000);
                                 self.hunter_unlocked = p.hunter_unlocked.into_iter().collect();
                                 self.hunter_custom_rules = p.hunter_custom_rules;
-                                self.gui_scale = if p.profile_version >= OPERATOR_PROFILE_VERSION {
+                                self.gui_scale = if p.profile_version >= GUI_SCALE_PROFILE_VERSION {
                                     p.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
                                 } else {
                                     default_gui_scale()
@@ -8488,6 +8713,10 @@ impl eframe::App for QsonautGuiApp {
                                 self.psk_reporter_enabled = p.psk_reporter_enabled;
                                 if !p.server_instance_id.is_empty() {
                                     self.server_instance_id = p.server_instance_id;
+                                }
+                                if let Some(server) = p.server {
+                                    self.config.server = server;
+                                    self.reconnect_server();
                                 }
                                 self.acceleration_report =
                                     AccelerationReport::probe(self.compute_preference);
@@ -8583,20 +8812,32 @@ impl eframe::App for QsonautGuiApp {
                             .color(Color32::GRAY),
                     );
                 });
+                // Own exactly the remainder of the panel. Waterfall controls and
+                // images may clip inside this child, but they must never enlarge
+                // the parent response and ratchet the saved panel height upward.
+                let deck_rect = ui.available_rect_before_wrap();
+                ui.allocate_rect(deck_rect, egui::Sense::hover());
+                let mut deck_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .id_salt("waterfall_deck_contents")
+                        .max_rect(deck_rect)
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                );
+                deck_ui.set_clip_rect(deck_rect);
                 if radio_scope_visible {
-                    let total_width = ui.available_width();
+                    let total_width = deck_ui.available_width();
                     let radio_default_width = total_width * 0.5;
                     let radio_max_width = (total_width - 260.0).max(280.0);
                     egui::SidePanel::left("radio_waterfall_split")
                         .resizable(true)
                         .default_width(radio_default_width)
                         .width_range(280.0..=radio_max_width)
-                        .show_inside(ui, |ui| {
+                        .show_inside(&mut deck_ui, |ui| {
                             self.draw_radio_waterfall(ui, ctx, &snapshot);
                         });
-                    self.draw_audio_waterfall(ui, ctx, &snapshot);
+                    self.draw_audio_waterfall(&mut deck_ui, ctx, &snapshot);
                 } else {
-                    self.draw_audio_waterfall(ui, ctx, &snapshot);
+                    self.draw_audio_waterfall(&mut deck_ui, ctx, &snapshot);
                 }
             });
         let actual_deck_height = egui::containers::panel::PanelState::load(ctx, waterfall_panel_id)
@@ -8632,29 +8873,51 @@ impl eframe::App for QsonautGuiApp {
                 .show(ctx, |ui| {
                     self.draw_tx_safety_card(ui, &snapshot);
                     ui.add_space(6.0);
+                    ui.horizontal_wrapped(|ui| {
+                        for (tab, label) in [
+                            (SignalPanelTab::Status, "STATUS"),
+                            (SignalPanelTab::Profile, "PROFILE"),
+                            (SignalPanelTab::Server, "SERVER"),
+                            (SignalPanelTab::Band, "BAND"),
+                            (SignalPanelTab::Log, "LOG"),
+                            (SignalPanelTab::Devices, "DEVICES"),
+                        ] {
+                            let selected = self.signal_panel_tab == tab;
+                            let text = if selected {
+                                RichText::new(label)
+                                    .strong()
+                                    .color(Color32::from_rgb(120, 225, 255))
+                            } else {
+                                RichText::new(label).color(Color32::GRAY)
+                            };
+                            if ui.selectable_label(selected, text).clicked() {
+                                self.signal_panel_tab = tab;
+                            }
+                        }
+                    });
+                    ui.separator();
                     egui::ScrollArea::vertical()
                         .id_salt("signals_scroll")
                         .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            if self.show_device_settings {
-                                ui.group(|ui| self.draw_device_settings(ui));
-                                ui.add_space(4.0);
+                        .show(ui, |ui| match self.signal_panel_tab {
+                            SignalPanelTab::Status => {
+                                self.draw_status(ui, &snapshot);
+                                ui.add_space(10.0);
+                                ui.separator();
+                                self.draw_hunter_panel(ui, &snapshot);
                             }
-                            egui::CollapsingHeader::new("📡 Station health")
-                                .default_open(true)
-                                .show(ui, |ui| self.draw_status(ui, &snapshot));
-                            egui::CollapsingHeader::new("🏆 Achievement hunter")
-                                .default_open(true)
-                                .show(ui, |ui| self.draw_hunter_panel(ui, &snapshot));
-                            egui::CollapsingHeader::new("Station profile")
-                                .default_open(false)
-                                .show(ui, |ui| self.draw_station_profile(ui));
-                            egui::CollapsingHeader::new("Band controls")
-                                .default_open(true)
-                                .show(ui, |ui| self.draw_band_controls(ui, &snapshot));
-                            egui::CollapsingHeader::new("Contact log")
-                                .default_open(false)
-                                .show(ui, |ui| self.draw_contact_log(ui, &snapshot));
+                            SignalPanelTab::Profile | SignalPanelTab::Server => {
+                                self.draw_profile_or_server_panel(ui);
+                            }
+                            SignalPanelTab::Band => {
+                                self.draw_band_controls(ui, &snapshot);
+                            }
+                            SignalPanelTab::Log => {
+                                self.draw_contact_log(ui, &snapshot);
+                            }
+                            SignalPanelTab::Devices => {
+                                self.draw_device_settings(ui);
+                            }
                         });
                 });
         }

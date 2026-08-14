@@ -66,6 +66,8 @@ pub struct ServerConfig {
     pub share_radio_details: bool,
     #[serde(default)]
     pub share_logs: bool,
+    #[serde(default)]
+    pub share_diagnostics: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

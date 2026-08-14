@@ -93,6 +93,7 @@ pub struct ServerAutomationEvent {
 enum Command {
     Presence(Box<Presence>),
     Log(Value),
+    Diagnostic(Value),
     Sync,
     ChannelMessage { channel: String, message: String },
     Shutdown,
@@ -151,6 +152,10 @@ impl ServerClient {
 
     pub fn publish_log(&self, log: Value) {
         let _ = self.commands.send(Command::Log(log));
+    }
+
+    pub fn publish_diagnostic(&self, diagnostic: Value) {
+        let _ = self.commands.send(Command::Diagnostic(diagnostic));
     }
 
     pub fn request_sync(&self) {
@@ -284,6 +289,7 @@ async fn connect(
                     send(&mut writer, ClientMessage::Presence(presence)).await?;
                 }
                 Some(Command::Log(log)) => send(&mut writer, ClientMessage::Log(log)).await?,
+                Some(Command::Diagnostic(report)) => send(&mut writer, ClientMessage::Diagnostic(report)).await?,
                 Some(Command::Sync) => send(&mut writer, ClientMessage::Sync).await?,
                 Some(Command::ChannelMessage { channel, message }) => {
                     send(
@@ -407,7 +413,9 @@ fn receive(
         ServerMessage::ChannelMessageAccepted(message) => {
             push_channel_event(automation_events, "message_accepted", message);
         }
-        ServerMessage::PresenceAccepted(value) | ServerMessage::LogAccepted(value) => {
+        ServerMessage::PresenceAccepted(value)
+        | ServerMessage::LogAccepted(value)
+        | ServerMessage::DiagnosticAccepted(value) => {
             drop(value);
         }
         ServerMessage::Ack | ServerMessage::Pong => {}
@@ -485,6 +493,7 @@ enum ClientMessage {
     Sync,
     Presence(Box<Presence>),
     Log(Value),
+    Diagnostic(Value),
     ChannelMessage(ChannelMessageInput),
     Ping,
 }
@@ -519,6 +528,7 @@ enum ServerMessage {
     },
     PresenceAccepted(Value),
     LogAccepted(Value),
+    DiagnosticAccepted(Value),
     ChannelMessageAccepted(ChannelMessage),
     ChannelMessagePublished(ChannelMessage),
     Ack,
@@ -593,6 +603,24 @@ mod tests {
         assert_eq!(json["type"], "channel_message");
         assert_eq!(json["payload"]["channel"], "ops");
         assert_eq!(json["payload"]["message"], "Band opening on 20m");
+    }
+
+    #[test]
+    fn diagnostic_snapshots_use_the_stable_server_contract() {
+        let envelope = ClientEnvelope {
+            protocol_version: PROTOCOL_VERSION.to_owned(),
+            event_id: Uuid::nil(),
+            message: ClientMessage::Diagnostic(serde_json::json!({
+                "instance_id": Uuid::nil(),
+                "category": "radio_snapshot",
+                "summary": "IC-7300 snapshot",
+                "payload": { "radio": { "model": "IC-7300" } },
+            })),
+        };
+        let json = serde_json::to_value(envelope).unwrap();
+        assert_eq!(json["type"], "diagnostic");
+        assert_eq!(json["payload"]["category"], "radio_snapshot");
+        assert_eq!(json["payload"]["payload"]["radio"]["model"], "IC-7300");
     }
 
     #[test]
