@@ -456,7 +456,7 @@ mod tests {
                 source_period,
                 DEFAULT_PTT_LEAD_SECONDS,
             ),
-            103
+            101
         );
     }
 
