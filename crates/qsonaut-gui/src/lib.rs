@@ -6092,10 +6092,28 @@ impl QsonautGuiApp {
         if let Some(tex) = &self.radio_waterfall_texture {
             let response = ui.image((tex.id(), display_size));
             let dial_fraction = match self.radio_scope_view {
-                RadioScopeView::Narrow => Some(match sideband_projection {
-                    ScopeProjection::Full => 0.5,
-                    ScopeProjection::LowerSideband => 1.0,
-                    ScopeProjection::UpperSideband => 0.0,
+                RadioScopeView::Narrow => snapshot.frequency_hz.map(|frequency| {
+                    let half_span = scope_span_hz(self.radio_scope_span_code);
+                    let (low, high) = match sideband_projection {
+                        ScopeProjection::Full => (
+                            frequency.saturating_sub(half_span),
+                            frequency.saturating_add(half_span),
+                        ),
+                        ScopeProjection::LowerSideband => {
+                            (frequency.saturating_sub(half_span), frequency)
+                        }
+                        ScopeProjection::UpperSideband => {
+                            (frequency, frequency.saturating_add(half_span))
+                        }
+                    };
+                    // Calculate fraction based on frequency position within the displayed range
+                    let range_width = high.saturating_sub(low);
+                    if range_width > 0 {
+                        let position_from_low = frequency.saturating_sub(low);
+                        (position_from_low as f32 / range_width as f32).clamp(0.0, 1.0)
+                    } else {
+                        0.5 // Default to center if no range
+                    }
                 }),
                 RadioScopeView::Overview => snapshot.frequency_hz.and_then(|frequency| {
                     band_edges_for_frequency(Some(frequency)).map(|(low, high, _)| {
