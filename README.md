@@ -44,7 +44,7 @@ This is an honest snapshot, not a compatibility promise:
 | CW, FLDIGI | UI/integration surfaces only; no native working modem is claimed |
 | Radio control | Selectable Rigwright profiles cover popular Icom, Yaesu (including FTdx101 and FT-857D), and Kenwood radios; IC-7300 is hardware-validated, while the other serial drivers remain experimental |
 | PSK Reporter | Optional, off by default, batched UDP reporting for decoded stations |
-| QSONaut Server | Optional WSS connection for event/catalog sync, presence, radio metadata, and idempotent log publication; every outbound data class is off by default |
+| QSONaut Server | Optional WSS connection for event/catalog sync, presence, radio metadata, idempotent QSO log publication, diagnostic snapshots, and shared channel messages; every outbound data class is off by default |
 | Automation | Permission-gated component model and Discord/IRC configuration contracts; connectors are not live yet |
 | GPU/NPU compute | Hardware detection and validation policy exist; decoders currently use CPU SIMD because GPU kernels are not validated |
 
@@ -90,6 +90,119 @@ cargo run -p qsonaut -- --help
 cargo run -p qsonaut -- --list-audio
 cargo run -p qsonaut -- --list-radio
 ```
+
+## QSONaut Server Integration
+
+QSONaut Server is the independent coordination service for QSONaut operators,
+clubs, and group events. It provides:
+
+- **Event/Catalog Synchronization**: Contest templates, active events, and schedules
+- **Station Presence**: Online status, radio model/frequency, and platform information
+- **QSO Logging**: Idempotent QSO submission with operator identity
+- **Shared Channels**: Group chat for operators in the same event
+- **Diagnostics**: Radio, audio, and decoder status reporting
+
+### Authentication Model
+
+The server uses **device token authentication** with dual models:
+
+1. **90-day bearer tokens** for native clients (SHA-256 hashed on server)
+2. **Browser session tokens** for the management web console (encrypted cookies)
+
+Token scopes are explicitly defined:
+- `events:read` - Access to contest and event catalogs
+- `presence:write` - Publish station presence status
+- `logs:write` - Submit QSO records
+- `diagnostics:write` - Submit diagnostic reports
+- `messages:read/write` - Shared channel communication
+
+Password resets revoke all device tokens and browser sessions.
+
+### Connection Requirements
+
+1. **QSONaut Server** must be running at a WSS/HTTPS endpoint
+2. **Device Token**: Obtained through the Server's management UI → "Station link"
+3. **Configuration**: Set in `qsonaut.toml` under `[server]`
+4. **WebSocket Protocol**: `qsonaut.v1` subprotocol required
+
+### Quick Start
+
+1. **Start QSONaut Server** (from [`QSONaut-Server/`](../QSONaut-Server/)):
+   ```bash
+   cd QSONaut-Server
+   docker compose -f deploy/postgres-dev.compose.yaml up -d
+   export QSONAUT_DATABASE_URL=postgresql://qsonaut:password@127.0.0.1:5432/qsonaut
+   cargo run -p qsonaut-server
+   ```
+
+2. **Obtain Device Token**:
+   - Open QSONaut Server Management UI at `http://127.0.0.1:8080`
+   - Navigate to "Station link"
+   - Create a device name and copy the displayed token
+
+3. **Configure QSONaut** (`qsonaut.toml`):
+   ```toml
+   [server]
+   enabled = true
+   url = "http://127.0.0.1:8080"
+   device_token = "your-device-token-here"
+   share_presence = true
+   share_radio_details = false
+   share_logs = true
+   share_diagnostics = false
+   share_channel_messages = false
+   ```
+
+4. **Enable server publish** (if sharing channel messages):
+   ```bash
+   QSONAUT_AUTOMATION_ENABLE_SERVER_PUBLISH=true cargo run -p qsonaut
+   ```
+
+5. **Launch QSONaut**:
+   ```bash
+   cd QSONaut
+   cargo run --release -p qsonaut -- --gui
+   ```
+
+### WebSocket Message Types
+
+| Client → Server | Server → Client | Description |
+|-----------------|-----------------|-------------|
+| `Hello` | `Welcome` | Initial greeting with user info |
+| `Sync` | `Snapshot` | Request current state (events, contests, channels) |
+| `Presence` | `PresenceAccepted` | Publish station presence |
+| `Log` | `LogAccepted` | Submit QSO record (idempotent) |
+| `Diagnostic` | `DiagnosticAccepted` | Submit diagnostic report |
+| `ChannelMessage` | `ChannelMessageAccepted` | Publish to shared channel |
+| `Ping` | `Pong` | Keep-alive heartbeat |
+
+### Data Flows
+
+| Direction | Data Type | WebSocket Message |
+|-----------|-----------|-------------------|
+| Client → Server | Station presence | `Presence(StationPresenceInput)` |
+| Client → Server | QSO log | `Log(QsoLogInput)` |
+| Client → Server | Diagnostic report | `Diagnostic(DiagnosticReportInput)` |
+| Client → Server | Channel message | `ChannelMessage(ChannelMessageInput)` |
+| Server → Client | Event catalog snapshot | `Snapshot{events, contest_templates, channel_messages}` |
+| Server → Client | Presence acknowledgment | `PresenceAccepted` |
+| Server → Client | QSO acknowledgment | `LogAccepted` |
+| Server → Client | Channel messages | `ChannelMessagePublished` (broadcast) |
+
+### Automation Integration
+
+Automations can observe:
+- `connection` - Server connection state
+- `snapshot` - Fresh event/catalog sync
+- `accepted-message` - Event handling completion
+- `error` - Protocol errors
+- `live channel_message` - Real-time channel traffic
+
+Actions include:
+- `server_sync` - Request fresh server snapshot
+- `server_send_message` - Publish to shared channels (requires `server_publish` capability)
+
+See [`docs/server-integration.md`](docs/server-integration.md) for detailed configuration.
 
 ## Configuration and privacy
 
