@@ -229,6 +229,10 @@ pub enum QsoStage {
     Complete,
 }
 
+pub fn should_finalize_after_tx(stage: QsoStage) -> bool {
+    stage == QsoStage::FinalSent
+}
+
 #[derive(Debug, Clone)]
 pub struct QsoSession {
     pub target: String,
@@ -594,5 +598,12 @@ mod tests {
         let report = parse_message("N7UF K1ABC -12").unwrap();
         session.response_to(&report, "N7UF", "CN84", -9, 104);
         assert_eq!(session.tx_attempts, 0);
+    }
+
+    #[test]
+    fn final_outbound_exchange_completes_the_local_qso() {
+        assert!(should_finalize_after_tx(QsoStage::FinalSent));
+        assert!(!should_finalize_after_tx(QsoStage::RogerReportSent));
+        assert!(!should_finalize_after_tx(QsoStage::Complete));
     }
 }

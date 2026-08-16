@@ -27,10 +27,6 @@ Rust desktop app.
   <em>Early FT8 flight deck on Linux/WSL. Operator identity is intentionally blurred.</em>
 </p>
 
-There is currently no end-user LLM feature to enable. The `qsonaut-ai` crate
-and related config knobs are placeholder scaffolding for future experiments,
-and they are not in QSONaut's active receive/transmit control path.
-
 ## What works today
 
 This is an honest snapshot, not a compatibility promise:
@@ -252,7 +248,8 @@ local development against a sibling checkout, copy `.cargo/config.toml.example`
 to `.cargo/config.toml`; the local file is ignored by Git and overrides the
 Git dependency with `../rigwright` without changing committed manifests. Run
 `cargo update -p rigwright` when you intentionally want the latest GitHub head.
-- `crates/qsonaut-audio`, `qsonaut-dsp`, `qsonaut-modes` — real-time media and modem support
+- `crates/qsonaut-audio` — real-time audio and high-quality 48→12 kHz decimation
+- `mfsk-core` — WSJT-family modem encoding and decoding
 - `crates/qsonaut-log`, `qsonaut-pskreporter` — local logging and opt-in reporting
 - `crates/qsonaut-server-client` — optional authenticated WSS synchronization
 - `crates/qsonaut-accelerate` — measured compute-backend selection

@@ -2535,7 +2535,6 @@ dependencies = [
  "anyhow",
  "clap",
  "image",
- "qsonaut-ai",
  "qsonaut-audio",
  "qsonaut-core",
  "qsonaut-gui",
@@ -2553,15 +2552,6 @@ version = "0.2.3"
 dependencies = [
  "serde",
  "wgpu",
-]
-
-[[package]]
-name = "qsonaut-ai"
-version = "0.2.3"
-dependencies = [
- "anyhow",
- "async-trait",
- "serde",
 ]
 
 [[package]]
@@ -2594,15 +2584,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "qsonaut-dsp"
-version = "0.2.3"
-dependencies = [
- "anyhow",
- "qsonaut-modes",
- "rustfft",
-]
-
-[[package]]
 name = "qsonaut-gui"
 version = "0.2.3"
 dependencies = [
@@ -2613,7 +2594,6 @@ dependencies = [
  "qsonaut-audio",
  "qsonaut-automation",
  "qsonaut-core",
- "qsonaut-dsp",
  "qsonaut-log",
  "qsonaut-pskreporter",
  "qsonaut-server-client",
@@ -2636,13 +2616,6 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "qsonaut-modes"
-version = "0.2.3"
-dependencies = [
- "anyhow",
 ]
 
 [[package]]

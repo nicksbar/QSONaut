@@ -18,7 +18,6 @@ mfsk-core = { path = "../../../mfsk-core/mfsk-core", default-features = false, f
 
 qsonaut-audio = { path = "../qsonaut-audio" }
 qsonaut-accelerate = { path = "../qsonaut-accelerate" }
-qsonaut-dsp   = { path = "../qsonaut-dsp" }
 qsonaut-core = { path = "../qsonaut-core" }
 qsonaut-automation = { path = "../qsonaut-automation" }
 qsonaut-log = { path = "../qsonaut-log" }

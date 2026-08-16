@@ -3,7 +3,7 @@ use super::decode::{
     prepare_early_digital_slot, prepare_early_ft8_slot, run_ft8_decode_worker,
     run_native_digital_decode, warm_ft8_decoder,
 };
-use qsonaut_dsp::resample::Decimator;
+use qsonaut_audio::resample::Decimator;
 
 #[allow(clippy::too_many_arguments)]
 pub(in super::super) fn spawn_audio_spectrum_worker(

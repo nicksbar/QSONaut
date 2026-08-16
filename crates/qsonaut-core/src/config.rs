@@ -8,7 +8,6 @@ pub struct AppConfig {
     pub station: StationConfig,
     pub audio: AudioConfig,
     pub radio: RadioConfig,
-    pub ai: AiConfig,
     #[serde(default)]
     pub server: ServerConfig,
     #[serde(default)]
@@ -44,12 +43,6 @@ pub struct RadioConfig {
     pub civ_address: u8,
     #[serde(default = "default_controller_civ_address")]
     pub controller_civ_address: u8,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AiConfig {
-    pub enabled: bool,
-    pub provider: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -151,10 +144,6 @@ impl Default for AppConfig {
                 civ_address: default_radio_civ_address(),
                 controller_civ_address: default_controller_civ_address(),
             },
-            ai: AiConfig {
-                enabled: false,
-                provider: "none".to_string(),
-            },
             server: ServerConfig::default(),
             contest: ContestProfile::default(),
         }
@@ -180,13 +169,6 @@ impl AppConfig {
         if let Ok(grid) = std::env::var("QSONAUT_STATION_GRID") {
             cfg.station.grid = Some(grid);
         }
-        if let Ok(provider) = std::env::var("QSONAUT_AI_PROVIDER") {
-            cfg.ai.provider = provider;
-        }
-        if let Ok(enabled) = std::env::var("QSONAUT_AI_ENABLED") {
-            cfg.ai.enabled = parse_bool(&enabled);
-        }
-
         if let Ok(enabled) = std::env::var("QSONAUT_CONTEST_ENABLED") {
             cfg.contest.enabled = parse_bool(&enabled);
         }
@@ -400,10 +382,6 @@ channels = 1
 [radio]
 enabled = true
 backend = "none"
-
-[ai]
-enabled = false
-provider = "none"
 "#;
 
         let cfg: AppConfig = toml::from_str(src).expect("config parse");

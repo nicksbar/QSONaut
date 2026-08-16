@@ -9,17 +9,13 @@ graph TB
         A[apps/qsonaut<br/>Main CLI]
         A --> B[crates/qsonaut-gui<br/>eframe 0.33 + wgpu]
         A --> C[crates/qsonaut-core<br/>Config + Events]
-        A --> D[crates/qsonaut-dsp<br/>rustfft 6]
-        A --> E[crates/qsonaut-modes<br/>FT8/FT4/JT9/JT65/Q65/WSPR]
         A --> F[crates/qsonaut-audio<br/>cpal 0.15]
         A --> G[crates/qsonaut-automation<br/>Event system]
         A --> H[crates/qsonaut-server-client<br/>WSS sync]
         A --> I[crates/qsonaut-log<br/>ADIF]
         A --> J[crates/qsonaut-pskreporter<br/>UDP]
         
-        B --> D
-        B --> E
-        F --> D
+        B --> F
         G --> H
         G --> I
     end
@@ -41,7 +37,8 @@ graph TB
         T[Discord/IRC<br/>Automation]
     end
     
-    Q --> E
+    Q --> B
+    F --> Q
     R --> A
     S --> I
     T --> G
@@ -55,7 +52,7 @@ graph TB
 sequenceDiagram
     participant User
     participant GUI as qsonaut-gui
-    participant DSP as qsonaut-dsp
+    participant Decoder as mfsk-core
     participant Audio as qsonaut-audio
     participant Radio as rigwright
     participant Server as qsonaut-server
@@ -67,9 +64,9 @@ sequenceDiagram
     
     User->>GUI: Enable RX
     GUI->>Audio: Start capture
-    Audio->>DSP: Audio stream
-    DSP->>DSP: Decoding (mfsk-core)
-    DSP-->>GUI: Decoded stations
+    Audio->>Decoder: Decimated 12 kHz audio
+    Decoder->>Decoder: Decode active WSJT-family mode
+    Decoder-->>GUI: Decoded stations
     
     opt Server Connected
         GUI->>Server: Presence publish
@@ -93,41 +90,31 @@ graph LR
     qsonaut[apps/qsonaut]
     audio[qsonaut-audio]
     core[qsonaut-core]
-    dsp[qsonaut-dsp]
-    modes[qsonaut-modes]
     gui[qsonaut-gui]
     log[qsonaut-log]
     automation[qsonaut-automation]
     psk[qsonaut-pskreporter]
     server-client[qsonaut-server-client]
     accelerate[qsonaut-accelerate]
-    ai[qsonaut-ai]
     mfsk[mfsk-core]
     rigwright[rigwright<br/>v0.1.2]
     
     qsonaut -->|path| gui
     qsonaut -->|path| core
-    qsonaut -->|path| dsp
-    qsonaut -->|path| modes
     qsonaut -->|path| audio
     qsonaut -->|path| log
     qsonaut -->|path| automation
     qsonaut -->|path| psk
     qsonaut -->|path| server-client
     qsonaut -->|path| accelerate
-    qsonaut -->|path| ai
     qsonaut -->|git| rigwright
     
     gui -->|path| mfsk
-    gui -->|path| dsp
-    gui -->|path| modes
     gui -->|path| audio
     gui -->|path| acceleration
     gui -->|path| automation
     gui -->|path| server-client
     gui -->|path| psk
-    
-    dsp -->|path| modes
     
     psk -->|path| core
     server-client -->|path| core
