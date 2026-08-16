@@ -7,6 +7,27 @@ pub const REPLY_DEADLINE_SECONDS: f64 = 2.0;
 pub const MAX_ATTEMPTS_PER_EXCHANGE: u8 = 6;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoTxStopPolicy {
+    #[default]
+    Continuous,
+    AfterNextTx,
+    AfterCurrentQso,
+}
+
+impl AutoTxStopPolicy {
+    pub const ALL: [Self; 3] = [Self::Continuous, Self::AfterNextTx, Self::AfterCurrentQso];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Continuous => "Keep running",
+            Self::AfterNextTx => "Stop after next TX",
+            Self::AfterCurrentQso => "Stop after current QSO",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoReplyPolicy {
     #[default]
     First,
@@ -335,6 +356,18 @@ pub fn should_retry_after_decode(last_tx_period: Option<u64>, decoded_period: u6
     last_tx_period.is_some_and(|last_tx| decoded_period == last_tx.saturating_add(1))
 }
 
+pub fn should_repeat_cq(
+    auto_sequence: bool,
+    last_tx_was_cq: bool,
+    last_tx_period: Option<u64>,
+    completed_rx_period: Option<u64>,
+) -> bool {
+    auto_sequence
+        && last_tx_was_cq
+        && completed_rx_period
+            .is_some_and(|period| should_retry_after_decode(last_tx_period, period))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,6 +462,15 @@ mod tests {
         assert!(should_retry_after_decode(Some(101), 102));
         assert!(!should_retry_after_decode(Some(101), 103));
         assert!(!should_retry_after_decode(None, 102));
+    }
+
+    #[test]
+    fn cq_repeats_only_after_its_opposite_receive_period() {
+        assert!(should_repeat_cq(true, true, Some(100), Some(101)));
+        assert!(!should_repeat_cq(false, true, Some(100), Some(101)));
+        assert!(!should_repeat_cq(true, false, Some(100), Some(101)));
+        assert!(!should_repeat_cq(true, true, Some(100), Some(102)));
+        assert!(!should_repeat_cq(true, true, None, Some(101)));
     }
 
     #[test]
