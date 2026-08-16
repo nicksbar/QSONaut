@@ -1,5 +1,7 @@
 use super::super::*;
-use super::cw::{run_cw_decode, CW_DECODE_WINDOW_SAMPLES};
+use super::cw::{
+    run_cw_decode, CW_DECODE_HOP_SAMPLES, CW_DECODE_MIN_SAMPLES, CW_DECODE_WINDOW_SAMPLES,
+};
 use super::decode::{
     prepare_early_digital_slot, prepare_early_ft8_slot, run_ft8_decode_worker,
     run_native_digital_decode, warm_ft8_decoder,
@@ -75,6 +77,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut ft8_slot_gate = Ft8SlotGate::default();
         let mut digital_buf: Vec<f32> = Vec::with_capacity(12_000 * 120);
         let mut cw_buf: Vec<f32> = Vec::with_capacity(CW_DECODE_WINDOW_SAMPLES);
+        let mut cw_samples_since_decode = 0usize;
         let mut digital_slot_gate = DigitalSlotGate::default();
         let mut ft4_slot_gate = Ft8SlotGate::default();
         let mut decode_workspace_last: Option<WorkspaceMode> = None;
@@ -158,6 +161,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             ft8_buf.clear();
                             digital_buf.clear();
                             cw_buf.clear();
+                            cw_samples_since_decode = 0;
                             ft8_slot_gate.reset();
                             ft4_slot_gate.reset();
                             digital_slot_gate.reset();
@@ -168,7 +172,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     "READY: collecting a fresh FT8 slot".to_string();
                             } else if active_workspace_mode == WorkspaceMode::Cw {
                                 s.digital_decode_status =
-                                    "READY: collecting an 8-second CW window".to_string();
+                                    "READY: live CW decode starts after 3 seconds".to_string();
+                                s.cw_live_text.clear();
+                                s.cw_last_window_text.clear();
                             } else if active_workspace_mode.has_native_decoder() {
                                 s.digital_decode_status = format!(
                                     "READY: collecting a fresh {} slot",
@@ -288,17 +294,23 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 || digital_tx_active.load(Ordering::Acquire)
                             {
                                 cw_buf.clear();
-                                state
-                                    .lock()
-                                    .expect("ui state lock poisoned")
-                                    .digital_decode_status =
+                                cw_samples_since_decode = 0;
+                                let mut shared = state.lock().expect("ui state lock poisoned");
+                                shared.cw_last_window_text.clear();
+                                shared.cw_live_text.clear();
+                                shared.digital_decode_status =
                                     "CW TX active; receive window reset".to_string();
                                 continue;
                             }
                             cw_buf.extend_from_slice(&ds);
-                            if cw_buf.len() >= CW_DECODE_WINDOW_SAMPLES {
-                                let samples: Vec<f32> =
-                                    cw_buf.drain(..CW_DECODE_WINDOW_SAMPLES).collect();
+                            cw_samples_since_decode =
+                                cw_samples_since_decode.saturating_add(ds.len());
+                            if cw_buf.len() > CW_DECODE_WINDOW_SAMPLES {
+                                cw_buf.drain(..cw_buf.len() - CW_DECODE_WINDOW_SAMPLES);
+                            }
+                            if cw_buf.len() >= CW_DECODE_MIN_SAMPLES
+                                && cw_samples_since_decode >= CW_DECODE_HOP_SAMPLES
+                            {
                                 let in_progress = digital_decode_in_progress.clone();
                                 if in_progress
                                     .compare_exchange(
@@ -309,6 +321,8 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     )
                                     .is_ok()
                                 {
+                                    cw_samples_since_decode = 0;
+                                    let samples = cw_buf.clone();
                                     let now_s = SystemTime::now()
                                         .duration_since(UNIX_EPOCH)
                                         .map(|duration| duration.as_secs_f64())
@@ -329,9 +343,17 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         .lock()
                                         .expect("ui state lock poisoned")
                                         .digital_decode_status =
-                                        "CW decode skipped: previous window still running"
+                                        "LIVE CW · decoder busy; retaining rolling audio"
                                             .to_string();
                                 }
+                            } else if cw_buf.len() < CW_DECODE_MIN_SAMPLES {
+                                state
+                                    .lock()
+                                    .expect("ui state lock poisoned")
+                                    .digital_decode_status = format!(
+                                    "LIVE CW · listening {:.1}/3.0 s",
+                                    cw_buf.len() as f32 / 12_000.0
+                                );
                             }
                         } else if active_workspace_mode == WorkspaceMode::Ft4 {
                             digital_buf.extend_from_slice(&ds);

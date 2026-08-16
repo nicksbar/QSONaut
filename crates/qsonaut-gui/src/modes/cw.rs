@@ -45,19 +45,43 @@ impl QsonautGuiApp {
         });
         ui.separator();
 
+        egui::Frame::group(ui.style())
+            .fill(Color32::from_rgb(20, 34, 28))
+            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(90, 210, 130)))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new("LIVE DECODE")
+                        .small()
+                        .strong()
+                        .color(Color32::LIGHT_GREEN),
+                );
+                ui.label(
+                    RichText::new(if snapshot.cw_live_text.is_empty() {
+                        "Listening…"
+                    } else {
+                        &snapshot.cw_live_text
+                    })
+                    .monospace()
+                    .strong()
+                    .size(18.0),
+                );
+            });
+        ui.add_space(6.0);
+
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new("UTC          Decoded text")
+                RichText::new("UTC          New transcript text")
                     .monospace()
                     .strong(),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("Clear").clicked() {
-                    self.state
-                        .lock()
-                        .expect("ui state lock poisoned")
+                    let mut state = self.state.lock().expect("ui state lock poisoned");
+                    state
                         .digital_decodes
                         .retain(|entry| entry.mode != WorkspaceMode::Cw);
+                    state.cw_live_text.clear();
+                    state.cw_last_window_text.clear();
                 }
             });
         });
@@ -79,7 +103,7 @@ impl QsonautGuiApp {
                 }
                 if shown == 0 {
                     ui.label(
-                        RichText::new("Collecting the first 8-second CW window…")
+                        RichText::new("Listening for the first stable CW characters…")
                             .color(Color32::GRAY),
                     );
                 }
