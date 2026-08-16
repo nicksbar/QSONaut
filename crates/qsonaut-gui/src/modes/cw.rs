@@ -55,7 +55,7 @@ impl QsonautGuiApp {
 
         egui::Frame::group(ui.style())
             .fill(Color32::from_rgb(20, 34, 28))
-            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(90, 210, 130)))
+            .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgb(90, 210, 130)))
             .show(ui, |ui| {
                 ui.label(
                     RichText::new("LIVE DECODE")
