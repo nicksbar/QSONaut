@@ -12,7 +12,7 @@ use super::{
 };
 
 pub(super) const OPERATOR_PROFILE_FILE: &str = "profile.toml";
-pub(super) const OPERATOR_PROFILE_VERSION: u32 = 9;
+pub(super) const OPERATOR_PROFILE_VERSION: u32 = 10;
 const LEGACY_OPERATOR_PROFILE_FILE: &str = ".rigforge_profile.toml";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +67,10 @@ pub(super) struct OperatorProfile {
     pub(super) ptt_lead_ms: u64,
     #[serde(default = "default_ptt_tail_ms")]
     pub(super) ptt_tail_ms: u64,
+    #[serde(default = "default_cw_wpm")]
+    pub(super) cw_wpm: u8,
+    #[serde(default = "default_cw_tone_hz")]
+    pub(super) cw_tone_hz: u16,
     #[serde(default)]
     pub(super) audio_input_device: Option<String>,
     #[serde(default)]
@@ -139,6 +143,14 @@ pub(super) fn default_ptt_lead_ms() -> u64 {
 
 pub(super) fn default_ptt_tail_ms() -> u64 {
     100
+}
+
+pub(super) fn default_cw_wpm() -> u8 {
+    20
+}
+
+pub(super) fn default_cw_tone_hz() -> u16 {
+    600
 }
 
 pub(super) fn default_contest_serial_start() -> u32 {

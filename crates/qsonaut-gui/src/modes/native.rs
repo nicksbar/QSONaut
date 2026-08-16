@@ -196,12 +196,12 @@ impl QsonautGuiApp {
             );
         } else {
             ui.separator();
-            let status = if mode == WorkspaceMode::Cw {
-                "CW is currently a radio preset and waterfall view. A decoder, keyer timing engine, sidetone controls, and macro workflow are still required."
-            } else {
-                "FLDIGI is currently a radio preset and waterfall view. No XML-RPC modem connection is active yet."
-            };
-            ui.label(RichText::new(status).color(Color32::YELLOW));
+            ui.label(
+                RichText::new(
+                    "FLDIGI is currently a radio preset and waterfall view. No XML-RPC modem connection is active yet.",
+                )
+                .color(Color32::YELLOW),
+            );
         }
     }
 }

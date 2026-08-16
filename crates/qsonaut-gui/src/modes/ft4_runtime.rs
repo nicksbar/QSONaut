@@ -226,35 +226,62 @@ impl QsonautGuiApp {
             self.digital_tx_status = "TX unavailable: radio control is disabled".to_string();
             return;
         };
-        let Some(slot_seconds) = mode.core_slot_seconds() else {
+        let slot_seconds = mode.core_slot_seconds();
+        if slot_seconds.is_none() && mode != WorkspaceMode::Cw {
             self.digital_tx_status = format!("{} TX backend is not available", mode.label());
             return;
-        };
+        }
         let tx_tone_hz = self.contest_effective_tx_tone_hz();
-        match build_native_digital_tx_pcm(mode, &self.digital_compose, tx_tone_hz) {
+        match build_native_digital_tx_pcm(
+            mode,
+            &self.digital_compose,
+            tx_tone_hz,
+            self.cw_wpm,
+            self.cw_tone_hz,
+        ) {
             Ok((pcm, audio_offset_s)) => {
                 let now_s = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map(|duration| duration.as_secs_f64())
                     .unwrap_or(0.0);
-                let period = (now_s / slot_seconds).floor() as u64 + 1;
+                let (period, job_slot_seconds, audio_start_s) =
+                    if let Some(slot_seconds) = slot_seconds {
+                        let period = (now_s / slot_seconds).floor() as u64 + 1;
+                        (period, slot_seconds, None)
+                    } else {
+                        (
+                            now_s.floor() as u64,
+                            1.0,
+                            Some(now_s + self.ptt_lead_ms as f64 / 1_000.0 + 0.05),
+                        )
+                    };
                 self.digital_tx_abort.store(false, Ordering::Release);
                 self.digital_tx_active.store(true, Ordering::Release);
-                self.digital_tx_status = format!(
-                    "{} queued for {}",
-                    mode.label(),
-                    utc_hhmmss_millis(period as f64 * slot_seconds)
-                );
+                self.digital_tx_status = if mode == WorkspaceMode::Cw {
+                    format!(
+                        "CW queued for {}",
+                        utc_hhmmss_millis(audio_start_s.unwrap_or(now_s))
+                    )
+                } else {
+                    format!(
+                        "{} queued for {}",
+                        mode.label(),
+                        utc_hhmmss_millis(period as f64 * job_slot_seconds)
+                    )
+                };
                 self.digital_queued_tx_message = Some(self.digital_compose.trim().to_string());
-                self.state
-                    .lock()
-                    .expect("ui state lock poisoned")
-                    .digital_tx_period = Some((mode, period));
+                if mode != WorkspaceMode::Cw {
+                    self.state
+                        .lock()
+                        .expect("ui state lock poisoned")
+                        .digital_tx_period = Some((mode, period));
+                }
                 let job = DigitalTxJob {
                     mode,
                     period,
-                    slot_seconds,
+                    slot_seconds: job_slot_seconds,
                     audio_offset_s,
+                    audio_start_s,
                     pcm: Arc::new(pcm),
                     ptt_lead: Duration::from_millis(self.ptt_lead_ms),
                     ptt_tail: Duration::from_millis(self.ptt_tail_ms),

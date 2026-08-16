@@ -1,4 +1,5 @@
 use super::super::*;
+use super::cw::{run_cw_decode, CW_DECODE_WINDOW_SAMPLES};
 use super::decode::{
     prepare_early_digital_slot, prepare_early_ft8_slot, run_ft8_decode_worker,
     run_native_digital_decode, warm_ft8_decoder,
@@ -73,6 +74,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut ft8_buf: Vec<f32> = Vec::with_capacity(12_000 * 18);
         let mut ft8_slot_gate = Ft8SlotGate::default();
         let mut digital_buf: Vec<f32> = Vec::with_capacity(12_000 * 120);
+        let mut cw_buf: Vec<f32> = Vec::with_capacity(CW_DECODE_WINDOW_SAMPLES);
         let mut digital_slot_gate = DigitalSlotGate::default();
         let mut ft4_slot_gate = Ft8SlotGate::default();
         let mut decode_workspace_last: Option<WorkspaceMode> = None;
@@ -155,6 +157,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             decode_workspace_last = Some(active_workspace_mode);
                             ft8_buf.clear();
                             digital_buf.clear();
+                            cw_buf.clear();
                             ft8_slot_gate.reset();
                             ft4_slot_gate.reset();
                             digital_slot_gate.reset();
@@ -163,6 +166,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             if active_workspace_mode == WorkspaceMode::Ft8 {
                                 s.ft8_decode_status =
                                     "READY: collecting a fresh FT8 slot".to_string();
+                            } else if active_workspace_mode == WorkspaceMode::Cw {
+                                s.digital_decode_status =
+                                    "READY: collecting an 8-second CW window".to_string();
                             } else if active_workspace_mode.has_native_decoder() {
                                 s.digital_decode_status = format!(
                                     "READY: collecting a fresh {} slot",
@@ -275,6 +281,56 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     info!(
                                         "FT8 decode deferred: previous decode pass still running"
                                     );
+                                }
+                            }
+                        } else if active_workspace_mode == WorkspaceMode::Cw {
+                            if tx_active.load(Ordering::Acquire)
+                                || digital_tx_active.load(Ordering::Acquire)
+                            {
+                                cw_buf.clear();
+                                state
+                                    .lock()
+                                    .expect("ui state lock poisoned")
+                                    .digital_decode_status =
+                                    "CW TX active; receive window reset".to_string();
+                                continue;
+                            }
+                            cw_buf.extend_from_slice(&ds);
+                            if cw_buf.len() >= CW_DECODE_WINDOW_SAMPLES {
+                                let samples: Vec<f32> =
+                                    cw_buf.drain(..CW_DECODE_WINDOW_SAMPLES).collect();
+                                let in_progress = digital_decode_in_progress.clone();
+                                if in_progress
+                                    .compare_exchange(
+                                        false,
+                                        true,
+                                        Ordering::AcqRel,
+                                        Ordering::Relaxed,
+                                    )
+                                    .is_ok()
+                                {
+                                    let now_s = SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .map(|duration| duration.as_secs_f64())
+                                        .unwrap_or_default();
+                                    let window_id = now_s.floor() as u64;
+                                    let utc = utc_hhmmss_millis(now_s);
+                                    let tone_hz = state
+                                        .lock()
+                                        .expect("ui state lock poisoned")
+                                        .selected_audio_hz;
+                                    let state_d = state.clone();
+                                    thread::spawn(move || {
+                                        run_cw_decode(samples, window_id, utc, tone_hz, state_d);
+                                        in_progress.store(false, Ordering::Release);
+                                    });
+                                } else {
+                                    state
+                                        .lock()
+                                        .expect("ui state lock poisoned")
+                                        .digital_decode_status =
+                                        "CW decode skipped: previous window still running"
+                                            .to_string();
                                 }
                             }
                         } else if active_workspace_mode == WorkspaceMode::Ft4 {

@@ -1,4 +1,5 @@
 mod audio;
+pub(super) mod cw;
 pub(super) mod decode;
 pub(super) mod radio;
 

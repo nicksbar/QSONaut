@@ -78,7 +78,7 @@ use modes::exchange::{
     ReplyCandidate, SLOT_SECONDS,
 };
 use profile::{
-    default_contest_fake_split_offset_hz, default_gui_scale,
+    default_contest_fake_split_offset_hz, default_cw_tone_hz, default_cw_wpm, default_gui_scale,
     default_max_attempts as default_ft8_max_attempts, default_ptt_lead_ms, default_ptt_tail_ms,
     default_rx_tone_hz, default_tx_tone_hz, default_waterfall_deck_height, load_operator_profile,
     save_operator_profile, OperatorProfile, OPERATOR_PROFILE_FILE, OPERATOR_PROFILE_VERSION,
@@ -290,6 +290,7 @@ fn workspace_mode_supports_native_tx(mode: WorkspaceMode) -> bool {
             | WorkspaceMode::Jt9
             | WorkspaceMode::Jt65
             | WorkspaceMode::Q65
+            | WorkspaceMode::Cw
     )
 }
 
@@ -980,6 +981,8 @@ struct QsonautGuiApp {
     tx_tone_hz: u32,
     ptt_lead_ms: u64,
     ptt_tail_ms: u64,
+    cw_wpm: u8,
+    cw_tone_hz: u16,
     profile_io_status: String,
     profile_dirty: bool,
     audio_input_devices: Vec<String>,
@@ -1145,6 +1148,8 @@ impl QsonautGuiApp {
         let mut tx_tone_hz = default_tx_tone_hz();
         let mut ptt_lead_ms = default_ptt_lead_ms();
         let mut ptt_tail_ms = default_ptt_tail_ms();
+        let mut cw_wpm = default_cw_wpm();
+        let mut cw_tone_hz = default_cw_tone_hz();
         let mut gui_scale = default_gui_scale();
         let mut compute_preference = ComputePreference::Auto;
         let mut psk_reporter_enabled = false;
@@ -1198,6 +1203,8 @@ impl QsonautGuiApp {
             }
             ptt_lead_ms = p.ptt_lead_ms.clamp(100, 1_500);
             ptt_tail_ms = p.ptt_tail_ms.clamp(0, 1_000);
+            cw_wpm = p.cw_wpm.clamp(5, 40);
+            cw_tone_hz = p.cw_tone_hz.clamp(200, 1_200);
             gui_scale = if p.profile_version >= GUI_SCALE_PROFILE_VERSION {
                 p.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
             } else {
@@ -1269,6 +1276,8 @@ impl QsonautGuiApp {
                 tx_tone_hz,
                 ptt_lead_ms,
                 ptt_tail_ms,
+                cw_wpm,
+                cw_tone_hz,
                 audio_input_device: config.audio.input_device.clone(),
                 audio_output_device: config.audio.output_device.clone(),
                 radio_serial_port: config.radio.serial_port.clone(),
@@ -1461,6 +1470,8 @@ impl QsonautGuiApp {
             tx_tone_hz,
             ptt_lead_ms,
             ptt_tail_ms,
+            cw_wpm,
+            cw_tone_hz,
             profile_io_status,
             profile_dirty: false,
             audio_input_devices,
@@ -1608,6 +1619,8 @@ impl QsonautGuiApp {
             tx_tone_hz: self.tx_tone_hz,
             ptt_lead_ms: self.ptt_lead_ms.clamp(100, 1_500),
             ptt_tail_ms: self.ptt_tail_ms.clamp(0, 1_000),
+            cw_wpm: self.cw_wpm.clamp(5, 40),
+            cw_tone_hz: self.cw_tone_hz.clamp(200, 1_200),
             audio_input_device: self.config.audio.input_device.clone(),
             audio_output_device: self.config.audio.output_device.clone(),
             radio_serial_port: self.config.radio.serial_port.clone(),
@@ -1800,13 +1813,13 @@ impl QsonautGuiApp {
         match self.workspace_mode {
             WorkspaceMode::Ft8 => self.draw_ft8_workspace(ui, ctx, snapshot),
             WorkspaceMode::Ft4 => self.draw_ft4_workspace(ui, snapshot),
+            WorkspaceMode::Cw => self.draw_cw_workspace(ui, snapshot),
             WorkspaceMode::Fst4
             | WorkspaceMode::Wspr
             | WorkspaceMode::Jt9
             | WorkspaceMode::Jt65
             | WorkspaceMode::Q65
             | WorkspaceMode::Msk144
-            | WorkspaceMode::Cw
             | WorkspaceMode::Fldigi => {
                 self.draw_mfsk_mode_workspace(ui, snapshot, self.workspace_mode)
             }
@@ -1946,7 +1959,11 @@ impl eframe::App for QsonautGuiApp {
             s.workspace_mode = self.workspace_mode;
             s.ft8_deep_decode = self.ft8_deep_decode;
             s.ft4_deep_decode = self.ft4_deep_decode;
-            s.selected_audio_hz = self.rx_tone_hz;
+            s.selected_audio_hz = if self.workspace_mode == WorkspaceMode::Cw {
+                u32::from(self.cw_tone_hz)
+            } else {
+                self.rx_tone_hz
+            };
             s.compute_backend = self.acceleration_report.active;
             s.radio_spectrum_desired = self.civ_spectrum_on;
             s.radio_scope_contrast = self.radio_scope_contrast;
@@ -2195,6 +2212,8 @@ impl eframe::App for QsonautGuiApp {
                                 }
                                 self.ptt_lead_ms = p.ptt_lead_ms.clamp(100, 1_500);
                                 self.ptt_tail_ms = p.ptt_tail_ms.clamp(0, 1_000);
+                                self.cw_wpm = p.cw_wpm.clamp(5, 40);
+                                self.cw_tone_hz = p.cw_tone_hz.clamp(200, 1_200);
                                 self.contest_serial_current = p
                                     .contest_serial_current
                                     .max(self.contest_serial_start.max(1))
@@ -3011,7 +3030,7 @@ mod tests {
             WorkspaceMode::Jt65,
             WorkspaceMode::Q65,
         ] {
-            let (pcm, offset) = build_native_digital_tx_pcm(mode, "CQ W1AW AA00", 1_500)
+            let (pcm, offset) = build_native_digital_tx_pcm(mode, "CQ W1AW AA00", 1_500, 20, 600)
                 .unwrap_or_else(|error| panic!("{} synthesis failed: {error}", mode.label()));
             assert!(!pcm.is_empty(), "{} synthesis was empty", mode.label());
             assert!(pcm.iter().any(|sample| *sample != 0));
@@ -3020,9 +3039,29 @@ mod tests {
     }
 
     #[test]
+    fn cw_builder_round_trips_through_ditdah() {
+        let (pcm, offset) = build_native_digital_tx_pcm(WorkspaceMode::Cw, "SOS", 600, 20, 600)
+            .expect("CW synthesis");
+        assert_eq!(offset, 0.0);
+        let samples: Vec<f32> = pcm
+            .iter()
+            .map(|sample| *sample as f32 / i16::MAX as f32)
+            .collect();
+        let decoded = ditdah::decode_samples(&samples, 12_000).expect("CW decode");
+        assert_eq!(decoded, "SOS");
+    }
+
+    #[test]
+    fn cw_builder_rejects_unsupported_punctuation() {
+        let error = build_native_digital_tx_pcm(WorkspaceMode::Cw, "CQ?", 600, 20, 600)
+            .expect_err("punctuation must be rejected");
+        assert!(error.to_string().contains("does not support '?'"));
+    }
+
+    #[test]
     fn ft4_workspace_adapter_decodes_generated_audio() {
         let (pcm, offset_s) =
-            build_native_digital_tx_pcm(WorkspaceMode::Ft4, "CQ W1AW AA00", 1_500)
+            build_native_digital_tx_pcm(WorkspaceMode::Ft4, "CQ W1AW AA00", 1_500, 20, 600)
                 .expect("FT4 synthesis");
         let mut slot = vec![0.0f32; (7.5 * 12_000.0) as usize];
         let start = (offset_s * 12_000.0) as usize;
@@ -3049,7 +3088,7 @@ mod tests {
     #[test]
     fn jt9_workspace_adapter_decodes_generated_audio() {
         let (pcm, offset_s) =
-            build_native_digital_tx_pcm(WorkspaceMode::Jt9, "CQ W1AW AA00", 1_500)
+            build_native_digital_tx_pcm(WorkspaceMode::Jt9, "CQ W1AW AA00", 1_500, 20, 600)
                 .expect("JT9 synthesis");
         let slot_samples = (60.0 * 12_000.0) as usize;
         let mut slot = vec![0.0f32; slot_samples];
@@ -3080,8 +3119,9 @@ mod tests {
 
     #[test]
     fn early_ft4_capture_contains_a_deliberately_late_decodable_waveform() {
-        let (pcm, _) = build_native_digital_tx_pcm(WorkspaceMode::Ft4, "CQ W1AW AA00", 1_500)
-            .expect("FT4 synthesis");
+        let (pcm, _) =
+            build_native_digital_tx_pcm(WorkspaceMode::Ft4, "CQ W1AW AA00", 1_500, 20, 600)
+                .expect("FT4 synthesis");
         let captured = (FT4_EARLY_DECODE_S * 12_000.0).round() as usize;
         let prehistory = 12_000 * 2;
         let mut rolling = vec![0.0f32; prehistory + captured];
@@ -3312,6 +3352,7 @@ mod tests {
     fn workspace_mode_supports_native_tx_matches_current_backends() {
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Ft4));
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Jt9));
+        assert!(workspace_mode_supports_native_tx(WorkspaceMode::Cw));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Ft8));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Wspr));
     }

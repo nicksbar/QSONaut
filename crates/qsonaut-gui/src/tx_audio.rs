@@ -31,9 +31,11 @@ pub(super) fn build_native_digital_tx_pcm(
     mode: WorkspaceMode,
     compose: &str,
     tx_tone_hz: u32,
+    cw_wpm: u8,
+    cw_tone_hz: u16,
 ) -> Result<(Vec<i16>, f64)> {
     let tokens: Vec<&str> = compose.split_whitespace().collect();
-    if tokens.len() != 3 {
+    if mode != WorkspaceMode::Cw && tokens.len() != 3 {
         anyhow::bail!("{} TX needs exactly 3 message fields", mode.label());
     }
     let to_i16 = |audio: Vec<f32>| {
@@ -75,6 +77,49 @@ pub(super) fn build_native_digital_tx_pcm(
             mfsk_core::q65::synthesize_standard(tokens[0], tokens[1], tokens[2], 12_000, tone, 1.0)
                 .map(|audio| (to_i16(audio), 1.0))
                 .ok_or_else(|| anyhow!("unable to pack Q65 message"))
+        }
+        WorkspaceMode::Cw => {
+            let text = compose.trim().to_ascii_uppercase();
+            if text.is_empty() {
+                anyhow::bail!("CW TX requires text");
+            }
+            if let Some(character) = text
+                .chars()
+                .find(|character| !character.is_ascii_alphanumeric() && !character.is_whitespace())
+            {
+                anyhow::bail!(
+                    "CW TX does not support '{character}'; use A-Z, 0-9, and spaces only"
+                );
+            }
+            let generator = ditdah::MorseGenerator::new(
+                FT8_TX_SAMPLE_RATE_HZ,
+                f32::from(cw_tone_hz.clamp(200, 1_200)),
+                f32::from(cw_wpm.clamp(5, 40)),
+            );
+            let temporary_directory = tempfile::tempdir().context("create CW audio workspace")?;
+            let wav_path = temporary_directory.path().join("cw.wav");
+            generator
+                .generate_wav_file(&text, &wav_path)
+                .context("generate CW audio")?;
+            let mut reader =
+                hound::WavReader::open(&wav_path).context("read generated CW audio")?;
+            let spec = reader.spec();
+            if spec.channels != 1
+                || spec.sample_rate != FT8_TX_SAMPLE_RATE_HZ
+                || spec.sample_format != hound::SampleFormat::Int
+                || spec.bits_per_sample != 16
+            {
+                anyhow::bail!("DitDah generated an unsupported CW WAV format");
+            }
+            let pcm: Vec<i16> = reader
+                .samples::<i16>()
+                .collect::<std::result::Result<_, _>>()
+                .context("read CW PCM samples")?;
+            if pcm.is_empty() {
+                anyhow::bail!("CW TX did not produce audio");
+            }
+            // CW uses explicit immediate timing, not a slot-relative offset.
+            Ok((pcm, 0.0))
         }
         _ => anyhow::bail!("{} transmit synthesis is not available", mode.label()),
     }
@@ -257,6 +302,7 @@ pub(super) struct DigitalTxJob {
     pub(super) period: u64,
     pub(super) slot_seconds: f64,
     pub(super) audio_offset_s: f64,
+    pub(super) audio_start_s: Option<f64>,
     pub(super) pcm: Arc<Vec<i16>>,
     pub(super) ptt_lead: Duration,
     pub(super) ptt_tail: Duration,
@@ -270,8 +316,9 @@ pub(super) struct DigitalTxJob {
 }
 
 pub(super) fn run_digital_tx_job(job: DigitalTxJob) {
-    let slot_start_s = job.period as f64 * job.slot_seconds;
-    let audio_start_s = slot_start_s + job.audio_offset_s;
+    let audio_start_s = job
+        .audio_start_s
+        .unwrap_or(job.period as f64 * job.slot_seconds + job.audio_offset_s);
     let ptt_start_s = audio_start_s - job.ptt_lead.as_secs_f64();
     let result = (|| -> Result<()> {
         wait_until_epoch(ptt_start_s, &job.abort)?;

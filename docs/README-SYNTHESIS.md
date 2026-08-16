@@ -24,6 +24,7 @@ Both repositories use Rust and share versioning conventions but maintain separat
 | Crate | Purpose | Version | Notes |
 |-------|---------|---------|-------|
 | mfsk-core | DSP/decoding | 0.9.1 | Path dependency from sibling repo |
+| DitDah | Morse/CW decoding and generation | 0.2.0 | Path dependency from sibling repo; MIT |
 | rigwright | CI-V radio HAL | 0.1.2 | Git dependency (https://github.com/nicksbar/rigwright) |
 | eframe 0.33 | GUI framework | 0.33 | With wgpu, wayland, vulkan |
 | tokio 1 | Async runtime | 1 | Multi-threaded |

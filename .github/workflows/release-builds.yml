@@ -39,7 +39,7 @@ jobs:
             os: windows
 
     steps:
-      # The application currently consumes mfsk-core as a sibling workspace.
+      # The application consumes modem libraries as sibling workspaces.
       - name: Check out QSONaut
         uses: actions/checkout@v6
         with:
@@ -52,6 +52,13 @@ jobs:
           # Track current upstream development head.
           ref: main
           path: mfsk-core
+
+      - name: Check out DitDah
+        uses: actions/checkout@v6
+        with:
+          repository: yuvadm/ditdah
+          ref: main
+          path: ditdah
 
       - name: Install Linux native libraries
         if: matrix.os == 'linux'
@@ -73,6 +80,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/qsonaut" "dist/${{ matrix.artifact }}/"
           cp README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md qsonaut.toml.example "dist/${{ matrix.artifact }}/"
           cp ../mfsk-core/LICENSE "dist/${{ matrix.artifact }}/MFSK-CORE-LICENSE.txt"
+          cp ../ditdah/LICENSE "dist/${{ matrix.artifact }}/DITDAH-LICENSE.txt"
           tar -C dist -czf "dist/${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"
 
       - name: Package Windows distribution
@@ -84,6 +92,7 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/qsonaut.exe" "dist/${{ matrix.artifact }}/"
           Copy-Item README.md,CHANGELOG.md,LICENSE,THIRD_PARTY_NOTICES.md,qsonaut.toml.example "dist/${{ matrix.artifact }}/"
           Copy-Item ../mfsk-core/LICENSE "dist/${{ matrix.artifact }}/MFSK-CORE-LICENSE.txt"
+          Copy-Item ../ditdah/LICENSE "dist/${{ matrix.artifact }}/DITDAH-LICENSE.txt"
           Compress-Archive -Path "dist/${{ matrix.artifact }}/*" -DestinationPath "dist/${{ matrix.artifact }}.zip"
 
       - name: Upload distribution

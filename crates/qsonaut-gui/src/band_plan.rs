@@ -223,14 +223,31 @@ pub(super) struct WorkspaceRadioPreset {
 pub(super) fn workspace_radio_preset(mode: WorkspaceMode) -> WorkspaceRadioPreset {
     match mode {
         WorkspaceMode::Cw => WorkspaceRadioPreset {
-            base_mode: BaseMode::Cw,
-            data_mode: false,
-            filter: 2,
+            // DitDah operates on generated/received audio tones. USB-D keeps
+            // the wide receive passband and lets the operator place TX with
+            // the configurable CW audio-tone cursor. A keyed-carrier CW mode
+            // will be a separate future backend.
+            base_mode: BaseMode::Usb,
+            data_mode: true,
+            filter: 1,
         },
         _ => WorkspaceRadioPreset {
             base_mode: BaseMode::Usb,
             data_mode: true,
             filter: 1,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn software_cw_uses_usb_data_for_audio_subband_operation() {
+        let preset = workspace_radio_preset(WorkspaceMode::Cw);
+        assert_eq!(preset.base_mode, BaseMode::Usb);
+        assert!(preset.data_mode);
+        assert_eq!(preset.filter, 1);
     }
 }
