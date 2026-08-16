@@ -1,5 +1,21 @@
 use super::super::*;
 
+pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
+    ("160m", 1_840_000),
+    ("80m", 3_575_000),
+    ("60m", 5_357_000),
+    ("40m", 7_076_000),
+    ("30m", 10_136_000),
+    ("20m", 14_076_000),
+    ("17m", 18_104_000),
+    ("15m", 21_076_000),
+    ("12m", 24_924_000),
+    ("10m", 28_076_000),
+    ("6m", 50_318_000),
+    ("2m", 144_174_000),
+    ("70cm", 432_076_000),
+];
+
 impl QsonautGuiApp {
     fn draw_ft4_conversation(&self, ui: &mut egui::Ui, snapshot: &GuiState, height: f32) {
         let operator_call = self.station_callsign_or_default().to_string();

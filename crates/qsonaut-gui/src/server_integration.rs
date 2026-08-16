@@ -139,8 +139,13 @@ impl QsonautGuiApp {
             self.profile_io_status = "Connect to QSONaut Server before sending".to_string();
             return;
         };
+        if client.status().state != ServerConnectionState::Connected {
+            self.profile_io_status =
+                "Wait for QSONaut Server to show CONNECTED before sending".to_string();
+            return;
+        }
         let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
-        client.publish_diagnostic(serde_json::json!({
+        let diagnostic = serde_json::json!({
             "instance_id": self.server_instance_id,
             "category": "radio_snapshot",
             "summary": format!("{} radio and runtime snapshot", self.config.radio.model),
@@ -185,7 +190,10 @@ impl QsonautGuiApp {
                 },
                 "last_error": snapshot.last_error,
             }
-        }));
-        self.profile_io_status = "Diagnostic snapshot queued for QSONaut Server".to_string();
+        });
+        self.profile_io_status = match client.publish_diagnostic(diagnostic) {
+            Ok(()) => "Diagnostic snapshot sent; waiting for server acceptance".to_string(),
+            Err(error) => format!("Diagnostic snapshot could not be queued: {error}"),
+        };
     }
 }

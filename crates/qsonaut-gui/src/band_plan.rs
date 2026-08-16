@@ -1,5 +1,7 @@
 use qsonaut_radio::BaseMode;
 
+use crate::modes::{cw, ft4, ft8, native};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum WorkspaceMode {
     Ft8,
@@ -61,124 +63,6 @@ pub(super) const WORKSPACE_MODES: [WorkspaceMode; 10] = [
     WorkspaceMode::Fldigi,
 ];
 
-static FT8_BANDS: &[(&str, u64)] = &[
-    ("160m", 1_840_000),
-    ("80m", 3_573_000),
-    ("60m", 5_357_000),
-    ("40m", 7_074_000),
-    ("30m", 10_136_000),
-    ("20m", 14_074_000),
-    ("17m", 18_100_000),
-    ("15m", 21_074_000),
-    ("12m", 24_915_000),
-    ("10m", 28_074_000),
-    ("6m", 50_313_000),
-];
-
-static FT4_BANDS: &[(&str, u64)] = &[
-    ("80m", 3_575_000),
-    ("40m", 7_047_500),
-    ("30m", 10_140_000),
-    ("20m", 14_080_000),
-    ("17m", 18_104_000),
-    ("15m", 21_140_000),
-    ("12m", 24_919_000),
-    ("10m", 28_180_000),
-    ("6m", 50_318_000),
-];
-
-static FST4_BANDS: &[(&str, u64)] = &[
-    ("80m", 3_573_000),
-    ("40m", 7_047_500),
-    ("30m", 10_140_000),
-    ("20m", 14_080_000),
-    ("17m", 18_104_000),
-    ("15m", 21_140_000),
-    ("12m", 24_919_000),
-    ("10m", 28_180_000),
-];
-
-static WSPR_BANDS: &[(&str, u64)] = &[
-    ("160m", 1_836_600),
-    ("80m", 3_568_600),
-    ("60m", 5_287_200),
-    ("40m", 7_038_600),
-    ("30m", 10_138_700),
-    ("20m", 14_095_600),
-    ("17m", 18_104_600),
-    ("15m", 21_094_600),
-    ("12m", 24_924_600),
-    ("10m", 28_124_600),
-    ("6m", 50_294_400),
-];
-
-static JT9_BANDS: &[(&str, u64)] = &[
-    ("160m", 1_839_000),
-    ("80m", 3_578_000),
-    ("40m", 7_078_000),
-    ("30m", 10_140_000),
-    ("20m", 14_078_000),
-    ("17m", 18_104_000),
-    ("15m", 21_078_000),
-    ("12m", 24_919_000),
-    ("10m", 28_078_000),
-    ("6m", 50_312_000),
-];
-
-static JT65_BANDS: &[(&str, u64)] = &[
-    ("160m", 1_838_000),
-    ("80m", 3_576_000),
-    ("40m", 7_076_000),
-    ("30m", 10_138_000),
-    ("20m", 14_076_000),
-    ("17m", 18_102_000),
-    ("15m", 21_076_000),
-    ("12m", 24_917_000),
-    ("10m", 28_076_000),
-    ("6m", 50_310_000),
-];
-
-static Q65_BANDS: &[(&str, u64)] = &[
-    ("160m", 1_838_000),
-    ("80m", 3_576_000),
-    ("40m", 7_076_000),
-    ("30m", 10_138_000),
-    ("20m", 14_076_000),
-    ("17m", 18_102_000),
-    ("15m", 21_076_000),
-    ("12m", 24_917_000),
-    ("10m", 28_076_000),
-    ("6m", 50_313_000),
-];
-
-static MSK144_BANDS: &[(&str, u64)] = &[
-    ("6m", 50_280_000),
-    ("2m", 144_360_000),
-    ("70cm", 432_360_000),
-];
-
-static CW_BANDS: &[(&str, u64)] = &[
-    ("80m", 3_560_000),
-    ("40m", 7_030_000),
-    ("30m", 10_106_000),
-    ("20m", 14_060_000),
-    ("17m", 18_096_000),
-    ("15m", 21_060_000),
-    ("12m", 24_906_000),
-    ("10m", 28_060_000),
-];
-
-static FLDIGI_BANDS: &[(&str, u64)] = &[
-    ("80m", 3_580_000),
-    ("40m", 7_080_000),
-    ("30m", 10_140_000),
-    ("20m", 14_080_000),
-    ("17m", 18_100_000),
-    ("15m", 21_080_000),
-    ("12m", 24_920_000),
-    ("10m", 28_080_000),
-];
-
 pub(super) fn band_for_frequency(frequency_hz: u64) -> &'static str {
     match frequency_hz {
         1_800_000..=2_000_000 => "160m",
@@ -200,16 +84,16 @@ pub(super) fn band_for_frequency(frequency_hz: u64) -> &'static str {
 
 pub(super) fn workspace_band_plan(mode: WorkspaceMode) -> &'static [(&'static str, u64)] {
     match mode {
-        WorkspaceMode::Ft8 => FT8_BANDS,
-        WorkspaceMode::Ft4 => FT4_BANDS,
-        WorkspaceMode::Fst4 => FST4_BANDS,
-        WorkspaceMode::Wspr => WSPR_BANDS,
-        WorkspaceMode::Jt9 => JT9_BANDS,
-        WorkspaceMode::Jt65 => JT65_BANDS,
-        WorkspaceMode::Q65 => Q65_BANDS,
-        WorkspaceMode::Msk144 => MSK144_BANDS,
-        WorkspaceMode::Cw => CW_BANDS,
-        WorkspaceMode::Fldigi => FLDIGI_BANDS,
+        WorkspaceMode::Ft8 => ft8::BAND_PLAN,
+        WorkspaceMode::Ft4 => ft4::BAND_PLAN,
+        WorkspaceMode::Fst4 => native::FST4_BAND_PLAN,
+        WorkspaceMode::Wspr => native::WSPR_BAND_PLAN,
+        WorkspaceMode::Jt9 => native::JT9_BAND_PLAN,
+        WorkspaceMode::Jt65 => native::JT65_BAND_PLAN,
+        WorkspaceMode::Q65 => native::Q65_BAND_PLAN,
+        WorkspaceMode::Msk144 => native::MSK144_BAND_PLAN,
+        WorkspaceMode::Cw => cw::BAND_PLAN,
+        WorkspaceMode::Fldigi => native::FLDIGI_BAND_PLAN,
     }
 }
 
@@ -220,28 +104,44 @@ pub(super) struct WorkspaceRadioPreset {
     pub(super) filter: u8,
 }
 
-pub(super) fn workspace_radio_preset(mode: WorkspaceMode) -> WorkspaceRadioPreset {
-    match mode {
-        WorkspaceMode::Cw => WorkspaceRadioPreset {
-            // DitDah operates on generated/received audio tones. USB-D keeps
-            // the wide receive passband and lets the operator place TX with
-            // the configurable CW audio-tone cursor. A keyed-carrier CW mode
-            // will be a separate future backend.
-            base_mode: BaseMode::Usb,
-            data_mode: true,
-            filter: 1,
-        },
-        _ => WorkspaceRadioPreset {
-            base_mode: BaseMode::Usb,
-            data_mode: true,
-            filter: 1,
-        },
+pub(super) fn workspace_radio_preset(_mode: WorkspaceMode) -> WorkspaceRadioPreset {
+    WorkspaceRadioPreset {
+        // Software modes operate on generated/received audio tones. USB-D keeps
+        // a wide receive passband and lets the mode place audio-tone cursors.
+        base_mode: BaseMode::Usb,
+        data_mode: true,
+        filter: 1,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_band_plan_uses_mode_specific_center_frequencies() {
+        let ft8 = workspace_band_plan(WorkspaceMode::Ft8);
+        assert_eq!(
+            ft8.iter()
+                .find(|(label, _)| *label == "20m")
+                .map(|(_, freq)| *freq),
+            Some(14_074_000)
+        );
+        let cw = workspace_band_plan(WorkspaceMode::Cw);
+        assert_eq!(
+            cw.iter()
+                .find(|(label, _)| *label == "40m")
+                .map(|(_, freq)| *freq),
+            Some(7_030_000)
+        );
+        let wspr = workspace_band_plan(WorkspaceMode::Wspr);
+        assert_eq!(
+            wspr.iter()
+                .find(|(label, _)| *label == "20m")
+                .map(|(_, freq)| *freq),
+            Some(14_095_600)
+        );
+    }
 
     #[test]
     fn software_cw_uses_usb_data_for_audio_subband_operation() {

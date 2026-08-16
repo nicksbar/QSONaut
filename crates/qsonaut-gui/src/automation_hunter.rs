@@ -20,6 +20,30 @@ pub(super) enum AchievementKind {
     CenturyHunter,
 }
 
+impl AchievementKind {
+    const ALL: [Self; 7] = [
+        Self::FirstDecode,
+        Self::DirectedCall,
+        Self::FirstQsoLogged,
+        Self::TenQsosLogged,
+        Self::FiftyQsosLogged,
+        Self::DupeShield,
+        Self::CenturyHunter,
+    ];
+
+    fn presentation(self) -> (&'static str, &'static str) {
+        match self {
+            Self::FirstDecode => ("Signal Hunter", "Capture the first decode burst"),
+            Self::DirectedCall => ("You Have Mail", "Receive a directed callsign hit"),
+            Self::FirstQsoLogged => ("Logbook Opened", "Log the first contact"),
+            Self::TenQsosLogged => ("Ragchew Rookie", "Log 10 contacts"),
+            Self::FiftyQsosLogged => ("Pileup Wrangler", "Log 50 contacts"),
+            Self::DupeShield => ("Dupe Shield", "Prevent 10 duplicate TX attempts"),
+            Self::CenturyHunter => ("Century Hunter", "Hear 100 unique callsigns"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum HunterMetric {
@@ -308,9 +332,63 @@ impl QsonautGuiApp {
             );
         }
 
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new("Built-in achievements")
+                .strong()
+                .color(Color32::from_rgb(255, 201, 92)),
+        );
+        let qso_count = self.qso_log.contacts.len() as u32;
+        for achievement in AchievementKind::ALL {
+            let (title, detail) = achievement.presentation();
+            let (progress, target) = match achievement {
+                AchievementKind::FirstDecode => (self.hunter_decode_bursts.min(1), 1),
+                AchievementKind::DirectedCall => (self.hunter_directed_hits.min(1), 1),
+                AchievementKind::FirstQsoLogged => (qso_count.min(1), 1),
+                AchievementKind::TenQsosLogged => (qso_count.min(10), 10),
+                AchievementKind::FiftyQsosLogged => (qso_count.min(50), 50),
+                AchievementKind::DupeShield => (self.hunter_dupe_blocks.min(10), 10),
+                AchievementKind::CenturyHunter => {
+                    ((self.hunter_unique_heard.len() as u32).min(100), 100)
+                }
+            };
+            let unlocked = self.hunter_unlocked.contains(&achievement);
+            ui.group(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(if unlocked { "🏆" } else { "🔒" }).color(
+                        if unlocked {
+                            Color32::from_rgb(255, 201, 92)
+                        } else {
+                            Color32::GRAY
+                        },
+                    ));
+                    ui.label(RichText::new(title).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(if unlocked { "UNLOCKED" } else { "IN PROGRESS" })
+                                .small()
+                                .color(if unlocked {
+                                    Color32::LIGHT_GREEN
+                                } else {
+                                    Color32::GRAY
+                                }),
+                        );
+                    });
+                });
+                ui.label(RichText::new(detail).small().color(Color32::GRAY));
+                ui.add(
+                    egui::ProgressBar::new(progress as f32 / target as f32)
+                        .text(format!("{progress} / {target}")),
+                );
+            });
+            ui.add_space(3.0);
+        }
+
+        ui.add_space(4.0);
+        ui.label(RichText::new("Recent achievement activity").strong());
         ui.add_space(4.0);
         egui::ScrollArea::vertical()
-            .max_height(120.0)
+            .max_height(180.0)
             .show(ui, |ui| {
                 if self.hunter_feed.is_empty() {
                     ui.label(
@@ -614,11 +692,28 @@ impl QsonautGuiApp {
         }
     }
 
-    pub(super) fn pump_server_automation_events(&self) {
+    pub(super) fn pump_server_automation_events(&mut self) {
         let Some(client) = &self.server_client else {
             return;
         };
         for event in client.drain_automation_events() {
+            if event.kind == "diagnostic_accepted" {
+                let id = event
+                    .fields
+                    .get("id")
+                    .map(String::as_str)
+                    .unwrap_or_default();
+                let short_id = id.get(..8).unwrap_or(id);
+                self.profile_io_status = if short_id.is_empty() {
+                    "Diagnostic snapshot accepted by QSONaut Server".to_string()
+                } else {
+                    format!("Diagnostic snapshot accepted by QSONaut Server · {short_id}")
+                };
+            } else if event.kind == "error" {
+                if let Some(message) = event.fields.get("message") {
+                    self.profile_io_status = format!("QSONaut Server rejected request: {message}");
+                }
+            }
             self.app_events.publish(AppEvent::ServerMessageReceived {
                 kind: event.kind,
                 fields: event.fields,
@@ -662,7 +757,10 @@ impl QsonautGuiApp {
             },
             "tune_workspace_band_hz" => match value.trim().parse::<u64>() {
                 Ok(frequency_hz) if frequency_hz > 0 => {
-                    self.send_command(GuiCommand::TuneWorkspaceBand(frequency_hz));
+                    self.send_command(GuiCommand::ApplyWorkspace {
+                        mode: self.workspace_mode,
+                        frequency_hz,
+                    });
                     format!(
                         "Applied workspace band tune to {:.3} MHz",
                         frequency_hz as f64 / 1_000_000.0

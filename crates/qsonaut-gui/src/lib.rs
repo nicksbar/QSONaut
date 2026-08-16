@@ -78,10 +78,12 @@ use modes::exchange::{
     ReplyCandidate, SLOT_SECONDS,
 };
 use profile::{
-    default_contest_fake_split_offset_hz, default_cw_tone_hz, default_cw_wpm, default_gui_scale,
-    default_max_attempts as default_ft8_max_attempts, default_ptt_lead_ms, default_ptt_tail_ms,
-    default_rx_tone_hz, default_tx_tone_hz, default_waterfall_deck_height, load_operator_profile,
-    save_operator_profile, OperatorProfile, OPERATOR_PROFILE_FILE, OPERATOR_PROFILE_VERSION,
+    active_operator_profile_name, default_contest_fake_split_offset_hz, default_cw_tone_hz,
+    default_cw_wpm, default_gui_scale, default_max_attempts as default_ft8_max_attempts,
+    default_ptt_lead_ms, default_ptt_tail_ms, default_rx_tone_hz, default_tx_tone_hz,
+    default_waterfall_deck_height, list_operator_profiles, load_operator_profile,
+    load_operator_profile_named, save_operator_profile, save_operator_profile_named,
+    select_operator_profile, OperatorProfile, OPERATOR_PROFILE_FILE, OPERATOR_PROFILE_VERSION,
 };
 #[cfg(test)]
 use tx_audio::FT8_TX_AUDIO_START_S;
@@ -90,10 +92,7 @@ use tx_audio::{
     DigitalTxChatEntry, DigitalTxEvent, DigitalTxJob, Ft8ChatDirection, Ft8ChatLine,
     Ft8TxChatEntry, Ft8TxEvent, Ft8TxJob,
 };
-use ui_format::{
-    fmt_civ_level_percent, fmt_opt_u8, format_signal_report, ft8_period_progress, qso_stage_label,
-    utc_hhmmss_millis,
-};
+use ui_format::{format_signal_report, ft8_period_progress, qso_stage_label, utc_hhmmss_millis};
 use visuals::{
     audio_cursor_level, build_scope_waterfall_image, build_waterfall_image_with_theme,
     downsample_bins, fft_buffer_to_display_bins, scale_scope_levels,
@@ -139,12 +138,14 @@ const FT4_ADAPTIVE_OFFSET_LIMIT_S: f32 = 1.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum SignalPanelTab {
     #[default]
-    Status,
+    Achievements,
     Profile,
+    Contest,
+    Reporting,
+    Waterfall,
+    Settings,
     Server,
-    Band,
     Log,
-    Devices,
 }
 
 fn default_true() -> bool {
@@ -292,6 +293,19 @@ fn workspace_mode_supports_native_tx(mode: WorkspaceMode) -> bool {
             | WorkspaceMode::Q65
             | WorkspaceMode::Cw
     )
+}
+
+fn workspace_frequency_for_current_band(
+    mode: WorkspaceMode,
+    current_frequency_hz: Option<u64>,
+) -> Option<u64> {
+    let band = current_frequency_hz
+        .map(band_for_frequency)
+        .filter(|band| !band.is_empty())?;
+    workspace_band_plan(mode)
+        .iter()
+        .find(|(label, _)| *label == band)
+        .map(|(_, frequency_hz)| *frequency_hz)
 }
 
 fn parse_tx_target_from_compose(compose: &str, operator_call: &str) -> Option<String> {
@@ -659,6 +673,8 @@ struct GuiState {
     ft8_last_decode_period: Option<u64>,
     digital_decode_status: String,
     digital_decodes: VecDeque<DigitalDecodeEntry>,
+    cw_live_text: String,
+    cw_last_window_text: String,
     ft4_last_decode_period: Option<u64>,
     digital_tx_period: Option<(WorkspaceMode, u64)>,
     selected_audio_hz: u32,
@@ -707,6 +723,8 @@ impl Default for GuiState {
             ft8_last_decode_period: None,
             digital_decode_status: "Select a native digital mode".to_string(),
             digital_decodes: VecDeque::with_capacity(300),
+            cw_live_text: String::new(),
+            cw_last_window_text: String::new(),
             ft4_last_decode_period: None,
             digital_tx_period: None,
             selected_audio_hz: default_rx_tone_hz(),
@@ -726,7 +744,10 @@ enum GuiCommand {
     CycleMode,
     TogglePtt,
     AfGainDelta(i16),
-    TuneWorkspaceBand(u64),
+    ApplyWorkspace {
+        mode: WorkspaceMode,
+        frequency_hz: u64,
+    },
     SetFilter(u8),
     SetPtt(bool),
     SetPttWithAck(bool, mpsc::Sender<std::result::Result<(), String>>),
@@ -983,6 +1004,9 @@ struct QsonautGuiApp {
     ptt_tail_ms: u64,
     cw_wpm: u8,
     cw_tone_hz: u16,
+    selected_profile_name: String,
+    new_profile_name: String,
+    available_profiles: Vec<String>,
     profile_io_status: String,
     profile_dirty: bool,
     audio_input_devices: Vec<String>,
@@ -1315,6 +1339,14 @@ impl QsonautGuiApp {
             server_instance_id = new_instance_id();
         }
 
+        let available_profiles = list_operator_profiles();
+        let active_profile_name = active_operator_profile_name();
+        let selected_profile_name = available_profiles
+            .iter()
+            .find(|name| name.eq_ignore_ascii_case(&active_profile_name))
+            .cloned()
+            .unwrap_or_else(|| "Default".to_string());
+
         let server_client = (config.server.enabled
             && !config.server.url.trim().is_empty()
             && !config.server.device_token.trim().is_empty())
@@ -1472,6 +1504,9 @@ impl QsonautGuiApp {
             ptt_tail_ms,
             cw_wpm,
             cw_tone_hz,
+            selected_profile_name,
+            new_profile_name: String::new(),
+            available_profiles,
             profile_io_status,
             profile_dirty: false,
             audio_input_devices,
@@ -1490,7 +1525,7 @@ impl QsonautGuiApp {
             waterfall_deck_height,
             waterfall_deck_resize_pending: false,
             show_signal_panel: true,
-            signal_panel_tab: SignalPanelTab::Status,
+            signal_panel_tab: SignalPanelTab::Achievements,
             device_restart_required: false,
             gui_scale,
             compute_preference,
@@ -1507,15 +1542,114 @@ impl QsonautGuiApp {
     }
 
     fn persist_profile(&mut self, status_prefix: &str) {
-        match save_operator_profile(&self.current_operator_profile()) {
+        match save_operator_profile_named(
+            &self.selected_profile_name,
+            &self.current_operator_profile(),
+        ) {
             Ok(_) => {
-                self.profile_io_status = format!("{status_prefix} {}", OPERATOR_PROFILE_FILE);
+                self.profile_io_status =
+                    format!("{status_prefix} profile ‘{}’", self.selected_profile_name);
+                self.available_profiles = list_operator_profiles();
                 self.profile_dirty = false;
             }
             Err(err) => {
                 self.profile_io_status = format!("Save failed: {err}");
             }
         }
+    }
+
+    fn apply_operator_profile(&mut self, profile: OperatorProfile) {
+        self.station_callsign = profile.callsign;
+        self.station_grid = profile.grid;
+        self.station_qth = profile.qth;
+        self.ft8_follow_log = profile.follow_log;
+        self.ft8_max_log_entries = profile.max_log_entries.clamp(80, 1000);
+        self.ft8_deep_decode = profile.deep_decode;
+        self.ft4_deep_decode = profile.ft4_deep_decode;
+        self.ft4_autoseq = profile.ft4_autoseq;
+        self.ft4_auto_reply_policy = profile.ft4_auto_reply_policy;
+        self.ft4_cq_only_view = profile.ft4_cq_only_view;
+        self.ft4_follow_log = profile.ft4_follow_log;
+        self.ft4_max_log_entries = profile.ft4_max_log_entries.clamp(80, 300);
+        self.ft4_max_attempts = profile.ft4_max_attempts.clamp(1, 20);
+        self.ft4_stop_policy = AutoTxStopPolicy::Continuous;
+        self.ft8_autoseq = profile.autoseq;
+        self.ft8_auto_reply_policy = profile.auto_reply_policy;
+        self.ft8_auto_answer_cq = profile.auto_answer_cq;
+        self.ft8_cq_only_view = profile.cq_only_view;
+        self.civ_spectrum_on = profile.civ_spectrum_on;
+        self.waterfall_theme = profile.waterfall_theme;
+        self.waterfall_deck_height = profile.waterfall_deck_height.clamp(170.0, 560.0);
+        self.ft8_stop_policy = AutoTxStopPolicy::Continuous;
+        self.ft8_max_attempts = profile.ft8_max_attempts.clamp(1, 20);
+        self.ft8_hold_tx_freq = profile.profile_version >= 3 && profile.hold_tx_freq;
+        self.rx_tone_hz = profile.rx_tone_hz;
+        self.tx_tone_hz = if self.ft8_hold_tx_freq {
+            profile.tx_tone_hz
+        } else {
+            profile.rx_tone_hz
+        };
+        self.ptt_lead_ms = profile.ptt_lead_ms.clamp(100, 1_500);
+        self.ptt_tail_ms = profile.ptt_tail_ms.clamp(0, 1_000);
+        self.cw_wpm = profile.cw_wpm.clamp(5, 40);
+        self.cw_tone_hz = profile.cw_tone_hz.clamp(200, 1_200);
+        self.contest_enabled = profile.contest_enabled;
+        self.contest_operating_mode = profile.contest_operating_mode;
+        self.contest_split_policy = profile.contest_split_policy;
+        self.contest_fox_hound_role = profile.contest_fox_hound_role;
+        self.contest_exchange_template = profile.contest_exchange_template;
+        self.contest_serial_start = profile.contest_serial_start.max(1);
+        self.contest_serial_step = profile.contest_serial_step.max(1);
+        self.contest_dupe_check = profile.contest_dupe_check;
+        self.contest_serial_current = profile
+            .contest_serial_current
+            .max(self.contest_serial_start)
+            .max(1);
+        self.contest_fake_split_offset_hz = profile.contest_fake_split_offset_hz.clamp(0, 2_000);
+        self.hunter_unlocked = profile.hunter_unlocked.into_iter().collect();
+        self.hunter_custom_rules = profile.hunter_custom_rules;
+        self.gui_scale = if profile.profile_version >= GUI_SCALE_PROFILE_VERSION {
+            profile.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
+        } else {
+            default_gui_scale()
+        };
+        self.compute_preference = profile.compute_preference;
+        self.psk_reporter_enabled = profile.psk_reporter_enabled;
+        if !profile.server_instance_id.is_empty() {
+            self.server_instance_id = profile.server_instance_id;
+        }
+        if let Some(server) = profile.server {
+            self.config.server = server;
+            self.reconnect_server();
+        }
+        self.acceleration_report = AccelerationReport::probe(self.compute_preference);
+        if profile.profile_version >= 3 {
+            self.config.audio.input_device = profile.audio_input_device;
+            self.config.audio.output_device = profile.audio_output_device;
+            self.config.radio.serial_port = profile.radio_serial_port;
+            if profile.profile_version >= 8 {
+                self.config.radio.model = profile.radio_model;
+                self.config.radio.baud_rate = profile.radio_baud_rate;
+            }
+        }
+        self.config.station.callsign = Some(self.station_callsign.clone());
+        self.config.station.grid = Some(self.station_grid.clone());
+        self.config.contest = ContestProfile {
+            enabled: self.contest_enabled,
+            operating_mode: self.contest_operating_mode,
+            split_policy: self.contest_split_policy,
+            fox_hound_role: self.contest_fox_hound_role,
+            exchange_template: if self.contest_exchange_template.trim().is_empty() {
+                None
+            } else {
+                Some(self.contest_exchange_template.trim().to_string())
+            },
+            serial_start: self.contest_serial_start,
+            serial_step: self.contest_serial_step,
+            dupe_check: self.contest_dupe_check,
+        };
+        self.restart_psk_reporter();
+        self.profile_dirty = false;
     }
 
     fn persist_qso_log(&mut self, status_prefix: &str) {
@@ -1803,13 +1937,6 @@ impl QsonautGuiApp {
     }
 
     fn draw_workspace(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, snapshot: &GuiState) {
-        ui.horizontal_wrapped(|ui| {
-            for mode in WORKSPACE_MODES {
-                ui.selectable_value(&mut self.workspace_mode, mode, mode.label());
-            }
-        });
-        ui.separator();
-
         match self.workspace_mode {
             WorkspaceMode::Ft8 => self.draw_ft8_workspace(ui, ctx, snapshot),
             WorkspaceMode::Ft4 => self.draw_ft4_workspace(ui, snapshot),
@@ -1826,20 +1953,18 @@ impl QsonautGuiApp {
         }
     }
 
-    fn draw_radio_control_strip(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+    fn draw_banner_radio_controls(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         let supports_levels = find_model(&self.config.radio.model)
+            .is_some_and(|profile| matches!(profile.protocol, Protocol::IcomCiV { .. }));
+        let supports_filter = find_model(&self.config.radio.model)
             .is_some_and(|profile| matches!(profile.protocol, Protocol::IcomCiV { .. }));
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Radio").strong());
-
             if ui.small_button("-1 kHz").clicked() {
                 self.send_command(GuiCommand::TuneDelta(-1_000));
             }
             if ui.small_button("+1 kHz").clicked() {
                 self.send_command(GuiCommand::TuneDelta(1_000));
-            }
-            if ui.small_button("Mode").clicked() {
-                self.send_command(GuiCommand::CycleMode);
             }
             if ui
                 .small_button(if snapshot.ptt_on { "PTT OFF" } else { "PTT ON" })
@@ -1866,68 +1991,158 @@ impl QsonautGuiApp {
             {
                 self.send_command(GuiCommand::AfGainDelta(5));
             }
-
             ui.separator();
-
-            let mut tuning = self.display_tuning.lock().expect("tuning lock poisoned");
-            let auto_clicked = ui
-                .selectable_label(tuning.auto_visual, "AUTO")
-                .on_hover_text("Auto-select waterfall speed and audio detail for current mode")
-                .clicked();
-            if auto_clicked {
-                tuning.auto_visual = !tuning.auto_visual;
+            ui.label(RichText::new("Mode").strong());
+            for mode in WORKSPACE_MODES {
+                if ui
+                    .selectable_label(self.workspace_mode == mode, mode.label())
+                    .clicked()
+                {
+                    self.workspace_mode = mode;
+                    if let Some(frequency_hz) =
+                        workspace_frequency_for_current_band(mode, snapshot.frequency_hz)
+                    {
+                        self.send_command(GuiCommand::ApplyWorkspace { mode, frequency_hz });
+                    }
+                }
             }
-
-            ui.label("WF");
-            if ui
-                .selectable_label(
-                    !tuning.auto_visual && tuning.waterfall_speed == WaterfallSpeed::Slow,
-                    "Slow",
-                )
-                .clicked()
-            {
-                tuning.auto_visual = false;
-                tuning.waterfall_speed = WaterfallSpeed::Slow;
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Band").strong());
+            let current_hz = snapshot.frequency_hz.unwrap_or(0);
+            for &(label, frequency_hz) in workspace_band_plan(self.workspace_mode) {
+                let on_band = current_hz.abs_diff(frequency_hz) < 200_000;
+                if ui
+                    .selectable_label(on_band, label)
+                    .on_hover_text(format!("{:.6} MHz", frequency_hz as f64 / 1_000_000.0))
+                    .clicked()
+                {
+                    self.send_command(GuiCommand::ApplyWorkspace {
+                        mode: self.workspace_mode,
+                        frequency_hz,
+                    });
+                }
             }
-            if ui
-                .selectable_label(
-                    !tuning.auto_visual && tuning.waterfall_speed == WaterfallSpeed::Mid,
-                    "Mid",
-                )
-                .clicked()
-            {
-                tuning.auto_visual = false;
-                tuning.waterfall_speed = WaterfallSpeed::Mid;
-            }
-            if ui
-                .selectable_label(
-                    !tuning.auto_visual && tuning.waterfall_speed == WaterfallSpeed::Fast,
-                    "Fast",
-                )
-                .clicked()
-            {
-                tuning.auto_visual = false;
-                tuning.waterfall_speed = WaterfallSpeed::Fast;
-            }
-
-            drop(tuning);
-
             ui.separator();
-            ui.label(format!(
-                "{} | {} | {}",
-                snapshot.mode,
-                snapshot
-                    .frequency_hz
-                    .map(|v| format!("{v} Hz"))
-                    .unwrap_or_else(|| "freq ?".to_string()),
-                if !snapshot.radio_spectrum_desired {
-                    "WF OFF"
-                } else if snapshot.radio_spectrum_enabled {
-                    "WF LIVE"
+            ui.label(RichText::new("Filter").strong());
+            for filter in 1_u8..=3 {
+                if ui
+                    .add_enabled(
+                        supports_filter,
+                        egui::Button::new(format!("FIL{filter}"))
+                            .selected(snapshot.filter == Some(filter)),
+                    )
+                    .clicked()
+                {
+                    self.send_command(GuiCommand::SetFilter(filter));
+                }
+            }
+        });
+    }
+
+    fn draw_connection_strip(&self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Connections").strong());
+            ui.separator();
+            ui.label(
+                RichText::new(if snapshot.frequency_hz.is_some() {
+                    "Radio CONNECTED"
                 } else {
-                    "WF ARMING"
+                    "Radio OFFLINE"
+                })
+                .color(if snapshot.frequency_hz.is_some() {
+                    Color32::LIGHT_GREEN
+                } else {
+                    Color32::GRAY
+                }),
+            );
+            let (server_label, server_color) = self
+                .server_client
+                .as_ref()
+                .map(|client| match client.status().state {
+                    ServerConnectionState::Connected => {
+                        ("QSONaut Server CONNECTED", Color32::LIGHT_GREEN)
+                    }
+                    ServerConnectionState::Connecting | ServerConnectionState::Reconnecting => {
+                        ("QSONaut Server CONNECTING", Color32::YELLOW)
+                    }
+                    ServerConnectionState::Disabled | ServerConnectionState::Stopped => {
+                        ("QSONaut Server OFFLINE", Color32::GRAY)
+                    }
+                })
+                .unwrap_or(("QSONaut Server DISABLED", Color32::GRAY));
+            ui.separator();
+            ui.label(RichText::new(server_label).color(server_color));
+            for label in ["IRC", "Discord"] {
+                ui.separator();
+                ui.label(RichText::new(format!("{label} NOT IMPLEMENTED")).color(Color32::GRAY));
+            }
+        });
+
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Health").strong());
+            ui.separator();
+            let (audio_label, audio_color) = snapshot.audio_level_dbfs.map_or_else(
+                || ("Audio NO LEVEL".to_string(), Color32::YELLOW),
+                |level| {
+                    if snapshot.audio_clip_percent > 0.1 {
+                        (
+                            "Audio CLIPPING".to_string(),
+                            Color32::from_rgb(255, 110, 100),
+                        )
+                    } else {
+                        (format!("Audio {level:.0} dBFS"), Color32::LIGHT_GREEN)
+                    }
                 },
-            ));
+            );
+            ui.label(RichText::new(audio_label).color(audio_color))
+                .on_hover_text(format!(
+                    "{} · {:.1}% clipped",
+                    snapshot.audio_spectrum_status, snapshot.audio_clip_percent
+                ));
+
+            let decode_status = if self.workspace_mode == WorkspaceMode::Ft8 {
+                snapshot.ft8_decode_status.as_str()
+            } else {
+                snapshot.digital_decode_status.as_str()
+            };
+            ui.separator();
+            ui.label(
+                RichText::new(format!("Decode {}", self.workspace_mode.label())).color(
+                    if decode_status.contains("failed") || decode_status.contains("NO INPUT") {
+                        Color32::YELLOW
+                    } else {
+                        Color32::LIGHT_BLUE
+                    },
+                ),
+            )
+            .on_hover_text(decode_status);
+
+            ui.separator();
+            ui.label(
+                RichText::new(format!("Compute {}", self.acceleration_report.summary()))
+                    .color(Color32::from_rgb(180, 150, 255)),
+            )
+            .on_hover_text(self.acceleration_report.hardware_detail());
+
+            let telemetry = if self.workspace_mode == WorkspaceMode::Ft8 {
+                snapshot.ft8_compute_telemetry.as_ref()
+            } else {
+                snapshot.digital_compute_telemetry.as_ref()
+            };
+            if let Some(telemetry) = telemetry {
+                ui.separator();
+                ui.label(RichText::new(format!(
+                    "Last decode {}",
+                    telemetry.concise()
+                )))
+                .on_hover_text(telemetry.stage_detail());
+            }
+            if let Some(error) = &snapshot.last_error {
+                ui.separator();
+                ui.label(RichText::new("⚠ NEEDS ATTENTION").color(Color32::YELLOW))
+                    .on_hover_text(error);
+            }
         });
     }
 }
@@ -2022,8 +2237,8 @@ impl eframe::App for QsonautGuiApp {
 
         egui::TopBottomPanel::top("header")
             .resizable(true)
-            .min_height(72.0)
-            .max_height(160.0)
+            .min_height(112.0)
+            .max_height(240.0)
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.add(
@@ -2129,157 +2344,7 @@ impl eframe::App for QsonautGuiApp {
                     });
                 });
                 ui.separator();
-                ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .selectable_label(self.show_signal_panel, "Signals")
-                        .on_hover_text("Show or hide the resizable monitoring panel")
-                        .clicked()
-                    {
-                        self.show_signal_panel = !self.show_signal_panel;
-                    }
-                    if ui
-                        .selectable_label(
-                            self.show_signal_panel
-                                && self.signal_panel_tab == SignalPanelTab::Devices,
-                            "Devices",
-                        )
-                        .on_hover_text("Choose OS audio and USB/serial devices")
-                        .clicked()
-                    {
-                        self.show_signal_panel = true;
-                        self.signal_panel_tab = SignalPanelTab::Devices;
-                    }
-                    ui.separator();
-                    let previous_scale = self.gui_scale;
-                    egui::ComboBox::from_id_salt("gui_scale")
-                        .selected_text(format!("UI {:.0}%", gui_scale_percent(self.gui_scale)))
-                        .width(82.0)
-                        .show_ui(ui, |ui| {
-                            for percent in [75_u32, 85, 100, 110, 125] {
-                                let scale = gui_scale_from_percent(percent);
-                                ui.selectable_value(
-                                    &mut self.gui_scale,
-                                    scale,
-                                    format!("{percent}%"),
-                                );
-                            }
-                        });
-                    if (previous_scale - self.gui_scale).abs() > 0.001 {
-                        ctx.set_zoom_factor(self.gui_scale);
-                        self.profile_dirty = true;
-                        self.persist_profile("Auto-saved");
-                    }
-                    ui.separator();
-                    if ui.small_button("Save Profile").clicked() {
-                        self.persist_profile("Saved");
-                    }
-                    if ui.small_button("Reload Profile").clicked() {
-                        match load_operator_profile() {
-                            Some(p) => {
-                                self.station_callsign = p.callsign;
-                                self.station_grid = p.grid;
-                                self.station_qth = p.qth;
-                                self.ft8_follow_log = p.follow_log;
-                                self.ft8_max_log_entries = p.max_log_entries.clamp(80, 1000);
-                                self.ft8_deep_decode = p.deep_decode;
-                                self.ft4_deep_decode = p.ft4_deep_decode;
-                                self.ft4_autoseq = p.ft4_autoseq;
-                                self.ft4_auto_reply_policy = p.ft4_auto_reply_policy;
-                                self.ft4_cq_only_view = p.ft4_cq_only_view;
-                                self.ft4_follow_log = p.ft4_follow_log;
-                                self.ft4_max_log_entries = p.ft4_max_log_entries.clamp(80, 300);
-                                self.ft4_max_attempts = p.ft4_max_attempts.clamp(1, 20);
-                                self.ft4_stop_policy = AutoTxStopPolicy::Continuous;
-                                self.ft8_autoseq = p.autoseq;
-                                self.ft8_auto_reply_policy = p.auto_reply_policy;
-                                self.ft8_auto_answer_cq = p.auto_answer_cq;
-                                self.ft8_cq_only_view = p.cq_only_view;
-                                self.civ_spectrum_on = p.civ_spectrum_on;
-                                self.waterfall_theme = p.waterfall_theme;
-                                self.waterfall_deck_height =
-                                    p.waterfall_deck_height.clamp(170.0, 560.0);
-                                self.ft8_stop_policy = AutoTxStopPolicy::Continuous;
-                                self.ft8_max_attempts = p.ft8_max_attempts.clamp(1, 20);
-                                self.ft8_hold_tx_freq = if p.profile_version >= 3 {
-                                    p.hold_tx_freq
-                                } else {
-                                    false
-                                };
-                                self.rx_tone_hz = p.rx_tone_hz;
-                                self.tx_tone_hz = p.tx_tone_hz;
-                                if !self.ft8_hold_tx_freq {
-                                    self.tx_tone_hz = self.rx_tone_hz;
-                                }
-                                self.ptt_lead_ms = p.ptt_lead_ms.clamp(100, 1_500);
-                                self.ptt_tail_ms = p.ptt_tail_ms.clamp(0, 1_000);
-                                self.cw_wpm = p.cw_wpm.clamp(5, 40);
-                                self.cw_tone_hz = p.cw_tone_hz.clamp(200, 1_200);
-                                self.contest_serial_current = p
-                                    .contest_serial_current
-                                    .max(self.contest_serial_start.max(1))
-                                    .max(1);
-                                self.contest_fake_split_offset_hz =
-                                    p.contest_fake_split_offset_hz.clamp(0, 2_000);
-                                self.hunter_unlocked = p.hunter_unlocked.into_iter().collect();
-                                self.hunter_custom_rules = p.hunter_custom_rules;
-                                self.gui_scale = if p.profile_version >= GUI_SCALE_PROFILE_VERSION {
-                                    p.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
-                                } else {
-                                    default_gui_scale()
-                                };
-                                self.compute_preference = p.compute_preference;
-                                self.psk_reporter_enabled = p.psk_reporter_enabled;
-                                if !p.server_instance_id.is_empty() {
-                                    self.server_instance_id = p.server_instance_id;
-                                }
-                                if let Some(server) = p.server {
-                                    self.config.server = server;
-                                    self.reconnect_server();
-                                }
-                                self.acceleration_report =
-                                    AccelerationReport::probe(self.compute_preference);
-                                if p.profile_version >= 3 {
-                                    self.config.audio.input_device = p.audio_input_device;
-                                    self.config.audio.output_device = p.audio_output_device;
-                                    self.config.radio.serial_port = p.radio_serial_port;
-                                    if p.profile_version >= 8 {
-                                        self.config.radio.model = p.radio_model;
-                                        self.config.radio.baud_rate = p.radio_baud_rate;
-                                    }
-                                }
-                                self.config.station.callsign = Some(self.station_callsign.clone());
-                                self.config.station.grid = Some(self.station_grid.clone());
-                                self.restart_psk_reporter();
-                                self.profile_io_status =
-                                    format!("Loaded {}", OPERATOR_PROFILE_FILE);
-                                self.profile_dirty = false;
-                            }
-                            None => {
-                                self.profile_io_status =
-                                    format!("No {} found", OPERATOR_PROFILE_FILE);
-                            }
-                        }
-                    }
-                    let status_color = if self.profile_dirty {
-                        Color32::YELLOW
-                    } else {
-                        Color32::GRAY
-                    };
-                    ui.label(
-                        RichText::new(&self.profile_io_status)
-                            .small()
-                            .color(status_color),
-                    );
-                    if let Some(alert) = self.hunter_feed.back() {
-                        ui.separator();
-                        ui.label(
-                            RichText::new(format!("{} {}", alert.utc, alert.title))
-                                .small()
-                                .color(alert.accent),
-                        )
-                        .on_hover_text(&alert.detail);
-                    }
-                });
+                self.draw_banner_radio_controls(ui, &snapshot);
             });
 
         let supports_radio_scope = find_model(&self.config.radio.model)
@@ -2302,16 +2367,6 @@ impl eframe::App for QsonautGuiApp {
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("Waterfalls").strong());
-                    if ui
-                        .add_enabled(
-                            supports_radio_scope,
-                            egui::Checkbox::new(&mut self.civ_spectrum_on, "Radio scope"),
-                        )
-                        .changed()
-                    {
-                        self.profile_dirty = true;
-                        self.persist_profile("Auto-saved");
-                    }
                     let wf_color = if snapshot.radio_spectrum_enabled {
                         Color32::LIGHT_GREEN
                     } else if self.civ_spectrum_on {
@@ -2374,12 +2429,11 @@ impl eframe::App for QsonautGuiApp {
             self.persist_profile("Auto-saved");
         }
 
-        egui::TopBottomPanel::bottom("radio_strip")
-            .resizable(true)
-            .default_height(38.0)
-            .height_range(32.0..=120.0)
+        egui::TopBottomPanel::bottom("connection_strip")
+            .resizable(false)
+            .exact_height(52.0)
             .show(ctx, |ui| {
-                self.draw_radio_control_strip(ui, &snapshot);
+                self.draw_connection_strip(ui, &snapshot);
             });
 
         if self.show_signal_panel {
@@ -2393,12 +2447,14 @@ impl eframe::App for QsonautGuiApp {
                     ui.add_space(6.0);
                     ui.horizontal_wrapped(|ui| {
                         for (tab, label) in [
-                            (SignalPanelTab::Status, "STATUS"),
+                            (SignalPanelTab::Achievements, "ACHIEVEMENTS"),
                             (SignalPanelTab::Profile, "PROFILE"),
+                            (SignalPanelTab::Contest, "CONTEST"),
+                            (SignalPanelTab::Reporting, "REPORTING"),
+                            (SignalPanelTab::Waterfall, "WATERFALL"),
+                            (SignalPanelTab::Settings, "SETTINGS"),
                             (SignalPanelTab::Server, "SERVER"),
-                            (SignalPanelTab::Band, "BAND"),
                             (SignalPanelTab::Log, "LOG"),
-                            (SignalPanelTab::Devices, "DEVICES"),
                         ] {
                             let selected = self.signal_panel_tab == tab;
                             let text = if selected {
@@ -2418,24 +2474,14 @@ impl eframe::App for QsonautGuiApp {
                         .id_salt("signals_scroll")
                         .auto_shrink([false, false])
                         .show(ui, |ui| match self.signal_panel_tab {
-                            SignalPanelTab::Status => {
-                                self.draw_status(ui, &snapshot);
-                                ui.add_space(10.0);
-                                ui.separator();
-                                self.draw_hunter_panel(ui, &snapshot);
-                            }
-                            SignalPanelTab::Profile | SignalPanelTab::Server => {
-                                self.draw_profile_or_server_panel(ui);
-                            }
-                            SignalPanelTab::Band => {
-                                self.draw_band_controls(ui, &snapshot);
-                            }
-                            SignalPanelTab::Log => {
-                                self.draw_contact_log(ui, &snapshot);
-                            }
-                            SignalPanelTab::Devices => {
-                                self.draw_device_settings(ui);
-                            }
+                            SignalPanelTab::Achievements => self.draw_hunter_panel(ui, &snapshot),
+                            SignalPanelTab::Profile => self.draw_profile_panel(ui),
+                            SignalPanelTab::Contest => self.draw_contest_panel(ui),
+                            SignalPanelTab::Reporting => self.draw_reporting_panel(ui),
+                            SignalPanelTab::Waterfall => self.draw_waterfall_panel(ui, &snapshot),
+                            SignalPanelTab::Settings => self.draw_settings_panel(ui),
+                            SignalPanelTab::Server => self.draw_server_panel(ui),
+                            SignalPanelTab::Log => self.draw_contact_log(ui, &snapshot),
                         });
                 });
         }
@@ -2480,28 +2526,6 @@ fn ft8_stat_chip(ui: &mut egui::Ui, label: &str, value: String, detail: String) 
                 ui.label(RichText::new(detail).small().color(Color32::DARK_GRAY));
             });
         });
-}
-
-fn operator_status_card(
-    ui: &mut egui::Ui,
-    label: &str,
-    value: &str,
-    detail: &str,
-    accent: Color32,
-) {
-    egui::Frame::group(ui.style())
-        .fill(Color32::from_rgb(24, 29, 36))
-        .stroke(egui::Stroke::new(1.0_f32, accent.gamma_multiply(0.7)))
-        .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(label).strong().color(Color32::LIGHT_GRAY));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(value).strong().monospace().color(accent));
-                });
-            });
-            ui.label(RichText::new(detail).small().color(Color32::GRAY));
-        });
-    ui.add_space(3.0);
 }
 
 fn filter_bandwidth_hz(mode: &str, filter: Option<u8>) -> u32 {
@@ -2828,14 +2852,6 @@ mod tests {
     }
 
     #[test]
-    fn ci_v_levels_are_presented_as_percentages() {
-        assert_eq!(fmt_civ_level_percent(Some(0)), "0%");
-        assert_eq!(fmt_civ_level_percent(Some(128)), "50%");
-        assert_eq!(fmt_civ_level_percent(Some(255)), "100%");
-        assert_eq!(fmt_civ_level_percent(None), "?");
-    }
-
-    #[test]
     fn radio_port_inventory_collects_labels_and_detected_models() {
         let descriptors = vec![
             SerialPortDescriptor {
@@ -3047,7 +3063,9 @@ mod tests {
             .iter()
             .map(|sample| *sample as f32 / i16::MAX as f32)
             .collect();
-        let decoded = ditdah::decode_samples(&samples, 12_000).expect("CW decode");
+        let (filtered, _) = workers::cw::prepare_cw_signal(&samples, 12_000, 600)
+            .expect("generated CW should pass the selected-tone gate");
+        let decoded = ditdah::decode_samples(&filtered, 12_000).expect("CW decode");
         assert_eq!(decoded, "SOS");
     }
 
@@ -3355,5 +3373,21 @@ mod tests {
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Cw));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Ft8));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Wspr));
+    }
+
+    #[test]
+    fn workspace_mode_selection_uses_mode_center_for_current_band() {
+        assert_eq!(
+            workspace_frequency_for_current_band(WorkspaceMode::Ft4, Some(7_074_000)),
+            Some(7_076_000)
+        );
+        assert_eq!(
+            workspace_frequency_for_current_band(WorkspaceMode::Ft8, Some(7_099_000)),
+            Some(7_074_000)
+        );
+        assert_eq!(
+            workspace_frequency_for_current_band(WorkspaceMode::Ft8, None),
+            None
+        );
     }
 }

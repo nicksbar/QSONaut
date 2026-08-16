@@ -154,8 +154,10 @@ impl ServerClient {
         let _ = self.commands.send(Command::Log(log));
     }
 
-    pub fn publish_diagnostic(&self, diagnostic: Value) {
-        let _ = self.commands.send(Command::Diagnostic(diagnostic));
+    pub fn publish_diagnostic(&self, diagnostic: Value) -> Result<(), String> {
+        self.commands
+            .send(Command::Diagnostic(diagnostic))
+            .map_err(|_| "QSONaut Server worker is not running".to_owned())
     }
 
     pub fn request_sync(&self) {
@@ -413,9 +415,39 @@ fn receive(
         ServerMessage::ChannelMessageAccepted(message) => {
             push_channel_event(automation_events, "message_accepted", message);
         }
-        ServerMessage::PresenceAccepted(value)
-        | ServerMessage::LogAccepted(value)
-        | ServerMessage::DiagnosticAccepted(value) => {
+        ServerMessage::DiagnosticAccepted(value) => {
+            push_automation_event(
+                automation_events,
+                "diagnostic_accepted",
+                [
+                    (
+                        "id",
+                        value
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ),
+                    (
+                        "summary",
+                        value
+                            .get("summary")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ),
+                    (
+                        "created_at",
+                        value
+                            .get("created_at")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ),
+                ],
+            );
+        }
+        ServerMessage::PresenceAccepted(value) | ServerMessage::LogAccepted(value) => {
             drop(value);
         }
         ServerMessage::Ack | ServerMessage::Pong => {}
@@ -648,5 +680,33 @@ mod tests {
         assert_eq!(event.kind, "channel_message");
         assert_eq!(event.fields["author"], "W1AW");
         assert_eq!(event.fields["channel"], "ops");
+    }
+
+    #[test]
+    fn accepted_diagnostic_becomes_a_client_event() {
+        let status = Arc::new(Mutex::new(ConnectionStatus::default()));
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        receive(
+            r#"{
+                "protocol_version":"v1",
+                "event_id":"00000000-0000-0000-0000-000000000000",
+                "type":"diagnostic_accepted",
+                "payload":{
+                    "id":"3ecb975c-bd24-47fd-b230-5a79c0d5cad3",
+                    "summary":"IC-7300 radio and runtime snapshot",
+                    "created_at":"2026-08-16T17:33:26Z"
+                }
+            }"#,
+            &status,
+            &events,
+        )
+        .unwrap();
+        let event = events.lock().unwrap().pop_front().unwrap();
+        assert_eq!(event.kind, "diagnostic_accepted");
+        assert_eq!(event.fields["id"], "3ecb975c-bd24-47fd-b230-5a79c0d5cad3");
+        assert_eq!(
+            event.fields["summary"],
+            "IC-7300 radio and runtime snapshot"
+        );
     }
 }

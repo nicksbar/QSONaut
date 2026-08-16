@@ -2645,7 +2645,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "qsonaut"
-version = "0.2.3"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2663,7 +2663,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-accelerate"
-version = "0.2.3"
+version = "0.3.1"
 dependencies = [
  "serde",
  "wgpu",
@@ -2671,7 +2671,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-audio"
-version = "0.2.3"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "cpal",
@@ -2680,7 +2680,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-automation"
-version = "0.2.3"
+version = "0.3.1"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -2689,7 +2689,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-core"
-version = "0.2.3"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "dotenvy",
@@ -2700,7 +2700,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-gui"
-version = "0.2.3"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "ditdah",
@@ -2726,7 +2726,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-log"
-version = "0.2.3"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -2738,11 +2738,11 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-pskreporter"
-version = "0.2.3"
+version = "0.3.1"
 
 [[package]]
 name = "qsonaut-server-client"
-version = "0.2.3"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -2920,7 +2920,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 [[package]]
 name = "rigwright"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/rigwright?tag=v0.1.2#3d6da31740b409be016c5612b875976971ffae9a"
+source = "git+https://github.com/nicksbar/rigwright?tag=v0.1.3#7769437eaccf6b3df65793c8b6319166085de548"
 dependencies = [
  "anyhow",
  "async-trait",

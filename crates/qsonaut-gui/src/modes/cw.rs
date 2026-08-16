@@ -1,5 +1,21 @@
 use super::super::*;
 
+pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
+    ("160m", 1_836_000),
+    ("80m", 3_570_000),
+    ("60m", 5_351_500),
+    ("40m", 7_030_000),
+    ("30m", 10_120_000),
+    ("20m", 14_050_000),
+    ("17m", 18_086_000),
+    ("15m", 21_050_000),
+    ("12m", 24_930_000),
+    ("10m", 28_050_000),
+    ("6m", 50_100_000),
+    ("2m", 146_520_000),
+    ("70cm", 432_100_000),
+];
+
 impl QsonautGuiApp {
     pub(crate) fn draw_cw_workspace(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         let preset = workspace_radio_preset(WorkspaceMode::Cw);
@@ -37,19 +53,43 @@ impl QsonautGuiApp {
         });
         ui.separator();
 
+        egui::Frame::group(ui.style())
+            .fill(Color32::from_rgb(20, 34, 28))
+            .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgb(90, 210, 130)))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new("LIVE DECODE")
+                        .small()
+                        .strong()
+                        .color(Color32::LIGHT_GREEN),
+                );
+                ui.label(
+                    RichText::new(if snapshot.cw_live_text.is_empty() {
+                        "Listening…"
+                    } else {
+                        &snapshot.cw_live_text
+                    })
+                    .monospace()
+                    .strong()
+                    .size(18.0),
+                );
+            });
+        ui.add_space(6.0);
+
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new("UTC          Decoded text")
+                RichText::new("UTC          New transcript text")
                     .monospace()
                     .strong(),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("Clear").clicked() {
-                    self.state
-                        .lock()
-                        .expect("ui state lock poisoned")
+                    let mut state = self.state.lock().expect("ui state lock poisoned");
+                    state
                         .digital_decodes
                         .retain(|entry| entry.mode != WorkspaceMode::Cw);
+                    state.cw_live_text.clear();
+                    state.cw_last_window_text.clear();
                 }
             });
         });
@@ -71,7 +111,7 @@ impl QsonautGuiApp {
                 }
                 if shown == 0 {
                     ui.label(
-                        RichText::new("Collecting the first 8-second CW window…")
+                        RichText::new("Listening for the first stable CW characters…")
                             .color(Color32::GRAY),
                     );
                 }
@@ -88,7 +128,7 @@ impl QsonautGuiApp {
                 self.persist_profile("CW speed saved to");
             }
             ui.separator();
-            ui.label("CW tone");
+            ui.label("RX/TX CW tone");
             if ui
                 .add(egui::Slider::new(&mut self.cw_tone_hz, 200..=1_200).suffix(" Hz"))
                 .changed()
@@ -129,7 +169,7 @@ impl QsonautGuiApp {
         ui.label(RichText::new(&self.digital_tx_status).color(Color32::GRAY));
         ui.label(
             RichText::new(
-                "Software CW uses USB-D and the configured audio tone for wide-passband receive and subband TX placement. DitDah supports A-Z, 0-9, and spaces; prosigns, punctuation, paddle/keyed-carrier CW, and automatic QSO sequencing are not yet available.",
+                "Software CW uses USB-D. The selected CW tone centers a narrow RX decoder gate and sets the TX audio pitch; broadband noise and steady carriers are rejected before DitDah. DitDah supports A-Z, 0-9, and spaces; prosigns, punctuation, paddle/keyed-carrier CW, and automatic QSO sequencing are not yet available.",
             )
             .small()
             .color(Color32::YELLOW),
