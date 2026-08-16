@@ -741,7 +741,10 @@ impl QsonautGuiApp {
             },
             "tune_workspace_band_hz" => match value.trim().parse::<u64>() {
                 Ok(frequency_hz) if frequency_hz > 0 => {
-                    self.send_command(GuiCommand::TuneWorkspaceBand(frequency_hz));
+                    self.send_command(GuiCommand::ApplyWorkspace {
+                        mode: self.workspace_mode,
+                        frequency_hz,
+                    });
                     format!(
                         "Applied workspace band tune to {:.3} MHz",
                         frequency_hz as f64 / 1_000_000.0

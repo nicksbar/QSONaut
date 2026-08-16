@@ -346,20 +346,23 @@ pub(crate) fn spawn_radio_worker(
                         let _ = ack_tx.send(result);
                         poll_radio_core_state(&rt, &radio, &state);
                     }
-                    GuiCommand::TuneWorkspaceBand(freq_hz) => {
-                        let (workspace_mode, current_filter) = {
-                            let s = state.lock().expect("ui state lock poisoned");
-                            (s.workspace_mode, s.filter)
-                        };
+                    GuiCommand::ApplyWorkspace {
+                        mode: workspace_mode,
+                        frequency_hz,
+                    } => {
                         let preset = workspace_radio_preset(workspace_mode);
-                        let filter_to_keep = current_filter.unwrap_or(preset.filter).clamp(1, 3);
-                        let _ = rt.block_on(radio.set_frequency_hz(freq_hz));
+                        let filter = preset.filter.clamp(1, 3);
+                        let frequency_result = rt.block_on(radio.set_frequency_hz(frequency_hz));
                         if let Some(icom) = radio.as_icom() {
-                            let _ = rt.block_on(icom.set_operating_mode_details(
+                            let mode_result = rt.block_on(icom.set_operating_mode_details(
                                 preset.base_mode,
                                 preset.data_mode,
-                                filter_to_keep,
+                                filter,
                             ));
+                            if let Err(error) = frequency_result.and(mode_result) {
+                                state.lock().expect("ui state lock poisoned").last_error =
+                                    Some(error.to_string());
+                            }
                         } else {
                             let mode = if preset.data_mode {
                                 Mode::Data
@@ -370,7 +373,11 @@ pub(crate) fn spawn_radio_worker(
                                     _ => Mode::Usb,
                                 }
                             };
-                            let _ = rt.block_on(RadioHal::set_mode(&radio, mode));
+                            let mode_result = rt.block_on(RadioHal::set_mode(&radio, mode));
+                            if let Err(error) = frequency_result.and(mode_result) {
+                                state.lock().expect("ui state lock poisoned").last_error =
+                                    Some(error.to_string());
+                            }
                         }
                         poll_radio_core_state(&rt, &radio, &state);
                     }

@@ -298,6 +298,19 @@ fn workspace_mode_supports_native_tx(mode: WorkspaceMode) -> bool {
     )
 }
 
+fn workspace_frequency_for_current_band(
+    mode: WorkspaceMode,
+    current_frequency_hz: Option<u64>,
+) -> Option<u64> {
+    let band = current_frequency_hz
+        .map(band_for_frequency)
+        .filter(|band| !band.is_empty())?;
+    workspace_band_plan(mode)
+        .iter()
+        .find(|(label, _)| *label == band)
+        .map(|(_, frequency_hz)| *frequency_hz)
+}
+
 fn parse_tx_target_from_compose(compose: &str, operator_call: &str) -> Option<String> {
     let parsed = parse_message(compose)?;
     if parsed.is_cq {
@@ -730,7 +743,10 @@ enum GuiCommand {
     CycleMode,
     TogglePtt,
     AfGainDelta(i16),
-    TuneWorkspaceBand(u64),
+    ApplyWorkspace {
+        mode: WorkspaceMode,
+        frequency_hz: u64,
+    },
     SetFilter(u8),
     SetPtt(bool),
     SetPttWithAck(bool, mpsc::Sender<std::result::Result<(), String>>),
@@ -1977,7 +1993,20 @@ impl QsonautGuiApp {
             ui.separator();
             ui.label(RichText::new("Mode").strong());
             for mode in WORKSPACE_MODES {
-                ui.selectable_value(&mut self.workspace_mode, mode, mode.label());
+                if ui
+                    .selectable_label(self.workspace_mode == mode, mode.label())
+                    .clicked()
+                {
+                    self.workspace_mode = mode;
+                    if let Some(frequency_hz) =
+                        workspace_frequency_for_current_band(mode, snapshot.frequency_hz)
+                    {
+                        self.send_command(GuiCommand::ApplyWorkspace {
+                            mode,
+                            frequency_hz,
+                        });
+                    }
+                }
             }
         });
         ui.horizontal_wrapped(|ui| {
@@ -1990,7 +2019,10 @@ impl QsonautGuiApp {
                     .on_hover_text(format!("{:.6} MHz", frequency_hz as f64 / 1_000_000.0))
                     .clicked()
                 {
-                    self.send_command(GuiCommand::TuneWorkspaceBand(frequency_hz));
+                    self.send_command(GuiCommand::ApplyWorkspace {
+                        mode: self.workspace_mode,
+                        frequency_hz,
+                    });
                 }
             }
             ui.separator();
@@ -3335,5 +3367,21 @@ mod tests {
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Cw));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Ft8));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Wspr));
+    }
+
+    #[test]
+    fn workspace_mode_selection_uses_mode_center_for_current_band() {
+        assert_eq!(
+            workspace_frequency_for_current_band(WorkspaceMode::Ft4, Some(7_074_000)),
+            Some(7_076_000)
+        );
+        assert_eq!(
+            workspace_frequency_for_current_band(WorkspaceMode::Ft8, Some(7_099_000)),
+            Some(7_074_000)
+        );
+        assert_eq!(
+            workspace_frequency_for_current_band(WorkspaceMode::Ft8, None),
+            None
+        );
     }
 }
