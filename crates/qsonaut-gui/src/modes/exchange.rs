@@ -3,8 +3,29 @@ use serde::{Deserialize, Serialize};
 pub const SLOT_SECONDS: f64 = 15.0;
 pub const AUDIO_START_SECONDS: f64 = 0.5;
 pub const DEFAULT_PTT_LEAD_SECONDS: f64 = 0.25;
-pub const REPLY_DEADLINE_SECONDS: f64 = 1.90;
+pub const REPLY_DEADLINE_SECONDS: f64 = 2.0;
 pub const MAX_ATTEMPTS_PER_EXCHANGE: u8 = 6;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoTxStopPolicy {
+    #[default]
+    Continuous,
+    AfterNextTx,
+    AfterCurrentQso,
+}
+
+impl AutoTxStopPolicy {
+    pub const ALL: [Self; 3] = [Self::Continuous, Self::AfterNextTx, Self::AfterCurrentQso];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Continuous => "Keep running",
+            Self::AfterNextTx => "Stop after next TX",
+            Self::AfterCurrentQso => "Stop after current QSO",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoReplyPolicy {
@@ -208,8 +229,12 @@ pub enum QsoStage {
     Complete,
 }
 
+pub fn should_finalize_after_tx(stage: QsoStage) -> bool {
+    stage == QsoStage::FinalSent
+}
+
 #[derive(Debug, Clone)]
-pub struct Ft8Session {
+pub struct QsoSession {
     pub target: String,
     pub stage: QsoStage,
     pub tx_parity: u8,
@@ -221,7 +246,7 @@ pub struct Ft8Session {
     pub tx_attempts: u8,
 }
 
-impl Ft8Session {
+impl QsoSession {
     pub fn start(target: String, rx_period: u64) -> Self {
         Self {
             target,
@@ -335,6 +360,18 @@ pub fn should_retry_after_decode(last_tx_period: Option<u64>, decoded_period: u6
     last_tx_period.is_some_and(|last_tx| decoded_period == last_tx.saturating_add(1))
 }
 
+pub fn should_repeat_cq(
+    auto_sequence: bool,
+    last_tx_was_cq: bool,
+    last_tx_period: Option<u64>,
+    completed_rx_period: Option<u64>,
+) -> bool {
+    auto_sequence
+        && last_tx_was_cq
+        && completed_rx_period
+            .is_some_and(|period| should_retry_after_decode(last_tx_period, period))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,6 +469,15 @@ mod tests {
     }
 
     #[test]
+    fn cq_repeats_only_after_its_opposite_receive_period() {
+        assert!(should_repeat_cq(true, true, Some(100), Some(101)));
+        assert!(!should_repeat_cq(false, true, Some(100), Some(101)));
+        assert!(!should_repeat_cq(true, false, Some(100), Some(101)));
+        assert!(!should_repeat_cq(true, true, Some(100), Some(102)));
+        assert!(!should_repeat_cq(true, true, None, Some(101)));
+    }
+
+    #[test]
     fn reply_uses_current_slot_after_strict_ptt_deadline() {
         let source_period = 100;
         assert_eq!(
@@ -456,7 +502,7 @@ mod tests {
                 source_period,
                 DEFAULT_PTT_LEAD_SECONDS,
             ),
-            103
+            101
         );
     }
 
@@ -506,7 +552,7 @@ mod tests {
 
     #[test]
     fn advances_standard_qso_exchange() {
-        let mut session = Ft8Session::start("K1ABC".into(), 100);
+        let mut session = QsoSession::start("K1ABC".into(), 100);
         let grid = parse_message("N7UF K1ABC FN42").unwrap();
         assert_eq!(
             session
@@ -541,7 +587,7 @@ mod tests {
 
     #[test]
     fn new_exchange_step_resets_attempt_counter_but_repeats_do_not() {
-        let mut session = Ft8Session::start("K1ABC".into(), 100);
+        let mut session = QsoSession::start("K1ABC".into(), 100);
         let grid = parse_message("N7UF K1ABC FN42").unwrap();
         session.response_to(&grid, "N7UF", "CN84", -7, 100);
         session.tx_attempts = 5;
@@ -552,5 +598,12 @@ mod tests {
         let report = parse_message("N7UF K1ABC -12").unwrap();
         session.response_to(&report, "N7UF", "CN84", -9, 104);
         assert_eq!(session.tx_attempts, 0);
+    }
+
+    #[test]
+    fn final_outbound_exchange_completes_the_local_qso() {
+        assert!(should_finalize_after_tx(QsoStage::FinalSent));
+        assert!(!should_finalize_after_tx(QsoStage::RogerReportSent));
+        assert!(!should_finalize_after_tx(QsoStage::Complete));
     }
 }

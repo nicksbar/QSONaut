@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      # The application currently consumes mfsk-core as a sibling workspace.
+      # The application consumes modem libraries as sibling workspaces.
       - name: Check out QSONaut
         uses: actions/checkout@v6
         with:
@@ -28,6 +28,13 @@ jobs:
           # Track current upstream development head.
           ref: main
           path: mfsk-core
+
+      - name: Check out DitDah
+        uses: actions/checkout@v6
+        with:
+          repository: yuvadm/ditdah
+          ref: main
+          path: ditdah
 
       - name: Install Linux native libraries
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev

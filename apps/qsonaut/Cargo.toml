@@ -12,7 +12,6 @@ clap.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
-qsonaut-ai = { path = "../../crates/qsonaut-ai" }
 qsonaut-audio = { path = "../../crates/qsonaut-audio" }
 qsonaut-core = { path = "../../crates/qsonaut-core" }
 qsonaut-log = { path = "../../crates/qsonaut-log" }

@@ -11,7 +11,7 @@ static FIR: OnceLock<[f32; NTAPS]> = OnceLock::new();
 fn fir_coeffs() -> &'static [f32; NTAPS] {
     FIR.get_or_init(|| {
         use std::f64::consts::PI;
-        const FC: f64 = 0.25; // normalised cutoff
+        const FC: f64 = 0.25;
         const ALPHA: f64 = 5.0;
         let m = (NTAPS - 1) as f64;
         let i0a = bessel_i0(ALPHA);
@@ -47,7 +47,7 @@ fn bessel_i0(x: f64) -> f64 {
     sum
 }
 
-/// Decimator state — holds the FIR delay line.
+/// Stateful high-quality 48 kHz → 12 kHz FIR decimator.
 pub struct Decimator {
     buf: Vec<f32>,
     pos: usize,
@@ -77,20 +77,19 @@ impl Decimator {
         12_000
     }
 
-    /// Process a chunk of input samples, returning one output sample per FACTOR inputs.
     pub fn process(&mut self, input: &[f32]) -> Vec<f32> {
         let mut out = Vec::with_capacity(input.len() / FACTOR + 1);
-        for &x in input {
-            self.buf[self.pos] = x;
+        for &sample in input {
+            self.buf[self.pos] = sample;
             self.pos = (self.pos + 1) % NTAPS;
             if self.phase == FACTOR - 1 {
-                let y: f32 = (0..NTAPS)
-                    .map(|k| {
-                        let idx = (self.pos + k) % NTAPS;
-                        fir_coeffs()[k] * self.buf[idx]
+                let value = (0..NTAPS)
+                    .map(|index| {
+                        let buffer_index = (self.pos + index) % NTAPS;
+                        fir_coeffs()[index] * self.buf[buffer_index]
                     })
                     .sum();
-                out.push(y);
+                out.push(value);
             }
             self.phase = (self.phase + 1) % FACTOR;
         }
@@ -104,39 +103,34 @@ mod tests {
 
     #[test]
     fn decimator_length() {
-        let mut dec = Decimator::new(48_000);
-        let input = vec![0.0f32; 48_000]; // 1 second at 48 kHz
-        let out = dec.process(&input);
-        assert_eq!(out.len(), 12_000, "1 s of 48 kHz → 12 kHz samples");
+        let mut decimator = Decimator::new(48_000);
+        let output = decimator.process(&vec![0.0; 48_000]);
+        assert_eq!(output.len(), 12_000);
     }
 
     #[test]
     fn decimator_chunked_matches_one_shot() {
         let input: Vec<f32> = (0..96_000)
-            .map(|n| {
-                // Mixed tones + slight envelope to avoid trivial periodic alias.
-                let t = n as f32 / 48_000.0;
-                (2.0 * std::f32::consts::PI * 700.0 * t).sin()
-                    * (0.7 + 0.3 * (2.0 * std::f32::consts::PI * 2.0 * t).sin())
-                    + 0.4 * (2.0 * std::f32::consts::PI * 1500.0 * t).sin()
+            .map(|sample| {
+                let time = sample as f32 / 48_000.0;
+                (2.0 * std::f32::consts::PI * 700.0 * time).sin()
+                    * (0.7 + 0.3 * (2.0 * std::f32::consts::PI * 2.0 * time).sin())
+                    + 0.4 * (2.0 * std::f32::consts::PI * 1_500.0 * time).sin()
             })
             .collect();
 
-        let mut one = Decimator::new(48_000);
-        let out_one = one.process(&input);
-
+        let mut one_shot = Decimator::new(48_000);
+        let expected = one_shot.process(&input);
         let mut chunked = Decimator::new(48_000);
-        let mut out_chunked = Vec::new();
-        for chunk in input.chunks(1379) {
-            out_chunked.extend(chunked.process(chunk));
-        }
+        let actual: Vec<f32> = input
+            .chunks(1_379)
+            .flat_map(|chunk| chunked.process(chunk))
+            .collect();
 
-        assert_eq!(out_one.len(), out_chunked.len());
-        for (a, b) in out_one.iter().zip(out_chunked.iter()) {
-            assert!(
-                (a - b).abs() < 1e-6,
-                "chunked decimator mismatch: {a} vs {b}"
-            );
-        }
+        assert_eq!(expected.len(), actual.len());
+        assert!(expected
+            .iter()
+            .zip(actual.iter())
+            .all(|(left, right)| (left - right).abs() < 1e-6));
     }
 }

@@ -14,6 +14,8 @@ use cpal::{
     Device, Sample, SampleFormat, SampleRate, Stream, StreamError, SupportedStreamConfig,
 };
 
+pub mod resample;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioDeviceKind {
     Input,
