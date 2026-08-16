@@ -7,6 +7,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+- Explicitly install the Rustls Ring crypto provider before starting QSONaut Server WSS
+  connections, preventing HTTPS/WSS startup panics in builds where provider inference is
+  unavailable.
+
 ## [0.3.1] - 2026-08-16
 
 ### Added

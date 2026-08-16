@@ -110,6 +110,7 @@ pub struct ServerClient {
 impl ServerClient {
     #[must_use]
     pub fn spawn(config: ConnectionConfig) -> Self {
+        install_tls_crypto_provider();
         let (commands, receiver) = mpsc::unbounded_channel();
         let status = Arc::new(Mutex::new(ConnectionStatus {
             state: ConnectionState::Connecting,
@@ -187,6 +188,13 @@ impl ServerClient {
             .expect("server status lock poisoned")
             .clone()
     }
+}
+
+fn install_tls_crypto_provider() {
+    // rustls 0.23 cannot infer a process-level provider when downstream TLS
+    // features do not select one. Installing Ring explicitly keeps WSS startup
+    // deterministic across native and cross-compiled QSONaut builds.
+    let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
 impl Drop for ServerClient {
@@ -592,6 +600,12 @@ struct Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installs_a_process_level_tls_crypto_provider() {
+        install_tls_crypto_provider();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+    }
 
     #[test]
     fn proxy_url_uses_same_origin_wss_path() {
