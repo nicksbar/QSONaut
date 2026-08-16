@@ -14,6 +14,9 @@ use super::{
 pub(super) const OPERATOR_PROFILE_FILE: &str = "profile.toml";
 pub(super) const OPERATOR_PROFILE_VERSION: u32 = 10;
 const LEGACY_OPERATOR_PROFILE_FILE: &str = ".rigforge_profile.toml";
+const DEFAULT_PROFILE_NAME: &str = "Default";
+const OPERATOR_PROFILES_DIR: &str = "profiles";
+const ACTIVE_PROFILE_FILE: &str = "active-profile";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct OperatorProfile {
@@ -193,27 +196,135 @@ fn operator_profile_path() -> PathBuf {
     app_config_dir().join(OPERATOR_PROFILE_FILE)
 }
 
+fn operator_profiles_dir() -> PathBuf {
+    app_config_dir().join(OPERATOR_PROFILES_DIR)
+}
+
+fn active_profile_path() -> PathBuf {
+    app_config_dir().join(ACTIVE_PROFILE_FILE)
+}
+
+fn validate_profile_name(name: &str) -> Result<&str> {
+    let name = name.trim();
+    anyhow::ensure!(!name.is_empty(), "profile name cannot be empty");
+    anyhow::ensure!(
+        name.chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, ' ' | '-' | '_')),
+        "profile names may contain only letters, numbers, spaces, '-' and '_'"
+    );
+    Ok(name)
+}
+
+fn named_operator_profile_path(name: &str) -> Result<PathBuf> {
+    let name = validate_profile_name(name)?;
+    if name.eq_ignore_ascii_case(DEFAULT_PROFILE_NAME) {
+        Ok(operator_profile_path())
+    } else {
+        Ok(operator_profiles_dir().join(format!("{name}.toml")))
+    }
+}
+
+pub(super) fn active_operator_profile_name() -> String {
+    fs::read_to_string(active_profile_path())
+        .ok()
+        .and_then(|name| validate_profile_name(&name).ok().map(str::to_string))
+        .unwrap_or_else(|| DEFAULT_PROFILE_NAME.to_string())
+}
+
+pub(super) fn select_operator_profile(name: &str) -> Result<()> {
+    let name = validate_profile_name(name)?;
+    anyhow::ensure!(named_operator_profile_path(name)?.is_file(), "profile ‘{name}’ does not exist");
+    let path = active_profile_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, name)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+pub(super) fn list_operator_profiles() -> Vec<String> {
+    let mut profiles = vec![DEFAULT_PROFILE_NAME.to_string()];
+    if let Ok(entries) = fs::read_dir(operator_profiles_dir()) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("toml") {
+                continue;
+            }
+            if let Some(name) = path.file_stem().and_then(|name| name.to_str()) {
+                if validate_profile_name(name).is_ok() {
+                    profiles.push(name.to_string());
+                }
+            }
+        }
+    }
+    profiles.sort_by_key(|name| name.to_ascii_lowercase());
+    profiles.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    profiles
+}
+
+pub(super) fn load_operator_profile_named(name: &str) -> Option<OperatorProfile> {
+    let path = named_operator_profile_path(name).ok()?;
+    let source = fs::read_to_string(path).ok()?;
+    toml::from_str(&source).ok()
+}
+
 pub(super) fn load_operator_profile() -> Option<OperatorProfile> {
-    let preferred = operator_profile_path();
+    let selected = active_operator_profile_name();
+    if let Some(profile) = load_operator_profile_named(&selected) {
+        return Some(profile);
+    }
     let legacy = std::env::current_dir()
         .ok()
         .map(|directory| directory.join(LEGACY_OPERATOR_PROFILE_FILE));
-    let source = fs::read_to_string(&preferred)
+    let source = fs::read_to_string(operator_profile_path())
         .ok()
         .or_else(|| legacy.and_then(|path| fs::read_to_string(path).ok()))?;
     toml::from_str(&source).ok()
 }
 
-pub(super) fn save_operator_profile(profile: &OperatorProfile) -> Result<()> {
-    let path = operator_profile_path();
+pub(super) fn save_operator_profile_named(
+    name: &str,
+    profile: &OperatorProfile,
+) -> Result<()> {
+    let name = validate_profile_name(name)?;
+    let path = named_operator_profile_path(name)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::write(&path, toml::to_string_pretty(profile)?)?;
+    fs::write(active_profile_path(), name)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        fs::set_permissions(active_profile_path(), fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
+}
+
+pub(super) fn save_operator_profile(profile: &OperatorProfile) -> Result<()> {
+    save_operator_profile_named(&active_operator_profile_name(), profile)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_profile_name;
+
+    #[test]
+    fn profile_names_allow_human_readable_safe_names() {
+        assert_eq!(validate_profile_name(" Field Day 2026 ").unwrap(), "Field Day 2026");
+        assert!(validate_profile_name("portable_vhf-2").is_ok());
+    }
+
+    #[test]
+    fn profile_names_reject_paths_and_empty_values() {
+        assert!(validate_profile_name("").is_err());
+        assert!(validate_profile_name("../other").is_err());
+        assert!(validate_profile_name("club/profile").is_err());
+    }
 }

@@ -1,5 +1,13 @@
 use super::super::*;
 
+pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
+    ("160m", 1_836_000), ("80m", 3_570_000), ("60m", 5_351_500),
+    ("40m", 7_030_000), ("30m", 10_120_000), ("20m", 14_050_000),
+    ("17m", 18_086_000), ("15m", 21_050_000), ("12m", 24_930_000),
+    ("10m", 28_050_000), ("6m", 50_100_000), ("2m", 146_520_000),
+    ("70cm", 432_100_000),
+];
+
 impl QsonautGuiApp {
     pub(crate) fn draw_cw_workspace(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         let preset = workspace_radio_preset(WorkspaceMode::Cw);

@@ -51,18 +51,3 @@ pub(super) fn ft8_period_progress() -> f32 {
         .unwrap_or(0.0);
     ((seconds % 15.0) / 15.0) as f32
 }
-
-pub(super) fn fmt_opt_u8(value: Option<u8>) -> String {
-    value
-        .map(|number| number.to_string())
-        .unwrap_or_else(|| "?".to_string())
-}
-
-pub(super) fn fmt_civ_level_percent(value: Option<u8>) -> String {
-    value
-        .map(|raw| {
-            let percent = (raw as f32 * 100.0 / 255.0).round() as u8;
-            format!("{percent}%")
-        })
-        .unwrap_or_else(|| "?".to_string())
-}
