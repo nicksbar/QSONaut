@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use super::{ft8_ops::parse_message, WorkspaceMode};
+use super::{modes::exchange::parse_message, WorkspaceMode};
 
 #[cfg(test)]
 use super::FT8_EARLY_DECODE_S;

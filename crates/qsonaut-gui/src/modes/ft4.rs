@@ -19,7 +19,7 @@ impl QsonautGuiApp {
                 || false,
                 |target| {
                     parse_message(&entry.message)
-                        .is_some_and(|message| ft8_ops::callsign_eq(&message.from, target))
+                        .is_some_and(|message| super::exchange::callsign_eq(&message.from, target))
                 },
             );
             if belongs {
@@ -45,7 +45,7 @@ impl QsonautGuiApp {
                     message
                         .to
                         .as_deref()
-                        .is_some_and(|to| ft8_ops::callsign_eq(to, target))
+                        .is_some_and(|to| super::exchange::callsign_eq(to, target))
                 })
             });
             if belongs {
@@ -602,7 +602,7 @@ impl QsonautGuiApp {
                                 let my_call = self.station_callsign_or_default().to_string();
                                 let my_grid = self.station_grid_or_default().to_string();
                                 let mut session =
-                                    Ft8Session::start(message.from.clone(), entry.period);
+                                    QsoSession::start(message.from.clone(), entry.period);
                                 if let Some(reply) = session.response_to(
                                     &message,
                                     &my_call,

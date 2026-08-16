@@ -230,7 +230,7 @@ pub enum QsoStage {
 }
 
 #[derive(Debug, Clone)]
-pub struct Ft8Session {
+pub struct QsoSession {
     pub target: String,
     pub stage: QsoStage,
     pub tx_parity: u8,
@@ -242,7 +242,7 @@ pub struct Ft8Session {
     pub tx_attempts: u8,
 }
 
-impl Ft8Session {
+impl QsoSession {
     pub fn start(target: String, rx_period: u64) -> Self {
         Self {
             target,
@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn advances_standard_qso_exchange() {
-        let mut session = Ft8Session::start("K1ABC".into(), 100);
+        let mut session = QsoSession::start("K1ABC".into(), 100);
         let grid = parse_message("N7UF K1ABC FN42").unwrap();
         assert_eq!(
             session
@@ -583,7 +583,7 @@ mod tests {
 
     #[test]
     fn new_exchange_step_resets_attempt_counter_but_repeats_do_not() {
-        let mut session = Ft8Session::start("K1ABC".into(), 100);
+        let mut session = QsoSession::start("K1ABC".into(), 100);
         let grid = parse_message("N7UF K1ABC FN42").unwrap();
         session.response_to(&grid, "N7UF", "CN84", -7, 100);
         session.tx_attempts = 5;

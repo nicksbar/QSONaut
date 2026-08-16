@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::ft8_ops::QsoStage;
+use super::modes::exchange::QsoStage;
 
 pub(super) fn format_signal_report(report: i8) -> String {
     format!("{:+03}", report.clamp(-50, 49))

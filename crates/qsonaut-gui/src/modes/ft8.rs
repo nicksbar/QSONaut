@@ -72,7 +72,7 @@ impl QsonautGuiApp {
                 parse_message(&entry.message).is_some_and(|message| {
                     // RX chat contains transmissions from the station we are
                     // working, not unrelated callers transmitting to them.
-                    ft8_ops::callsign_eq(&message.from, target)
+                    super::exchange::callsign_eq(&message.from, target)
                 })
             } else {
                 false
@@ -93,11 +93,11 @@ impl QsonautGuiApp {
         for entry in &self.ft8_tx_chat {
             let belongs = if let Some(target) = target.as_deref() {
                 parse_message(&entry.message).is_some_and(|message| {
-                    ft8_ops::callsign_eq(&message.from, target)
+                    super::exchange::callsign_eq(&message.from, target)
                         || message
                             .to
                             .as_deref()
-                            .is_some_and(|to| ft8_ops::callsign_eq(to, target))
+                            .is_some_and(|to| super::exchange::callsign_eq(to, target))
                 })
             } else {
                 false
@@ -560,7 +560,7 @@ impl QsonautGuiApp {
                     let mut picked_freq_from_double_click: Option<u32> = None;
                     let mut picked_period_from_double_click: Option<u64> = None;
                     let mut move_tx_from_double_click: Option<bool> = None;
-                    let mut session_from_double_click: Option<Ft8Session> = None;
+                    let mut session_from_double_click: Option<QsoSession> = None;
                     for (i, entry) in self.ft8_log.iter().enumerate() {
                         if self.ft8_cq_only_view && !entry.is_cq {
                             continue;
@@ -649,7 +649,7 @@ impl QsonautGuiApp {
                                     let call = parsed.from.clone();
                                     let my = self.station_callsign_or_default();
                                     let grid = self.station_grid_or_default();
-                                    let mut session = Ft8Session::start(call.clone(), entry.period);
+                                    let mut session = QsoSession::start(call.clone(), entry.period);
                                     if let Some(response) = session.response_to(
                                         &parsed,
                                         my,
@@ -701,7 +701,7 @@ impl QsonautGuiApp {
                         let same_target = self
                             .ft8_seq_target
                             .as_deref()
-                            .is_some_and(|current| ft8_ops::callsign_eq(current, &target));
+                            .is_some_and(|current| super::exchange::callsign_eq(current, &target));
                         if tx_scheduled && same_target {
                             self.ft8_seq_status = format!("Reply to {target} is already queued");
                         } else if tx_scheduled

@@ -7,7 +7,7 @@ use qsonaut_log::app_config_dir;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ft8_ops::{AutoReplyPolicy, DEFAULT_PTT_LEAD_SECONDS, MAX_ATTEMPTS_PER_EXCHANGE},
+    modes::exchange::{AutoReplyPolicy, DEFAULT_PTT_LEAD_SECONDS, MAX_ATTEMPTS_PER_EXCHANGE},
     AchievementKind, CustomAchievementRule, WaterfallTheme, GUI_SCALE_BASE,
 };
 

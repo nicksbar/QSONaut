@@ -1,7 +1,6 @@
 mod automation_hunter;
 mod band_plan;
 mod decode_model;
-mod ft8_ops;
 mod modes;
 mod panels;
 mod profile;
@@ -70,10 +69,10 @@ use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
     DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, OperatorCallHit, PendingFt8Decode,
 };
-use ft8_ops::{
-    next_reply_period, next_tx_period, parse_message, select_candidate, should_repeat_cq,
-    should_retry_after_decode, AutoReplyPolicy, AutoTxStopPolicy, Ft8Session, QsoStage,
-    ReplyCandidate,
+use modes::exchange::{
+    callsign_eq, is_probable_callsign, next_reply_period, next_tx_period, parse_message,
+    select_candidate, should_repeat_cq, should_retry_after_decode, AutoReplyPolicy,
+    AutoTxStopPolicy, Exchange, ParsedMessage, QsoSession, QsoStage, ReplyCandidate, SLOT_SECONDS,
 };
 use profile::{
     default_contest_fake_split_offset_hz, default_gui_scale,
@@ -321,13 +320,13 @@ fn parse_tx_target_from_compose(compose: &str, operator_call: &str) -> Option<St
     }
 
     let operator_call = operator_call.trim();
-    if ft8_ops::callsign_eq(&parsed.from, operator_call) {
+    if callsign_eq(&parsed.from, operator_call) {
         return parsed.to;
     }
     if parsed
         .to
         .as_deref()
-        .is_some_and(|to| ft8_ops::callsign_eq(to, operator_call))
+        .is_some_and(|to| callsign_eq(to, operator_call))
     {
         return Some(parsed.from);
     }
@@ -454,14 +453,14 @@ fn submit_psk_report(
     let sender_locator = parsed
         .as_ref()
         .and_then(|parsed| match &parsed.exchange {
-            ft8_ops::Exchange::Grid(grid) => Some(grid.clone()),
+            Exchange::Grid(grid) => Some(grid.clone()),
             _ => None,
         })
         .unwrap_or_default();
     let callsign = parsed.map(|parsed| parsed.from).or_else(|| {
         message
             .split_whitespace()
-            .find(|token| ft8_ops::is_probable_callsign(token))
+            .find(|token| is_probable_callsign(token))
             .map(|token| token.trim_matches(['<', '>']).to_ascii_uppercase())
     });
     let (Some(callsign), Some(dial)) = (callsign, dial_frequency_hz) else {
@@ -478,7 +477,7 @@ fn submit_psk_report(
     });
 }
 
-fn should_move_tx_to_decode(message: &ft8_ops::ParsedMessage, continuing_exchange: bool) -> bool {
+fn should_move_tx_to_decode(message: &ParsedMessage, continuing_exchange: bool) -> bool {
     !continuing_exchange && message.is_cq
 }
 
@@ -626,7 +625,7 @@ enum Ft8TxQueuePolicy {
 struct PendingManualFt8Reply {
     compose: String,
     target: String,
-    session: Ft8Session,
+    session: QsoSession,
     freq_hz: u32,
     source_period: u64,
     move_tx_to_remote: bool,
@@ -933,7 +932,7 @@ struct QsonautGuiApp {
     ft8_autoseq: bool,
     ft8_auto_reply_policy: AutoReplyPolicy,
     ft8_auto_answer_cq: bool,
-    ft8_session: Option<Ft8Session>,
+    ft8_session: Option<QsoSession>,
     ft8_seq_state: Ft8SeqState,
     ft8_seq_target: Option<String>,
     ft8_seq_status: String,
@@ -954,7 +953,7 @@ struct QsonautGuiApp {
     digital_compose: String,
     digital_selected: Option<DigitalDecodeEntry>,
     digital_seq_target: Option<String>,
-    ft4_session: Option<Ft8Session>,
+    ft4_session: Option<QsoSession>,
     ft4_seen_decodes: HashSet<(u64, u32, String)>,
     digital_tx_chat: VecDeque<DigitalTxChatEntry>,
     digital_queued_tx_message: Option<String>,
@@ -1760,7 +1759,7 @@ impl QsonautGuiApp {
         self.profile_io_status = "Diagnostic snapshot queued for QSONaut Server".to_string();
     }
 
-    fn log_completed_ft8_session(&mut self, session: &Ft8Session) {
+    fn log_completed_ft8_session(&mut self, session: &QsoSession) {
         let frequency_hz = self
             .state
             .lock()
@@ -1800,7 +1799,7 @@ impl QsonautGuiApp {
         self.append_qso(record, "Auto-logged");
     }
 
-    fn log_completed_ft4_session(&mut self, session: &Ft8Session) {
+    fn log_completed_ft4_session(&mut self, session: &QsoSession) {
         let frequency_hz = self
             .state
             .lock()
@@ -1899,7 +1898,7 @@ impl QsonautGuiApp {
                 let parsed = parse_message(&entry.message)?;
                 let eligible = (awaiting_cq_caller && parsed.directed_to(&my_call))
                     || (self.ft8_auto_answer_cq && parsed.is_cq);
-                if !eligible || ft8_ops::callsign_eq(&parsed.from, &my_call) {
+                if !eligible || callsign_eq(&parsed.from, &my_call) {
                     return None;
                 }
                 Some(ReplyCandidate {
@@ -1912,7 +1911,7 @@ impl QsonautGuiApp {
             if let Some(chosen) =
                 select_candidate(candidates, self.ft4_auto_reply_policy, self.rx_tone_hz)
             {
-                self.ft4_session = Some(Ft8Session::start(
+                self.ft4_session = Some(QsoSession::start(
                     chosen.parsed.from.clone(),
                     fresh[chosen.index].period,
                 ));
@@ -2051,7 +2050,7 @@ impl QsonautGuiApp {
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_secs_f64())
                     .unwrap_or(0.0);
-                let period = (now_s / ft8_ops::SLOT_SECONDS) as u64;
+                let period = (now_s / SLOT_SECONDS) as u64;
                 let target_period = match policy {
                     Ft8TxQueuePolicy::Standard => {
                         next_tx_period(now_s, None, self.ptt_lead_ms as f64 / 1_000.0)
@@ -2077,7 +2076,7 @@ impl QsonautGuiApp {
                     source_period = ?rx_period,
                     current_period = period,
                     target_period,
-                    slot_position_s = now_s % ft8_ops::SLOT_SECONDS,
+                    slot_position_s = now_s % SLOT_SECONDS,
                     "FT8 TX scheduled"
                 );
                 let pcm = Arc::new(pcm);
@@ -2089,10 +2088,9 @@ impl QsonautGuiApp {
                     parse_message(&self.ft8_compose).is_some_and(|message| message.is_cq);
                 self.ft8_seq_state = Ft8SeqState::TxQueued;
                 self.ft8_seq_status = match policy {
-                    Ft8TxQueuePolicy::ReplyAsap if target_period == period => format!(
-                        "Reply STARTING NOW at slot +{:.2}s",
-                        now_s % ft8_ops::SLOT_SECONDS
-                    ),
+                    Ft8TxQueuePolicy::ReplyAsap if target_period == period => {
+                        format!("Reply STARTING NOW at slot +{:.2}s", now_s % SLOT_SECONDS)
+                    }
                     Ft8TxQueuePolicy::ReplyAsap => format!(
                         "Reply queued for future slot {} (period {})",
                         utc_hhmmss_millis(target_period as f64 * 15.0),
@@ -2198,7 +2196,7 @@ impl QsonautGuiApp {
 
     fn has_logged_contact_with(&self, target_call: &str, mode: &str, band: &str) -> bool {
         self.qso_log.contacts.iter().any(|contact| {
-            ft8_ops::callsign_eq(&contact.callsign, target_call)
+            callsign_eq(&contact.callsign, target_call)
                 && contact.mode.eq_ignore_ascii_case(mode)
                 && contact.band.eq_ignore_ascii_case(band)
         })
@@ -2223,7 +2221,7 @@ impl QsonautGuiApp {
         let Some(target_call) = parse_tx_target_from_compose(compose, &operator_call) else {
             return false;
         };
-        if ft8_ops::callsign_eq(&target_call, &operator_call) {
+        if callsign_eq(&target_call, &operator_call) {
             return false;
         }
 
@@ -2595,7 +2593,7 @@ impl QsonautGuiApp {
         if let Some(target) = self.ft8_seq_target.clone() {
             let working_other = decodes.iter().find_map(|entry| {
                 let parsed = parse_message(&entry.message)?;
-                (ft8_ops::callsign_eq(&parsed.from, &target) && parsed.directed_away_from(&my_call))
+                (callsign_eq(&parsed.from, &target) && parsed.directed_away_from(&my_call))
                     .then(|| parsed.to.unwrap_or_else(|| "another station".to_string()))
             });
             if let Some(other) = working_other {
@@ -2653,7 +2651,7 @@ impl QsonautGuiApp {
             let parsed = parse_message(&entry.message)?;
             let eligible =
                 parsed.directed_to(&my_call) || (self.ft8_auto_answer_cq && parsed.is_cq);
-            if !eligible || ft8_ops::callsign_eq(&parsed.from, &my_call) {
+            if !eligible || callsign_eq(&parsed.from, &my_call) {
                 return None;
             }
             Some(ReplyCandidate {
@@ -2678,7 +2676,7 @@ impl QsonautGuiApp {
             return;
         };
         let entry = &decodes[selected.index];
-        let mut session = Ft8Session::start(selected.parsed.from.clone(), entry.period);
+        let mut session = QsoSession::start(selected.parsed.from.clone(), entry.period);
         let Some(response) = session.response_to(
             &selected.parsed,
             &my_call,

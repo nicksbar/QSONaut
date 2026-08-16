@@ -4,7 +4,7 @@ const FT8_TX_AMPLITUDE_I16: i16 = 18_000;
 const FT8_TX_SAMPLE_RATE_HZ: u32 = 12_000;
 const FT8_TX_MONITOR_FFT_SIZE: usize = 2_048;
 const FT8_TX_MONITOR_HOP_SAMPLES: usize = 500;
-pub(super) const FT8_TX_AUDIO_START_S: f64 = ft8_ops::AUDIO_START_SECONDS;
+pub(super) const FT8_TX_AUDIO_START_S: f64 = modes::exchange::AUDIO_START_SECONDS;
 const FT8_MAX_AUDIO_LATE_S: f64 = 1.75;
 
 pub(super) fn build_ft8_tx_pcm(compose: &str, tx_tone_hz: u32) -> Result<Vec<i16>> {
@@ -136,7 +136,7 @@ pub(super) struct Ft8TxJob {
 }
 
 pub(super) fn run_ft8_tx_job(job: Ft8TxJob) {
-    let slot_start_s = job.period as f64 * ft8_ops::SLOT_SECONDS;
+    let slot_start_s = job.period as f64 * modes::exchange::SLOT_SECONDS;
     let audio_start_s = slot_start_s + FT8_TX_AUDIO_START_S;
     let ptt_start_s = audio_start_s - job.ptt_lead.as_secs_f64();
 
