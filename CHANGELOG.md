@@ -7,6 +7,53 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-16
+
+### Added
+- Named operator profiles with create, select, save, reload, active-profile persistence,
+  safe profile names, and legacy profile fallback.
+- Dedicated Contest, Reporting, Waterfall, Settings, Server, Log, and Achievements views.
+- Built-in achievement catalog with locked/unlocked states, threshold progress, recent
+  activity, and custom achievement management.
+- Rolling live CW receive decoding from the same audio stream used by the waterfall, with
+  one-second updates over an eight-second context and overlap-aware transcript updates.
+- Selected-tone CW signal gating that rejects broadband noise and steady carriers before
+  invoking DitDah.
+- Explicit QSONaut Server diagnostic delivery feedback for queued, accepted, rejected, and
+  unavailable-client states.
+
+### Changed
+- Consolidated mode, mode-aware band, filter, tuning, PTT, and AF controls beneath the
+  frequency/mode header; either mode or band selection now applies the complete decoder
+  radio preset and exact mode-specific center frequency.
+- Reserved the bottom deck for connection state and nonredundant runtime health rather than
+  duplicating operational controls and status cards.
+- Reorganized waterfall settings into shared display, radio-scope-only, and audio-only
+  groups while keeping the live waterfall deck focused on signal display.
+- Moved mode-specific operating frequencies into their mode implementations; the shared
+  band-plan module now dispatches those definitions and retains common band lookup.
+- Synchronized physical radio frequency, mode, and filter state on a low-latency cadence,
+  with immediate repaint and separately throttled AF/RF/power polling.
+- Updated Rigwright to `v0.1.3` for correct IC-7300 extended mode/filter status parsing.
+
+### Fixed
+- Restored accurate FIL1/FIL2/FIL3 banner state after filter changes instead of displaying
+  an unknown or stale filter.
+- Removed the nonfunctional radio mode-cycle button and made direct mode selectors retune
+  the active band to the selected decoder's operating frequency.
+- Prevented CI-V scope reads from monopolizing serial access and delaying radio commands or
+  external VFO updates.
+- Prevented live CW decode from producing rapid nonsense text when no keyed CW signal is
+  present.
+- Surfaced diagnostic server acknowledgements instead of leaving the client indefinitely
+  at a misleading queued state.
+
+### Safety
+- Profile names are constrained to safe, human-readable filenames.
+- Diagnostic snapshots remain manual and opt-in; tokens, audio samples, and configured
+  device names are not included.
+- Existing global transmit disarm and PTT guardrails remain in force after the UI move.
+
 ## [0.2.3] - 2026-08-14
 
 ### Added

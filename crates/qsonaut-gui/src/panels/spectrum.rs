@@ -11,8 +11,7 @@ impl QsonautGuiApp {
             == RadioScopeView::Narrow
         {
             if self.radio_scope_lock_if_to_filter {
-                self.radio_scope_span_code =
-                    scope_span_for_filter(&snapshot.mode, snapshot.filter);
+                self.radio_scope_span_code = scope_span_for_filter(&snapshot.mode, snapshot.filter);
             }
             if !self.civ_spectrum_on {
                 return;
@@ -339,5 +338,4 @@ impl QsonautGuiApp {
                 .unwrap_or_default(),
         ));
     }
-
 }

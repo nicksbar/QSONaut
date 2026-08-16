@@ -209,7 +209,8 @@ fn validate_profile_name(name: &str) -> Result<&str> {
     anyhow::ensure!(!name.is_empty(), "profile name cannot be empty");
     anyhow::ensure!(
         name.chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, ' ' | '-' | '_')),
+            .all(|character| character.is_ascii_alphanumeric()
+                || matches!(character, ' ' | '-' | '_')),
         "profile names may contain only letters, numbers, spaces, '-' and '_'"
     );
     Ok(name)
@@ -233,7 +234,10 @@ pub(super) fn active_operator_profile_name() -> String {
 
 pub(super) fn select_operator_profile(name: &str) -> Result<()> {
     let name = validate_profile_name(name)?;
-    anyhow::ensure!(named_operator_profile_path(name)?.is_file(), "profile ‘{name}’ does not exist");
+    anyhow::ensure!(
+        named_operator_profile_path(name)?.is_file(),
+        "profile ‘{name}’ does not exist"
+    );
     let path = active_profile_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -287,10 +291,7 @@ pub(super) fn load_operator_profile() -> Option<OperatorProfile> {
     toml::from_str(&source).ok()
 }
 
-pub(super) fn save_operator_profile_named(
-    name: &str,
-    profile: &OperatorProfile,
-) -> Result<()> {
+pub(super) fn save_operator_profile_named(name: &str, profile: &OperatorProfile) -> Result<()> {
     let name = validate_profile_name(name)?;
     let path = named_operator_profile_path(name)?;
     if let Some(parent) = path.parent() {
@@ -317,7 +318,10 @@ mod tests {
 
     #[test]
     fn profile_names_allow_human_readable_safe_names() {
-        assert_eq!(validate_profile_name(" Field Day 2026 ").unwrap(), "Field Day 2026");
+        assert_eq!(
+            validate_profile_name(" Field Day 2026 ").unwrap(),
+            "Field Day 2026"
+        );
         assert!(validate_profile_name("portable_vhf-2").is_ok());
     }
 

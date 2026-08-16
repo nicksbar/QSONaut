@@ -21,8 +21,7 @@ fn block_rms(samples: &[f32], block_len: usize) -> Vec<f32> {
     samples
         .chunks_exact(block_len.max(1))
         .map(|block| {
-            (block.iter().map(|sample| sample * sample).sum::<f32>() / block.len() as f32)
-                .sqrt()
+            (block.iter().map(|sample| sample * sample).sum::<f32>() / block.len() as f32).sqrt()
         })
         .collect()
 }
@@ -213,7 +212,7 @@ mod tests {
         let dot_samples = (sample_rate as f32 * 0.06) as usize;
         (0..len)
             .map(|index| {
-                let keyed = (index / dot_samples) % 2 == 0;
+                let keyed = (index / dot_samples).is_multiple_of(2);
                 if keyed {
                     (2.0 * PI * tone_hz * index as f32 / sample_rate as f32).sin() * 0.25
                 } else {

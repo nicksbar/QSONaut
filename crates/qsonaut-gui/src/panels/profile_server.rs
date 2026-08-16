@@ -143,16 +143,16 @@ impl QsonautGuiApp {
                     self.profile_io_status = format!("Profile ‘{name}’ already exists");
                 } else {
                     match save_operator_profile_named(&name, &self.current_operator_profile()) {
-                    Ok(()) => {
-                        self.selected_profile_name = name.clone();
-                        self.available_profiles = list_operator_profiles();
-                        self.new_profile_name.clear();
-                        self.profile_io_status = format!("Created profile ‘{name}’");
-                        self.profile_dirty = false;
-                    }
-                    Err(error) => {
-                        self.profile_io_status = format!("Profile creation failed: {error}");
-                    }
+                        Ok(()) => {
+                            self.selected_profile_name = name.clone();
+                            self.available_profiles = list_operator_profiles();
+                            self.new_profile_name.clear();
+                            self.profile_io_status = format!("Created profile ‘{name}’");
+                            self.profile_dirty = false;
+                        }
+                        Err(error) => {
+                            self.profile_io_status = format!("Profile creation failed: {error}");
+                        }
                     }
                 }
             }
@@ -172,7 +172,10 @@ impl QsonautGuiApp {
     pub(in super::super) fn draw_contest_panel(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.heading("🏁 Contest profile");
-            if ui.checkbox(&mut self.contest_enabled, "Enable contest workflow profile").changed() {
+            if ui
+                .checkbox(&mut self.contest_enabled, "Enable contest workflow profile")
+                .changed()
+            {
                 self.config.contest.enabled = self.contest_enabled;
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
@@ -187,8 +190,16 @@ impl QsonautGuiApp {
                         ContestOperatingMode::SearchAndPounce => "Search & Pounce",
                     })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.contest_operating_mode, ContestOperatingMode::Run, "Run");
-                        ui.selectable_value(&mut self.contest_operating_mode, ContestOperatingMode::SearchAndPounce, "Search & Pounce");
+                        ui.selectable_value(
+                            &mut self.contest_operating_mode,
+                            ContestOperatingMode::Run,
+                            "Run",
+                        );
+                        ui.selectable_value(
+                            &mut self.contest_operating_mode,
+                            ContestOperatingMode::SearchAndPounce,
+                            "Search & Pounce",
+                        );
                     });
 
                 ui.label("Split policy");
@@ -199,9 +210,21 @@ impl QsonautGuiApp {
                         SplitPolicy::Rig => "Rig split",
                     })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.contest_split_policy, SplitPolicy::Off, "Off");
-                        ui.selectable_value(&mut self.contest_split_policy, SplitPolicy::Fake, "Fake split");
-                        ui.selectable_value(&mut self.contest_split_policy, SplitPolicy::Rig, "Rig split");
+                        ui.selectable_value(
+                            &mut self.contest_split_policy,
+                            SplitPolicy::Off,
+                            "Off",
+                        );
+                        ui.selectable_value(
+                            &mut self.contest_split_policy,
+                            SplitPolicy::Fake,
+                            "Fake split",
+                        );
+                        ui.selectable_value(
+                            &mut self.contest_split_policy,
+                            SplitPolicy::Rig,
+                            "Rig split",
+                        );
                     });
             });
 
@@ -214,15 +237,31 @@ impl QsonautGuiApp {
                         FoxHoundRole::Hound => "Hound",
                     })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.contest_fox_hound_role, FoxHoundRole::Disabled, "Disabled");
-                        ui.selectable_value(&mut self.contest_fox_hound_role, FoxHoundRole::Fox, "Fox");
-                        ui.selectable_value(&mut self.contest_fox_hound_role, FoxHoundRole::Hound, "Hound");
+                        ui.selectable_value(
+                            &mut self.contest_fox_hound_role,
+                            FoxHoundRole::Disabled,
+                            "Disabled",
+                        );
+                        ui.selectable_value(
+                            &mut self.contest_fox_hound_role,
+                            FoxHoundRole::Fox,
+                            "Fox",
+                        );
+                        ui.selectable_value(
+                            &mut self.contest_fox_hound_role,
+                            FoxHoundRole::Hound,
+                            "Hound",
+                        );
                     });
             });
 
             ui.horizontal(|ui| {
                 ui.label("Exchange template");
-                ui.add(egui::TextEdit::singleline(&mut self.contest_exchange_template).desired_width(260.0).hint_text("e.g. 5NN ${serial}"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.contest_exchange_template)
+                        .desired_width(260.0)
+                        .hint_text("e.g. 5NN ${serial}"),
+                );
             });
 
             ui.horizontal_wrapped(|ui| {
@@ -235,14 +274,21 @@ impl QsonautGuiApp {
 
             ui.horizontal_wrapped(|ui| {
                 ui.label("Serial current");
-                ui.label(RichText::new(format!("{:03}", self.contest_serial_current.max(1))).monospace().strong());
+                ui.label(
+                    RichText::new(format!("{:03}", self.contest_serial_current.max(1)))
+                        .monospace()
+                        .strong(),
+                );
                 if ui.small_button("Reset").clicked() {
                     self.contest_serial_current = self.contest_serial_start.max(1);
                     self.profile_dirty = true;
                     self.persist_profile("Auto-saved");
                 }
                 if ui.small_button("-Step").clicked() {
-                    self.contest_serial_current = self.contest_serial_current.saturating_sub(self.contest_serial_step.max(1)).max(self.contest_serial_start.max(1));
+                    self.contest_serial_current = self
+                        .contest_serial_current
+                        .saturating_sub(self.contest_serial_step.max(1))
+                        .max(self.contest_serial_start.max(1));
                     self.profile_dirty = true;
                     self.persist_profile("Auto-saved");
                 }
@@ -255,7 +301,11 @@ impl QsonautGuiApp {
 
             ui.horizontal_wrapped(|ui| {
                 ui.label("Fake split offset");
-                ui.add(egui::DragValue::new(&mut self.contest_fake_split_offset_hz).range(0..=2_000).suffix(" Hz"));
+                ui.add(
+                    egui::DragValue::new(&mut self.contest_fake_split_offset_hz)
+                        .range(0..=2_000)
+                        .suffix(" Hz"),
+                );
                 if ui.small_button("Use RX+offset").clicked() {
                     self.contest_split_policy = SplitPolicy::Fake;
                     self.profile_dirty = true;
@@ -264,20 +314,39 @@ impl QsonautGuiApp {
                 }
             });
 
-            ui.label(RichText::new(self.contest_guidance_text()).small().color(Color32::from_rgb(132, 228, 255)));
+            ui.label(
+                RichText::new(self.contest_guidance_text())
+                    .small()
+                    .color(Color32::from_rgb(132, 228, 255)),
+            );
             if self.contest_enabled && self.contest_split_policy == SplitPolicy::Fake {
-                ui.label(RichText::new(format!("Fake split active · TX offset {} Hz · software-only guardrail", self.contest_fake_split_offset_hz)).small().color(Color32::from_rgb(255, 201, 92)));
+                ui.label(
+                    RichText::new(format!(
+                        "Fake split active · TX offset {} Hz · software-only guardrail",
+                        self.contest_fake_split_offset_hz
+                    ))
+                    .small()
+                    .color(Color32::from_rgb(255, 201, 92)),
+                );
             }
 
             self.contest_serial_start = self.contest_serial_start.max(1);
             self.contest_serial_step = self.contest_serial_step.max(1);
-            self.contest_serial_current = self.contest_serial_current.max(self.contest_serial_start.max(1));
+            self.contest_serial_current = self
+                .contest_serial_current
+                .max(self.contest_serial_start.max(1));
 
             if self.config.contest.enabled != self.contest_enabled
                 || self.config.contest.operating_mode != self.contest_operating_mode
                 || self.config.contest.split_policy != self.contest_split_policy
                 || self.config.contest.fox_hound_role != self.contest_fox_hound_role
-                || self.config.contest.exchange_template.as_deref().unwrap_or_default() != self.contest_exchange_template.trim()
+                || self
+                    .config
+                    .contest
+                    .exchange_template
+                    .as_deref()
+                    .unwrap_or_default()
+                    != self.contest_exchange_template.trim()
                 || self.config.contest.serial_start != self.contest_serial_start
                 || self.config.contest.serial_step != self.contest_serial_step
                 || self.config.contest.dupe_check != self.contest_dupe_check
@@ -287,7 +356,11 @@ impl QsonautGuiApp {
                     operating_mode: self.contest_operating_mode,
                     split_policy: self.contest_split_policy,
                     fox_hound_role: self.contest_fox_hound_role,
-                    exchange_template: if self.contest_exchange_template.trim().is_empty() { None } else { Some(self.contest_exchange_template.trim().to_string()) },
+                    exchange_template: if self.contest_exchange_template.trim().is_empty() {
+                        None
+                    } else {
+                        Some(self.contest_exchange_template.trim().to_string())
+                    },
                     serial_start: self.contest_serial_start,
                     serial_step: self.contest_serial_step,
                     dupe_check: self.contest_dupe_check,
@@ -297,7 +370,11 @@ impl QsonautGuiApp {
                 self.emit_contest_profile_hooks();
             }
 
-            ui.label(RichText::new("Automation hook targets: contest_state + operator_profile events").small().color(Color32::GRAY));
+            ui.label(
+                RichText::new("Automation hook targets: contest_state + operator_profile events")
+                    .small()
+                    .color(Color32::GRAY),
+            );
         });
     }
 
@@ -309,18 +386,37 @@ impl QsonautGuiApp {
             self.restart_psk_reporter();
             self.profile_dirty = true;
             self.persist_profile("PSK Reporter preference saved to");
-            self.emit_operator_profile_hook(format!("psk_reporter_enabled={}", self.psk_reporter_enabled));
+            self.emit_operator_profile_hook(format!(
+                "psk_reporter_enabled={}",
+                self.psk_reporter_enabled
+            ));
         }
         if self.psk_reporter_enabled {
             if let Some(reporter) = &self.psk_reporter {
                 let status = reporter.status();
-                let detail = status.last_error.map(|error| format!("network error: {error}")).unwrap_or_else(|| format!("{} queued · {} sent · five-minute batching", status.queued, status.sent));
+                let detail = status
+                    .last_error
+                    .map(|error| format!("network error: {error}"))
+                    .unwrap_or_else(|| {
+                        format!(
+                            "{} queued · {} sent · five-minute batching",
+                            status.queued, status.sent
+                        )
+                    });
                 ui.label(RichText::new(detail).small().color(Color32::LIGHT_GREEN));
             } else {
-                ui.label(RichText::new("Set a real callsign and grid before reporting").small().color(Color32::YELLOW));
+                ui.label(
+                    RichText::new("Set a real callsign and grid before reporting")
+                        .small()
+                        .color(Color32::YELLOW),
+                );
             }
         } else {
-            ui.label(RichText::new("Private by default · no reception data leaves QSONaut").small().color(Color32::GRAY));
+            ui.label(
+                RichText::new("Private by default · no reception data leaves QSONaut")
+                    .small()
+                    .color(Color32::GRAY),
+            );
         }
     }
 
@@ -373,7 +469,11 @@ impl QsonautGuiApp {
         self.draw_device_settings(ui);
     }
 
-    pub(in super::super) fn draw_waterfall_panel(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+    pub(in super::super) fn draw_waterfall_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        snapshot: &GuiState,
+    ) {
         ui.heading("Waterfall");
         ui.separator();
         let supports_radio_scope = find_model(&self.config.radio.model)
@@ -469,11 +569,17 @@ impl QsonautGuiApp {
                 .text("Intensity")
                 .clamping(egui::SliderClamping::Always),
         );
-        ui.checkbox(&mut self.radio_scope_lock_if_to_filter, "Match span to selected FIL");
+        ui.checkbox(
+            &mut self.radio_scope_lock_if_to_filter,
+            "Match span to selected FIL",
+        );
         ui.checkbox(&mut self.radio_scope_vbw_wide, "Wide video bandwidth");
         if self.radio_scope_lock_if_to_filter {
             self.radio_scope_span_code = scope_span_for_filter(&snapshot.mode, snapshot.filter);
-            ui.small(format!("Automatic span: {}", scope_span_label(self.radio_scope_span_code)));
+            ui.small(format!(
+                "Automatic span: {}",
+                scope_span_label(self.radio_scope_span_code)
+            ));
         } else {
             egui::ComboBox::from_id_salt("radio_scope_span_settings")
                 .selected_text(scope_span_label(self.radio_scope_span_code))
@@ -515,24 +621,48 @@ impl QsonautGuiApp {
         ui.separator();
         ui.label(RichText::new("Use http://localhost:8080 for local development, a LAN address when the server is on another machine, or the hosted HTTPS address. QSONaut selects WS/WSS automatically; reverse proxies require no specialty port.").small().color(Color32::GRAY));
         let server_settings_before = self.config.server.clone();
-        ui.checkbox(&mut self.config.server.enabled, "Connect this QSONaut instance");
+        ui.checkbox(
+            &mut self.config.server.enabled,
+            "Connect this QSONaut instance",
+        );
         ui.horizontal(|ui| {
             ui.label("Endpoint");
-            ui.add(egui::TextEdit::singleline(&mut self.config.server.url).desired_width(ui.available_width()).hint_text("http://localhost:8080 or https://qsonaut.example.org"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.config.server.url)
+                    .desired_width(ui.available_width())
+                    .hint_text("http://localhost:8080 or https://qsonaut.example.org"),
+            );
         });
         ui.horizontal(|ui| {
             ui.label("Device token");
-            ui.add(egui::TextEdit::singleline(&mut self.config.server.device_token).password(true).desired_width(ui.available_width()).hint_text("Paste the token issued by QSONaut Server"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.config.server.device_token)
+                    .password(true)
+                    .desired_width(ui.available_width())
+                    .hint_text("Paste the token issued by QSONaut Server"),
+            );
         });
         ui.label(RichText::new("The token is stored locally in profile.toml with owner-only permissions on Unix systems.").small().color(Color32::GRAY));
         ui.add_space(5.0);
         ui.label(RichText::new("Privacy controls").strong());
-        ui.checkbox(&mut self.config.server.share_presence, "Share online presence and operating mode");
+        ui.checkbox(
+            &mut self.config.server.share_presence,
+            "Share online presence and operating mode",
+        );
         ui.add_enabled_ui(self.config.server.share_presence, |ui| {
-            ui.checkbox(&mut self.config.server.share_radio_details, "Share radio, frequency, and operating metadata");
+            ui.checkbox(
+                &mut self.config.server.share_radio_details,
+                "Share radio, frequency, and operating metadata",
+            );
         });
-        ui.checkbox(&mut self.config.server.share_logs, "Share contact/QSO logs with the server");
-        ui.checkbox(&mut self.config.server.share_diagnostics, "Allow manual radio/debug snapshots");
+        ui.checkbox(
+            &mut self.config.server.share_logs,
+            "Share contact/QSO logs with the server",
+        );
+        ui.checkbox(
+            &mut self.config.server.share_diagnostics,
+            "Allow manual radio/debug snapshots",
+        );
         if self.config.server != server_settings_before {
             self.profile_dirty = true;
         }
@@ -549,6 +679,25 @@ impl QsonautGuiApp {
             }
             ui.label(RichText::new("Nothing is shared unless its control is enabled.").small().color(Color32::GRAY));
         });
+        if self.profile_io_status.contains("Diagnostic snapshot")
+            || self.profile_io_status.contains("QSONaut Server rejected")
+        {
+            let color = if self.profile_io_status.contains("accepted") {
+                Color32::LIGHT_GREEN
+            } else if self.profile_io_status.contains("rejected")
+                || self.profile_io_status.contains("could not")
+            {
+                Color32::YELLOW
+            } else {
+                Color32::LIGHT_BLUE
+            };
+            ui.label(
+                RichText::new(&self.profile_io_status)
+                    .small()
+                    .strong()
+                    .color(color),
+            );
+        }
 
         ui.add_space(8.0);
         ui.group(|ui| {
@@ -560,13 +709,22 @@ impl QsonautGuiApp {
                         ServerConnectionState::Connected => ("CONNECTED", Color32::LIGHT_GREEN),
                         ServerConnectionState::Connecting => ("CONNECTING", Color32::YELLOW),
                         ServerConnectionState::Reconnecting => ("RECONNECTING", Color32::YELLOW),
-                        ServerConnectionState::Disabled | ServerConnectionState::Stopped => ("OFFLINE", Color32::GRAY),
+                        ServerConnectionState::Disabled | ServerConnectionState::Stopped => {
+                            ("OFFLINE", Color32::GRAY)
+                        }
                     };
                     ui.label(RichText::new(label).monospace().strong().color(color));
                     if ui.small_button("Refresh events").clicked() {
                         client.request_sync();
                     }
-                    ui.label(RichText::new(format!("{} active · {} contest models", status.active_event_count, status.catalog_size)).small().color(Color32::GRAY));
+                    ui.label(
+                        RichText::new(format!(
+                            "{} active · {} contest models",
+                            status.active_event_count, status.catalog_size
+                        ))
+                        .small()
+                        .color(Color32::GRAY),
+                    );
                     if let Some(error) = status.last_error {
                         ui.label(RichText::new(error).small().color(Color32::YELLOW));
                     }
@@ -574,12 +732,33 @@ impl QsonautGuiApp {
                     ui.label(RichText::new("DISABLED").monospace().color(Color32::GRAY));
                 }
             });
-            ui.label(RichText::new(format!("Presence: {} · radio details: {} · QSO logs: {} · diagnostics: {}",
-                if self.config.server.share_presence { "shared" } else { "private" },
-                if self.config.server.share_presence && self.config.server.share_radio_details { "shared" } else { "private" },
-                if self.config.server.share_logs { "shared" } else { "private" },
-                if self.config.server.share_diagnostics { "manual" } else { "private" },
-            )).small().color(Color32::GRAY));
+            ui.label(
+                RichText::new(format!(
+                    "Presence: {} · radio details: {} · QSO logs: {} · diagnostics: {}",
+                    if self.config.server.share_presence {
+                        "shared"
+                    } else {
+                        "private"
+                    },
+                    if self.config.server.share_presence && self.config.server.share_radio_details {
+                        "shared"
+                    } else {
+                        "private"
+                    },
+                    if self.config.server.share_logs {
+                        "shared"
+                    } else {
+                        "private"
+                    },
+                    if self.config.server.share_diagnostics {
+                        "manual"
+                    } else {
+                        "private"
+                    },
+                ))
+                .small()
+                .color(Color32::GRAY),
+            );
         });
 
         ui.add_space(8.0);

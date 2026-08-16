@@ -122,17 +122,23 @@ mod tests {
     fn workspace_band_plan_uses_mode_specific_center_frequencies() {
         let ft8 = workspace_band_plan(WorkspaceMode::Ft8);
         assert_eq!(
-            ft8.iter().find(|(label, _)| *label == "20m").map(|(_, freq)| *freq),
+            ft8.iter()
+                .find(|(label, _)| *label == "20m")
+                .map(|(_, freq)| *freq),
             Some(14_074_000)
         );
         let cw = workspace_band_plan(WorkspaceMode::Cw);
         assert_eq!(
-            cw.iter().find(|(label, _)| *label == "40m").map(|(_, freq)| *freq),
+            cw.iter()
+                .find(|(label, _)| *label == "40m")
+                .map(|(_, freq)| *freq),
             Some(7_030_000)
         );
         let wspr = workspace_band_plan(WorkspaceMode::Wspr);
         assert_eq!(
-            wspr.iter().find(|(label, _)| *label == "20m").map(|(_, freq)| *freq),
+            wspr.iter()
+                .find(|(label, _)| *label == "20m")
+                .map(|(_, freq)| *freq),
             Some(14_095_600)
         );
     }

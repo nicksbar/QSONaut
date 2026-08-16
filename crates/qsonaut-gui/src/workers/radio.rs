@@ -212,8 +212,7 @@ pub(crate) fn spawn_radio_worker(
 
                 // Preserve every complete native sweep delivered in a serial
                 // read instead of returning one and discarding the buffered rest.
-                match rt
-                    .block_on(stream_radio.drain_scope_waveform_sweeps(RADIO_SCOPE_READ_SLICE))
+                match rt.block_on(stream_radio.drain_scope_waveform_sweeps(RADIO_SCOPE_READ_SLICE))
                 {
                     Ok(sweeps) if !sweeps.is_empty() => {
                         cadence_sweeps += sweeps.len();
@@ -516,6 +515,9 @@ fn poll_radio_core_state(
     } else {
         (None, None, None)
     };
+    // The IC-7300's regular mode response does not consistently include the
+    // active FIL number, so filter state needs its own fast query.
+    let filt = read_u8_control(rt, radio, ControlId::Filter);
     let mut s = state.lock().expect("ui state lock poisoned");
     if let Ok(status) = status_result {
         if let Some(freq) = status.frequency_hz {
@@ -538,6 +540,9 @@ fn poll_radio_core_state(
     }
     if let Some(v) = pwr {
         s.rf_power = Some(v);
+    }
+    if let Some(v) = filt {
+        s.filter = Some(v);
     }
 }
 

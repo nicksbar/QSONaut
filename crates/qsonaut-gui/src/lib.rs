@@ -78,13 +78,12 @@ use modes::exchange::{
     ReplyCandidate, SLOT_SECONDS,
 };
 use profile::{
-    active_operator_profile_name,
-    default_contest_fake_split_offset_hz, default_cw_tone_hz, default_cw_wpm, default_gui_scale,
-    default_max_attempts as default_ft8_max_attempts, default_ptt_lead_ms, default_ptt_tail_ms,
-    default_rx_tone_hz, default_tx_tone_hz, default_waterfall_deck_height,
-    list_operator_profiles, load_operator_profile, load_operator_profile_named,
-    save_operator_profile, save_operator_profile_named, select_operator_profile, OperatorProfile,
-    OPERATOR_PROFILE_FILE, OPERATOR_PROFILE_VERSION,
+    active_operator_profile_name, default_contest_fake_split_offset_hz, default_cw_tone_hz,
+    default_cw_wpm, default_gui_scale, default_max_attempts as default_ft8_max_attempts,
+    default_ptt_lead_ms, default_ptt_tail_ms, default_rx_tone_hz, default_tx_tone_hz,
+    default_waterfall_deck_height, list_operator_profiles, load_operator_profile,
+    load_operator_profile_named, save_operator_profile, save_operator_profile_named,
+    select_operator_profile, OperatorProfile, OPERATOR_PROFILE_FILE, OPERATOR_PROFILE_VERSION,
 };
 #[cfg(test)]
 use tx_audio::FT8_TX_AUDIO_START_S;
@@ -93,9 +92,7 @@ use tx_audio::{
     DigitalTxChatEntry, DigitalTxEvent, DigitalTxJob, Ft8ChatDirection, Ft8ChatLine,
     Ft8TxChatEntry, Ft8TxEvent, Ft8TxJob,
 };
-use ui_format::{
-    format_signal_report, ft8_period_progress, qso_stage_label, utc_hhmmss_millis,
-};
+use ui_format::{format_signal_report, ft8_period_progress, qso_stage_label, utc_hhmmss_millis};
 use visuals::{
     audio_cursor_level, build_scope_waterfall_image, build_waterfall_image_with_theme,
     downsample_bins, fft_buffer_to_display_bins, scale_scope_levels,
@@ -2005,10 +2002,7 @@ impl QsonautGuiApp {
                     if let Some(frequency_hz) =
                         workspace_frequency_for_current_band(mode, snapshot.frequency_hz)
                     {
-                        self.send_command(GuiCommand::ApplyWorkspace {
-                            mode,
-                            frequency_hz,
-                        });
+                        self.send_command(GuiCommand::ApplyWorkspace { mode, frequency_hz });
                     }
                 }
             }
@@ -2066,7 +2060,9 @@ impl QsonautGuiApp {
                 .server_client
                 .as_ref()
                 .map(|client| match client.status().state {
-                    ServerConnectionState::Connected => ("QSONaut Server CONNECTED", Color32::LIGHT_GREEN),
+                    ServerConnectionState::Connected => {
+                        ("QSONaut Server CONNECTED", Color32::LIGHT_GREEN)
+                    }
                     ServerConnectionState::Connecting | ServerConnectionState::Reconnecting => {
                         ("QSONaut Server CONNECTING", Color32::YELLOW)
                     }
@@ -2079,9 +2075,7 @@ impl QsonautGuiApp {
             ui.label(RichText::new(server_label).color(server_color));
             for label in ["IRC", "Discord"] {
                 ui.separator();
-                ui.label(
-                    RichText::new(format!("{label} NOT IMPLEMENTED")).color(Color32::GRAY),
-                );
+                ui.label(RichText::new(format!("{label} NOT IMPLEMENTED")).color(Color32::GRAY));
             }
         });
 
@@ -2092,7 +2086,10 @@ impl QsonautGuiApp {
                 || ("Audio NO LEVEL".to_string(), Color32::YELLOW),
                 |level| {
                     if snapshot.audio_clip_percent > 0.1 {
-                        ("Audio CLIPPING".to_string(), Color32::from_rgb(255, 110, 100))
+                        (
+                            "Audio CLIPPING".to_string(),
+                            Color32::from_rgb(255, 110, 100),
+                        )
                     } else {
                         (format!("Audio {level:.0} dBFS"), Color32::LIGHT_GREEN)
                     }
@@ -2135,8 +2132,11 @@ impl QsonautGuiApp {
             };
             if let Some(telemetry) = telemetry {
                 ui.separator();
-                ui.label(RichText::new(format!("Last decode {}", telemetry.concise())))
-                    .on_hover_text(telemetry.stage_detail());
+                ui.label(RichText::new(format!(
+                    "Last decode {}",
+                    telemetry.concise()
+                )))
+                .on_hover_text(telemetry.stage_detail());
             }
             if let Some(error) = &snapshot.last_error {
                 ui.separator();

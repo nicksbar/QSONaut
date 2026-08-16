@@ -355,14 +355,13 @@ impl QsonautGuiApp {
             let unlocked = self.hunter_unlocked.contains(&achievement);
             ui.group(|ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new(if unlocked { "🏆" } else { "🔒" })
-                            .color(if unlocked {
-                                Color32::from_rgb(255, 201, 92)
-                            } else {
-                                Color32::GRAY
-                            }),
-                    );
+                    ui.label(RichText::new(if unlocked { "🏆" } else { "🔒" }).color(
+                        if unlocked {
+                            Color32::from_rgb(255, 201, 92)
+                        } else {
+                            Color32::GRAY
+                        },
+                    ));
                     ui.label(RichText::new(title).strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
@@ -693,11 +692,28 @@ impl QsonautGuiApp {
         }
     }
 
-    pub(super) fn pump_server_automation_events(&self) {
+    pub(super) fn pump_server_automation_events(&mut self) {
         let Some(client) = &self.server_client else {
             return;
         };
         for event in client.drain_automation_events() {
+            if event.kind == "diagnostic_accepted" {
+                let id = event
+                    .fields
+                    .get("id")
+                    .map(String::as_str)
+                    .unwrap_or_default();
+                let short_id = id.get(..8).unwrap_or(id);
+                self.profile_io_status = if short_id.is_empty() {
+                    "Diagnostic snapshot accepted by QSONaut Server".to_string()
+                } else {
+                    format!("Diagnostic snapshot accepted by QSONaut Server · {short_id}")
+                };
+            } else if event.kind == "error" {
+                if let Some(message) = event.fields.get("message") {
+                    self.profile_io_status = format!("QSONaut Server rejected request: {message}");
+                }
+            }
             self.app_events.publish(AppEvent::ServerMessageReceived {
                 kind: event.kind,
                 fields: event.fields,
