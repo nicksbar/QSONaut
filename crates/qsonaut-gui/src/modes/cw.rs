@@ -120,7 +120,7 @@ impl QsonautGuiApp {
                 self.persist_profile("CW speed saved to");
             }
             ui.separator();
-            ui.label("CW tone");
+            ui.label("RX/TX CW tone");
             if ui
                 .add(egui::Slider::new(&mut self.cw_tone_hz, 200..=1_200).suffix(" Hz"))
                 .changed()
@@ -161,7 +161,7 @@ impl QsonautGuiApp {
         ui.label(RichText::new(&self.digital_tx_status).color(Color32::GRAY));
         ui.label(
             RichText::new(
-                "Software CW uses USB-D and the configured audio tone for wide-passband receive and subband TX placement. DitDah supports A-Z, 0-9, and spaces; prosigns, punctuation, paddle/keyed-carrier CW, and automatic QSO sequencing are not yet available.",
+                "Software CW uses USB-D. The selected CW tone centers a narrow RX decoder gate and sets the TX audio pitch; broadband noise and steady carriers are rejected before DitDah. DitDah supports A-Z, 0-9, and spaces; prosigns, punctuation, paddle/keyed-carrier CW, and automatic QSO sequencing are not yet available.",
             )
             .small()
             .color(Color32::YELLOW),

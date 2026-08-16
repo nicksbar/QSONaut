@@ -3063,7 +3063,9 @@ mod tests {
             .iter()
             .map(|sample| *sample as f32 / i16::MAX as f32)
             .collect();
-        let decoded = ditdah::decode_samples(&samples, 12_000).expect("CW decode");
+        let (filtered, _) = workers::cw::prepare_cw_signal(&samples, 12_000, 600)
+            .expect("generated CW should pass the selected-tone gate");
+        let decoded = ditdah::decode_samples(&filtered, 12_000).expect("CW decode");
         assert_eq!(decoded, "SOS");
     }
 
