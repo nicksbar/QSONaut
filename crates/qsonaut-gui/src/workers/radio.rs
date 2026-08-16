@@ -1,5 +1,10 @@
 use super::super::*;
 
+const RADIO_CORE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const RADIO_LEVEL_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const RADIO_COMMAND_WAKE_INTERVAL: Duration = Duration::from_millis(50);
+const RADIO_SCOPE_READ_SLICE: Duration = Duration::from_millis(50);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RadioScopeStreamConfig {
     view: RadioScopeView,
@@ -208,7 +213,7 @@ pub(crate) fn spawn_radio_worker(
                 // Preserve every complete native sweep delivered in a serial
                 // read instead of returning one and discarding the buffered rest.
                 match rt
-                    .block_on(stream_radio.drain_scope_waveform_sweeps(Duration::from_millis(250)))
+                    .block_on(stream_radio.drain_scope_waveform_sweeps(RADIO_SCOPE_READ_SLICE))
                 {
                     Ok(sweeps) if !sweeps.is_empty() => {
                         cadence_sweeps += sweeps.len();
@@ -255,12 +260,18 @@ pub(crate) fn spawn_radio_worker(
             }
         });
 
-        poll_radio_core_state(&rt, &radio, &state);
+        poll_radio_core_state(&rt, &radio, &state, true);
+        let mut next_core_poll = Instant::now() + RADIO_CORE_POLL_INTERVAL;
+        let mut next_level_poll = Instant::now() + RADIO_LEVEL_POLL_INTERVAL;
 
         while !stop.load(Ordering::Relaxed) {
-            let cmd = match rx.recv() {
+            let wait = next_core_poll
+                .saturating_duration_since(Instant::now())
+                .min(RADIO_COMMAND_WAKE_INTERVAL);
+            let cmd = match rx.recv_timeout(wait) {
                 Ok(cmd) => Some(cmd),
-                Err(_) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
 
             if let Some(cmd) = cmd {
@@ -279,7 +290,7 @@ pub(crate) fn spawn_radio_worker(
                                 s.last_error = Some(err.to_string());
                             }
                         }
-                        poll_radio_core_state(&rt, &radio, &state);
+                        poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::CycleMode => {
                         let current = rt.block_on(radio.get_mode()).unwrap_or(Mode::Usb);
@@ -293,7 +304,7 @@ pub(crate) fn spawn_radio_worker(
                             let mut s = state.lock().expect("ui state lock poisoned");
                             s.last_error = Some(err.to_string());
                         }
-                        poll_radio_core_state(&rt, &radio, &state);
+                        poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::TogglePtt => {
                         let ptt_target = {
@@ -312,7 +323,7 @@ pub(crate) fn spawn_radio_worker(
                             Err(error) => s.last_error = Some(error),
                         }
                         drop(s);
-                        poll_radio_core_state(&rt, &radio, &state);
+                        poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::SetPtt(target) => {
                         let result = rt
@@ -327,7 +338,7 @@ pub(crate) fn spawn_radio_worker(
                             Err(error) => s.last_error = Some(error),
                         }
                         drop(s);
-                        poll_radio_core_state(&rt, &radio, &state);
+                        poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::SetPttWithAck(target, ack_tx) => {
                         let result = rt
@@ -344,7 +355,7 @@ pub(crate) fn spawn_radio_worker(
                             }
                         }
                         let _ = ack_tx.send(result);
-                        poll_radio_core_state(&rt, &radio, &state);
+                        poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::ApplyWorkspace {
                         mode: workspace_mode,
@@ -379,7 +390,7 @@ pub(crate) fn spawn_radio_worker(
                                     Some(error.to_string());
                             }
                         }
-                        poll_radio_core_state(&rt, &radio, &state);
+                        poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::SetFilter(n) => {
                         let workspace_mode =
@@ -401,7 +412,7 @@ pub(crate) fn spawn_radio_worker(
                             let mut s = state.lock().expect("ui state lock poisoned");
                             s.last_error = Some(err.to_string());
                         }
-                        poll_radio_core_state(&rt, &radio, &state);
+                        poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::AfGainDelta(delta) => {
                         let current = match rt
@@ -423,18 +434,26 @@ pub(crate) fn spawn_radio_worker(
                             let mut s = state.lock().expect("ui state lock poisoned");
                             s.last_error = Some(err.to_string());
                         }
-                        poll_radio_core_state(&rt, &radio, &state);
+                        poll_radio_core_state(&rt, &radio, &state, true);
                     }
+                }
+                next_core_poll = Instant::now() + RADIO_CORE_POLL_INTERVAL;
+                next_level_poll = Instant::now() + RADIO_LEVEL_POLL_INTERVAL;
+                if let Some(ctx) = repaint_ctx.get() {
+                    ctx.request_repaint();
                 }
             }
 
-            if let Ok(mut s) = state.lock() {
-                let t = display_tuning.lock().expect("tuning lock poisoned").clone();
-                let (_, sweep_code) = effective_visual_profile(&t, &s.mode);
-                if let Some(icom) = radio.as_icom() {
-                    if let Err(err) = rt.block_on(icom.set_scope_sweep_speed(sweep_code)) {
-                        s.last_error = Some(err.to_string());
-                    }
+            let now = Instant::now();
+            if now >= next_core_poll {
+                let poll_levels = now >= next_level_poll;
+                poll_radio_core_state(&rt, &radio, &state, poll_levels);
+                next_core_poll = Instant::now() + RADIO_CORE_POLL_INTERVAL;
+                if poll_levels {
+                    next_level_poll = Instant::now() + RADIO_LEVEL_POLL_INTERVAL;
+                }
+                if let Some(ctx) = repaint_ctx.get() {
+                    ctx.request_repaint();
                 }
             }
         }
@@ -445,6 +464,7 @@ fn poll_radio_core_state(
     rt: &tokio::runtime::Runtime,
     radio: &ConfiguredRadio,
     state: &Arc<Mutex<GuiState>>,
+    poll_levels: bool,
 ) {
     if radio.as_icom().is_none() {
         let frequency = rt.block_on(radio.get_frequency_hz());
@@ -487,11 +507,15 @@ fn poll_radio_core_state(
     } else {
         radio.probe()
     };
-    let af = read_u8_control(rt, radio, ControlId::AfGain);
-    let rf = read_u8_control(rt, radio, ControlId::RfGain);
-    let pwr = read_u8_control(rt, radio, ControlId::RfPower);
-    let filt = read_u8_control(rt, radio, ControlId::Filter);
-
+    let (af, rf, pwr) = if poll_levels {
+        (
+            read_u8_control(rt, radio, ControlId::AfGain),
+            read_u8_control(rt, radio, ControlId::RfGain),
+            read_u8_control(rt, radio, ControlId::RfPower),
+        )
+    } else {
+        (None, None, None)
+    };
     let mut s = state.lock().expect("ui state lock poisoned");
     if let Ok(status) = status_result {
         if let Some(freq) = status.frequency_hz {
@@ -514,9 +538,6 @@ fn poll_radio_core_state(
     }
     if let Some(v) = pwr {
         s.rf_power = Some(v);
-    }
-    if let Some(v) = filt {
-        s.filter = Some(v);
     }
 }
 
