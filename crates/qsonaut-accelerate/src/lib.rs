@@ -58,8 +58,8 @@ pub struct AccelerationReport {
     pub active: ActiveBackend,
     pub logical_cpus: usize,
     pub simd_features: Vec<&'static str>,
-    /// Hardware compute devices discovered through wgpu or a native compute
-    /// runtime such as CUDA. Software rasterizers never appear in this list.
+    /// Hardware compute devices discovered through a native compute runtime
+    /// such as CUDA. Software rasterizers never appear in this list.
     pub gpu_adapters: Vec<GpuAdapterInfo>,
     pub software_adapters: Vec<GpuAdapterInfo>,
     pub npu_exposed: bool,
@@ -68,14 +68,30 @@ pub struct AccelerationReport {
 }
 
 impl AccelerationReport {
+    /// Cheap placeholder used while the real probe runs off the UI thread.
+    /// Enumerating adapters and shelling out to `nvidia-smi` can take seconds.
+    pub fn pending(preference: ComputePreference) -> Self {
+        Self {
+            preference,
+            active: ActiveBackend::CpuSimd,
+            logical_cpus: std::thread::available_parallelism().map_or(1, usize::from),
+            simd_features: detected_simd_features(),
+            gpu_adapters: Vec::new(),
+            software_adapters: Vec::new(),
+            npu_exposed: false,
+            gpu_kernels_validated: false,
+            fallback_reason: Some("Probing compute devices…".to_string()),
+        }
+    }
+
     pub fn probe(preference: ComputePreference) -> Self {
-        let (mut gpu_adapters, software_adapters) = enumerate_wgpu_adapters();
-        for cuda_device in enumerate_cuda_devices() {
-            if !gpu_adapters
-                .iter()
-                .any(|adapter| adapter.name.eq_ignore_ascii_case(&cuda_device.name))
-            {
-                gpu_adapters.push(cuda_device);
+        let mut gpu_adapters = Vec::new();
+        let mut software_adapters = Vec::new();
+        for device in enumerate_cuda_devices() {
+            if is_software_adapter(&device) {
+                software_adapters.push(device);
+            } else {
+                gpu_adapters.push(device);
             }
         }
         let gpu_kernels_validated = false;
@@ -152,39 +168,6 @@ impl AccelerationReport {
     }
 }
 
-fn enumerate_wgpu_adapters() -> (Vec<GpuAdapterInfo>, Vec<GpuAdapterInfo>) {
-    #[cfg(target_os = "linux")]
-    if !Path::new("/dev/dri").exists() {
-        // This crate currently enables wgpu's Vulkan backend. WSL's /dev/dxg
-        // exposes D3D12/CUDA, not a Vulkan DRM device; probing Vulkan there
-        // only initializes lavapipe/llvmpipe and floods debug logs. CUDA is
-        // discovered independently below.
-        return (Vec::new(), Vec::new());
-    }
-
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::VULKAN,
-        flags: wgpu::InstanceFlags::empty(),
-        ..Default::default()
-    });
-    let mut hardware = Vec::new();
-    let mut software = Vec::new();
-    for adapter in instance.enumerate_adapters(wgpu::Backends::VULKAN) {
-        let info = adapter.get_info();
-        let adapter = GpuAdapterInfo {
-            name: info.name,
-            backend: format!("{:?}", info.backend),
-            device_type: format!("{:?}", info.device_type),
-        };
-        if is_software_adapter(&adapter) {
-            software.push(adapter);
-        } else {
-            hardware.push(adapter);
-        }
-    }
-    (hardware, software)
-}
-
 fn is_software_adapter(adapter: &GpuAdapterInfo) -> bool {
     let name = adapter.name.to_ascii_lowercase();
     adapter.device_type.eq_ignore_ascii_case("cpu")
@@ -200,8 +183,15 @@ fn enumerate_cuda_devices() -> Vec<GpuAdapterInfo> {
     let candidates = ["nvidia-smi", "/usr/lib/wsl/lib/nvidia-smi"];
 
     let output = candidates.iter().find_map(|program| {
-        Command::new(program)
-            .args(["--query-gpu=name", "--format=csv,noheader,nounits"])
+        let mut command = Command::new(program);
+        command.args(["--query-gpu=name", "--format=csv,noheader,nounits"]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // CREATE_NO_WINDOW: without it every probe flashes a console window.
+            command.creation_flags(0x0800_0000);
+        }
+        command
             .output()
             .ok()
             .filter(|output| output.status.success())

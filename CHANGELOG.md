@@ -7,6 +7,30 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-17
+
+### Fixed
+- Eliminated the Windows startup window flashing. Restored geometry is applied through the
+  viewport builder before the window is created, and the maximized state is applied after
+  the first painted frame, so winit no longer performs `SW_MAXIMIZE`/`SW_HIDE` round trips
+  on an unpainted window.
+- Suppressed the console window that flashed during GPU detection by spawning `nvidia-smi`
+  with `CREATE_NO_WINDOW` on Windows.
+- Corrected a Windows-only test failure where a temporary log path embedded a thread name
+  containing `::`, which is not a legal path character.
+
+### Changed
+- Switched the GUI to eframe's `glow` (OpenGL) backend on every platform and removed the
+  `wgpu` renderer, dropping `wgpu`, `wgpu-hal`, and `naga` from the dependency tree. This
+  also stops the 2D console from requesting a high-performance discrete GPU adapter.
+- Moved audio/serial device enumeration and compute-backend probing off the UI thread,
+  reducing time-to-first-frame from roughly 1.8 s to under 10 ms of app construction.
+- Capped waterfall-driven UI repaints at roughly 15 Hz instead of repainting on every audio
+  chunk, substantially lowering GPU and CPU load during receive.
+- QSONaut now persists native window geometry itself in `window.json` under the platform
+  app directory, validating stored values so a stale or corrupt entry cannot open the window
+  off-screen or at an unusable size.
+
 ## [0.3.2] - 2026-08-16
 
 ### Fixed

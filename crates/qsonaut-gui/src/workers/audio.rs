@@ -81,6 +81,11 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut digital_slot_gate = DigitalSlotGate::default();
         let mut ft4_slot_gate = Ft8SlotGate::default();
         let mut decode_workspace_last: Option<WorkspaceMode> = None;
+        // Waterfall rows arrive far faster than a human can see. Redrawing the
+        // whole UI on every chunk is what pins the GPU, so cap the repaint rate
+        // and let egui coalesce the rest.
+        let repaint_interval = Duration::from_millis(66);
+        let mut last_repaint = Instant::now() - repaint_interval;
 
         while !stop.load(Ordering::Relaxed) {
             let chunk_samples = {
@@ -562,7 +567,13 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                     }
 
                     if let Some(ctx) = repaint_ctx.get() {
-                        ctx.request_repaint();
+                        let elapsed = last_repaint.elapsed();
+                        if elapsed >= repaint_interval {
+                            last_repaint = Instant::now();
+                            ctx.request_repaint();
+                        } else {
+                            ctx.request_repaint_after(repaint_interval - elapsed);
+                        }
                     }
                 }
                 Err(err) => {

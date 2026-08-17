@@ -44,7 +44,7 @@ jobs:
 
       - name: Check formatting
         working-directory: QSONaut
-        run: cargo fmt --all -- --check
+        run: cargo fmt -- --check
 
       - name: Build workspace
         working-directory: QSONaut

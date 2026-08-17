@@ -51,7 +51,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::f32::consts::PI;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
@@ -795,18 +794,24 @@ pub fn run_gui(config: AppConfig) -> Result<()> {
 
     let app_icon = eframe::icon_data::from_png_bytes(QSONAUT_ICON_PNG)
         .context("embedded QSONaut icon is not a valid PNG")?;
-    let renderer = preferred_renderer()?;
+    let renderer = preferred_renderer();
+    let stored_geometry = WindowGeometry::load();
+    info!(?stored_geometry, "Restoring window geometry");
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size(WINDOW_DEFAULT_SIZE)
+        .with_min_inner_size(WINDOW_MIN_SIZE)
+        .with_title("QSONaut — Amateur Radio Mission Control")
+        .with_icon(app_icon.clone())
+        .with_resizable(true);
+    if let Some(geometry) = stored_geometry {
+        viewport = geometry.apply(viewport);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 860.0])
-            .with_min_inner_size([980.0, 680.0])
-            .with_title("QSONaut — Amateur Radio Mission Control")
-            .with_icon(app_icon.clone())
-            .with_resizable(true),
+        viewport,
         renderer,
-        // With eframe's persistence feature this restores native window
-        // position/size and egui memory, including collapsing-header state.
-        persist_window: true,
+        // QSONaut restores geometry through the builder above so winit applies
+        // it once, before the window is ever shown.
+        persist_window: false,
         ..Default::default()
     };
 
@@ -819,9 +824,10 @@ pub fn run_gui(config: AppConfig) -> Result<()> {
             info!(renderer = %renderer, "eframe app creation callback entered");
             Ok(Box::new(QsonautGuiApp::new(
                 app_config.clone(),
-                &cc.egui_ctx,
+                cc,
                 &app_icon,
                 renderer,
+                stored_geometry,
             )))
         }),
     );
@@ -839,35 +845,160 @@ pub fn run_gui(config: AppConfig) -> Result<()> {
     Ok(())
 }
 
-fn preferred_renderer() -> Result<eframe::Renderer> {
+const WINDOW_GEOMETRY_FILE: &str = "window.json";
+const WINDOW_MIN_SIZE: [f32; 2] = [980.0, 680.0];
+const WINDOW_DEFAULT_SIZE: [f32; 2] = [1280.0, 860.0];
+
+/// Native window geometry restored by QSONaut instead of eframe. Applying it to
+/// the `ViewportBuilder` means winit configures the window once, while it is
+/// still hidden, instead of showing and re-hiding it for each late change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct WindowGeometry {
+    #[serde(default)]
+    maximized: bool,
+    #[serde(default)]
+    position: Option<[f32; 2]>,
+    #[serde(default)]
+    size: Option<[f32; 2]>,
+}
+
+impl WindowGeometry {
+    fn path() -> PathBuf {
+        qsonaut_log::app_config_dir().join(WINDOW_GEOMETRY_FILE)
+    }
+
+    fn load() -> Option<Self> {
+        let raw = std::fs::read_to_string(Self::path()).ok()?;
+        match serde_json::from_str::<Self>(&raw) {
+            Ok(geometry) => Some(geometry.sanitized()),
+            Err(error) => {
+                info!(%error, "Ignoring unreadable window geometry");
+                None
+            }
+        }
+    }
+
+    /// A stale profile can carry a monitor that no longer exists or values from
+    /// a crashed session, which would otherwise open the window off-screen.
+    fn sanitized(mut self) -> Self {
+        self.size = self
+            .size
+            .filter(|s| s.iter().all(|v| v.is_finite()))
+            .map(|s| {
+                [
+                    s[0].clamp(WINDOW_MIN_SIZE[0], 16_000.0),
+                    s[1].clamp(WINDOW_MIN_SIZE[1], 16_000.0),
+                ]
+            });
+        self.position = self
+            .position
+            .filter(|p| p.iter().all(|v| v.is_finite() && v.abs() <= 32_000.0));
+        self
+    }
+
+    fn read(ctx: &egui::Context, previous: Option<Self>) -> Option<Self> {
+        ctx.input(|input| {
+            let viewport = input.viewport();
+            let maximized = viewport.maximized.unwrap_or(false);
+            // Restore bounds are meaningless while maximized, so keep the last
+            // known un-maximized rect instead of overwriting it.
+            if maximized {
+                let previous = previous.unwrap_or_default();
+                return Some(Self {
+                    maximized: true,
+                    position: previous.position,
+                    size: previous.size,
+                });
+            }
+            let position = viewport.outer_rect.map(|rect| [rect.min.x, rect.min.y])?;
+            let size = viewport
+                .inner_rect
+                .map(|rect| [rect.width(), rect.height()])?;
+            Some(Self {
+                maximized: false,
+                position: Some(position),
+                size: Some(size),
+            })
+        })
+    }
+
+    fn save(self) {
+        let path = Self::path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match serde_json::to_string_pretty(&self) {
+            Ok(json) => {
+                if let Err(error) = std::fs::write(&path, json) {
+                    info!(%error, path = %path.display(), "Failed to save window geometry");
+                }
+            }
+            Err(error) => info!(%error, "Failed to serialize window geometry"),
+        }
+    }
+
+    fn apply(self, mut builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
+        if let Some(size) = self.size {
+            builder = builder.with_inner_size(size);
+        }
+        if let Some(position) = self.position {
+            builder = builder.with_position(position);
+        }
+        // Maximized is deliberately not set here: winit would `SW_MAXIMIZE` the
+        // still-unpainted window and immediately `SW_HIDE` it again, which is
+        // the white flash. It is applied after the first frame instead.
+        builder
+    }
+}
+
+#[derive(Default)]
+struct DeviceInventory {
+    audio_inputs: Vec<String>,
+    audio_outputs: Vec<String>,
+    serial_ports: Vec<String>,
+    serial_port_labels: HashMap<String, String>,
+    detected_models: Vec<String>,
+}
+
+/// WASAPI and serial enumeration each take hundreds of milliseconds, which is
+/// long enough to delay the first paint and leave a ghost window on Windows.
+fn spawn_device_scan() -> mpsc::Receiver<DeviceInventory> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let (serial_ports, serial_port_labels, detected_models) =
+            radio_port_inventory(enumerate_serial_port_descriptors().unwrap_or_default());
+        let _ = tx.send(DeviceInventory {
+            audio_inputs: AudioService::input_devices().unwrap_or_default(),
+            audio_outputs: AudioService::output_devices().unwrap_or_default(),
+            serial_ports,
+            serial_port_labels,
+            detected_models,
+        });
+    });
+    rx
+}
+
+fn spawn_acceleration_probe(preference: ComputePreference) -> mpsc::Receiver<AccelerationReport> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(AccelerationReport::probe(preference));
+    });
+    rx
+}
+
+fn preferred_renderer() -> eframe::Renderer {
+    // QSONaut renders a 2D operator console. glow (OpenGL) is the lightest
+    // eframe backend and behaves identically on Windows, Linux, and WSL.
     if let Some(raw) = std::env::var_os("QSONAUT_RENDERER") {
         let raw = raw.to_string_lossy();
-        let parsed = eframe::Renderer::from_str(&raw).map_err(|error| {
-            anyhow!("invalid QSONAUT_RENDERER value '{raw}' (expected 'wgpu' or 'glow'): {error}")
-        })?;
-        info!(renderer = %parsed, source = "env:QSONAUT_RENDERER", "Using explicit GUI renderer override");
-        return Ok(parsed);
+        if !raw.eq_ignore_ascii_case("glow") {
+            info!(
+                requested = %raw,
+                "QSONAUT_RENDERER override ignored: only 'glow' is built in"
+            );
+        }
     }
-
-    #[cfg(target_os = "windows")]
-    {
-        info!(
-            renderer = "wgpu",
-            source = "platform-default",
-            "Selecting Windows GUI renderer"
-        );
-        return Ok(eframe::Renderer::Wgpu);
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        info!(
-            renderer = "glow",
-            source = "platform-default",
-            "Selecting non-Windows GUI renderer"
-        );
-        Ok(eframe::Renderer::Glow)
-    }
+    eframe::Renderer::Glow
 }
 
 fn configure_unix_gui_environment() {
@@ -1014,6 +1145,7 @@ struct QsonautGuiApp {
     radio_serial_ports: Vec<String>,
     radio_serial_port_labels: HashMap<String, String>,
     radio_detected_models: Vec<String>,
+    device_scan: Option<mpsc::Receiver<DeviceInventory>>,
     radio_scope_contrast: f32,
     radio_scope_span_code: u8,
     radio_scope_vbw_wide: bool,
@@ -1030,6 +1162,7 @@ struct QsonautGuiApp {
     gui_scale: f32,
     compute_preference: ComputePreference,
     acceleration_report: AccelerationReport,
+    acceleration_probe: Option<mpsc::Receiver<AccelerationReport>>,
     psk_reporter_enabled: bool,
     psk_reporter: Option<Reporter>,
     server_client: Option<ServerClient>,
@@ -1038,15 +1171,19 @@ struct QsonautGuiApp {
     brand_icon: TextureHandle,
     selected_renderer: eframe::Renderer,
     first_frame_logged: bool,
+    window_geometry: Option<WindowGeometry>,
+    pending_maximize: bool,
 }
 
 impl QsonautGuiApp {
     fn new(
         mut config: AppConfig,
-        ctx: &egui::Context,
+        cc: &eframe::CreationContext<'_>,
         app_icon: &egui::IconData,
         selected_renderer: eframe::Renderer,
+        stored_geometry: Option<WindowGeometry>,
     ) -> Self {
+        let ctx = &cc.egui_ctx;
         let brand_image = ColorImage::from_rgba_unmultiplied(
             [app_icon.width as usize, app_icon.height as usize],
             &app_icon.rgba,
@@ -1065,10 +1202,6 @@ impl QsonautGuiApp {
             }
         }
 
-        let audio_input_devices = AudioService::input_devices().unwrap_or_default();
-        let audio_output_devices = AudioService::output_devices().unwrap_or_default();
-        let (radio_serial_ports, radio_serial_port_labels, radio_detected_models) =
-            radio_port_inventory(enumerate_serial_port_descriptors().unwrap_or_default());
         let state = Arc::new(Mutex::new(GuiState::default()));
         let app_events = AppEventBus::new(256);
         let automation_event_rx = app_events.subscribe();
@@ -1372,7 +1505,11 @@ impl QsonautGuiApp {
             Err(error) => (QsoLog::default(), format!("Log load failed: {error}")),
         };
 
-        let acceleration_report = AccelerationReport::probe(compute_preference);
+        let acceleration_report = AccelerationReport::pending(compute_preference);
+        let acceleration_probe = Some(spawn_acceleration_probe(compute_preference));
+        // Applied before the first paint so the window is never laid out at one
+        // scale and immediately re-laid out at another.
+        ctx.set_zoom_factor(gui_scale);
         let psk_reporter = start_psk_reporter(
             psk_reporter_enabled,
             &station_callsign,
@@ -1509,11 +1646,12 @@ impl QsonautGuiApp {
             available_profiles,
             profile_io_status,
             profile_dirty: false,
-            audio_input_devices,
-            audio_output_devices,
-            radio_serial_ports,
-            radio_serial_port_labels,
-            radio_detected_models,
+            audio_input_devices: Vec::new(),
+            audio_output_devices: Vec::new(),
+            radio_serial_ports: Vec::new(),
+            radio_serial_port_labels: HashMap::new(),
+            radio_detected_models: Vec::new(),
+            device_scan: Some(spawn_device_scan()),
             radio_scope_contrast: 1.2,
             radio_scope_span_code: 0,
             radio_scope_vbw_wide: true,
@@ -1530,6 +1668,7 @@ impl QsonautGuiApp {
             gui_scale,
             compute_preference,
             acceleration_report,
+            acceleration_probe,
             psk_reporter_enabled,
             psk_reporter,
             server_client,
@@ -1538,7 +1677,14 @@ impl QsonautGuiApp {
             brand_icon,
             selected_renderer,
             first_frame_logged: false,
+            window_geometry: stored_geometry,
+            pending_maximize: stored_geometry.is_some_and(|geometry| geometry.maximized),
         }
+    }
+
+    fn refresh_acceleration_report(&mut self) {
+        self.acceleration_report = AccelerationReport::pending(self.compute_preference);
+        self.acceleration_probe = Some(spawn_acceleration_probe(self.compute_preference));
     }
 
     fn persist_profile(&mut self, status_prefix: &str) {
@@ -1622,7 +1768,7 @@ impl QsonautGuiApp {
             self.config.server = server;
             self.reconnect_server();
         }
-        self.acceleration_report = AccelerationReport::probe(self.compute_preference);
+        self.refresh_acceleration_report();
         if profile.profile_version >= 3 {
             self.config.audio.input_device = profile.audio_input_device;
             self.config.audio.output_device = profile.audio_output_device;
@@ -1876,13 +2022,15 @@ impl QsonautGuiApp {
     }
 
     fn refresh_device_lists(&mut self) {
-        self.audio_input_devices = AudioService::input_devices().unwrap_or_default();
-        self.audio_output_devices = AudioService::output_devices().unwrap_or_default();
-        let (ports, labels, models) =
-            radio_port_inventory(enumerate_serial_port_descriptors().unwrap_or_default());
-        self.radio_serial_ports = ports;
-        self.radio_serial_port_labels = labels;
-        self.radio_detected_models = models;
+        self.device_scan = Some(spawn_device_scan());
+    }
+
+    fn apply_device_inventory(&mut self, inventory: DeviceInventory) {
+        self.audio_input_devices = inventory.audio_inputs;
+        self.audio_output_devices = inventory.audio_outputs;
+        self.radio_serial_ports = inventory.serial_ports;
+        self.radio_serial_port_labels = inventory.serial_port_labels;
+        self.radio_detected_models = inventory.detected_models;
     }
 
     fn draw_tx_safety_card(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
@@ -2148,7 +2296,20 @@ impl QsonautGuiApp {
 }
 
 impl eframe::App for QsonautGuiApp {
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        if let Some(geometry) = self.window_geometry {
+            geometry.save();
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.pending_maximize {
+            self.pending_maximize = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        }
+        if let Some(geometry) = WindowGeometry::read(ctx, self.window_geometry) {
+            self.window_geometry = Some(geometry);
+        }
         if !self.first_frame_logged {
             self.first_frame_logged = true;
             info!(
@@ -2167,6 +2328,28 @@ impl eframe::App for QsonautGuiApp {
         let _ = self.repaint_ctx.get_or_init(|| ctx.clone());
         // Safety-net repaint in case no worker data arrives for a long time.
         ctx.request_repaint_after(Duration::from_secs(1));
+
+        if let Some(rx) = &self.acceleration_probe {
+            match rx.try_recv() {
+                Ok(report) => {
+                    self.acceleration_report = report;
+                    self.acceleration_probe = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.acceleration_probe = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+
+        if let Some(rx) = &self.device_scan {
+            match rx.try_recv() {
+                Ok(inventory) => {
+                    self.device_scan = None;
+                    self.apply_device_inventory(inventory);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.device_scan = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
 
         // Drain FT8 decodes from the shared pending queue into app-local log.
         let (new_decodes, latest_decode_period) = {
