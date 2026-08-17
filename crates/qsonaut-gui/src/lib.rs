@@ -881,12 +881,15 @@ impl WindowGeometry {
     /// A stale profile can carry a monitor that no longer exists or values from
     /// a crashed session, which would otherwise open the window off-screen.
     fn sanitized(mut self) -> Self {
-        self.size = self.size.filter(|s| s.iter().all(|v| v.is_finite())).map(|s| {
-            [
-                s[0].clamp(WINDOW_MIN_SIZE[0], 16_000.0),
-                s[1].clamp(WINDOW_MIN_SIZE[1], 16_000.0),
-            ]
-        });
+        self.size = self
+            .size
+            .filter(|s| s.iter().all(|v| v.is_finite()))
+            .map(|s| {
+                [
+                    s[0].clamp(WINDOW_MIN_SIZE[0], 16_000.0),
+                    s[1].clamp(WINDOW_MIN_SIZE[1], 16_000.0),
+                ]
+            });
         self.position = self
             .position
             .filter(|p| p.iter().all(|v| v.is_finite() && v.abs() <= 32_000.0));
@@ -975,9 +978,7 @@ fn spawn_device_scan() -> mpsc::Receiver<DeviceInventory> {
     rx
 }
 
-fn spawn_acceleration_probe(
-    preference: ComputePreference,
-) -> mpsc::Receiver<AccelerationReport> {
+fn spawn_acceleration_probe(preference: ComputePreference) -> mpsc::Receiver<AccelerationReport> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let _ = tx.send(AccelerationReport::probe(preference));
