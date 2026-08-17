@@ -702,10 +702,15 @@ mod tests {
 
     #[test]
     fn saves_and_loads_toml_log() {
+        // Thread names contain `::`, which is not a legal Windows path character.
+        let thread_name = std::thread::current()
+            .name()
+            .unwrap_or("test")
+            .replace(|c: char| !c.is_ascii_alphanumeric(), "_");
         let path = std::env::temp_dir().join(format!(
             "qsonaut-qso-log-{}-{}.toml",
             std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            thread_name
         ));
         let log = QsoLog {
             version: 1,

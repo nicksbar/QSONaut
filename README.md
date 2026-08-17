@@ -219,12 +219,8 @@ Runtime logs are written to `qsonaut.log` under the platform app directory:
 If QSONaut fails to open a window or crashes during startup, attach that log
 file to the issue report.
 
-For renderer troubleshooting, QSONaut also honors `QSONAUT_RENDERER`:
-
-- `QSONAUT_RENDERER=wgpu`
-- `QSONAUT_RENDERER=glow`
-
-The selected renderer is recorded in `qsonaut.log`.
+QSONaut renders through eframe's `glow` (OpenGL) backend on every platform. The
+selected renderer is recorded in `qsonaut.log`.
 
 UI scale now uses a rebased baseline: the physical size that previously looked
 like 75% is now the 100% preset.

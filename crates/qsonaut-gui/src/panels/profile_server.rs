@@ -452,7 +452,7 @@ impl QsonautGuiApp {
                 }
             });
         if self.compute_preference != previous_compute {
-            self.acceleration_report = AccelerationReport::probe(self.compute_preference);
+            self.refresh_acceleration_report();
             self.profile_dirty = true;
             self.persist_profile("Compute policy saved to");
         }
