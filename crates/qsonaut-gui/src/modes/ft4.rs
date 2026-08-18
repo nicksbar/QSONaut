@@ -367,7 +367,12 @@ impl QsonautGuiApp {
             }
             if ui
                 .checkbox(&mut self.ft8_auto_answer_cq, "Answer unattended CQs")
-                .on_hover_text("Shared FT8/FT4 policy; only active while this mode is armed")
+                .on_hover_text(
+                    "When armed, automatically reply to stations calling CQ even if you are not \
+                     actively watching. QSONaut picks the strongest/nearest caller and starts the \
+                     exchange on its own. Leave OFF if you want to choose every caller manually. \
+                     Shared FT8/FT4 policy; only active while this mode is armed.",
+                )
                 .changed()
             {
                 self.profile_dirty = true;
@@ -472,13 +477,6 @@ impl QsonautGuiApp {
         }
         let operator_call = self.station_callsign_or_default().to_string();
         let active_band = snapshot.frequency_hz.map(band_for_frequency).unwrap_or("");
-
-        if let Some((entry, hit)) = entries.iter().rev().find_map(|entry| {
-            operator_call_hit(&entry.message, &operator_call).map(|hit| (entry, hit))
-        }) {
-            draw_operator_call_banner(ui, "FT4", &operator_call, &entry.message, hit);
-            ui.add_space(4.0);
-        }
 
         egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
             ui.set_min_height(decode_h);

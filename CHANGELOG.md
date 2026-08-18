@@ -7,6 +7,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+- Removed the PTT button from the top radio-control banner. PTT is now controlled only by
+  software (TX automation) or at the radio itself; the TX deck's PTT/stop controls remain.
+- Added explanatory hover tooltips to the "Answer unattended CQs" checkbox in the FT8 and
+  FT4 workspaces so it is clear what enabling it does.
+- Removed the "lit up the receiver" operator-call banner from the FT8 and FT4 workspaces.
+  Operator calls are still highlighted inline in the decode log, which is sufficient.
+- PSK Reporter status now appears in the status bar (off / waiting / queued+sent / error),
+  while the Reporting panel keeps the enable toggle and gains submission-rule controls:
+  batch interval, re-report cache timeout, and max pending spots. These follow PSK
+  Reporter's IPFIX/UDP guidance and mirror WSJT-X's internal knobs.
+
 ## [0.3.3] - 2026-08-17
 
 ### Fixed

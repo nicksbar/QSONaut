@@ -90,6 +90,12 @@ pub(super) struct OperatorProfile {
     pub(super) compute_preference: ComputePreference,
     #[serde(default)]
     pub(super) psk_reporter_enabled: bool,
+    #[serde(default = "default_psk_batch_interval_secs")]
+    pub(super) psk_batch_interval_secs: u64,
+    #[serde(default = "default_psk_repeat_cache_secs")]
+    pub(super) psk_repeat_cache_secs: u64,
+    #[serde(default = "default_psk_max_pending")]
+    pub(super) psk_max_pending: usize,
     #[serde(default)]
     pub(super) server_instance_id: String,
     #[serde(default)]
@@ -186,6 +192,18 @@ fn default_radio_model() -> String {
 
 fn default_radio_baud_rate() -> u32 {
     115_200
+}
+
+pub(super) fn default_psk_batch_interval_secs() -> u64 {
+    300
+}
+
+pub(super) fn default_psk_repeat_cache_secs() -> u64 {
+    300
+}
+
+pub(super) fn default_psk_max_pending() -> usize {
+    80
 }
 
 fn default_contest_serial_current() -> u32 {

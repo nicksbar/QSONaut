@@ -430,6 +430,11 @@ impl QsonautGuiApp {
             }
             if ui
                 .checkbox(&mut self.ft8_auto_answer_cq, "Answer unattended CQs")
+                .on_hover_text(
+                    "When armed, automatically reply to stations calling CQ even if you are not \
+                     actively watching. QSONaut picks the strongest/nearest caller and starts the \
+                     exchange on its own. Leave OFF if you want to choose every caller manually.",
+                )
                 .changed()
             {
                 self.profile_dirty = true;
@@ -489,13 +494,6 @@ impl QsonautGuiApp {
         let tx_h = (panel_h * 0.20).max(120.0);
         let operator_call = self.station_callsign_or_default().to_string();
         let active_band = snapshot.frequency_hz.map(band_for_frequency).unwrap_or("");
-
-        if let Some((entry, hit)) = self.ft8_log.iter().rev().find_map(|entry| {
-            operator_call_hit(&entry.message, &operator_call).map(|hit| (entry, hit))
-        }) {
-            draw_operator_call_banner(ui, "FT8", &operator_call, &entry.message, hit);
-            ui.add_space(4.0);
-        }
 
         // ── Decode log ───────────────────────────────────────────────────────
         egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {

@@ -418,6 +418,65 @@ impl QsonautGuiApp {
                     .color(Color32::GRAY),
             );
         }
+
+        ui.add_space(8.0);
+        ui.label(RichText::new("Submission rules").strong());
+        ui.label(
+            RichText::new(
+                "These follow PSK Reporter's IPFIX/UDP guidance. The service asks clients to \
+                 batch reports and to avoid flooding it with repeats of the same station.",
+            )
+            .small()
+            .color(Color32::GRAY),
+        );
+        let mut tuning_changed = false;
+        ui.horizontal(|ui| {
+            ui.label("Batch every");
+            let previous = self.psk_batch_interval_secs;
+            ui.add(
+                egui::DragValue::new(&mut self.psk_batch_interval_secs)
+                    .range(60..=3_600)
+                    .suffix(" s"),
+            )
+            .on_hover_text(
+                "How often queued reports are sent. The actual interval is randomized up to \
+                 +30 s so bursts from many clients don't collide. WSJT-X uses 300 s.",
+            );
+            tuning_changed |= previous != self.psk_batch_interval_secs;
+        });
+        ui.horizontal(|ui| {
+            ui.label("Re-report same call after");
+            let previous = self.psk_repeat_cache_secs;
+            ui.add(
+                egui::DragValue::new(&mut self.psk_repeat_cache_secs)
+                    .range(60..=3_600)
+                    .suffix(" s"),
+            )
+            .on_hover_text(
+                "Minimum time before the same callsign is reported again. PSK Reporter asks \
+                 clients to avoid repeating a station too often. WSJT-X uses 300 s.",
+            );
+            tuning_changed |= previous != self.psk_repeat_cache_secs;
+        });
+        ui.horizontal(|ui| {
+            ui.label("Max pending");
+            let previous = self.psk_max_pending;
+            ui.add(
+                egui::DragValue::new(&mut self.psk_max_pending)
+                    .range(1..=2_048)
+                    .suffix(" spots"),
+            )
+            .on_hover_text(
+                "Largest number of reports held before a batch is forced out early. WSJT-X \
+                 uses 2048; QSONaut's default is 80.",
+            );
+            tuning_changed |= previous != self.psk_max_pending;
+        });
+        if tuning_changed {
+            self.restart_psk_reporter();
+            self.profile_dirty = true;
+            self.persist_profile("PSK Reporter tuning saved to");
+        }
     }
 
     pub(in super::super) fn draw_settings_panel(&mut self, ui: &mut egui::Ui) {

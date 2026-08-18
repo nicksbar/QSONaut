@@ -18,12 +18,41 @@ const SENDER_TEMPLATE: &[u8] = &[
     0x80, 0x0B, 0x00, 0x01, 0x00, 0x00, 0x76, 0x8F, 0x00, 0x96, 0x00, 0x04,
 ];
 
+/// Tuning knobs for how reception reports are batched and sent to PSK Reporter.
+///
+/// These mirror the knobs WSJT-X exposes internally so operators can follow the
+/// service's rules (or relax them) without editing code.
+#[derive(Debug, Clone)]
+pub struct ReporterTuning {
+    /// Nominal batch interval in seconds. The actual interval is randomized
+    /// around this value (up to +30 s) so bursts from many clients don't all
+    /// land on the same wall-clock boundary. WSJT-X uses 300 s.
+    pub batch_interval_secs: u64,
+    /// Minimum time in seconds before the same callsign may be reported again.
+    /// WSJT-X uses 300 s (5 minutes) to reduce load on the collector.
+    pub repeat_cache_secs: u64,
+    /// Maximum number of pending reports held before a batch is forced out.
+    /// WSJT-X uses 2048; QSONaut's default is 80.
+    pub max_pending: usize,
+}
+
+impl Default for ReporterTuning {
+    fn default() -> Self {
+        Self {
+            batch_interval_secs: 300,
+            repeat_cache_secs: 300,
+            max_pending: 80,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ReporterConfig {
     pub receiver_callsign: String,
     pub receiver_locator: String,
     pub decoder_software: String,
     pub destination: String,
+    pub tuning: ReporterTuning,
 }
 
 impl ReporterConfig {
@@ -33,6 +62,7 @@ impl ReporterConfig {
             receiver_locator: locator.into(),
             decoder_software: format!("QSONaut {}", env!("CARGO_PKG_VERSION")),
             destination: "report.pskreporter.info:4739".to_string(),
+            tuning: ReporterTuning::default(),
         }
     }
 }
@@ -129,7 +159,10 @@ fn run_worker(
     };
 
     let session_id = session_identifier(&config.receiver_callsign);
-    let interval = Duration::from_secs(300 + u64::from(session_id % 31));
+    let tuning = &config.tuning;
+    let interval = Duration::from_secs(
+        tuning.batch_interval_secs + u64::from(session_id % 31),
+    );
     let mut deadline = Instant::now() + interval;
     let mut queue = Vec::new();
     let mut recent: HashMap<String, Instant> = HashMap::new();
@@ -143,13 +176,13 @@ fn run_worker(
                 let now = Instant::now();
                 if recent
                     .get(&key)
-                    .is_none_or(|seen| now.duration_since(*seen) >= Duration::from_secs(300))
+                    .is_none_or(|seen| now.duration_since(*seen) >= Duration::from_secs(tuning.repeat_cache_secs))
                 {
                     recent.insert(key, now);
                     queue.push(report);
                     status.lock().expect("PSK status lock").queued = queue.len();
                 }
-                if queue.len() < 80 {
+                if queue.len() < tuning.max_pending {
                     continue;
                 }
             }
@@ -277,6 +310,7 @@ mod tests {
             receiver_locator: "FN42hn".into(),
             decoder_software: "QSONaut test".into(),
             destination: String::new(),
+            tuning: ReporterTuning::default(),
         };
         let report = ReceptionReport {
             sender_callsign: "KB1MBX".into(),

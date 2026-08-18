@@ -2,8 +2,7 @@
 
 Chore
 Alerts system, there is no interface for controls or settings.
-Things like worked all states, grids, new stuff, unusual stuff, things that help achievements.
-
+Things like worked all states, grids, new stuff, unusual stuff, things that help achievements
 
 Redesign
 wsjtx has it right, global decodes on the left and active channel decodes on the right - effecient use of space.
@@ -11,27 +10,13 @@ The PTT Lead and tail can prob go to the radio settings tab.
 We should be able to massivly compact that TX Deck area and i'm really unsure what the purpose of the bottom section is for, i think we should remove it and use that bottom area to promote the log panel out of the settings and globally available in the main body as a bottom panel, all the control and interaction for logging should be here.
 Remove the PTT button from the tx deck, unecessary, and the stop/disarm - thats a 3rd spot to do the same thing found elsewhere.
 
-Chore
-Popup notes on stuff. Like everything - like what does 'answer unattended cqs' do??
 
-Chore
-PSKReporter details should be in the status bar, only enabled and options in the panel.
-I'm not sure how pskreporter wants things submitted, we are doing 5m batches, can we have control options for the user here that follow their rules?
-
-Chore
-Readme update and fresh screenshots for qsonaut and server 
-
-Chore
-Remove the PTT button from the top bar. Its either controlled by software only, or operator at radio.
 
 Bug - FT8, prob ft4
 The window to double click on someone calling cq is still to short, we need to make it a bit longer to stop blocking late tx when it would still work.
 
 Bug - ft8, prob ft4
 Similar to last, it took two cycles for it to begin TX after attemtping to respond. I'm not sure why it didn't try the first next cycle.
-
-Chore
-The stuff about me lighting up the receiver - remove that. Its unecessary. What is in the channel chat is enough
 
 Feature Request
 Standard UDP logging for other logging standard services and interaction
