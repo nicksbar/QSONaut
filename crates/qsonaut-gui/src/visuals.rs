@@ -43,6 +43,24 @@ pub(super) fn audio_cursor_level(rows: &VecDeque<Vec<u8>>, frequency_hz: u32) ->
     row[start..=end].iter().copied().max().unwrap_or(0)
 }
 
+pub(super) fn crop_audio_rows(
+    rows: &VecDeque<Vec<u8>>,
+    visible_bandwidth_hz: u32,
+) -> VecDeque<Vec<u8>> {
+    let fraction = (visible_bandwidth_hz.min(AUDIO_MAX_FREQ_HZ) as f32 / AUDIO_MAX_FREQ_HZ as f32)
+        .clamp(0.0, 1.0);
+    rows.iter()
+        .map(|row| {
+            if row.is_empty() {
+                return Vec::new();
+            }
+            let end =
+                (((row.len() - 1) as f32 * fraction).round() as usize).clamp(1, row.len() - 1);
+            row[..=end].to_vec()
+        })
+        .collect()
+}
+
 pub(super) fn fft_buffer_to_display_bins(
     buffer: &[Complex<f32>],
     bins: usize,
