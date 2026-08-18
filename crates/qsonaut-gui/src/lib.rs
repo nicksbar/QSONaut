@@ -1494,15 +1494,18 @@ impl QsonautGuiApp {
             ft8_max_log_entries = p.max_log_entries.clamp(80, 1000);
             ft8_deep_decode = p.deep_decode;
             ft4_deep_decode = p.ft4_deep_decode;
-            ft4_autoseq = p.ft4_autoseq;
+            // Transmit automation is never restored as armed at startup.
+            ft4_autoseq = false;
             ft4_auto_reply_policy = p.ft4_auto_reply_policy;
             ft4_cq_only_view = p.ft4_cq_only_view;
             ft4_follow_log = p.ft4_follow_log;
             ft4_max_log_entries = p.ft4_max_log_entries.clamp(80, 300);
             ft4_max_attempts = p.ft4_max_attempts.clamp(1, 20);
-            ft8_autoseq = p.autoseq;
+            // Transmit automation is never restored as armed at startup.
+            ft8_autoseq = false;
             ft8_auto_reply_policy = p.auto_reply_policy;
-            ft8_auto_answer_cq = p.auto_answer_cq;
+            // Unattended CQ answering must be explicitly re-enabled each run.
+            ft8_auto_answer_cq = false;
             automation_unlocked = p.automation_unlocked;
             ft8_cq_only_view = p.cq_only_view;
             civ_spectrum_on = p.civ_spectrum_on;
@@ -1913,16 +1916,19 @@ impl QsonautGuiApp {
         self.ft8_max_log_entries = profile.max_log_entries.clamp(80, 1000);
         self.ft8_deep_decode = profile.deep_decode;
         self.ft4_deep_decode = profile.ft4_deep_decode;
-        self.ft4_autoseq = profile.ft4_autoseq;
+        // Loading or switching profiles must never arm transmit automation.
+        self.ft4_autoseq = false;
         self.ft4_auto_reply_policy = profile.ft4_auto_reply_policy;
         self.ft4_cq_only_view = profile.ft4_cq_only_view;
         self.ft4_follow_log = profile.ft4_follow_log;
         self.ft4_max_log_entries = profile.ft4_max_log_entries.clamp(80, 300);
         self.ft4_max_attempts = profile.ft4_max_attempts.clamp(1, 20);
         self.ft4_stop_policy = AutoTxStopPolicy::Continuous;
-        self.ft8_autoseq = profile.autoseq;
+        // Loading or switching profiles must never arm transmit automation.
+        self.ft8_autoseq = false;
         self.ft8_auto_reply_policy = profile.auto_reply_policy;
-        self.ft8_auto_answer_cq = profile.auto_answer_cq;
+        // Unattended CQ answering must be explicitly enabled for this run.
+        self.ft8_auto_answer_cq = false;
         self.automation_unlocked = profile.automation_unlocked;
         self.ft8_cq_only_view = profile.cq_only_view;
         self.civ_spectrum_on = profile.civ_spectrum_on;

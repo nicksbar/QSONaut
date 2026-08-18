@@ -34,6 +34,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a narrower radio filter view.
 - Preserves the active FT8 conversation after stopping TX and keeps directed responses
   addressed to the operator visible when CQ-only filtering is enabled.
+- Always starts FT8/FT4 transmit automation disarmed, and leaves unattended-CQ answering
+  unchecked until explicitly enabled during the current run.
 
 ## [0.3.3] - 2026-08-18
 
