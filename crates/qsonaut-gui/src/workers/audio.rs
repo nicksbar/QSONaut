@@ -18,6 +18,8 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
     sample_rate_hz: u32,
     channels: u8,
     preferred_device: Option<String>,
+    monitor_enabled: bool,
+    monitor_output_device: Option<String>,
     repaint_ctx: Arc<OnceLock<egui::Context>>,
     display_tuning: Arc<Mutex<DisplayTuning>>,
 ) -> std::thread::JoinHandle<()> {
@@ -37,6 +39,13 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 return;
             }
         };
+        let monitor = monitor_enabled
+            .then(|| {
+                qsonaut_audio::AudioMonitor::open(sample_rate_hz, monitor_output_device.as_deref())
+            })
+            .transpose()
+            .ok()
+            .flatten();
 
         let mut fft_planner = FftPlanner::<f32>::new();
         let audio_fft = fft_planner.plan_fft_forward(FFT_SIZE);
@@ -100,6 +109,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
             let chunk_bytes = (chunk_samples * 2).max(512);
             match stream.read_chunk(chunk_bytes) {
                 Ok(samples) => {
+                    if let Some(monitor) = &monitor {
+                        monitor.push(&samples);
+                    }
                     let samples_f32: Vec<f32> = samples
                         .iter()
                         .map(|&s| s as f32 / i16::MAX as f32)

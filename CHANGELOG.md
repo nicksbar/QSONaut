@@ -28,6 +28,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Moved PTT lead and tail timing controls into Settings and removed the redundant manual
   PTT and stop/disarm controls from the TX deck while retaining programmatic TX safety
   controls.
+- Added a local SQLite HamDB cache with a 30-day TTL. HamDB lookups run in the background,
+  retain the complete returned callsign record, and never overwrite explicit QSO grid or
+  state values.
+- Expanded the Contact Log with callsign, operator name, grid, state, band, and mode columns,
+  complete HamDB detail display, and explicit per-contact HamDB refresh through the button or
+  F5. Refreshed HamDB details are also attached to existing matching log records and included
+  in ADIF comments.
+- Expanded the Achievement Hunter with acknowledgement-based hiding, reversible show/hide
+  acknowledged controls, alert enablement settings, and additional band, grid, mode, time-of-day,
+  contest, weak-signal, and QSO milestone achievements.
+- Added opt-in RX audio monitoring with a bounded cpal output stream, selectable monitor output,
+  and compact 🎧/🔊 indicators in the top radio-details panel. TX audio continues to use the
+  configured TX output path, and monitor controls are persisted with the audio configuration.
 
 ## [0.3.3] - 2026-08-17
 

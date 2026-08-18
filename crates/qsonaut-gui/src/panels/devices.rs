@@ -27,6 +27,8 @@ impl QsonautGuiApp {
         let old_port = self.config.radio.serial_port.clone();
         let old_model = self.config.radio.model.clone();
         let old_baud = self.config.radio.baud_rate;
+        let old_monitor = self.config.audio.monitor_enabled;
+        let old_monitor_device = self.config.audio.monitor_output_device.clone();
 
         egui::Grid::new("device_settings_grid")
             .num_columns(2)
@@ -192,6 +194,8 @@ impl QsonautGuiApp {
             || old_port != self.config.radio.serial_port
             || old_model != self.config.radio.model
             || old_baud != self.config.radio.baud_rate
+            || old_monitor != self.config.audio.monitor_enabled
+            || old_monitor_device != self.config.audio.monitor_output_device
         {
             if old_model != self.config.radio.model {
                 if let Some(profile) = find_model(&self.config.radio.model) {

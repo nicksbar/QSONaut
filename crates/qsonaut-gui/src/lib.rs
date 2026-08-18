@@ -1380,6 +1380,12 @@ impl QsonautGuiApp {
             config.audio.sample_rate_hz,
             config.audio.channels,
             config.audio.input_device.clone(),
+            config.audio.monitor_enabled,
+            config
+                .audio
+                .monitor_output_device
+                .clone()
+                .or_else(|| config.audio.output_device.clone()),
             repaint_ctx.clone(),
             display_tuning.clone(),
         ));
@@ -2740,6 +2746,60 @@ impl eframe::App for QsonautGuiApp {
                         .monospace()
                         .color(Color32::from_rgb(135, 220, 145)),
                     );
+                    let monitor_label = if self.config.audio.monitor_enabled {
+                        "🎧 RX MONITOR ON"
+                    } else {
+                        "🎧 RX MONITOR OFF"
+                    };
+                    let monitor_color = if self.config.audio.monitor_enabled {
+                        Color32::LIGHT_GREEN
+                    } else {
+                        Color32::GRAY
+                    };
+                    if ui
+                        .selectable_label(
+                            self.config.audio.monitor_enabled,
+                            RichText::new(monitor_label).color(monitor_color),
+                        )
+                        .on_hover_text("Toggle captured RX audio to the selected monitor output")
+                        .clicked()
+                    {
+                        self.config.audio.monitor_enabled = !self.config.audio.monitor_enabled;
+                        self.device_restart_required = true;
+                        self.profile_dirty = true;
+                        self.persist_profile("Audio monitor saved to");
+                    }
+                    egui::ComboBox::from_id_salt("top_audio_monitor_output")
+                        .selected_text(
+                            self.config
+                                .audio
+                                .monitor_output_device
+                                .as_deref()
+                                .or(self.config.audio.output_device.as_deref())
+                                .unwrap_or("Audio output"),
+                        )
+                        .width(180.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.config.audio.monitor_output_device,
+                                None,
+                                "Audio output",
+                            );
+                            for name in &self.audio_output_devices {
+                                ui.selectable_value(
+                                    &mut self.config.audio.monitor_output_device,
+                                    Some(name.clone()),
+                                    name,
+                                );
+                            }
+                        });
+                    if ui
+                        .small_button("🔊 TX AUDIO")
+                        .on_hover_text("TX audio is sent to the configured Audio output device")
+                        .clicked()
+                    {
+                        self.device_restart_required = true;
+                    }
                     let armed = self.any_tx_armed(&snapshot);
                     ui.label(
                         RichText::new(if snapshot.ptt_on {
