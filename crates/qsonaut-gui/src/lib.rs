@@ -2763,7 +2763,7 @@ impl eframe::App for QsonautGuiApp {
         self.publish_server_presence(&snapshot);
 
         egui::TopBottomPanel::top("header")
-            .resizable(true)
+            .resizable(false)
             .min_height(112.0)
             .max_height(240.0)
             .show(ctx, |ui| {

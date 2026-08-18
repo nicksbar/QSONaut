@@ -47,6 +47,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the connected radio.
 
 ### Fixed
+- Removed the misleading resize cursor and inactive resize boundary between the radio
+  controls and the waterfall deck; the waterfall deck's lower edge remains resizable.
 - Made RX audio monitoring resample captured audio to the selected output device's native
   rate, and report monitor startup failures instead of silently disabling playback.
 - Calling CQ now clears the previously selected FT8 decode/contact and returns the RX/TX
