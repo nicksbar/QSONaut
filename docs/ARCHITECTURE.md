@@ -31,7 +31,7 @@ graph TB
     end
     
     subgraph External["External Services"]
-        Q[mfsk-core v0.9.1<br/>DSP/Decoding]
+        Q[mfsk-core 0.10.0 unreleased<br/>DSP/Decoding]
         U[DitDah v0.2.0<br/>Morse/CW]
         R[rigwright v0.1.2<br/>CI-V Radio]
         S[PSK Reporter<br/>UDP]
@@ -184,7 +184,7 @@ graph TB
 |-----------|---------|-------|
 | QSONaut Client | 0.2.3 | Main feature branch |
 | QSONaut Server | 0.1.0 | Independent release |
-| mfsk-core | 0.9.1 | Path dependency |
+| mfsk-core | 0.10.0 (unreleased) | Path dependency; pinned upstream commit |
 | rigwright | 0.1.2 | Git tag |
 | eframe | 0.33 | GUI framework |
 | tokio | 1.0 | Async runtime |
@@ -201,7 +201,7 @@ graph TB
 - ✅ Automation events
 - ✅ Persistent UI state
 
-### mfsk-core v0.9.1
+### mfsk-core 0.10.0 (unreleased upstream)
 - ✅ FT8 WSJT-X parity
 - ✅ WSPR full integration
 - ✅ Q65 precision fixes

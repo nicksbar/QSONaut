@@ -25,8 +25,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: jl1nie/mfsk-core
-          # Track current upstream development head.
-          ref: main
+          # Pin the integration dependency to the exact tested upstream commit.
+          ref: bfcac2c93bf3add38f1214a809705e9838cac9c3
           path: mfsk-core
 
       - name: Check out DitDah

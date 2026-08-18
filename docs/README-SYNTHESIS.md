@@ -23,7 +23,7 @@ Both repositories use Rust and share versioning conventions but maintain separat
 
 | Crate | Purpose | Version | Notes |
 |-------|---------|---------|-------|
-| mfsk-core | DSP/decoding | 0.9.1 | Path dependency from sibling repo |
+| mfsk-core | DSP/decoding | 0.10.0 (unreleased) | Path dependency from sibling repo; pinned upstream commit |
 | DitDah | Morse/CW decoding and generation | 0.2.0 | Path dependency from sibling repo; MIT |
 | rigwright | CI-V radio HAL | 0.1.2 | Git dependency (https://github.com/nicksbar/rigwright) |
 | eframe 0.33 | GUI framework | 0.33 | With wgpu, wayland, vulkan |
@@ -140,7 +140,7 @@ Management UI (Svelte)
 - v0.2.0: Contest profiles, Fox/Hound roles, Achievement Hunter
 - v0.2.1: Windows icon build fix
 
-### mfsk-core (v0.9.1)
+### mfsk-core (0.10.0, unreleased upstream)
 **Recent fixes:**
 - FT8: Restored WSJT-X coarse-sync lag bounds (±2.5s)
 - Q65: Restored ±1.0s Δt window
@@ -160,7 +160,7 @@ Management UI (Svelte)
 
 ### QSONaut/README.md
 **Current issues:**
-1. ✅ Mentions mfsk-core v0.9.1 correctly
+1. ✅ Mentions the unreleased mfsk-core 0.10.0 development dependency correctly
 2. ✅ Describes server integration exists
 3. ❌ **Needs:** Explicit version for QSONaut Server
 4. ❌ **Needs:** Mention automation features

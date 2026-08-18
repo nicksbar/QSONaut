@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.3] - 2026-08-18
 
 ### Changed
 - Removed the PTT button from the top radio-control banner. PTT is now controlled only by
@@ -45,8 +45,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   complete stored control visibility, and FT8/FT4/CW/Other default-profile assignments. The top
   radio-details area now shows the active tuning profile and live AF/RF/power values reported by
   the connected radio.
-
-## [0.3.3] - 2026-08-17
 
 ### Fixed
 - Eliminated the Windows startup window flashing. Restored geometry is applied through the
