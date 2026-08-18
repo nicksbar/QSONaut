@@ -429,8 +429,8 @@ impl QsonautGuiApp {
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
             }
-            if self.automation_unlocked {
-                if ui
+            if self.automation_unlocked
+                && ui
                     .checkbox(&mut self.ft8_auto_answer_cq, "Answer unattended CQs")
                     .on_hover_text(
                         "When armed, automatically reply to stations calling CQ even if you are not \
@@ -438,10 +438,9 @@ impl QsonautGuiApp {
                          exchange on its own. Leave OFF if you want to choose every caller manually.",
                     )
                     .changed()
-                {
-                    self.profile_dirty = true;
-                    self.persist_profile("Auto-saved");
-                }
+            {
+                self.profile_dirty = true;
+                self.persist_profile("Auto-saved");
             }
             ui.separator();
             ui.label("Max unanswered");
@@ -636,12 +635,12 @@ impl QsonautGuiApp {
                                     } else {
                                         Color32::LIGHT_GRAY
                                     };
-                                    let park_marker = entry
-                                        .message
-                                        .to_ascii_uppercase()
-                                        .contains("POTA")
-                                        .then_some("🌲 ")
-                                        .unwrap_or_default();
+                                    let park_marker =
+                                        if entry.message.to_ascii_uppercase().contains("POTA") {
+                                            "🌲 "
+                                        } else {
+                                            ""
+                                        };
                                     let pota_detail = if park_marker.is_empty() {
                                         None
                                     } else {
@@ -664,17 +663,15 @@ impl QsonautGuiApp {
                                                 })
                                         })
                                     };
+                                    let pota_detail = pota_detail.unwrap_or_default();
                                     let row = RichText::new(format!(
-                                        "{:12}  {:+3}  {:5.1}  {:>5}  {}",
+                                        "{:12}  {:+3}  {:5.1}  {:>5}  {park_marker}{}{}",
                                         entry.utc,
                                         entry.snr_db,
                                         entry.dt_s,
                                         entry.freq_hz,
-                                        format!(
-                                            "{park_marker}{}{}",
-                                            entry.message,
-                                            pota_detail.unwrap_or_default()
-                                        )
+                                        entry.message,
+                                        pota_detail
                                     ))
                                     .monospace()
                                     .color(text_color);
