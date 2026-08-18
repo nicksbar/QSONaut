@@ -88,7 +88,8 @@ use profile::{
     default_ptt_lead_ms, default_ptt_tail_ms, default_rx_tone_hz, default_tx_tone_hz,
     default_waterfall_deck_height, list_operator_profiles, load_operator_profile,
     load_operator_profile_named, save_operator_profile, save_operator_profile_named,
-    select_operator_profile, OperatorProfile, OPERATOR_PROFILE_FILE, OPERATOR_PROFILE_VERSION,
+    select_operator_profile, OperatorProfile, RadioProfile, OPERATOR_PROFILE_FILE,
+    OPERATOR_PROFILE_VERSION,
 };
 #[cfg(test)]
 use tx_audio::FT8_TX_AUDIO_START_S;
@@ -150,6 +151,7 @@ enum SignalPanelTab {
     Waterfall,
     Settings,
     Server,
+    RadioTuning,
 }
 
 fn default_true() -> bool {
@@ -833,6 +835,7 @@ enum GuiCommand {
         frequency_hz: u64,
     },
     SetFilter(u8),
+    SetControl(ControlId, ControlValue),
     SetPtt(bool),
     SetPttWithAck(bool, mpsc::Sender<std::result::Result<(), String>>),
     Quit,
@@ -1148,6 +1151,9 @@ struct QsonautGuiApp {
     hunter_dupe_blocks: u32,
     hunter_decode_bursts: u32,
     hunter_custom_rules: Vec<CustomAchievementRule>,
+    radio_profiles: Vec<RadioProfile>,
+    mode_radio_profile: std::collections::BTreeMap<String, String>,
+    radio_profile_name_input: String,
     hunter_custom_title_input: String,
     hunter_custom_detail_input: String,
     hunter_custom_metric_input: HunterMetric,
@@ -1450,6 +1456,8 @@ impl QsonautGuiApp {
         let mut hunter_acknowledged = HashSet::new();
         let mut hunter_alerts_enabled = true;
         let mut hunter_custom_rules = Vec::new();
+        let mut radio_profiles = Vec::new();
+        let mut mode_radio_profile = std::collections::BTreeMap::new();
         let profile_io_status: String;
 
         if let Some(p) = load_operator_profile() {
@@ -1517,6 +1525,8 @@ impl QsonautGuiApp {
             hunter_acknowledged = p.hunter_acknowledged.into_iter().collect();
             hunter_alerts_enabled = p.hunter_alerts_enabled;
             hunter_custom_rules = p.hunter_custom_rules;
+            radio_profiles = p.radio_profiles;
+            mode_radio_profile = p.mode_radio_profile;
             config.station.callsign = Some(station_callsign.clone());
             config.station.grid = Some(station_grid.clone());
             config.contest = ContestProfile {
@@ -1593,6 +1603,8 @@ impl QsonautGuiApp {
                 hunter_acknowledged: Vec::new(),
                 hunter_alerts_enabled: true,
                 hunter_custom_rules: Vec::new(),
+                radio_profiles: Vec::new(),
+                mode_radio_profile: std::collections::BTreeMap::new(),
             };
             match save_operator_profile(&bootstrap) {
                 Ok(_) => {
@@ -1677,6 +1689,9 @@ impl QsonautGuiApp {
             hunter_dupe_blocks: 0,
             hunter_decode_bursts: 0,
             hunter_custom_rules,
+            radio_profiles,
+            mode_radio_profile,
+            radio_profile_name_input: String::new(),
             hunter_custom_title_input: String::new(),
             hunter_custom_detail_input: String::new(),
             hunter_custom_metric_input: HunterMetric::UniqueHeard,
@@ -1907,6 +1922,8 @@ impl QsonautGuiApp {
         self.hunter_acknowledged = profile.hunter_acknowledged.into_iter().collect();
         self.hunter_alerts_enabled = profile.hunter_alerts_enabled;
         self.hunter_custom_rules = profile.hunter_custom_rules;
+        self.radio_profiles = profile.radio_profiles;
+        self.mode_radio_profile = profile.mode_radio_profile;
         self.gui_scale = if profile.profile_version >= GUI_SCALE_PROFILE_VERSION {
             profile.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
         } else {
@@ -2074,6 +2091,81 @@ impl QsonautGuiApp {
             || self.digital_tx_active.load(Ordering::Acquire)
     }
 
+    fn read_radio_profile(&self, name: &str, snapshot: &GuiState) -> RadioProfile {
+        RadioProfile {
+            name: name.to_string(),
+            mode: Some(snapshot.mode.clone()),
+            data_mode: snapshot.data_mode,
+            filter: snapshot.filter,
+            af_gain: snapshot.af_gain,
+            rf_gain: snapshot.rf_gain,
+            rf_power: snapshot.rf_power,
+            preamp: None,
+            attenuator: None,
+            noise_blank: None,
+            noise_reduction: None,
+            agc: None,
+        }
+    }
+
+    fn apply_radio_profile(&mut self, profile: RadioProfile) {
+        let Some(tx) = &self.command_tx else {
+            self.profile_io_status = "Radio tuning unavailable: radio is not connected".to_string();
+            return;
+        };
+        if let Some(mode) = profile.mode.as_deref() {
+            if let Some(workspace_mode) = WORKSPACE_MODES
+                .iter()
+                .copied()
+                .find(|candidate| candidate.label().eq_ignore_ascii_case(mode))
+            {
+                let frequency_hz = self.state.lock().ok().and_then(|state| state.frequency_hz);
+                if let Some(frequency_hz) = frequency_hz {
+                    let _ = tx.send(GuiCommand::ApplyWorkspace {
+                        mode: workspace_mode,
+                        frequency_hz,
+                    });
+                }
+            }
+        }
+        if let Some(filter) = profile.filter {
+            let _ = tx.send(GuiCommand::SetFilter(filter));
+        }
+        for (control, value) in [
+            (ControlId::AfGain, profile.af_gain.map(ControlValue::U8)),
+            (ControlId::RfGain, profile.rf_gain.map(ControlValue::U8)),
+            (ControlId::RfPower, profile.rf_power.map(ControlValue::U8)),
+            (ControlId::Preamp, profile.preamp.map(ControlValue::Bool)),
+            (
+                ControlId::Attenuator,
+                profile.attenuator.map(ControlValue::Bool),
+            ),
+            (
+                ControlId::NoiseBlanker,
+                profile.noise_blank.map(ControlValue::Bool),
+            ),
+            (
+                ControlId::NoiseReduction,
+                profile.noise_reduction.map(ControlValue::Bool),
+            ),
+            (ControlId::Agc, profile.agc.map(ControlValue::U8)),
+        ] {
+            if let Some(value) = value {
+                let _ = tx.send(GuiCommand::SetControl(control, value));
+            }
+        }
+        self.profile_io_status = format!("Applied radio profile {}", profile.name);
+    }
+
+    fn active_radio_profile_name(&self) -> Option<&str> {
+        let mode = self.workspace_mode.label();
+        self.mode_radio_profile
+            .get(mode)
+            .or_else(|| self.mode_radio_profile.get("Other"))
+            .map(String::as_str)
+            .filter(|name| !name.trim().is_empty())
+    }
+
     fn disarm_all_tx(&mut self, reason: &str) {
         self.force_stop_tx();
         self.stop_native_digital_tx();
@@ -2153,6 +2245,8 @@ impl QsonautGuiApp {
             hunter_acknowledged: self.hunter_acknowledged.iter().copied().collect(),
             hunter_alerts_enabled: self.hunter_alerts_enabled,
             hunter_custom_rules: self.hunter_custom_rules.clone(),
+            radio_profiles: self.radio_profiles.clone(),
+            mode_radio_profile: self.mode_radio_profile.clone(),
         }
     }
 
@@ -2737,6 +2831,31 @@ impl eframe::App for QsonautGuiApp {
                             .strong()
                             .color(Color32::LIGHT_BLUE),
                     );
+                    let active_profile = self.active_radio_profile_name().unwrap_or("None");
+                    ui.label(
+                        RichText::new(format!("🎛 {active_profile}"))
+                            .small()
+                            .color(if active_profile == "None" {
+                                Color32::GRAY
+                            } else {
+                                Color32::from_rgb(255, 201, 92)
+                            }),
+                    )
+                    .on_hover_text(
+                        "Enabled radio tuning profile for this QSONaut mode; edit it in RADIO TUNING",
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "AF {} · RF {} · PWR {}",
+                            snapshot.af_gain.map_or("—".to_string(), |value| value.to_string()),
+                            snapshot.rf_gain.map_or("—".to_string(), |value| value.to_string()),
+                            snapshot.rf_power.map_or("—".to_string(), |value| value.to_string()),
+                        ))
+                        .small()
+                        .monospace()
+                        .color(Color32::GRAY),
+                    )
+                    .on_hover_text("Current values reported by the radio");
                     ui.separator();
                     ui.label(
                         RichText::new(format!(
@@ -2963,6 +3082,7 @@ impl eframe::App for QsonautGuiApp {
                             (SignalPanelTab::Waterfall, "WATERFALL"),
                             (SignalPanelTab::Settings, "SETTINGS"),
                             (SignalPanelTab::Server, "SERVER"),
+                            (SignalPanelTab::RadioTuning, "RADIO TUNING"),
                         ] {
                             let selected = self.signal_panel_tab == tab;
                             let text = if selected {
@@ -2989,6 +3109,9 @@ impl eframe::App for QsonautGuiApp {
                             SignalPanelTab::Waterfall => self.draw_waterfall_panel(ui, &snapshot),
                             SignalPanelTab::Settings => self.draw_settings_panel(ui),
                             SignalPanelTab::Server => self.draw_server_panel(ui),
+                            SignalPanelTab::RadioTuning => {
+                                self.draw_radio_tuning_panel(ui, &snapshot)
+                            }
                         });
                 });
         }

@@ -394,6 +394,13 @@ pub(crate) fn spawn_radio_worker(
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
+                    GuiCommand::SetControl(id, value) => {
+                        if let Err(error) = rt.block_on(radio.set_control(id, value)) {
+                            state.lock().expect("ui state lock poisoned").last_error =
+                                Some(error.to_string());
+                        }
+                        poll_radio_core_state(&rt, &radio, &state, true);
+                    }
                     GuiCommand::AfGainDelta(delta) => {
                         let current = match rt
                             .block_on(radio.get_control(ControlId::AfGain))

@@ -129,6 +129,37 @@ pub(super) struct OperatorProfile {
     pub(super) hunter_alerts_enabled: bool,
     #[serde(default)]
     pub(super) hunter_custom_rules: Vec<CustomAchievementRule>,
+    #[serde(default)]
+    pub(super) radio_profiles: Vec<RadioProfile>,
+    #[serde(default)]
+    pub(super) mode_radio_profile: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct RadioProfile {
+    pub(super) name: String,
+    #[serde(default)]
+    pub(super) mode: Option<String>,
+    #[serde(default)]
+    pub(super) data_mode: Option<bool>,
+    #[serde(default)]
+    pub(super) filter: Option<u8>,
+    #[serde(default)]
+    pub(super) af_gain: Option<u8>,
+    #[serde(default)]
+    pub(super) rf_gain: Option<u8>,
+    #[serde(default)]
+    pub(super) rf_power: Option<u8>,
+    #[serde(default)]
+    pub(super) preamp: Option<bool>,
+    #[serde(default)]
+    pub(super) attenuator: Option<bool>,
+    #[serde(default)]
+    pub(super) noise_blank: Option<bool>,
+    #[serde(default)]
+    pub(super) noise_reduction: Option<bool>,
+    #[serde(default)]
+    pub(super) agc: Option<u8>,
 }
 
 pub(super) fn default_gui_scale() -> f32 {

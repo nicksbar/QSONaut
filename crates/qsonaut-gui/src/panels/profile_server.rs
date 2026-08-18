@@ -1,5 +1,15 @@
 use super::super::*;
 
+fn edit_optional_u8(ui: &mut egui::Ui, value: &mut Option<u8>, min: u8, max: u8) {
+    let mut current = i32::from(value.unwrap_or(min));
+    if ui
+        .add(egui::DragValue::new(&mut current).range(i32::from(min)..=i32::from(max)))
+        .changed()
+    {
+        *value = Some(current.clamp(i32::from(min), i32::from(max)) as u8);
+    }
+}
+
 impl QsonautGuiApp {
     pub(in super::super) fn draw_profile_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("Operator Profile");
@@ -527,6 +537,60 @@ impl QsonautGuiApp {
         ui.add_space(8.0);
         ui.label(RichText::new("Digital TX timing").strong());
         ui.label(
+            RichText::new("Profiles apply only to supported controls and are safe to reapply.")
+                .small()
+                .color(Color32::GRAY),
+        );
+        let profile_names = self
+            .radio_profiles
+            .iter()
+            .map(|profile| profile.name.clone())
+            .collect::<Vec<_>>();
+        for mode in ["FT8", "FT4", "CW", "Other"] {
+            ui.horizontal(|ui| {
+                ui.label(format!("{mode} default"));
+                let selected = self
+                    .mode_radio_profile
+                    .get(mode)
+                    .cloned()
+                    .unwrap_or_else(|| "None".to_string());
+                egui::ComboBox::from_id_salt(format!("radio_profile_default_{mode}"))
+                    .selected_text(selected)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            self.mode_radio_profile.entry(mode.to_string()).or_default(),
+                            String::new(),
+                            "None",
+                        );
+                        for name in &profile_names {
+                            ui.selectable_value(
+                                self.mode_radio_profile.entry(mode.to_string()).or_default(),
+                                name.clone(),
+                                name,
+                            );
+                        }
+                    });
+            });
+        }
+        if ui.button("Save current radio state as profile").clicked() {
+            self.radio_profiles.push(RadioProfile {
+                name: format!("Profile {}", self.radio_profiles.len() + 1),
+                mode: Some(self.workspace_mode.label().to_string()),
+                data_mode: None,
+                filter: None,
+                af_gain: None,
+                rf_gain: None,
+                rf_power: None,
+                preamp: None,
+                attenuator: None,
+                noise_blank: None,
+                noise_reduction: None,
+                agc: None,
+            });
+            self.profile_dirty = true;
+            self.persist_profile("Radio profile saved to");
+        }
+        ui.label(
             RichText::new("Applied before and after FT8/FT4 audio transmission.")
                 .small()
                 .color(Color32::GRAY),
@@ -555,6 +619,149 @@ impl QsonautGuiApp {
         }
         ui.add_space(8.0);
         self.draw_device_settings(ui);
+    }
+
+    pub(in super::super) fn draw_radio_tuning_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        snapshot: &GuiState,
+    ) {
+        ui.heading("Radio Tuning Profiles");
+        ui.separator();
+        ui.label(
+            RichText::new("Save reusable IC-7300 settings, edit every stored option, apply them to the radio, and assign defaults per QSONaut mode.")
+                .small()
+                .color(Color32::GRAY),
+        );
+
+        let mut selected_name = self
+            .radio_profiles
+            .first()
+            .map(|profile| profile.name.clone())
+            .unwrap_or_default();
+        if self.radio_profile_name_input.is_empty() {
+            self.radio_profile_name_input = selected_name.clone();
+        }
+        ui.horizontal(|ui| {
+            ui.label("Profile");
+            egui::ComboBox::from_id_salt("radio_tuning_profile")
+                .selected_text(if selected_name.is_empty() {
+                    "New profile"
+                } else {
+                    &selected_name
+                })
+                .show_ui(ui, |ui| {
+                    for profile in &self.radio_profiles {
+                        ui.selectable_value(
+                            &mut selected_name,
+                            profile.name.clone(),
+                            &profile.name,
+                        );
+                    }
+                });
+            if ui.button("Apply").clicked() {
+                if let Some(profile) = self
+                    .radio_profiles
+                    .iter()
+                    .find(|profile| profile.name == selected_name)
+                {
+                    self.apply_radio_profile(profile.clone());
+                }
+            }
+            if ui.button("Delete").clicked() && !selected_name.is_empty() {
+                self.radio_profiles
+                    .retain(|profile| profile.name != selected_name);
+                self.mode_radio_profile
+                    .retain(|_, name| name != &selected_name);
+                self.profile_dirty = true;
+                self.persist_profile("Radio profile deleted from");
+            }
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Name");
+            ui.text_edit_singleline(&mut self.radio_profile_name_input);
+            if ui.button("Save current as").clicked()
+                && !self.radio_profile_name_input.trim().is_empty()
+            {
+                let profile =
+                    self.read_radio_profile(self.radio_profile_name_input.trim(), snapshot);
+                self.radio_profiles
+                    .retain(|existing| existing.name != profile.name);
+                self.radio_profiles.push(profile);
+                selected_name = self.radio_profile_name_input.trim().to_string();
+                self.radio_profile_name_input.clear();
+                self.profile_dirty = true;
+                self.persist_profile("Radio profile saved to");
+            }
+        });
+
+        let profile = self
+            .radio_profiles
+            .iter_mut()
+            .find(|profile| profile.name == selected_name);
+        if let Some(profile) = profile {
+            ui.separator();
+            ui.label(RichText::new("Stored options").strong());
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Mode");
+                ui.text_edit_singleline(profile.mode.get_or_insert_with(String::new));
+                ui.checkbox(profile.data_mode.get_or_insert(false), "Data mode");
+                ui.label("Filter");
+                edit_optional_u8(ui, &mut profile.filter, 1, 3);
+            });
+            ui.horizontal_wrapped(|ui| {
+                for (label, value) in [
+                    ("AF", &mut profile.af_gain),
+                    ("RF", &mut profile.rf_gain),
+                    ("Power", &mut profile.rf_power),
+                    ("AGC", &mut profile.agc),
+                ] {
+                    ui.label(label);
+                    edit_optional_u8(ui, value, 0, 255);
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(profile.preamp.get_or_insert(false), "Preamp");
+                ui.checkbox(profile.attenuator.get_or_insert(false), "Attenuator");
+                ui.checkbox(profile.noise_blank.get_or_insert(false), "Noise blanker");
+                ui.checkbox(
+                    profile.noise_reduction.get_or_insert(false),
+                    "Noise reduction",
+                );
+            });
+            if ui.button("Save edits").clicked() {
+                self.profile_dirty = true;
+                self.persist_profile("Radio profile edits saved to");
+            }
+        }
+
+        ui.separator();
+        ui.label(RichText::new("Mode defaults").strong());
+        for mode in ["FT8", "FT4", "CW", "Other"] {
+            ui.horizontal(|ui| {
+                ui.label(mode);
+                let value = self.mode_radio_profile.entry(mode.to_string()).or_default();
+                egui::ComboBox::from_id_salt(format!("radio_tuning_default_{mode}"))
+                    .selected_text(if value.is_empty() {
+                        "None"
+                    } else {
+                        value.as_str()
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(value, String::new(), "None");
+                        for profile in &self.radio_profiles {
+                            ui.selectable_value(value, profile.name.clone(), &profile.name);
+                        }
+                    });
+            });
+        }
+        if self.radio_profiles.is_empty() {
+            ui.label(
+                RichText::new("No profiles yet. Enter a name and save the current radio state.")
+                    .color(Color32::GRAY),
+            );
+        }
     }
 
     pub(in super::super) fn draw_waterfall_panel(

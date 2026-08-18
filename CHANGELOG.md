@@ -41,6 +41,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added opt-in RX audio monitoring with a bounded cpal output stream, selectable monitor output,
   and compact 🎧/🔊 indicators in the top radio-details panel. TX audio continues to use the
   configured TX output path, and monitor controls are persisted with the audio configuration.
+- Added a dedicated Radio Tuning tab with named profile creation, editing, deletion, apply actions,
+  complete stored control visibility, and FT8/FT4/CW/Other default-profile assignments. The top
+  radio-details area now shows the active tuning profile and live AF/RF/power values reported by
+  the connected radio.
 
 ## [0.3.3] - 2026-08-17
 

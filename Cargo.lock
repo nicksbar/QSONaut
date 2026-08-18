@@ -2005,7 +2005,7 @@ dependencies = [
 
 [[package]]
 name = "mfsk-core"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "crc",
  "num-complex",
