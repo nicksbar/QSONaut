@@ -1099,6 +1099,7 @@ struct QsonautGuiApp {
     ft8_last_tx_was_cq: bool,
     digital_compose: String,
     digital_selected: Option<DigitalDecodeEntry>,
+    digital_last_click: Option<(u64, u32, String, Instant)>,
     digital_seq_target: Option<String>,
     ft4_session: Option<QsoSession>,
     ft4_seen_decodes: HashSet<(u64, u32, String)>,
@@ -1364,8 +1365,8 @@ impl QsonautGuiApp {
             if !ft8_hold_tx_freq {
                 tx_tone_hz = rx_tone_hz;
             }
-            ptt_lead_ms = p.ptt_lead_ms.clamp(100, 1_500);
-            ptt_tail_ms = p.ptt_tail_ms.clamp(0, 1_000);
+            ptt_lead_ms = p.ptt_lead_ms.clamp(0, 500);
+            ptt_tail_ms = p.ptt_tail_ms.clamp(0, 500);
             cw_wpm = p.cw_wpm.clamp(5, 40);
             cw_tone_hz = p.cw_tone_hz.clamp(200, 1_200);
             gui_scale = if p.profile_version >= GUI_SCALE_PROFILE_VERSION {
@@ -1610,6 +1611,7 @@ impl QsonautGuiApp {
             ft8_last_tx_was_cq: false,
             digital_compose: String::new(),
             digital_selected: None,
+            digital_last_click: None,
             digital_seq_target: None,
             ft4_session: None,
             ft4_seen_decodes: HashSet::new(),
@@ -1757,8 +1759,8 @@ impl QsonautGuiApp {
         } else {
             profile.rx_tone_hz
         };
-        self.ptt_lead_ms = profile.ptt_lead_ms.clamp(100, 1_500);
-        self.ptt_tail_ms = profile.ptt_tail_ms.clamp(0, 1_000);
+        self.ptt_lead_ms = profile.ptt_lead_ms.clamp(0, 500);
+        self.ptt_tail_ms = profile.ptt_tail_ms.clamp(0, 500);
         self.cw_wpm = profile.cw_wpm.clamp(5, 40);
         self.cw_tone_hz = profile.cw_tone_hz.clamp(200, 1_200);
         self.contest_enabled = profile.contest_enabled;
@@ -1922,8 +1924,8 @@ impl QsonautGuiApp {
             hold_tx_freq: self.ft8_hold_tx_freq,
             rx_tone_hz: self.rx_tone_hz,
             tx_tone_hz: self.tx_tone_hz,
-            ptt_lead_ms: self.ptt_lead_ms.clamp(100, 1_500),
-            ptt_tail_ms: self.ptt_tail_ms.clamp(0, 1_000),
+            ptt_lead_ms: self.ptt_lead_ms.clamp(0, 500),
+            ptt_tail_ms: self.ptt_tail_ms.clamp(0, 500),
             cw_wpm: self.cw_wpm.clamp(5, 40),
             cw_tone_hz: self.cw_tone_hz.clamp(200, 1_200),
             audio_input_device: self.config.audio.input_device.clone(),

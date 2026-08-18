@@ -638,7 +638,24 @@ impl QsonautGuiApp {
                                     } else {
                                         ui.selectable_label(selected, row)
                                     };
+                                    let now = Instant::now();
+                                    let synthetic_double = self
+                                        .digital_last_click
+                                        .as_ref()
+                                        .is_some_and(|(period, freq_hz, message, at)| {
+                                            *period == entry.period
+                                                && *freq_hz == entry.freq_hz
+                                                && message == &entry.message
+                                                && now.duration_since(*at)
+                                                    <= Duration::from_millis(500)
+                                        });
                                     if response.clicked() {
+                                        self.digital_last_click = Some((
+                                            entry.period,
+                                            entry.freq_hz,
+                                            entry.message.clone(),
+                                            now,
+                                        ));
                                         self.digital_selected = Some(entry.clone());
                                         self.digital_seq_target = parse_message(&entry.message)
                                             .map(|message| message.from);
@@ -647,7 +664,7 @@ impl QsonautGuiApp {
                                             self.tx_tone_hz = entry.freq_hz;
                                         }
                                     }
-                                    if response.double_clicked() {
+                                    if synthetic_double || response.double_clicked() {
                                         if let Some(message) = parse_message(&entry.message) {
                                             let my_call =
                                                 self.station_callsign_or_default().to_string();
@@ -777,7 +794,7 @@ impl QsonautGuiApp {
                 if ui
                     .add(
                         egui::DragValue::new(&mut self.ptt_lead_ms)
-                            .range(100..=1500)
+                            .range(0..=500)
                             .suffix(" ms"),
                     )
                     .changed()
@@ -789,7 +806,7 @@ impl QsonautGuiApp {
                 if ui
                     .add(
                         egui::DragValue::new(&mut self.ptt_tail_ms)
-                            .range(0..=1000)
+                            .range(0..=500)
                             .suffix(" ms"),
                     )
                     .changed()

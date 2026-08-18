@@ -536,7 +536,7 @@ impl QsonautGuiApp {
             ui.label("PTT lead");
             ui.add(
                 egui::DragValue::new(&mut self.ptt_lead_ms)
-                    .range(100..=1_500)
+                    .range(0..=500)
                     .suffix(" ms"),
             );
         });
@@ -545,7 +545,7 @@ impl QsonautGuiApp {
             ui.label("PTT tail");
             ui.add(
                 egui::DragValue::new(&mut self.ptt_tail_ms)
-                    .range(0..=1_000)
+                    .range(0..=500)
                     .suffix(" ms"),
             );
         });

@@ -899,7 +899,7 @@ impl QsonautGuiApp {
                 if ui
                     .add(
                         egui::DragValue::new(&mut self.ptt_lead_ms)
-                            .range(100..=1500)
+                            .range(0..=500)
                             .suffix(" ms"),
                     )
                     .changed()
@@ -911,7 +911,7 @@ impl QsonautGuiApp {
                 if ui
                     .add(
                         egui::DragValue::new(&mut self.ptt_tail_ms)
-                            .range(0..=1000)
+                            .range(0..=500)
                             .suffix(" ms"),
                     )
                     .changed()

@@ -151,7 +151,7 @@ pub(super) fn default_ptt_lead_ms() -> u64 {
 }
 
 pub(super) fn default_ptt_tail_ms() -> u64 {
-    100
+    0
 }
 
 pub(super) fn default_cw_wpm() -> u8 {
