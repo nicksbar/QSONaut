@@ -47,6 +47,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the connected radio.
 
 ### Fixed
+- Calling CQ now clears the previously selected FT8 decode/contact and returns the RX/TX
+  audio channel to the normal operating frequency unless HOLD TX FREQ is enabled.
 - Eliminated the Windows startup window flashing. Restored geometry is applied through the
   viewport builder before the window is created, and the maximized state is applied after
   the first painted frame, so winit no longer performs `SW_MAXIMIZE`/`SW_HIDE` round trips
