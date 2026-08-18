@@ -22,6 +22,18 @@ impl QsonautGuiApp {
             ended_at,
         );
         record.grid = session.remote_grid.clone().unwrap_or_default();
+        record.operation_mode = if session.pota_reference.is_empty() {
+            "General".to_string()
+        } else {
+            "POTA".to_string()
+        };
+        record.pota_role = session
+            .pota_reference
+            .is_empty()
+            .then(String::new)
+            .unwrap_or_else(|| "Hunter".to_string());
+        record.pota_reference = session.pota_reference.clone();
+        record.pota_name = session.pota_name.clone();
         record.report_sent = session
             .report_sent
             .map(format_signal_report)
@@ -525,6 +537,28 @@ impl QsonautGuiApp {
         };
         let entry = &decodes[selected.index];
         let mut session = QsoSession::start(selected.parsed.from.clone(), entry.period);
+        if selected.parsed.raw.to_ascii_uppercase().contains("POTA") {
+            if let Some(spot) = self
+                .pota_spots
+                .iter()
+                .filter(|spot| {
+                    spot.activator.eq_ignore_ascii_case(&selected.parsed.from) && spot.mode == "FT8"
+                })
+                .min_by_key(|spot| {
+                    spot.frequency_hz.abs_diff(
+                        self.state
+                            .lock()
+                            .expect("ui state lock poisoned")
+                            .frequency_hz
+                            .unwrap_or_default()
+                            + u64::from(entry.freq_hz),
+                    )
+                })
+            {
+                session.pota_reference = spot.reference.clone();
+                session.pota_name = spot.name.clone();
+            }
+        }
         let Some(response) = session.response_to(
             &selected.parsed,
             &my_call,

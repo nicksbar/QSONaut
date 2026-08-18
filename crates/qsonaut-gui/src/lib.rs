@@ -73,7 +73,7 @@ use band_plan::{
 };
 use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
-    DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, OperatorCallHit, PendingFt8Decode,
+    DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, OperatorCallHit, PendingFt8Decode, PotaSpot,
 };
 use modes::exchange::{
     callsign_eq, is_probable_callsign, next_reply_period, next_tx_period, parse_message,
@@ -558,6 +558,15 @@ struct HamDbCallsign {
     zip: String,
     #[serde(default)]
     country: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PotaApiSpot {
+    activator: Option<String>,
+    reference: Option<String>,
+    name: Option<String>,
+    frequency: Option<String>,
+    mode: Option<String>,
 }
 
 fn spawn_hamdb_lookup(
@@ -1178,6 +1187,9 @@ struct QsonautGuiApp {
     radio_init_rx: Option<mpsc::Receiver<Option<ConfiguredRadio>>>,
     hamdb_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
     hamdb_profile_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
+    pota_spots: Vec<PotaSpot>,
+    pota_lookup_rx: Option<mpsc::Receiver<Vec<PotaSpot>>>,
+    pota_last_lookup: Instant,
     radio_init_attempted: bool,
     radio_worker_handle: Option<std::thread::JoinHandle<()>>,
     audio_worker_handle: Option<std::thread::JoinHandle<()>>,
@@ -1717,6 +1729,9 @@ impl QsonautGuiApp {
             radio_init_rx,
             hamdb_lookup_rx: None,
             hamdb_profile_lookup_rx: None,
+            pota_spots: Vec::new(),
+            pota_lookup_rx: None,
+            pota_last_lookup: Instant::now() - Duration::from_secs(60),
             radio_init_attempted: false,
             radio_worker_handle,
             audio_worker_handle,
@@ -2063,6 +2078,49 @@ impl QsonautGuiApp {
         self.persist_profile("Loaded license profile from HamDB");
         self.emit_operator_profile_hook("profile_loaded_from_hamdb");
         self.hamdb_profile_lookup_rx = None;
+    }
+
+    fn pump_pota_spots(&mut self) {
+        if let Some(rx) = &self.pota_lookup_rx {
+            if let Ok(spots) = rx.try_recv() {
+                self.pota_spots = spots;
+                self.pota_lookup_rx = None;
+            }
+        }
+        if self.pota_lookup_rx.is_some()
+            || self.pota_last_lookup.elapsed() < Duration::from_secs(30)
+        {
+            return;
+        }
+        self.pota_last_lookup = Instant::now();
+        let (tx, rx) = mpsc::channel();
+        self.pota_lookup_rx = Some(rx);
+        thread::spawn(move || {
+            let spots = reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .ok()
+                .and_then(|client| {
+                    client
+                        .get("https://api.pota.app/spot/activator")
+                        .send()
+                        .ok()
+                })
+                .and_then(|response| response.json::<Vec<PotaApiSpot>>().ok())
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|spot| {
+                    Some(PotaSpot {
+                        activator: spot.activator?.trim().to_ascii_uppercase(),
+                        reference: spot.reference?.trim().to_string(),
+                        name: spot.name?.trim().to_string(),
+                        frequency_hz: spot.frequency?.parse::<f64>().ok()?.round() as u64 * 1_000,
+                        mode: spot.mode?.trim().to_ascii_uppercase(),
+                    })
+                })
+                .collect();
+            let _ = tx.send(spots);
+        });
     }
 
     fn load_profile_from_hamdb(&mut self) {
@@ -2806,6 +2864,7 @@ impl eframe::App for QsonautGuiApp {
         self.pump_server_automation_events();
         self.pump_automation_events();
         self.pump_hamdb_profile_lookup();
+        self.pump_pota_spots();
         let (ft4_decodes, latest_ft4_period) = {
             let shared = self.state.lock().expect("ui state lock poisoned");
             (

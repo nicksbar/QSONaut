@@ -10,6 +10,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 - Added an Operator Profile action to load callsign, grid, and QTH details from the
   callsign's HamDB license record.
+- Added asynchronous POTA activator-spot lookup with a short-lived cache. CQ POTA decodes
+  are marked with a tree icon and show a matched park reference and name when available.
 
 ### Fixed
 - Reworked the Contact Log into a resizable two-column layout with a scrollable contact

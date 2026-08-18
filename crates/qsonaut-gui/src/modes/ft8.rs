@@ -634,13 +634,45 @@ impl QsonautGuiApp {
                                     } else {
                                         Color32::LIGHT_GRAY
                                     };
+                                    let park_marker = entry
+                                        .message
+                                        .to_ascii_uppercase()
+                                        .contains("POTA")
+                                        .then_some("🌲 ")
+                                        .unwrap_or_default();
+                                    let pota_detail = if park_marker.is_empty() {
+                                        None
+                                    } else {
+                                        parse_message(&entry.message).and_then(|message| {
+                                            self.pota_spots
+                                                .iter()
+                                                .filter(|spot| {
+                                                    spot.activator
+                                                        .eq_ignore_ascii_case(&message.from)
+                                                        && spot.mode == "FT8"
+                                                })
+                                                .min_by_key(|spot| {
+                                                    spot.frequency_hz.abs_diff(
+                                                        snapshot.frequency_hz.unwrap_or_default()
+                                                            + u64::from(entry.freq_hz),
+                                                    )
+                                                })
+                                                .map(|spot| {
+                                                    format!(" · {} {}", spot.reference, spot.name)
+                                                })
+                                        })
+                                    };
                                     let row = RichText::new(format!(
                                         "{:12}  {:+3}  {:5.1}  {:>5}  {}",
                                         entry.utc,
                                         entry.snr_db,
                                         entry.dt_s,
                                         entry.freq_hz,
-                                        entry.message
+                                        format!(
+                                            "{park_marker}{}{}",
+                                            entry.message,
+                                            pota_detail.unwrap_or_default()
+                                        )
                                     ))
                                     .monospace()
                                     .color(text_color);

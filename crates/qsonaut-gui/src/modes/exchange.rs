@@ -245,6 +245,8 @@ pub struct QsoSession {
     pub report_sent: Option<i8>,
     pub report_received: Option<i8>,
     pub tx_attempts: u8,
+    pub pota_reference: String,
+    pub pota_name: String,
 }
 
 impl QsoSession {
@@ -259,6 +261,8 @@ impl QsoSession {
             report_sent: None,
             report_received: None,
             tx_attempts: 0,
+            pota_reference: String::new(),
+            pota_name: String::new(),
         }
     }
 
