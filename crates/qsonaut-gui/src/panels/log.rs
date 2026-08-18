@@ -20,7 +20,7 @@ impl QsonautGuiApp {
                     now,
                 );
                 self.qso_log.contacts.push(record);
-                self.qso_selected = Some(self.qso_log.contacts.len() - 1);
+                self.qso_selected = self.qso_log.contacts.last().map(|contact| contact.id);
                 self.qso_log_dirty = true;
                 self.qso_log_status = "New contact; edit and save".to_string();
             }
@@ -30,7 +30,12 @@ impl QsonautGuiApp {
             {
                 let publish = self
                     .qso_selected
-                    .and_then(|index| self.qso_log.contacts.get(index))
+                    .and_then(|id| {
+                        self.qso_log
+                            .contacts
+                            .iter()
+                            .find(|contact| contact.id == id)
+                    })
                     .cloned();
                 self.persist_qso_log("Saved");
                 if let Some(record) = &publish {
@@ -67,7 +72,8 @@ impl QsonautGuiApp {
                             summary.imported, summary.duplicates, summary.invalid
                         );
                         if summary.imported > 0 {
-                            self.qso_selected = Some(self.qso_log.contacts.len() - 1);
+                            self.qso_selected =
+                                self.qso_log.contacts.last().map(|contact| contact.id);
                             self.qso_log_dirty = true;
                             self.persist_qso_log("Imported + saved");
                         }
@@ -82,65 +88,82 @@ impl QsonautGuiApp {
         ui.separator();
 
         let mut selected = self.qso_selected;
-        egui::ScrollArea::vertical()
-            .id_salt("qso_log_rows")
-            // Let the table consume the space made available by the resizable
-            // bottom panel instead of leaving an empty/black region beneath it.
-            .max_height((ui.available_height() - 150.0).max(80.0))
-            .show(ui, |ui| {
-                egui::Grid::new("qso_log_grid")
-                    .striped(true)
-                    .min_col_width(38.0)
+        egui::SidePanel::left("qso_log_list")
+            .resizable(true)
+            .default_width(560.0)
+            .width_range(280.0..=(ui.available_width() - 280.0).max(280.0))
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("qso_log_rows")
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        for heading in [
-                            "Date", "UTC", "Call", "Name", "Grid", "State", "Band", "Mode",
-                        ] {
-                            ui.label(RichText::new(heading).strong().small());
-                        }
-                        ui.end_row();
+                        egui::Grid::new("qso_log_grid")
+                            .striped(true)
+                            .min_col_width(38.0)
+                            .show(ui, |ui| {
+                                for heading in [
+                                    "Date", "UTC", "Call", "Name", "Grid", "State", "Band", "Mode",
+                                ] {
+                                    ui.label(RichText::new(heading).strong().small());
+                                }
+                                ui.end_row();
 
-                        for (index, contact) in self.qso_log.contacts.iter().enumerate().rev() {
-                            let is_selected = selected == Some(index);
-                            if ui
-                                .selectable_label(is_selected, &contact.qso_date)
-                                .clicked()
-                            {
-                                selected = Some(index);
-                            }
-                            ui.label(&contact.time_on);
-                            ui.label(RichText::new(&contact.callsign).monospace().strong());
-                            let name = contact
-                                .hamdb
-                                .as_ref()
-                                .map(|hamdb| {
-                                    [
-                                        hamdb.first_name.as_str(),
-                                        hamdb.middle_name.as_str(),
-                                        hamdb.name.as_str(),
-                                        hamdb.suffix.as_str(),
-                                    ]
-                                    .into_iter()
-                                    .map(str::trim)
-                                    .filter(|part| !part.is_empty())
-                                    .collect::<Vec<_>>()
-                                    .join(" ")
-                                })
-                                .filter(|name| !name.is_empty())
-                                .unwrap_or_else(|| "—".to_string());
-                            ui.label(RichText::new(name).small());
-                            ui.label(RichText::new(&contact.grid).small());
-                            ui.label(RichText::new(&contact.state).small());
-                            ui.label(&contact.band);
-                            ui.label(&contact.mode);
-                            ui.end_row();
-                        }
+                                for (_index, contact) in
+                                    self.qso_log.contacts.iter().enumerate().rev()
+                                {
+                                    let is_selected = selected == Some(contact.id);
+                                    let row_response = ui.selectable_label(
+                                        is_selected,
+                                        format!("{}  {}", contact.qso_date, contact.time_on),
+                                    );
+                                    if row_response.clicked() {
+                                        selected = Some(contact.id);
+                                    }
+                                    ui.label(&contact.time_on);
+                                    ui.label(RichText::new(&contact.callsign).monospace().strong());
+                                    let name = contact
+                                        .hamdb
+                                        .as_ref()
+                                        .map(|hamdb| {
+                                            [
+                                                hamdb.first_name.as_str(),
+                                                hamdb.middle_name.as_str(),
+                                                hamdb.name.as_str(),
+                                                hamdb.suffix.as_str(),
+                                            ]
+                                            .into_iter()
+                                            .map(str::trim)
+                                            .filter(|part| !part.is_empty())
+                                            .collect::<Vec<_>>()
+                                            .join(" ")
+                                        })
+                                        .filter(|name| !name.is_empty())
+                                        .unwrap_or_else(|| "—".to_string());
+                                    ui.label(RichText::new(name).small());
+                                    ui.label(RichText::new(&contact.grid).small());
+                                    ui.label(RichText::new(&contact.state).small());
+                                    ui.label(&contact.band);
+                                    ui.label(&contact.mode);
+                                    ui.end_row();
+                                }
+                            });
                     });
             });
         self.qso_selected = selected;
 
         let mut changed = false;
         let mut delete_selected = false;
-        if let Some(index) = self.qso_selected {
+        let mut close_editor = false;
+        if let Some(id) = self.qso_selected {
+            let Some(index) = self
+                .qso_log
+                .contacts
+                .iter()
+                .position(|contact| contact.id == id)
+            else {
+                self.qso_selected = None;
+                return;
+            };
             let refresh_requested = ui.input(|input| input.key_pressed(egui::Key::F5));
             if refresh_requested {
                 self.refresh_hamdb_for_contact(index);
@@ -149,6 +172,14 @@ impl QsonautGuiApp {
             if let Some(contact) = self.qso_log.contacts.get_mut(index) {
                 ui.separator();
                 ui.horizontal(|ui| {
+                    ui.heading("Selected Contact");
+                    if ui
+                        .small_button("Close Editor")
+                        .on_hover_text("Close the contact editor; the contact list remains open")
+                        .clicked()
+                    {
+                        close_editor = true;
+                    }
                     if ui
                         .small_button("Refresh HamDB")
                         .on_hover_text("Refresh all HamDB fields for this callsign")
@@ -376,9 +407,17 @@ impl QsonautGuiApp {
             );
         }
 
+        if close_editor {
+            self.qso_selected = None;
+        }
         if changed {
-            if let Some(index) = self.qso_selected {
-                if let Some(contact) = self.qso_log.contacts.get_mut(index) {
+            if let Some(id) = self.qso_selected {
+                if let Some(contact) = self
+                    .qso_log
+                    .contacts
+                    .iter_mut()
+                    .find(|contact| contact.id == id)
+                {
                     contact.callsign = contact.callsign.trim().to_ascii_uppercase();
                     contact.grid = contact.grid.trim().to_ascii_uppercase();
                     contact.mode = contact.mode.trim().to_ascii_uppercase();
@@ -388,8 +427,15 @@ impl QsonautGuiApp {
             self.qso_log_status = "Unsaved changes".to_string();
         }
         if delete_selected {
-            if let Some(index) = self.qso_selected.take() {
-                self.qso_log.contacts.remove(index);
+            if let Some(id) = self.qso_selected.take() {
+                if let Some(index) = self
+                    .qso_log
+                    .contacts
+                    .iter()
+                    .position(|contact| contact.id == id)
+                {
+                    self.qso_log.contacts.remove(index);
+                }
                 self.qso_log_dirty = true;
                 self.persist_qso_log("Deleted contact from");
             }

@@ -39,13 +39,21 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 return;
             }
         };
-        let monitor = monitor_enabled
-            .then(|| {
-                qsonaut_audio::AudioMonitor::open(sample_rate_hz, monitor_output_device.as_deref())
-            })
-            .transpose()
-            .ok()
-            .flatten();
+        let (monitor, monitor_status) = if monitor_enabled {
+            match qsonaut_audio::AudioMonitor::open(
+                sample_rate_hz,
+                monitor_output_device.as_deref(),
+            ) {
+                Ok(monitor) => (Some(monitor), " · MONITOR ACTIVE".to_string()),
+                Err(err) => {
+                    let message = format!(" · MONITOR ERROR ({err})");
+                    tracing::error!(error = %err, "failed to start RX audio monitor");
+                    (None, message)
+                }
+            }
+        } else {
+            (None, String::new())
+        };
 
         let mut fft_planner = FftPlanner::<f32>::new();
         let audio_fft = fft_planner.plan_fft_forward(FFT_SIZE);
@@ -95,6 +103,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         // and let egui coalesce the rest.
         let repaint_interval = Duration::from_millis(66);
         let mut last_repaint = Instant::now() - repaint_interval;
+        let mut monitor_runtime_error: Option<String> = None;
 
         while !stop.load(Ordering::Relaxed) {
             let chunk_samples = {
@@ -111,6 +120,17 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 Ok(samples) => {
                     if let Some(monitor) = &monitor {
                         monitor.push(&samples);
+                        let dropped_chunks = monitor.take_dropped_chunks();
+                        if dropped_chunks > 0 {
+                            tracing::warn!(
+                                dropped_chunks,
+                                "RX audio monitor dropped queued chunks"
+                            );
+                        }
+                        if let Some(error) = monitor.take_error() {
+                            tracing::error!(error = %error, "RX audio monitor failed during playback");
+                            monitor_runtime_error = Some(error);
+                        }
                     }
                     let samples_f32: Vec<f32> = samples
                         .iter()
@@ -163,7 +183,10 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             }
                             s.audio_waterfall_rows.push_back(bins);
                             s.audio_waterfall_revision = s.audio_waterfall_revision.wrapping_add(1);
-                            s.audio_spectrum_status = "LIVE RX".to_string();
+                            s.audio_spectrum_status = monitor_runtime_error
+                                .as_deref()
+                                .map(|error| format!("LIVE RX · MONITOR ERROR ({error})"))
+                                .unwrap_or_else(|| format!("LIVE RX{monitor_status}"));
                         }
                         s.audio_level_dbfs = Some(20.0 * rms.max(1e-9).log10());
                         s.audio_clip_percent = clip_percent;

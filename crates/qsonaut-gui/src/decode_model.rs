@@ -107,6 +107,15 @@ pub(super) struct Ft8DecodeEntry {
     pub(super) is_cq: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(super) struct PotaSpot {
+    pub(super) activator: String,
+    pub(super) reference: String,
+    pub(super) name: String,
+    pub(super) frequency_hz: u64,
+    pub(super) mode: String,
+}
+
 /// An immutable native-mode decode event using mfsk-core's common result data.
 #[derive(Debug, Clone)]
 pub(super) struct DigitalDecodeEntry {

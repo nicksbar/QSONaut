@@ -133,6 +133,21 @@ pub struct QsoRecord {
     pub band: String,
     pub mode: String,
     pub frequency_hz: u64,
+    /// Operating/activity context, such as `General`, `Contest`, or `POTA`.
+    #[serde(default)]
+    pub operation_mode: String,
+    /// POTA role for this QSO, such as `Activator` or `Hunter`.
+    #[serde(default)]
+    pub pota_role: String,
+    /// Primary POTA reference associated with this QSO, for example `US-1091`.
+    #[serde(default)]
+    pub pota_reference: String,
+    /// Human-readable name for the primary POTA reference.
+    #[serde(default)]
+    pub pota_name: String,
+    /// Additional POTA references for multi-park activations.
+    #[serde(default)]
+    pub pota_references: String,
     #[serde(default)]
     pub report_sent: String,
     #[serde(default)]
@@ -172,6 +187,11 @@ impl QsoRecord {
             band: band.into(),
             mode: mode.into().trim().to_ascii_uppercase(),
             frequency_hz,
+            operation_mode: "General".to_string(),
+            pota_role: String::new(),
+            pota_reference: String::new(),
+            pota_name: String::new(),
+            pota_references: String::new(),
             report_sent: String::new(),
             report_received: String::new(),
             contest_exchange_sent: String::new(),
@@ -534,6 +554,25 @@ impl QsoLog {
                 band,
                 mode,
                 frequency_hz: frequency_hz.unwrap_or_default(),
+                operation_mode: fields
+                    .get("QSONAUT_OPERATION_MODE")
+                    .cloned()
+                    .unwrap_or_else(|| "General".to_string()),
+                pota_role: fields.get("QSONAUT_POTA_ROLE").cloned().unwrap_or_default(),
+                pota_reference: fields
+                    .get("SIG_INFO")
+                    .filter(|_| {
+                        fields
+                            .get("SIG")
+                            .is_some_and(|signal| signal.eq_ignore_ascii_case("POTA"))
+                    })
+                    .cloned()
+                    .unwrap_or_default(),
+                pota_name: fields.get("QSONAUT_POTA_NAME").cloned().unwrap_or_default(),
+                pota_references: fields
+                    .get("QSONAUT_POTA_REFERENCES")
+                    .cloned()
+                    .unwrap_or_default(),
                 report_sent: fields
                     .get("RST_SENT")
                     .map(|value| value.trim().to_string())
@@ -590,6 +629,13 @@ impl QsoLog {
             push_adif(&mut output, "CALL", &contact.callsign);
             push_adif(&mut output, "BAND", &contact.band);
             push_adif(&mut output, "MODE", &contact.mode);
+            if !contact.operation_mode.trim().is_empty() {
+                push_adif(&mut output, "COMMENT", &contact.operation_mode);
+            }
+            if !contact.pota_reference.trim().is_empty() {
+                push_adif(&mut output, "SIG", "POTA");
+                push_adif(&mut output, "SIG_INFO", &contact.pota_reference);
+            }
             if contact.frequency_hz > 0 {
                 push_adif(
                     &mut output,

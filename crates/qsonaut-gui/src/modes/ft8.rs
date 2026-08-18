@@ -91,7 +91,8 @@ impl QsonautGuiApp {
                     super::exchange::callsign_eq(&message.from, target)
                 })
             } else {
-                false
+                operator_call_hit(&entry.message, &operator_call)
+                    == Some(OperatorCallHit::DirectedToMe)
             };
             if belongs {
                 lines.push(Ft8ChatLine {
@@ -107,17 +108,17 @@ impl QsonautGuiApp {
             }
         }
         for entry in &self.ft8_tx_chat {
-            let belongs = if let Some(target) = target.as_deref() {
-                parse_message(&entry.message).is_some_and(|message| {
+            let belongs = parse_message(&entry.message).is_some_and(|message| {
+                if let Some(target) = target.as_deref() {
                     super::exchange::callsign_eq(&message.from, target)
                         || message
                             .to
                             .as_deref()
                             .is_some_and(|to| super::exchange::callsign_eq(to, target))
-                })
-            } else {
-                false
-            };
+                } else {
+                    message.is_cq && super::exchange::callsign_eq(&message.from, &operator_call)
+                }
+            });
             if belongs {
                 lines.push(Ft8ChatLine {
                     period: entry.period,
@@ -428,14 +429,15 @@ impl QsonautGuiApp {
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
             }
-            if ui
-                .checkbox(&mut self.ft8_auto_answer_cq, "Answer unattended CQs")
-                .on_hover_text(
-                    "When armed, automatically reply to stations calling CQ even if you are not \
-                     actively watching. QSONaut picks the strongest/nearest caller and starts the \
-                     exchange on its own. Leave OFF if you want to choose every caller manually.",
-                )
-                .changed()
+            if self.automation_unlocked
+                && ui
+                    .checkbox(&mut self.ft8_auto_answer_cq, "Answer unattended CQs")
+                    .on_hover_text(
+                        "When armed, automatically reply to stations calling CQ even if you are not \
+                         actively watching. QSONaut picks the strongest/nearest caller and starts the \
+                         exchange on its own. Leave OFF if you want to choose every caller manually.",
+                    )
+                    .changed()
             {
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
@@ -597,7 +599,10 @@ impl QsonautGuiApp {
                                 let mut move_tx_from_double_click: Option<bool> = None;
                                 let mut session_from_double_click: Option<QsoSession> = None;
                                 for (i, entry) in self.ft8_log.iter().enumerate() {
-                                    if self.ft8_cq_only_view && !entry.is_cq {
+                                    let directed_to_me =
+                                        operator_call_hit(&entry.message, &operator_call)
+                                            == Some(OperatorCallHit::DirectedToMe);
+                                    if self.ft8_cq_only_view && !entry.is_cq && !directed_to_me {
                                         continue;
                                     }
                                     if let Some(prev) = prev_utc {
@@ -630,13 +635,43 @@ impl QsonautGuiApp {
                                     } else {
                                         Color32::LIGHT_GRAY
                                     };
+                                    let park_marker =
+                                        if entry.message.to_ascii_uppercase().contains("POTA") {
+                                            "🌲 "
+                                        } else {
+                                            ""
+                                        };
+                                    let pota_detail = if park_marker.is_empty() {
+                                        None
+                                    } else {
+                                        parse_message(&entry.message).and_then(|message| {
+                                            self.pota_spots
+                                                .iter()
+                                                .filter(|spot| {
+                                                    spot.activator
+                                                        .eq_ignore_ascii_case(&message.from)
+                                                        && spot.mode == "FT8"
+                                                })
+                                                .min_by_key(|spot| {
+                                                    spot.frequency_hz.abs_diff(
+                                                        snapshot.frequency_hz.unwrap_or_default()
+                                                            + u64::from(entry.freq_hz),
+                                                    )
+                                                })
+                                                .map(|spot| {
+                                                    format!(" · {} {}", spot.reference, spot.name)
+                                                })
+                                        })
+                                    };
+                                    let pota_detail = pota_detail.unwrap_or_default();
                                     let row = RichText::new(format!(
-                                        "{:12}  {:+3}  {:5.1}  {:>5}  {}",
+                                        "{:12}  {:+3}  {:5.1}  {:>5}  {park_marker}{}{}",
                                         entry.utc,
                                         entry.snr_db,
                                         entry.dt_s,
                                         entry.freq_hz,
-                                        entry.message
+                                        entry.message,
+                                        pota_detail
                                     ))
                                     .monospace()
                                     .color(text_color);
@@ -697,13 +732,13 @@ impl QsonautGuiApp {
                                             if let Some(parsed) = parse_message(&entry.message) {
                                                 let call = parsed.from.clone();
                                                 let my = self.station_callsign_or_default();
-                                                let grid = self.station_grid_or_default();
+                                                let grid = self.station_grid_for_ft8();
                                                 let mut session =
                                                     QsoSession::start(call.clone(), entry.period);
                                                 if let Some(response) = session.response_to(
                                                     &parsed,
                                                     my,
-                                                    grid,
+                                                    &grid,
                                                     entry.snr_db,
                                                     entry.period,
                                                 ) {
@@ -822,10 +857,15 @@ impl QsonautGuiApp {
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 let my = self.station_callsign_or_default().to_string();
-                let grid = self.station_grid_or_default().to_string();
+                let grid = self.station_grid_for_ft8();
                 let target = self.ft8_seq_target.clone();
                 if ui.small_button("CALL CQ").clicked() {
                     self.ft8_compose = format!("CQ {my} {grid}");
+                    self.ft8_selected = None;
+                    self.rx_tone_hz = default_rx_tone_hz();
+                    if !self.ft8_hold_tx_freq {
+                        self.tx_tone_hz = default_tx_tone_hz();
+                    }
                     self.ft8_autoseq = true;
                     self.ft8_seq_state = Ft8SeqState::CqArmed;
                     self.ft8_seq_target = None;
@@ -942,7 +982,7 @@ impl QsonautGuiApp {
                     });
                     ui.horizontal_wrapped(|ui| {
                         let my = self.station_callsign_or_default();
-                        let grid = self.station_grid_or_default();
+                        let grid = self.station_grid_for_ft8();
                         if let Some(call) = parse_message(&e.message).map(|message| message.from) {
                             if ui.small_button(format!("Reply → {call}")).clicked() {
                                 self.ft8_compose = format!("{call} {my} {grid}");

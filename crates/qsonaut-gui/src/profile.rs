@@ -50,6 +50,8 @@ pub(super) struct OperatorProfile {
     #[serde(default)]
     pub(super) auto_answer_cq: bool,
     #[serde(default)]
+    pub(super) automation_unlocked: bool,
+    #[serde(default)]
     pub(super) cq_only_view: bool,
     #[serde(default)]
     pub(super) civ_spectrum_on: bool,

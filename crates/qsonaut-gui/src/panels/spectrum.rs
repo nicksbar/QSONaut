@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::visuals::crop_audio_rows;
 
 impl QsonautGuiApp {
     pub(in super::super) fn draw_radio_waterfall(
@@ -211,6 +212,7 @@ impl QsonautGuiApp {
             * AUDIO_BINS as f32)
             .round() as usize;
         let display_bins = display_bins.clamp(16, AUDIO_BINS);
+        let visible_audio_rows = crop_audio_rows(&snapshot.audio_waterfall_rows, bw_hz);
 
         // Capture layout geometry before texture ops — available_width() can change mid-frame.
         let display_size = egui::vec2(
@@ -224,7 +226,7 @@ impl QsonautGuiApp {
             || self.audio_waterfall_texture_theme != self.waterfall_theme
         {
             let image = build_waterfall_image_with_theme(
-                &snapshot.audio_waterfall_rows,
+                &visible_audio_rows,
                 display_bins,
                 AUDIO_WF_HEIGHT,
                 self.waterfall_theme,

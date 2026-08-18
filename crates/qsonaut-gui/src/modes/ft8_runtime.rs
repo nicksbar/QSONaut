@@ -22,6 +22,18 @@ impl QsonautGuiApp {
             ended_at,
         );
         record.grid = session.remote_grid.clone().unwrap_or_default();
+        record.operation_mode = if session.pota_reference.is_empty() {
+            "General".to_string()
+        } else {
+            "POTA".to_string()
+        };
+        record.pota_role = session
+            .pota_reference
+            .is_empty()
+            .then(String::new)
+            .unwrap_or_else(|| "Hunter".to_string());
+        record.pota_reference = session.pota_reference.clone();
+        record.pota_name = session.pota_name.clone();
         record.report_sent = session
             .report_sent
             .map(format_signal_report)
@@ -46,36 +58,74 @@ impl QsonautGuiApp {
         policy: Ft8TxQueuePolicy,
         rx_period: Option<u64>,
     ) {
+        info!(
+            ?policy,
+            compose = %self.ft8_compose,
+            auto_sequence = self.ft8_autoseq,
+            radio_available = self.command_tx.is_some(),
+            tx_active = self.ft8_tx_active.load(Ordering::Acquire),
+            queued_period = ?self.ft8_tx_queued_period,
+            suppress_canceled_events = self.ft8_suppress_canceled_tx_events,
+            "FT8 TX request received"
+        );
         if self.ft8_compose.trim().is_empty() {
             self.ft8_seq_status = "TX not queued: compose is empty".to_string();
             return;
         }
         let compose = self.ft8_compose.clone();
         if self.block_duplicate_tx_if_needed(WorkspaceMode::Ft8, &compose) {
+            tracing::warn!(compose = %compose, "FT8 TX blocked by duplicate-contact guard");
             return;
         }
         let Some(command_tx) = self.command_tx.clone() else {
+            tracing::warn!(compose = %compose, "FT8 TX blocked: radio command channel unavailable");
             self.ft8_seq_status = "TX unavailable: radio control is disabled".to_string();
             return;
         };
         if self.ft8_tx_active.load(Ordering::Acquire) || self.ft8_tx_queued_period.is_some() {
+            tracing::warn!(
+                compose = %compose,
+                tx_active = self.ft8_tx_active.load(Ordering::Acquire),
+                queued_period = ?self.ft8_tx_queued_period,
+                "FT8 TX blocked: another transmission is already scheduled"
+            );
             self.ft8_seq_status =
                 "TX not queued: another transmission is already scheduled".to_string();
             return;
         }
         if self.digital_tx_active.load(Ordering::Acquire) {
+            tracing::warn!(compose = %compose, "FT8 TX blocked: another digital mode is active");
             self.ft8_seq_status = "TX not queued: another digital mode is transmitting".to_string();
             return;
         }
         if self.ft8_suppress_canceled_tx_events {
-            self.ft8_seq_status = "TX cancellation is still settling; try again".to_string();
-            return;
+            if self.ft8_tx_active.load(Ordering::Acquire) || self.ft8_tx_queued_period.is_some() {
+                tracing::warn!(
+                    compose = %compose,
+                    tx_active = self.ft8_tx_active.load(Ordering::Acquire),
+                    queued_period = ?self.ft8_tx_queued_period,
+                    "FT8 TX blocked: cancellation is still settling"
+                );
+                self.ft8_seq_status = "TX cancellation is still settling; try again".to_string();
+                return;
+            }
+            // A canceled worker can terminate without delivering its terminal
+            // event (for example if the radio command channel disappears).
+            // Do not leave every later TX request permanently blocked.
+            tracing::warn!("clearing stale FT8 TX cancellation gate");
+            self.ft8_suppress_canceled_tx_events = false;
         }
         if self
             .ft8_session
             .as_ref()
             .is_some_and(|session| session.tx_attempts >= self.ft8_max_attempts)
         {
+            tracing::warn!(
+                compose = %compose,
+                attempts = self.ft8_session.as_ref().map(|session| session.tx_attempts),
+                max_attempts = self.ft8_max_attempts,
+                "FT8 TX blocked: maximum unanswered attempts reached"
+            );
             self.cancel_ft8_sequence(format!(
                 "Stopped after {} unanswered attempts",
                 self.ft8_max_attempts
@@ -203,8 +253,6 @@ impl QsonautGuiApp {
         self.ft8_tx_pcm = None;
         self.ft8_queued_tx_message = None;
         self.ft8_pending_manual_reply = None;
-        self.ft8_seq_target = None;
-        self.ft8_session = None;
         self.ft8_seq_state = Ft8SeqState::Idle;
         self.ft8_seq_status = "TX force-stopped".to_string();
 
@@ -379,7 +427,7 @@ impl QsonautGuiApp {
         }
 
         let my_call = self.station_callsign_or_default().to_ascii_uppercase();
-        let my_grid = self.station_grid_or_default().to_ascii_uppercase();
+        let my_grid = self.station_grid_for_ft8();
 
         for entry in decodes {
             if let Some(hit) = operator_call_hit(&entry.message, &my_call) {
@@ -489,6 +537,28 @@ impl QsonautGuiApp {
         };
         let entry = &decodes[selected.index];
         let mut session = QsoSession::start(selected.parsed.from.clone(), entry.period);
+        if selected.parsed.raw.to_ascii_uppercase().contains("POTA") {
+            if let Some(spot) = self
+                .pota_spots
+                .iter()
+                .filter(|spot| {
+                    spot.activator.eq_ignore_ascii_case(&selected.parsed.from) && spot.mode == "FT8"
+                })
+                .min_by_key(|spot| {
+                    spot.frequency_hz.abs_diff(
+                        self.state
+                            .lock()
+                            .expect("ui state lock poisoned")
+                            .frequency_hz
+                            .unwrap_or_default()
+                            + u64::from(entry.freq_hz),
+                    )
+                })
+            {
+                session.pota_reference = spot.reference.clone();
+                session.pota_name = spot.name.clone();
+            }
+        }
         let Some(response) = session.response_to(
             &selected.parsed,
             &my_call,

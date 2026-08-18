@@ -38,7 +38,55 @@ pub struct AudioStream {
 
 pub struct AudioMonitor {
     samples_tx: SyncSender<Vec<i16>>,
+    errors_rx: Receiver<String>,
+    dropped_chunks: Arc<std::sync::atomic::AtomicU64>,
+    resampler: std::sync::Mutex<MonitorResampler>,
     _stream: Stream,
+}
+
+struct MonitorResampler {
+    input_sample_rate_hz: u32,
+    output_sample_rate_hz: u32,
+    source_position: f64,
+    source: VecDeque<i16>,
+}
+
+impl MonitorResampler {
+    fn new(input_sample_rate_hz: u32, output_sample_rate_hz: u32) -> Self {
+        Self {
+            input_sample_rate_hz,
+            output_sample_rate_hz,
+            source_position: 0.0,
+            source: VecDeque::new(),
+        }
+    }
+
+    fn process(&mut self, samples: &[i16]) -> Vec<i16> {
+        if samples.is_empty() || self.input_sample_rate_hz == self.output_sample_rate_hz {
+            return samples.to_vec();
+        }
+        let step = self.input_sample_rate_hz as f64 / self.output_sample_rate_hz as f64;
+        self.source.extend(samples.iter().copied());
+        let mut output = Vec::new();
+        while self.source_position + 1.0 < self.source.len() as f64 {
+            let left = self.source_position.floor() as usize;
+            let right = left + 1;
+            let fraction = (self.source_position - left as f64) as f32;
+            output.push(
+                (self.source[left] as f32 * (1.0 - fraction) + self.source[right] as f32 * fraction)
+                    .round()
+                    .clamp(i16::MIN as f32, i16::MAX as f32) as i16,
+            );
+            self.source_position += step;
+        }
+        let consumed = self.source_position.floor() as usize;
+        if consumed > 0 {
+            self.source
+                .drain(..consumed.min(self.source.len().saturating_sub(1)));
+            self.source_position -= consumed as f64;
+        }
+        output
+    }
 }
 
 impl AudioMonitor {
@@ -48,14 +96,17 @@ impl AudioMonitor {
         let supported = select_config(&device, AudioDeviceKind::Output, sample_rate_hz, 1)
             .or_else(|_| device.default_output_config().map_err(anyhow::Error::from))?;
         let config = supported.config();
+        let output_sample_rate_hz = config.sample_rate.0;
         let channels = config.channels as usize;
         let (samples_tx, samples_rx) = mpsc::sync_channel::<Vec<i16>>(8);
+        let (errors_tx, errors_rx) = mpsc::channel::<String>();
+        let dropped_chunks = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let pending = Arc::new(std::sync::Mutex::new(VecDeque::<i16>::new()));
-        let error_callback = |_error: StreamError| {};
 
         macro_rules! output_stream {
             ($sample:ty) => {{
                 let pending = pending.clone();
+                let errors_tx = errors_tx.clone();
                 device.build_output_stream(
                     &config,
                     move |data: &mut [$sample], _| {
@@ -69,7 +120,9 @@ impl AudioMonitor {
                             }
                         }
                     },
-                    error_callback,
+                    move |error: StreamError| {
+                        let _ = errors_tx.send(error.to_string());
+                    },
                     None,
                 )?
             }};
@@ -90,12 +143,33 @@ impl AudioMonitor {
         stream.play().context("failed to start audio monitor")?;
         Ok(Self {
             samples_tx,
+            errors_rx,
+            dropped_chunks,
+            resampler: std::sync::Mutex::new(MonitorResampler::new(
+                sample_rate_hz,
+                output_sample_rate_hz,
+            )),
             _stream: stream,
         })
     }
 
     pub fn push(&self, samples: &[i16]) {
-        let _ = self.samples_tx.try_send(samples.to_vec());
+        let samples = self
+            .resampler
+            .lock()
+            .map(|mut resampler| resampler.process(samples))
+            .unwrap_or_default();
+        if self.samples_tx.try_send(samples).is_err() {
+            self.dropped_chunks.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn take_error(&self) -> Option<String> {
+        self.errors_rx.try_recv().ok()
+    }
+
+    pub fn take_dropped_chunks(&self) -> u64 {
+        self.dropped_chunks.swap(0, Ordering::Relaxed)
     }
 }
 
@@ -439,6 +513,23 @@ fn resample_linear_i16(samples: &[i16], source_rate: u32, output_rate: u32) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monitor_resampler_preserves_chunk_boundary_continuity() {
+        let mut chunked = MonitorResampler::new(48_000, 44_100);
+        let first = chunked.process(&(0..480).map(|value| value * 10).collect::<Vec<_>>());
+        let second = chunked.process(&(480..960).map(|value| value * 10).collect::<Vec<_>>());
+        let mut combined = first;
+        combined.extend(second);
+
+        let expected = resample_linear_i16(
+            &(0..960).map(|value| value * 10).collect::<Vec<_>>(),
+            48_000,
+            44_100,
+        );
+        assert!((combined.len() as isize - expected.len() as isize).abs() <= 1);
+        assert_eq!(&combined[..100], &expected[..100]);
+    }
 
     #[test]
     fn downmixes_stereo_without_clipping() {

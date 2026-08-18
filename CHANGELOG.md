@@ -5,6 +5,38 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-08-18
+
+### Added
+- Added an Operator Profile action to load callsign, grid, and QTH details from the
+  callsign's HamDB license record.
+- Added asynchronous POTA activator-spot lookup with a short-lived cache. CQ POTA decodes
+  are marked with a tree icon and show a matched park reference and name when available.
+- Added a persisted hidden automation-control unlock. The unattended-CQ control appears only
+  after ten logo clicks within ten seconds, with a brief logo-spin unlock indication.
+
+### Fixed
+- Reworked the Contact Log into a resizable two-column layout with a scrollable contact
+  list, a selected-contact editor, and an explicit Close action for the editor.
+- Removed the misleading resize cursor and inactive resize boundary between the radio
+  controls and the waterfall deck; the waterfall deck's lower edge remains resizable.
+- Made RX audio monitoring resample captured audio to the selected output device's native
+  rate, and report monitor startup failures instead of silently disabling playback.
+- Calling CQ now clears the previously selected FT8 decode/contact and returns the RX/TX
+  audio channel to the normal operating frequency unless HOLD TX FREQ is enabled.
+- Pauses the RX audio monitor while transmitting and restores it after TX, preventing
+  Windows audio-device contention from blocking unattended or manually armed CQ output.
+- Prevents a stale canceled-TX state from permanently blocking subsequent FT8 transmissions,
+  and adds diagnostic logging for TX requests and gate conditions.
+- Normalizes six-character station locators such as `CN84JU` to the required four-character
+  FT8 locator (`CN84`) when composing CQ and exchange messages.
+- Aligns the audio waterfall's visible spectrum with the RX/TX cursor positions when using
+  a narrower radio filter view.
+- Preserves the active FT8 conversation after stopping TX and keeps directed responses
+  addressed to the operator visible when CQ-only filtering is enabled.
+- Always starts FT8/FT4 transmit automation disarmed, and leaves unattended-CQ answering
+  unchecked until explicitly enabled during the current run.
+
 ## [0.3.3] - 2026-08-18
 
 ### Changed

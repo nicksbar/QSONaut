@@ -73,7 +73,7 @@ use band_plan::{
 };
 use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
-    DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, OperatorCallHit, PendingFt8Decode,
+    DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, OperatorCallHit, PendingFt8Decode, PotaSpot,
 };
 use modes::exchange::{
     callsign_eq, is_probable_callsign, next_reply_period, next_tx_period, parse_message,
@@ -560,37 +560,55 @@ struct HamDbCallsign {
     country: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct PotaApiSpot {
+    activator: Option<String>,
+    reference: Option<String>,
+    name: Option<String>,
+    frequency: Option<String>,
+    mode: Option<String>,
+}
+
 fn spawn_hamdb_lookup(
     callsign: String,
     completed_at_unix: u64,
 ) -> mpsc::Receiver<Option<HamDbCacheEntry>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let result = reqwest::blocking::get(format!(
-            "https://api.hamdb.org/{}/json/QSONaut",
-            callsign.trim()
-        ))
-        .ok()
-        .and_then(|response| response.json::<HamDbResponse>().ok())
-        .map(|response| HamDbCacheEntry {
-            callsign: response.hamdb.callsign.call.trim().to_ascii_uppercase(),
-            class: response.hamdb.callsign.class.trim().to_string(),
-            expires: response.hamdb.callsign.expires.trim().to_string(),
-            status: response.hamdb.callsign.status.trim().to_string(),
-            grid: response.hamdb.callsign.grid.trim().to_ascii_uppercase(),
-            latitude: response.hamdb.callsign.latitude.trim().to_string(),
-            longitude: response.hamdb.callsign.longitude.trim().to_string(),
-            first_name: response.hamdb.callsign.first_name.trim().to_string(),
-            middle_name: response.hamdb.callsign.middle_name.trim().to_string(),
-            name: response.hamdb.callsign.name.trim().to_string(),
-            suffix: response.hamdb.callsign.suffix.trim().to_string(),
-            address_line_1: response.hamdb.callsign.address_line_1.trim().to_string(),
-            address_line_2: response.hamdb.callsign.address_line_2.trim().to_string(),
-            state: response.hamdb.callsign.state.trim().to_ascii_uppercase(),
-            zip: response.hamdb.callsign.zip.trim().to_string(),
-            country: response.hamdb.callsign.country.trim().to_string(),
-            fetched_at_unix: completed_at_unix,
-        });
+        let result = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .ok()
+            .and_then(|client| {
+                client
+                    .get(format!(
+                        "https://api.hamdb.org/{}/json/QSONaut",
+                        callsign.trim()
+                    ))
+                    .send()
+                    .ok()
+            })
+            .filter(|response| response.status().is_success())
+            .and_then(|response| response.json::<HamDbResponse>().ok())
+            .map(|response| HamDbCacheEntry {
+                callsign: response.hamdb.callsign.call.trim().to_ascii_uppercase(),
+                class: response.hamdb.callsign.class.trim().to_string(),
+                expires: response.hamdb.callsign.expires.trim().to_string(),
+                status: response.hamdb.callsign.status.trim().to_string(),
+                grid: response.hamdb.callsign.grid.trim().to_ascii_uppercase(),
+                latitude: response.hamdb.callsign.latitude.trim().to_string(),
+                longitude: response.hamdb.callsign.longitude.trim().to_string(),
+                first_name: response.hamdb.callsign.first_name.trim().to_string(),
+                middle_name: response.hamdb.callsign.middle_name.trim().to_string(),
+                name: response.hamdb.callsign.name.trim().to_string(),
+                suffix: response.hamdb.callsign.suffix.trim().to_string(),
+                address_line_1: response.hamdb.callsign.address_line_1.trim().to_string(),
+                address_line_2: response.hamdb.callsign.address_line_2.trim().to_string(),
+                state: response.hamdb.callsign.state.trim().to_ascii_uppercase(),
+                zip: response.hamdb.callsign.zip.trim().to_string(),
+                country: response.hamdb.callsign.country.trim().to_string(),
+                fetched_at_unix: completed_at_unix,
+            });
         let _ = tx.send(result);
     });
     rx
@@ -1168,6 +1186,10 @@ struct QsonautGuiApp {
     worker_stop: Arc<AtomicBool>,
     radio_init_rx: Option<mpsc::Receiver<Option<ConfiguredRadio>>>,
     hamdb_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
+    hamdb_profile_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
+    pota_spots: Vec<PotaSpot>,
+    pota_lookup_rx: Option<mpsc::Receiver<Vec<PotaSpot>>>,
+    pota_last_lookup: Instant,
     radio_init_attempted: bool,
     radio_worker_handle: Option<std::thread::JoinHandle<()>>,
     audio_worker_handle: Option<std::thread::JoinHandle<()>>,
@@ -1188,7 +1210,7 @@ struct QsonautGuiApp {
     ft8_tx_chat: VecDeque<Ft8TxChatEntry>,
     ft8_seen_decode_period: Option<u64>,
     qso_log: QsoLog,
-    qso_selected: Option<usize>,
+    qso_selected: Option<u64>,
     qso_log_status: String,
     qso_log_dirty: bool,
     ft8_compose: String,
@@ -1196,6 +1218,9 @@ struct QsonautGuiApp {
     ft8_autoseq: bool,
     ft8_auto_reply_policy: AutoReplyPolicy,
     ft8_auto_answer_cq: bool,
+    automation_unlocked: bool,
+    logo_clicks: VecDeque<Instant>,
+    logo_spin_until: Option<Instant>,
     ft8_session: Option<QsoSession>,
     ft8_seq_state: Ft8SeqState,
     ft8_seq_target: Option<String>,
@@ -1421,6 +1446,7 @@ impl QsonautGuiApp {
         let mut ft8_autoseq = false;
         let mut ft8_auto_reply_policy = AutoReplyPolicy::default();
         let mut ft8_auto_answer_cq = false;
+        let mut automation_unlocked = false;
         let mut ft8_cq_only_view = false;
         let mut civ_spectrum_on = false;
         let mut waterfall_theme = WaterfallTheme::default();
@@ -1468,15 +1494,19 @@ impl QsonautGuiApp {
             ft8_max_log_entries = p.max_log_entries.clamp(80, 1000);
             ft8_deep_decode = p.deep_decode;
             ft4_deep_decode = p.ft4_deep_decode;
-            ft4_autoseq = p.ft4_autoseq;
+            // Transmit automation is never restored as armed at startup.
+            ft4_autoseq = false;
             ft4_auto_reply_policy = p.ft4_auto_reply_policy;
             ft4_cq_only_view = p.ft4_cq_only_view;
             ft4_follow_log = p.ft4_follow_log;
             ft4_max_log_entries = p.ft4_max_log_entries.clamp(80, 300);
             ft4_max_attempts = p.ft4_max_attempts.clamp(1, 20);
-            ft8_autoseq = p.autoseq;
+            // Transmit automation is never restored as armed at startup.
+            ft8_autoseq = false;
             ft8_auto_reply_policy = p.auto_reply_policy;
-            ft8_auto_answer_cq = p.auto_answer_cq;
+            // Unattended CQ answering must be explicitly re-enabled each run.
+            ft8_auto_answer_cq = false;
+            automation_unlocked = p.automation_unlocked;
             ft8_cq_only_view = p.cq_only_view;
             civ_spectrum_on = p.civ_spectrum_on;
             waterfall_theme = p.waterfall_theme;
@@ -1563,6 +1593,7 @@ impl QsonautGuiApp {
                 autoseq: ft8_autoseq,
                 auto_reply_policy: ft8_auto_reply_policy,
                 auto_answer_cq: ft8_auto_answer_cq,
+                automation_unlocked,
                 cq_only_view: ft8_cq_only_view,
                 civ_spectrum_on,
                 waterfall_theme,
@@ -1706,6 +1737,12 @@ impl QsonautGuiApp {
             worker_stop,
             radio_init_rx,
             hamdb_lookup_rx: None,
+            hamdb_profile_lookup_rx: None,
+            pota_spots: Vec::new(),
+            pota_lookup_rx: None,
+            pota_last_lookup: Instant::now() - Duration::from_secs(60),
+            logo_clicks: VecDeque::new(),
+            logo_spin_until: None,
             radio_init_attempted: false,
             radio_worker_handle,
             audio_worker_handle,
@@ -1733,6 +1770,7 @@ impl QsonautGuiApp {
             ft8_autoseq,
             ft8_auto_reply_policy,
             ft8_auto_answer_cq,
+            automation_unlocked,
             ft8_session: None,
             ft8_seq_state: Ft8SeqState::Idle,
             ft8_seq_target: None,
@@ -1878,16 +1916,20 @@ impl QsonautGuiApp {
         self.ft8_max_log_entries = profile.max_log_entries.clamp(80, 1000);
         self.ft8_deep_decode = profile.deep_decode;
         self.ft4_deep_decode = profile.ft4_deep_decode;
-        self.ft4_autoseq = profile.ft4_autoseq;
+        // Loading or switching profiles must never arm transmit automation.
+        self.ft4_autoseq = false;
         self.ft4_auto_reply_policy = profile.ft4_auto_reply_policy;
         self.ft4_cq_only_view = profile.ft4_cq_only_view;
         self.ft4_follow_log = profile.ft4_follow_log;
         self.ft4_max_log_entries = profile.ft4_max_log_entries.clamp(80, 300);
         self.ft4_max_attempts = profile.ft4_max_attempts.clamp(1, 20);
         self.ft4_stop_policy = AutoTxStopPolicy::Continuous;
-        self.ft8_autoseq = profile.autoseq;
+        // Loading or switching profiles must never arm transmit automation.
+        self.ft8_autoseq = false;
         self.ft8_auto_reply_policy = profile.auto_reply_policy;
-        self.ft8_auto_answer_cq = profile.auto_answer_cq;
+        // Unattended CQ answering must be explicitly enabled for this run.
+        self.ft8_auto_answer_cq = false;
+        self.automation_unlocked = profile.automation_unlocked;
         self.ft8_cq_only_view = profile.cq_only_view;
         self.civ_spectrum_on = profile.civ_spectrum_on;
         self.waterfall_theme = profile.waterfall_theme;
@@ -2011,6 +2053,107 @@ impl QsonautGuiApp {
         self.hamdb_lookup_rx = None;
     }
 
+    fn pump_hamdb_profile_lookup(&mut self) {
+        let Some(rx) = self.hamdb_profile_lookup_rx.as_ref() else {
+            return;
+        };
+        let entry = match rx.try_recv() {
+            Ok(Some(entry)) => entry,
+            Ok(None) | Err(mpsc::TryRecvError::Disconnected) => {
+                self.profile_io_status = "HamDB did not return a license record".to_string();
+                self.hamdb_profile_lookup_rx = None;
+                return;
+            }
+            Err(mpsc::TryRecvError::Empty) => return,
+        };
+        self.station_callsign = entry.callsign.clone();
+        if !entry.grid.trim().is_empty() {
+            self.station_grid = entry.grid.clone();
+        }
+        let qth = [
+            entry.address_line_1.trim(),
+            entry.address_line_2.trim(),
+            entry.state.trim(),
+            entry.country.trim(),
+        ]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+        if !qth.is_empty() {
+            self.station_qth = qth;
+        }
+        self.config.station.callsign = Some(self.station_callsign.clone());
+        self.config.station.grid =
+            (!self.station_grid.trim().is_empty()).then(|| self.station_grid.clone());
+        let cache = HamDbCache::open(&hamdb_cache_path()).ok();
+        if let Some(cache) = cache {
+            let _ = cache.upsert(&entry);
+        }
+        self.profile_dirty = true;
+        self.persist_profile("Loaded license profile from HamDB");
+        self.emit_operator_profile_hook("profile_loaded_from_hamdb");
+        self.hamdb_profile_lookup_rx = None;
+    }
+
+    fn pump_pota_spots(&mut self) {
+        if let Some(rx) = &self.pota_lookup_rx {
+            if let Ok(spots) = rx.try_recv() {
+                self.pota_spots = spots;
+                self.pota_lookup_rx = None;
+            }
+        }
+        if self.pota_lookup_rx.is_some()
+            || self.pota_last_lookup.elapsed() < Duration::from_secs(30)
+        {
+            return;
+        }
+        self.pota_last_lookup = Instant::now();
+        let (tx, rx) = mpsc::channel();
+        self.pota_lookup_rx = Some(rx);
+        thread::spawn(move || {
+            let spots = reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .ok()
+                .and_then(|client| {
+                    client
+                        .get("https://api.pota.app/spot/activator")
+                        .send()
+                        .ok()
+                })
+                .and_then(|response| response.json::<Vec<PotaApiSpot>>().ok())
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|spot| {
+                    Some(PotaSpot {
+                        activator: spot.activator?.trim().to_ascii_uppercase(),
+                        reference: spot.reference?.trim().to_string(),
+                        name: spot.name?.trim().to_string(),
+                        frequency_hz: spot.frequency?.parse::<f64>().ok()?.round() as u64 * 1_000,
+                        mode: spot.mode?.trim().to_ascii_uppercase(),
+                    })
+                })
+                .collect();
+            let _ = tx.send(spots);
+        });
+    }
+
+    fn load_profile_from_hamdb(&mut self) {
+        let callsign = self.station_callsign.trim().to_ascii_uppercase();
+        if callsign.is_empty() || !is_probable_callsign(&callsign) {
+            self.profile_io_status =
+                "Enter a valid callsign before loading HamDB profile".to_string();
+            return;
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        self.hamdb_profile_lookup_rx = Some(spawn_hamdb_lookup(callsign, now));
+        self.profile_io_status = "Loading license record from HamDB…".to_string();
+    }
+
     fn refresh_hamdb_for_contact(&mut self, index: usize) {
         let Some(record) = self.qso_log.contacts.get(index) else {
             return;
@@ -2074,7 +2217,7 @@ impl QsonautGuiApp {
                 frequency_hz: last.frequency_hz,
             });
         }
-        self.qso_selected = Some(self.qso_log.contacts.len() - 1);
+        self.qso_selected = self.qso_log.contacts.last().map(|contact| contact.id);
         self.qso_log_dirty = true;
         self.persist_qso_log(status);
         if let Some(record) = &published {
@@ -2202,6 +2345,7 @@ impl QsonautGuiApp {
             autoseq: self.ft8_autoseq,
             auto_reply_policy: self.ft8_auto_reply_policy,
             auto_answer_cq: self.ft8_auto_answer_cq,
+            automation_unlocked: self.automation_unlocked,
             cq_only_view: self.ft8_cq_only_view,
             civ_spectrum_on: self.civ_spectrum_on,
             waterfall_theme: self.waterfall_theme,
@@ -2268,12 +2412,40 @@ impl QsonautGuiApp {
         }
     }
 
+    fn station_grid_for_ft8(&self) -> String {
+        self.station_grid_or_default()
+            .chars()
+            .take(4)
+            .collect::<String>()
+            .to_ascii_uppercase()
+    }
+
     fn emit_operator_profile_hook(&self, detail: impl Into<String>) {
         self.app_events.publish(AppEvent::AutomationHook {
             kind: "operator_profile".to_string(),
             source: "gui.operator_profile".to_string(),
             detail: detail.into(),
         });
+    }
+
+    fn handle_logo_click(&mut self) {
+        let now = Instant::now();
+        while self
+            .logo_clicks
+            .front()
+            .is_some_and(|clicked| now.duration_since(*clicked) > Duration::from_secs(10))
+        {
+            self.logo_clicks.pop_front();
+        }
+        self.logo_clicks.push_back(now);
+        if self.logo_clicks.len() >= 10 {
+            self.logo_clicks.clear();
+            self.automation_unlocked = true;
+            self.logo_spin_until = Some(now + Duration::from_millis(700));
+            self.profile_dirty = true;
+            self.persist_profile("Automation controls unlocked");
+            self.profile_io_status = "Automation controls unlocked".to_string();
+        }
     }
 
     fn emit_radio_state_hook_if_changed(&mut self, snapshot: &GuiState) {
@@ -2728,6 +2900,8 @@ impl eframe::App for QsonautGuiApp {
         self.process_native_digital_tx_pipeline();
         self.pump_server_automation_events();
         self.pump_automation_events();
+        self.pump_hamdb_profile_lookup();
+        self.pump_pota_spots();
         let (ft4_decodes, latest_ft4_period) = {
             let shared = self.state.lock().expect("ui state lock poisoned");
             (
@@ -2763,15 +2937,29 @@ impl eframe::App for QsonautGuiApp {
         self.publish_server_presence(&snapshot);
 
         egui::TopBottomPanel::top("header")
-            .resizable(true)
+            .resizable(false)
             .min_height(112.0)
             .max_height(240.0)
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.add(
-                        egui::Image::new((self.brand_icon.id(), egui::vec2(46.0, 46.0)))
-                            .corner_radius(8.0),
-                    );
+                    let spin_angle = self.logo_spin_until.map_or(0.0, |until| {
+                        let remaining = until.saturating_duration_since(Instant::now());
+                        (1.0 - remaining.as_secs_f32() / 0.7).clamp(0.0, 1.0)
+                            * std::f32::consts::TAU
+                    });
+                    let logo = egui::Image::new((self.brand_icon.id(), egui::vec2(46.0, 46.0)))
+                        .corner_radius(8.0)
+                        .rotate(spin_angle, egui::Vec2::splat(0.5))
+                        .sense(egui::Sense::click());
+                    let logo_response = ui.add(logo);
+                    if logo_response.clicked() {
+                        self.handle_logo_click();
+                    }
+                    if self.logo_spin_until.is_some_and(|until| Instant::now() < until) {
+                        ui.ctx().request_repaint();
+                    } else {
+                        self.logo_spin_until = None;
+                    }
                     ui.vertical(|ui| {
                         ui.label(
                             RichText::new("QSONaut")
