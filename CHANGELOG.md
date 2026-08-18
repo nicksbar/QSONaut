@@ -26,6 +26,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   and adds diagnostic logging for TX requests and gate conditions.
 - Normalizes six-character station locators such as `CN84JU` to the required four-character
   FT8 locator (`CN84`) when composing CQ and exchange messages.
+- Aligns the audio waterfall's visible spectrum with the RX/TX cursor positions when using
+  a narrower radio filter view.
 
 ## [0.3.3] - 2026-08-18
 
