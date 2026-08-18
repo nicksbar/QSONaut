@@ -47,6 +47,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the connected radio.
 
 ### Fixed
+- Made RX audio monitoring resample captured audio to the selected output device's native
+  rate, and report monitor startup failures instead of silently disabling playback.
 - Calling CQ now clears the previously selected FT8 decode/contact and returns the RX/TX
   audio channel to the normal operating frequency unless HOLD TX FREQ is enabled.
 - Eliminated the Windows startup window flashing. Restored geometry is applied through the

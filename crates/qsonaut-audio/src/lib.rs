@@ -38,6 +38,8 @@ pub struct AudioStream {
 
 pub struct AudioMonitor {
     samples_tx: SyncSender<Vec<i16>>,
+    input_sample_rate_hz: u32,
+    output_sample_rate_hz: u32,
     _stream: Stream,
 }
 
@@ -48,6 +50,7 @@ impl AudioMonitor {
         let supported = select_config(&device, AudioDeviceKind::Output, sample_rate_hz, 1)
             .or_else(|_| device.default_output_config().map_err(anyhow::Error::from))?;
         let config = supported.config();
+        let output_sample_rate_hz = config.sample_rate.0;
         let channels = config.channels as usize;
         let (samples_tx, samples_rx) = mpsc::sync_channel::<Vec<i16>>(8);
         let pending = Arc::new(std::sync::Mutex::new(VecDeque::<i16>::new()));
@@ -90,12 +93,19 @@ impl AudioMonitor {
         stream.play().context("failed to start audio monitor")?;
         Ok(Self {
             samples_tx,
+            input_sample_rate_hz: sample_rate_hz,
+            output_sample_rate_hz,
             _stream: stream,
         })
     }
 
     pub fn push(&self, samples: &[i16]) {
-        let _ = self.samples_tx.try_send(samples.to_vec());
+        let samples = resample_linear_i16(
+            samples,
+            self.input_sample_rate_hz,
+            self.output_sample_rate_hz,
+        );
+        let _ = self.samples_tx.try_send(samples);
     }
 }
 

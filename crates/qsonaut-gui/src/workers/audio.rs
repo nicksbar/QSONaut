@@ -39,13 +39,21 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 return;
             }
         };
-        let monitor = monitor_enabled
-            .then(|| {
-                qsonaut_audio::AudioMonitor::open(sample_rate_hz, monitor_output_device.as_deref())
-            })
-            .transpose()
-            .ok()
-            .flatten();
+        let (monitor, monitor_status) = if monitor_enabled {
+            match qsonaut_audio::AudioMonitor::open(
+                sample_rate_hz,
+                monitor_output_device.as_deref(),
+            ) {
+                Ok(monitor) => (Some(monitor), " · MONITOR ACTIVE".to_string()),
+                Err(err) => {
+                    let message = format!(" · MONITOR ERROR ({err})");
+                    tracing::error!(error = %err, "failed to start RX audio monitor");
+                    (None, message)
+                }
+            }
+        } else {
+            (None, String::new())
+        };
 
         let mut fft_planner = FftPlanner::<f32>::new();
         let audio_fft = fft_planner.plan_fft_forward(FFT_SIZE);
@@ -163,7 +171,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             }
                             s.audio_waterfall_rows.push_back(bins);
                             s.audio_waterfall_revision = s.audio_waterfall_revision.wrapping_add(1);
-                            s.audio_spectrum_status = "LIVE RX".to_string();
+                            s.audio_spectrum_status = format!("LIVE RX{monitor_status}");
                         }
                         s.audio_level_dbfs = Some(20.0 * rms.max(1e-9).log10());
                         s.audio_clip_percent = clip_percent;
