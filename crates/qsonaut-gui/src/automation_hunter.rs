@@ -18,10 +18,20 @@ pub(super) enum AchievementKind {
     FiftyQsosLogged,
     DupeShield,
     CenturyHunter,
+    BandCollector,
+    GridMapper,
+    DXChaser,
+    ModeExplorer,
+    EarlyBird,
+    NightOwl,
+    ContestOperator,
+    AudioAlchemist,
+    SignalSurvivor,
+    QsoQuarter,
 }
 
 impl AchievementKind {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 17] = [
         Self::FirstDecode,
         Self::DirectedCall,
         Self::FirstQsoLogged,
@@ -29,6 +39,16 @@ impl AchievementKind {
         Self::FiftyQsosLogged,
         Self::DupeShield,
         Self::CenturyHunter,
+        Self::BandCollector,
+        Self::GridMapper,
+        Self::DXChaser,
+        Self::ModeExplorer,
+        Self::EarlyBird,
+        Self::NightOwl,
+        Self::ContestOperator,
+        Self::AudioAlchemist,
+        Self::SignalSurvivor,
+        Self::QsoQuarter,
     ];
 
     fn presentation(self) -> (&'static str, &'static str) {
@@ -40,6 +60,16 @@ impl AchievementKind {
             Self::FiftyQsosLogged => ("Pileup Wrangler", "Log 50 contacts"),
             Self::DupeShield => ("Dupe Shield", "Prevent 10 duplicate TX attempts"),
             Self::CenturyHunter => ("Century Hunter", "Hear 100 unique callsigns"),
+            Self::BandCollector => ("Band Collector", "Work contacts on 5 different bands"),
+            Self::GridMapper => ("Grid Mapper", "Work 25 distinct grid squares"),
+            Self::DXChaser => ("DX Chaser", "Work a station outside your home country"),
+            Self::ModeExplorer => ("Mode Explorer", "Log contacts in 3 digital modes"),
+            Self::EarlyBird => ("Early Bird", "Log a QSO before 07:00 UTC"),
+            Self::NightOwl => ("Night Owl", "Log a QSO after 23:00 UTC"),
+            Self::ContestOperator => ("Contest Operator", "Complete a contest exchange"),
+            Self::AudioAlchemist => ("Audio Alchemist", "Decode 1000 signal bursts"),
+            Self::SignalSurvivor => ("Signal Survivor", "Log a contact below -20 dB"),
+            Self::QsoQuarter => ("QSO Quartermaster", "Log 25 contacts"),
         }
     }
 }
@@ -86,6 +116,9 @@ impl QsonautGuiApp {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs_f64())
             .unwrap_or_default();
+        if !self.hunter_alerts_enabled {
+            return;
+        }
         self.hunter_feed.push_back(HunterAlert {
             utc: utc_hhmmss_millis(now_s),
             title: title.into(),
@@ -333,11 +366,22 @@ impl QsonautGuiApp {
         }
 
         ui.add_space(8.0);
-        ui.label(
-            RichText::new("Built-in achievements")
-                .strong()
-                .color(Color32::from_rgb(255, 201, 92)),
-        );
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new("Built-in achievements")
+                    .strong()
+                    .color(Color32::from_rgb(255, 201, 92)),
+            );
+            ui.checkbox(&mut self.hunter_alerts_enabled, "Alerts enabled");
+            let acknowledged_label = if self.hunter_show_acknowledged {
+                "Hide acknowledged"
+            } else {
+                "Show acknowledged"
+            };
+            if ui.button(acknowledged_label).clicked() {
+                self.hunter_show_acknowledged = !self.hunter_show_acknowledged;
+            }
+        });
         let qso_count = self.qso_log.contacts.len() as u32;
         for achievement in AchievementKind::ALL {
             let (title, detail) = achievement.presentation();
@@ -351,8 +395,52 @@ impl QsonautGuiApp {
                 AchievementKind::CenturyHunter => {
                     ((self.hunter_unique_heard.len() as u32).min(100), 100)
                 }
+                AchievementKind::BandCollector => {
+                    let bands = self
+                        .qso_log
+                        .contacts
+                        .iter()
+                        .map(|contact| contact.band.trim())
+                        .filter(|band| !band.is_empty())
+                        .collect::<HashSet<_>>()
+                        .len() as u32;
+                    (bands.min(5), 5)
+                }
+                AchievementKind::GridMapper => {
+                    let grids = self
+                        .qso_log
+                        .contacts
+                        .iter()
+                        .map(|contact| contact.grid.trim())
+                        .filter(|grid| !grid.is_empty())
+                        .collect::<HashSet<_>>()
+                        .len() as u32;
+                    (grids.min(25), 25)
+                }
+                AchievementKind::DXChaser => (0, 1),
+                AchievementKind::ModeExplorer => {
+                    let modes = self
+                        .qso_log
+                        .contacts
+                        .iter()
+                        .map(|contact| contact.mode.trim())
+                        .filter(|mode| !mode.is_empty())
+                        .collect::<HashSet<_>>()
+                        .len() as u32;
+                    (modes.min(3), 3)
+                }
+                AchievementKind::EarlyBird
+                | AchievementKind::NightOwl
+                | AchievementKind::ContestOperator
+                | AchievementKind::SignalSurvivor => (0, 1),
+                AchievementKind::AudioAlchemist => (self.hunter_decode_bursts.min(1_000), 1_000),
+                AchievementKind::QsoQuarter => (qso_count.min(25), 25),
             };
             let unlocked = self.hunter_unlocked.contains(&achievement);
+            let acknowledged = self.hunter_acknowledged.contains(&achievement);
+            if unlocked && acknowledged && !self.hunter_show_acknowledged {
+                continue;
+            }
             ui.group(|ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(if unlocked { "🏆" } else { "🔒" }).color(
@@ -364,6 +452,19 @@ impl QsonautGuiApp {
                     ));
                     ui.label(RichText::new(title).strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if unlocked
+                            && !acknowledged
+                            && ui
+                                .small_button("Acknowledge")
+                                .on_hover_text(
+                                    "Hide this completed achievement from the default list",
+                                )
+                                .clicked()
+                        {
+                            self.hunter_acknowledged.insert(achievement);
+                            self.profile_dirty = true;
+                            self.persist_profile("Achievement acknowledged in");
+                        }
                         ui.label(
                             RichText::new(if unlocked { "UNLOCKED" } else { "IN PROGRESS" })
                                 .small()
@@ -385,6 +486,11 @@ impl QsonautGuiApp {
         }
 
         ui.add_space(4.0);
+        ui.label(
+            RichText::new("Acknowledged achievements are hidden from the default list. Click Show acknowledged to restore them.")
+                .small()
+                .color(Color32::GRAY),
+        );
         ui.label(RichText::new("Recent achievement activity").strong());
         ui.add_space(4.0);
         egui::ScrollArea::vertical()

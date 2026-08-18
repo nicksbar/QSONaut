@@ -34,7 +34,10 @@ use qsonaut_core::{
     AppConfig, AppEvent, AppEventBus, ContestOperatingMode, ContestProfile, FoxHoundRole,
     SplitPolicy,
 };
-use qsonaut_log::{app_config_dir, AdifExportFilter, QsoLog, QsoRecord};
+use qsonaut_log::{
+    app_config_dir, hamdb_cache_path, AdifExportFilter, HamDbCache, HamDbCacheEntry, QsoLog,
+    QsoRecord,
+};
 use qsonaut_pskreporter::{
     ReceptionReport, ReportSender, Reporter, ReporterConfig, ReporterTuning,
 };
@@ -121,6 +124,7 @@ const GUI_SCALE_MAX: f32 = 2.0;
 const GUI_SCALE_MIN: f32 = 0.9;
 const QSO_LOG_FILE: &str = "log.toml";
 const QSO_ADIF_FILE: &str = "log.adi";
+const HAMDB_CACHE_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
 // The generated waveform starts at +0.5 s and ends at about +13.14 s.
 const FT8_EARLY_DECODE_S: f64 = 13.2;
 const FT8_SLOT_SAMPLES: usize = 12_000 * 15;
@@ -485,6 +489,109 @@ fn qso_log_path() -> PathBuf {
 
 fn qso_adif_path() -> PathBuf {
     app_config_dir().join(QSO_ADIF_FILE)
+}
+
+fn enrich_qso_from_hamdb(record: &mut QsoRecord, cache: &HamDbCache, now: u64) {
+    let callsign = record.callsign.trim().to_ascii_uppercase();
+    if callsign.is_empty() {
+        return;
+    }
+    let cached = cache
+        .get_fresh(&callsign, now, HAMDB_CACHE_TTL_SECONDS)
+        .ok()
+        .flatten();
+    let Some(entry) = cached else {
+        return;
+    };
+    // QSO-entered values always win over license-record values.
+    if record.grid.trim().is_empty() {
+        record.grid = entry.grid.clone();
+    }
+    if record.state.trim().is_empty() {
+        record.state = entry.state.clone();
+    }
+    record.hamdb = Some(entry);
+}
+
+#[derive(Debug, Deserialize)]
+struct HamDbResponse {
+    hamdb: HamDbPayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct HamDbPayload {
+    callsign: HamDbCallsign,
+}
+
+#[derive(Debug, Deserialize)]
+struct HamDbCallsign {
+    call: String,
+    #[serde(default)]
+    class: String,
+    #[serde(default)]
+    expires: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    grid: String,
+    #[serde(default, alias = "lat")]
+    latitude: String,
+    #[serde(default, alias = "lon")]
+    longitude: String,
+    #[serde(default, alias = "fname")]
+    first_name: String,
+    #[serde(default, alias = "mi")]
+    middle_name: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    suffix: String,
+    #[serde(default, alias = "addr1")]
+    address_line_1: String,
+    #[serde(default, alias = "addr2")]
+    address_line_2: String,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    zip: String,
+    #[serde(default)]
+    country: String,
+}
+
+fn spawn_hamdb_lookup(
+    callsign: String,
+    completed_at_unix: u64,
+) -> mpsc::Receiver<Option<HamDbCacheEntry>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = reqwest::blocking::get(format!(
+            "https://api.hamdb.org/{}/json/QSONaut",
+            callsign.trim()
+        ))
+        .ok()
+        .and_then(|response| response.json::<HamDbResponse>().ok())
+        .map(|response| HamDbCacheEntry {
+            callsign: response.hamdb.callsign.call.trim().to_ascii_uppercase(),
+            class: response.hamdb.callsign.class.trim().to_string(),
+            expires: response.hamdb.callsign.expires.trim().to_string(),
+            status: response.hamdb.callsign.status.trim().to_string(),
+            grid: response.hamdb.callsign.grid.trim().to_ascii_uppercase(),
+            latitude: response.hamdb.callsign.latitude.trim().to_string(),
+            longitude: response.hamdb.callsign.longitude.trim().to_string(),
+            first_name: response.hamdb.callsign.first_name.trim().to_string(),
+            middle_name: response.hamdb.callsign.middle_name.trim().to_string(),
+            name: response.hamdb.callsign.name.trim().to_string(),
+            suffix: response.hamdb.callsign.suffix.trim().to_string(),
+            address_line_1: response.hamdb.callsign.address_line_1.trim().to_string(),
+            address_line_2: response.hamdb.callsign.address_line_2.trim().to_string(),
+            state: response.hamdb.callsign.state.trim().to_ascii_uppercase(),
+            zip: response.hamdb.callsign.zip.trim().to_string(),
+            country: response.hamdb.callsign.country.trim().to_string(),
+            fetched_at_unix: completed_at_unix,
+        });
+        let _ = tx.send(result);
+    });
+    rx
 }
 
 fn qso_timestamp(record: &QsoRecord) -> Option<String> {
@@ -1032,6 +1139,9 @@ struct QsonautGuiApp {
     automation_external_transports: HashSet<String>,
     automation_external_outbox: VecDeque<ExternalSendRecord>,
     hunter_unlocked: HashSet<AchievementKind>,
+    hunter_acknowledged: HashSet<AchievementKind>,
+    hunter_show_acknowledged: bool,
+    hunter_alerts_enabled: bool,
     hunter_feed: VecDeque<HunterAlert>,
     hunter_unique_heard: HashSet<String>,
     hunter_directed_hits: u32,
@@ -1051,6 +1161,7 @@ struct QsonautGuiApp {
     command_tx: Option<mpsc::Sender<GuiCommand>>,
     worker_stop: Arc<AtomicBool>,
     radio_init_rx: Option<mpsc::Receiver<Option<ConfiguredRadio>>>,
+    hamdb_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
     radio_init_attempted: bool,
     radio_worker_handle: Option<std::thread::JoinHandle<()>>,
     audio_worker_handle: Option<std::thread::JoinHandle<()>>,
@@ -1330,6 +1441,8 @@ impl QsonautGuiApp {
         let mut contest_serial_current = contest_serial_start;
         let mut contest_fake_split_offset_hz = default_contest_fake_split_offset_hz();
         let mut hunter_unlocked = HashSet::new();
+        let mut hunter_acknowledged = HashSet::new();
+        let mut hunter_alerts_enabled = true;
         let mut hunter_custom_rules = Vec::new();
         let profile_io_status: String;
 
@@ -1395,6 +1508,8 @@ impl QsonautGuiApp {
             contest_serial_current = p.contest_serial_current.max(contest_serial_start).max(1);
             contest_fake_split_offset_hz = p.contest_fake_split_offset_hz.clamp(0, 2_000);
             hunter_unlocked = p.hunter_unlocked.into_iter().collect();
+            hunter_acknowledged = p.hunter_acknowledged.into_iter().collect();
+            hunter_alerts_enabled = p.hunter_alerts_enabled;
             hunter_custom_rules = p.hunter_custom_rules;
             config.station.callsign = Some(station_callsign.clone());
             config.station.grid = Some(station_grid.clone());
@@ -1469,6 +1584,8 @@ impl QsonautGuiApp {
                 contest_serial_current,
                 contest_fake_split_offset_hz,
                 hunter_unlocked: Vec::new(),
+                hunter_acknowledged: Vec::new(),
+                hunter_alerts_enabled: true,
                 hunter_custom_rules: Vec::new(),
             };
             match save_operator_profile(&bootstrap) {
@@ -1545,6 +1662,9 @@ impl QsonautGuiApp {
             automation_external_transports,
             automation_external_outbox: VecDeque::new(),
             hunter_unlocked,
+            hunter_acknowledged,
+            hunter_show_acknowledged: false,
+            hunter_alerts_enabled,
             hunter_feed: VecDeque::new(),
             hunter_unique_heard: HashSet::new(),
             hunter_directed_hits: 0,
@@ -1564,6 +1684,7 @@ impl QsonautGuiApp {
             command_tx,
             worker_stop,
             radio_init_rx,
+            hamdb_lookup_rx: None,
             radio_init_attempted: false,
             radio_worker_handle,
             audio_worker_handle,
@@ -1777,6 +1898,8 @@ impl QsonautGuiApp {
             .max(1);
         self.contest_fake_split_offset_hz = profile.contest_fake_split_offset_hz.clamp(0, 2_000);
         self.hunter_unlocked = profile.hunter_unlocked.into_iter().collect();
+        self.hunter_acknowledged = profile.hunter_acknowledged.into_iter().collect();
+        self.hunter_alerts_enabled = profile.hunter_alerts_enabled;
         self.hunter_custom_rules = profile.hunter_custom_rules;
         self.gui_scale = if profile.profile_version >= GUI_SCALE_PROFILE_VERSION {
             profile.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
@@ -1835,7 +1958,74 @@ impl QsonautGuiApp {
         }
     }
 
+    fn pump_hamdb_lookup(&mut self) {
+        let Some(rx) = self.hamdb_lookup_rx.as_ref() else {
+            return;
+        };
+        let Ok(Some(entry)) = rx.try_recv() else {
+            return;
+        };
+        let cache = HamDbCache::open(&hamdb_cache_path()).ok();
+        for record in self
+            .qso_log
+            .contacts
+            .iter_mut()
+            .filter(|record| record.callsign.eq_ignore_ascii_case(&entry.callsign))
+        {
+            if record.grid.trim().is_empty() {
+                record.grid = entry.grid.clone();
+            }
+            if record.state.trim().is_empty() {
+                record.state = entry.state.clone();
+            }
+            record.hamdb = Some(entry.clone());
+        }
+        if let Some(cache) = cache {
+            let _ = cache.upsert(&entry);
+        }
+        self.qso_log_dirty = true;
+        self.persist_qso_log("HamDB details saved to");
+        self.hamdb_lookup_rx = None;
+    }
+
+    fn refresh_hamdb_for_contact(&mut self, index: usize) {
+        let Some(record) = self.qso_log.contacts.get(index) else {
+            return;
+        };
+        let callsign = record.callsign.trim().to_ascii_uppercase();
+        if callsign.is_empty() {
+            self.qso_log_status = "HamDB lookup requires a callsign".to_string();
+            return;
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        self.hamdb_lookup_rx = Some(spawn_hamdb_lookup(callsign, now));
+        self.qso_log_status = "Refreshing HamDB details…".to_string();
+    }
+
     fn append_qso(&mut self, mut record: QsoRecord, status: &str) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        let cache = HamDbCache::open(&hamdb_cache_path()).ok();
+        if let Some(cache) = cache.as_ref() {
+            enrich_qso_from_hamdb(&mut record, cache, now);
+        }
+        if cache
+            .as_ref()
+            .and_then(|cache| {
+                cache
+                    .get_fresh(&record.callsign, now, HAMDB_CACHE_TTL_SECONDS)
+                    .ok()
+            })
+            .flatten()
+            .is_none()
+        {
+            self.hamdb_lookup_rx = Some(spawn_hamdb_lookup(record.callsign.clone(), now));
+        }
         if self
             .qso_log
             .contacts
@@ -1954,6 +2144,8 @@ impl QsonautGuiApp {
                 .max(self.contest_serial_start.max(1)),
             contest_fake_split_offset_hz: self.contest_fake_split_offset_hz,
             hunter_unlocked: self.hunter_unlocked.iter().copied().collect(),
+            hunter_acknowledged: self.hunter_acknowledged.iter().copied().collect(),
+            hunter_alerts_enabled: self.hunter_alerts_enabled,
             hunter_custom_rules: self.hunter_custom_rules.clone(),
         }
     }
@@ -2307,6 +2499,7 @@ impl eframe::App for QsonautGuiApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.pump_hamdb_lookup();
         if self.pending_maximize {
             self.pending_maximize = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));

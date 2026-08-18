@@ -52,6 +52,10 @@ pub fn log_file_path() -> PathBuf {
     log_dir().join(LOG_FILE)
 }
 
+pub fn hamdb_cache_path() -> PathBuf {
+    app_config_dir().join("hamdb.sqlite3")
+}
+
 pub fn init(default_filter: &str) -> Result<()> {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
@@ -122,6 +126,10 @@ pub struct QsoRecord {
     pub callsign: String,
     #[serde(default)]
     pub grid: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub hamdb: Option<HamDbCacheEntry>,
     pub band: String,
     pub mode: String,
     pub frequency_hz: u64,
@@ -159,6 +167,8 @@ impl QsoRecord {
             time_off,
             callsign: callsign.into().trim().to_ascii_uppercase(),
             grid: String::new(),
+            state: String::new(),
+            hamdb: None,
             band: band.into(),
             mode: mode.into().trim().to_ascii_uppercase(),
             frequency_hz,
@@ -217,6 +227,152 @@ pub struct QsoLog {
     pub version: u8,
     #[serde(default)]
     pub contacts: Vec<QsoRecord>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HamDbCacheEntry {
+    pub callsign: String,
+    #[serde(default)]
+    pub class: String,
+    #[serde(default)]
+    pub expires: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub grid: String,
+    #[serde(default)]
+    pub latitude: String,
+    #[serde(default)]
+    pub longitude: String,
+    #[serde(default)]
+    pub first_name: String,
+    #[serde(default)]
+    pub middle_name: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub suffix: String,
+    #[serde(default)]
+    pub address_line_1: String,
+    #[serde(default)]
+    pub address_line_2: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub zip: String,
+    #[serde(default)]
+    pub country: String,
+    #[serde(default)]
+    pub fetched_at_unix: u64,
+}
+
+pub struct HamDbCache {
+    connection: rusqlite::Connection,
+}
+
+impl HamDbCache {
+    pub fn open(path: &Path) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        }
+        let connection = rusqlite::Connection::open(path)
+            .with_context(|| format!("open HamDB cache {}", path.display()))?;
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS hamdb_callsigns (
+                callsign TEXT PRIMARY KEY,
+                class TEXT NOT NULL DEFAULT '', expires TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                grid TEXT NOT NULL DEFAULT '',
+                latitude TEXT NOT NULL DEFAULT '', longitude TEXT NOT NULL DEFAULT '',
+                first_name TEXT NOT NULL DEFAULT '', middle_name TEXT NOT NULL DEFAULT '',
+                name TEXT NOT NULL DEFAULT '', suffix TEXT NOT NULL DEFAULT '',
+                address_line_1 TEXT NOT NULL DEFAULT '', address_line_2 TEXT NOT NULL DEFAULT '',
+                state TEXT NOT NULL DEFAULT '',
+                zip TEXT NOT NULL DEFAULT '',
+                country TEXT NOT NULL DEFAULT '',
+                fetched_at_unix INTEGER NOT NULL
+            );",
+        )?;
+        for column in [
+            "class",
+            "expires",
+            "status",
+            "latitude",
+            "longitude",
+            "first_name",
+            "middle_name",
+            "name",
+            "suffix",
+            "address_line_1",
+            "address_line_2",
+            "zip",
+        ] {
+            let _ = connection.execute(
+                &format!(
+                    "ALTER TABLE hamdb_callsigns ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
+                ),
+                [],
+            );
+        }
+        Ok(Self { connection })
+    }
+
+    pub fn get_fresh(&self, callsign: &str, now: u64, ttl: u64) -> Result<Option<HamDbCacheEntry>> {
+        let mut statement = self.connection.prepare(
+            "SELECT callsign, class, expires, status, grid, latitude, longitude, first_name,
+                    middle_name, name, suffix, address_line_1, address_line_2, state, zip,
+                    country, fetched_at_unix
+             FROM hamdb_callsigns WHERE callsign = ?1 AND fetched_at_unix > ?2",
+        )?;
+        let mut rows = statement.query(rusqlite::params![callsign, now.saturating_sub(ttl)])?;
+        rows.next()?
+            .map(|row| -> rusqlite::Result<HamDbCacheEntry> {
+                Ok(HamDbCacheEntry {
+                    callsign: row.get(0)?,
+                    class: row.get(1)?,
+                    expires: row.get(2)?,
+                    status: row.get(3)?,
+                    grid: row.get(4)?,
+                    latitude: row.get(5)?,
+                    longitude: row.get(6)?,
+                    first_name: row.get(7)?,
+                    middle_name: row.get(8)?,
+                    name: row.get(9)?,
+                    suffix: row.get(10)?,
+                    address_line_1: row.get(11)?,
+                    address_line_2: row.get(12)?,
+                    state: row.get(13)?,
+                    zip: row.get(14)?,
+                    country: row.get(15)?,
+                    fetched_at_unix: row.get(16)?,
+                })
+            })
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub fn upsert(&self, entry: &HamDbCacheEntry) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO hamdb_callsigns
+             (callsign,class,expires,status,grid,latitude,longitude,first_name,middle_name,name,
+              suffix,address_line_1,address_line_2,state,zip,country,fetched_at_unix)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+             ON CONFLICT(callsign) DO UPDATE SET class=excluded.class, expires=excluded.expires,
+             status=excluded.status, grid=excluded.grid, latitude=excluded.latitude,
+             longitude=excluded.longitude, first_name=excluded.first_name, middle_name=excluded.middle_name,
+             name=excluded.name, suffix=excluded.suffix, address_line_1=excluded.address_line_1,
+             address_line_2=excluded.address_line_2, state=excluded.state, zip=excluded.zip,
+             country=excluded.country, fetched_at_unix=excluded.fetched_at_unix",
+            rusqlite::params![
+                entry.callsign,
+                entry.class, entry.expires, entry.status, entry.grid, entry.latitude,
+                entry.longitude, entry.first_name, entry.middle_name, entry.name, entry.suffix,
+                entry.address_line_1, entry.address_line_2, entry.state, entry.zip, entry.country,
+                entry.fetched_at_unix
+            ],
+        )?;
+        Ok(())
+    }
 }
 
 impl Default for QsoLog {
@@ -370,6 +526,11 @@ impl QsoLog {
                     .get("GRIDSQUARE")
                     .map(|value| value.trim().to_ascii_uppercase())
                     .unwrap_or_default(),
+                state: fields
+                    .get("STATE")
+                    .map(|value| value.trim().to_ascii_uppercase())
+                    .unwrap_or_default(),
+                hamdb: None,
                 band,
                 mode,
                 frequency_hz: frequency_hz.unwrap_or_default(),
@@ -437,6 +598,22 @@ impl QsoLog {
                 );
             }
             push_adif(&mut output, "GRIDSQUARE", &contact.grid);
+            push_adif(&mut output, "STATE", &contact.state);
+            if let Some(hamdb) = &contact.hamdb {
+                push_adif(
+                    &mut output,
+                    "COMMENT",
+                    &format!(
+                        "HamDB: {} {} {} {} {} {}",
+                        hamdb.name,
+                        hamdb.country,
+                        hamdb.state,
+                        hamdb.grid,
+                        hamdb.latitude,
+                        hamdb.longitude
+                    ),
+                );
+            }
             push_adif(&mut output, "RST_SENT", &contact.report_sent);
             push_adif(&mut output, "RST_RCVD", &contact.report_received);
             if let Some(serial) = contact.contest_serial_sent {

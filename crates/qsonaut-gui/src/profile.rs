@@ -7,6 +7,7 @@ use qsonaut_log::app_config_dir;
 use serde::{Deserialize, Serialize};
 
 use super::{
+    default_true,
     modes::exchange::{AutoReplyPolicy, DEFAULT_PTT_LEAD_SECONDS, MAX_ATTEMPTS_PER_EXCHANGE},
     AchievementKind, CustomAchievementRule, WaterfallTheme, GUI_SCALE_BASE,
 };
@@ -122,6 +123,10 @@ pub(super) struct OperatorProfile {
     pub(super) contest_fake_split_offset_hz: u32,
     #[serde(default)]
     pub(super) hunter_unlocked: Vec<AchievementKind>,
+    #[serde(default)]
+    pub(super) hunter_acknowledged: Vec<AchievementKind>,
+    #[serde(default = "default_true")]
+    pub(super) hunter_alerts_enabled: bool,
     #[serde(default)]
     pub(super) hunter_custom_rules: Vec<CustomAchievementRule>,
 }
