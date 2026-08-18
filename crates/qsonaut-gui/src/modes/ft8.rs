@@ -826,6 +826,11 @@ impl QsonautGuiApp {
                 let target = self.ft8_seq_target.clone();
                 if ui.small_button("CALL CQ").clicked() {
                     self.ft8_compose = format!("CQ {my} {grid}");
+                    self.ft8_selected = None;
+                    self.rx_tone_hz = default_rx_tone_hz();
+                    if !self.ft8_hold_tx_freq {
+                        self.tx_tone_hz = default_tx_tone_hz();
+                    }
                     self.ft8_autoseq = true;
                     self.ft8_seq_state = Ft8SeqState::CqArmed;
                     self.ft8_seq_target = None;
