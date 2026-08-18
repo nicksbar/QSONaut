@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [0.3.4] - Unreleased
 
+### Added
+- Added an Operator Profile action to load callsign, grid, and QTH details from the
+  callsign's HamDB license record.
+
 ### Fixed
 - Reworked the Contact Log into a resizable two-column layout with a scrollable contact
   list, a selected-contact editor, and an explicit Close action for the editor.

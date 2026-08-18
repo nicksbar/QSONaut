@@ -69,6 +69,16 @@ impl QsonautGuiApp {
             }
         });
 
+        if ui
+            .button("Load license profile from HamDB")
+            .on_hover_text(
+                "Look up this callsign and fill the station profile from its license record",
+            )
+            .clicked()
+        {
+            self.load_profile_from_hamdb();
+        }
+
         ui.horizontal(|ui| {
             ui.label(RichText::new("QTH").strong());
             let qth_changed = ui

@@ -566,31 +566,40 @@ fn spawn_hamdb_lookup(
 ) -> mpsc::Receiver<Option<HamDbCacheEntry>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let result = reqwest::blocking::get(format!(
-            "https://api.hamdb.org/{}/json/QSONaut",
-            callsign.trim()
-        ))
-        .ok()
-        .and_then(|response| response.json::<HamDbResponse>().ok())
-        .map(|response| HamDbCacheEntry {
-            callsign: response.hamdb.callsign.call.trim().to_ascii_uppercase(),
-            class: response.hamdb.callsign.class.trim().to_string(),
-            expires: response.hamdb.callsign.expires.trim().to_string(),
-            status: response.hamdb.callsign.status.trim().to_string(),
-            grid: response.hamdb.callsign.grid.trim().to_ascii_uppercase(),
-            latitude: response.hamdb.callsign.latitude.trim().to_string(),
-            longitude: response.hamdb.callsign.longitude.trim().to_string(),
-            first_name: response.hamdb.callsign.first_name.trim().to_string(),
-            middle_name: response.hamdb.callsign.middle_name.trim().to_string(),
-            name: response.hamdb.callsign.name.trim().to_string(),
-            suffix: response.hamdb.callsign.suffix.trim().to_string(),
-            address_line_1: response.hamdb.callsign.address_line_1.trim().to_string(),
-            address_line_2: response.hamdb.callsign.address_line_2.trim().to_string(),
-            state: response.hamdb.callsign.state.trim().to_ascii_uppercase(),
-            zip: response.hamdb.callsign.zip.trim().to_string(),
-            country: response.hamdb.callsign.country.trim().to_string(),
-            fetched_at_unix: completed_at_unix,
-        });
+        let result = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .ok()
+            .and_then(|client| {
+                client
+                    .get(format!(
+                        "https://api.hamdb.org/{}/json/QSONaut",
+                        callsign.trim()
+                    ))
+                    .send()
+                    .ok()
+            })
+            .filter(|response| response.status().is_success())
+            .and_then(|response| response.json::<HamDbResponse>().ok())
+            .map(|response| HamDbCacheEntry {
+                callsign: response.hamdb.callsign.call.trim().to_ascii_uppercase(),
+                class: response.hamdb.callsign.class.trim().to_string(),
+                expires: response.hamdb.callsign.expires.trim().to_string(),
+                status: response.hamdb.callsign.status.trim().to_string(),
+                grid: response.hamdb.callsign.grid.trim().to_ascii_uppercase(),
+                latitude: response.hamdb.callsign.latitude.trim().to_string(),
+                longitude: response.hamdb.callsign.longitude.trim().to_string(),
+                first_name: response.hamdb.callsign.first_name.trim().to_string(),
+                middle_name: response.hamdb.callsign.middle_name.trim().to_string(),
+                name: response.hamdb.callsign.name.trim().to_string(),
+                suffix: response.hamdb.callsign.suffix.trim().to_string(),
+                address_line_1: response.hamdb.callsign.address_line_1.trim().to_string(),
+                address_line_2: response.hamdb.callsign.address_line_2.trim().to_string(),
+                state: response.hamdb.callsign.state.trim().to_ascii_uppercase(),
+                zip: response.hamdb.callsign.zip.trim().to_string(),
+                country: response.hamdb.callsign.country.trim().to_string(),
+                fetched_at_unix: completed_at_unix,
+            });
         let _ = tx.send(result);
     });
     rx
@@ -1168,6 +1177,7 @@ struct QsonautGuiApp {
     worker_stop: Arc<AtomicBool>,
     radio_init_rx: Option<mpsc::Receiver<Option<ConfiguredRadio>>>,
     hamdb_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
+    hamdb_profile_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
     radio_init_attempted: bool,
     radio_worker_handle: Option<std::thread::JoinHandle<()>>,
     audio_worker_handle: Option<std::thread::JoinHandle<()>>,
@@ -1706,6 +1716,7 @@ impl QsonautGuiApp {
             worker_stop,
             radio_init_rx,
             hamdb_lookup_rx: None,
+            hamdb_profile_lookup_rx: None,
             radio_init_attempted: false,
             radio_worker_handle,
             audio_worker_handle,
@@ -2009,6 +2020,64 @@ impl QsonautGuiApp {
         self.qso_log_dirty = true;
         self.persist_qso_log("HamDB details saved to");
         self.hamdb_lookup_rx = None;
+    }
+
+    fn pump_hamdb_profile_lookup(&mut self) {
+        let Some(rx) = self.hamdb_profile_lookup_rx.as_ref() else {
+            return;
+        };
+        let entry = match rx.try_recv() {
+            Ok(Some(entry)) => entry,
+            Ok(None) | Err(mpsc::TryRecvError::Disconnected) => {
+                self.profile_io_status = "HamDB did not return a license record".to_string();
+                self.hamdb_profile_lookup_rx = None;
+                return;
+            }
+            Err(mpsc::TryRecvError::Empty) => return,
+        };
+        self.station_callsign = entry.callsign.clone();
+        if !entry.grid.trim().is_empty() {
+            self.station_grid = entry.grid.clone();
+        }
+        let qth = [
+            entry.address_line_1.trim(),
+            entry.address_line_2.trim(),
+            entry.state.trim(),
+            entry.country.trim(),
+        ]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+        if !qth.is_empty() {
+            self.station_qth = qth;
+        }
+        self.config.station.callsign = Some(self.station_callsign.clone());
+        self.config.station.grid =
+            (!self.station_grid.trim().is_empty()).then(|| self.station_grid.clone());
+        let cache = HamDbCache::open(&hamdb_cache_path()).ok();
+        if let Some(cache) = cache {
+            let _ = cache.upsert(&entry);
+        }
+        self.profile_dirty = true;
+        self.persist_profile("Loaded license profile from HamDB");
+        self.emit_operator_profile_hook("profile_loaded_from_hamdb");
+        self.hamdb_profile_lookup_rx = None;
+    }
+
+    fn load_profile_from_hamdb(&mut self) {
+        let callsign = self.station_callsign.trim().to_ascii_uppercase();
+        if callsign.is_empty() || !is_probable_callsign(&callsign) {
+            self.profile_io_status =
+                "Enter a valid callsign before loading HamDB profile".to_string();
+            return;
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        self.hamdb_profile_lookup_rx = Some(spawn_hamdb_lookup(callsign, now));
+        self.profile_io_status = "Loading license record from HamDB…".to_string();
     }
 
     fn refresh_hamdb_for_contact(&mut self, index: usize) {
@@ -2728,6 +2797,7 @@ impl eframe::App for QsonautGuiApp {
         self.process_native_digital_tx_pipeline();
         self.pump_server_automation_events();
         self.pump_automation_events();
+        self.pump_hamdb_profile_lookup();
         let (ft4_decodes, latest_ft4_period) = {
             let shared = self.state.lock().expect("ui state lock poisoned");
             (
