@@ -1188,7 +1188,7 @@ struct QsonautGuiApp {
     ft8_tx_chat: VecDeque<Ft8TxChatEntry>,
     ft8_seen_decode_period: Option<u64>,
     qso_log: QsoLog,
-    qso_selected: Option<usize>,
+    qso_selected: Option<u64>,
     qso_log_status: String,
     qso_log_dirty: bool,
     ft8_compose: String,
@@ -2074,7 +2074,7 @@ impl QsonautGuiApp {
                 frequency_hz: last.frequency_hz,
             });
         }
-        self.qso_selected = Some(self.qso_log.contacts.len() - 1);
+        self.qso_selected = self.qso_log.contacts.last().map(|contact| contact.id);
         self.qso_log_dirty = true;
         self.persist_qso_log(status);
         if let Some(record) = &published {

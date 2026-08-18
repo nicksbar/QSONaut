@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - Unreleased
+
+### Fixed
+- Reworked the Contact Log into a resizable two-column layout with a scrollable contact
+  list, a selected-contact editor, and an explicit Close action for the editor.
+- Removed the misleading resize cursor and inactive resize boundary between the radio
+  controls and the waterfall deck; the waterfall deck's lower edge remains resizable.
+- Made RX audio monitoring resample captured audio to the selected output device's native
+  rate, and report monitor startup failures instead of silently disabling playback.
+- Calling CQ now clears the previously selected FT8 decode/contact and returns the RX/TX
+  audio channel to the normal operating frequency unless HOLD TX FREQ is enabled.
+
 ## [0.3.3] - 2026-08-18
 
 ### Changed
@@ -47,12 +59,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the connected radio.
 
 ### Fixed
-- Removed the misleading resize cursor and inactive resize boundary between the radio
-  controls and the waterfall deck; the waterfall deck's lower edge remains resizable.
-- Made RX audio monitoring resample captured audio to the selected output device's native
-  rate, and report monitor startup failures instead of silently disabling playback.
-- Calling CQ now clears the previously selected FT8 decode/contact and returns the RX/TX
-  audio channel to the normal operating frequency unless HOLD TX FREQ is enabled.
 - Eliminated the Windows startup window flashing. Restored geometry is applied through the
   viewport builder before the window is created, and the maximized state is applied after
   the first painted frame, so winit no longer performs `SW_MAXIMIZE`/`SW_HIDE` round trips
