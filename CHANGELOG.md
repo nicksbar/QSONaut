@@ -28,6 +28,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   FT8 locator (`CN84`) when composing CQ and exchange messages.
 - Aligns the audio waterfall's visible spectrum with the RX/TX cursor positions when using
   a narrower radio filter view.
+- Preserves the active FT8 conversation after stopping TX and keeps directed responses
+  addressed to the operator visible when CQ-only filtering is enabled.
 
 ## [0.3.3] - 2026-08-18
 

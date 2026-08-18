@@ -91,7 +91,8 @@ impl QsonautGuiApp {
                     super::exchange::callsign_eq(&message.from, target)
                 })
             } else {
-                false
+                operator_call_hit(&entry.message, &operator_call)
+                    == Some(OperatorCallHit::DirectedToMe)
             };
             if belongs {
                 lines.push(Ft8ChatLine {
@@ -597,7 +598,10 @@ impl QsonautGuiApp {
                                 let mut move_tx_from_double_click: Option<bool> = None;
                                 let mut session_from_double_click: Option<QsoSession> = None;
                                 for (i, entry) in self.ft8_log.iter().enumerate() {
-                                    if self.ft8_cq_only_view && !entry.is_cq {
+                                    let directed_to_me =
+                                        operator_call_hit(&entry.message, &operator_call)
+                                            == Some(OperatorCallHit::DirectedToMe);
+                                    if self.ft8_cq_only_view && !entry.is_cq && !directed_to_me {
                                         continue;
                                     }
                                     if let Some(prev) = prev_utc {

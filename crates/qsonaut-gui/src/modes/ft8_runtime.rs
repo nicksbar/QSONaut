@@ -241,8 +241,6 @@ impl QsonautGuiApp {
         self.ft8_tx_pcm = None;
         self.ft8_queued_tx_message = None;
         self.ft8_pending_manual_reply = None;
-        self.ft8_seq_target = None;
-        self.ft8_session = None;
         self.ft8_seq_state = Ft8SeqState::Idle;
         self.ft8_seq_status = "TX force-stopped".to_string();
 
