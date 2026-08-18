@@ -34,8 +34,13 @@ use qsonaut_core::{
     AppConfig, AppEvent, AppEventBus, ContestOperatingMode, ContestProfile, FoxHoundRole,
     SplitPolicy,
 };
-use qsonaut_log::{app_config_dir, AdifExportFilter, QsoLog, QsoRecord};
-use qsonaut_pskreporter::{ReceptionReport, ReportSender, Reporter, ReporterConfig};
+use qsonaut_log::{
+    app_config_dir, hamdb_cache_path, AdifExportFilter, HamDbCache, HamDbCacheEntry, QsoLog,
+    QsoRecord,
+};
+use qsonaut_pskreporter::{
+    ReceptionReport, ReportSender, Reporter, ReporterConfig, ReporterTuning,
+};
 use qsonaut_radio::{
     drivers::{open_model_with_radio_address, ConfiguredRadio},
     enumerate_serial_port_descriptors,
@@ -79,10 +84,12 @@ use modes::exchange::{
 use profile::{
     active_operator_profile_name, default_contest_fake_split_offset_hz, default_cw_tone_hz,
     default_cw_wpm, default_gui_scale, default_max_attempts as default_ft8_max_attempts,
+    default_psk_batch_interval_secs, default_psk_max_pending, default_psk_repeat_cache_secs,
     default_ptt_lead_ms, default_ptt_tail_ms, default_rx_tone_hz, default_tx_tone_hz,
     default_waterfall_deck_height, list_operator_profiles, load_operator_profile,
     load_operator_profile_named, save_operator_profile, save_operator_profile_named,
-    select_operator_profile, OperatorProfile, OPERATOR_PROFILE_FILE, OPERATOR_PROFILE_VERSION,
+    select_operator_profile, OperatorProfile, RadioProfile, OPERATOR_PROFILE_FILE,
+    OPERATOR_PROFILE_VERSION,
 };
 #[cfg(test)]
 use tx_audio::FT8_TX_AUDIO_START_S;
@@ -102,7 +109,6 @@ use workers::decode::{
 };
 #[cfg(test)]
 use workers::radio::apply_waterfall_bins;
-use workers::radio::spawn_radio_worker;
 use workers::spawn_audio_spectrum_worker;
 
 const RADIO_WF_WIDTH: usize = 360;
@@ -119,6 +125,7 @@ const GUI_SCALE_MAX: f32 = 2.0;
 const GUI_SCALE_MIN: f32 = 0.9;
 const QSO_LOG_FILE: &str = "log.toml";
 const QSO_ADIF_FILE: &str = "log.adi";
+const HAMDB_CACHE_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
 // The generated waveform starts at +0.5 s and ends at about +13.14 s.
 const FT8_EARLY_DECODE_S: f64 = 13.2;
 const FT8_SLOT_SAMPLES: usize = 12_000 * 15;
@@ -144,7 +151,7 @@ enum SignalPanelTab {
     Waterfall,
     Settings,
     Server,
-    Log,
+    RadioTuning,
 }
 
 fn default_true() -> bool {
@@ -416,6 +423,7 @@ fn start_psk_reporter(
     enabled: bool,
     callsign: &str,
     grid: &str,
+    tuning: ReporterTuning,
     state: &Arc<Mutex<GuiState>>,
 ) -> Option<Reporter> {
     state
@@ -425,7 +433,9 @@ fn start_psk_reporter(
     if !enabled || callsign.trim().is_empty() || callsign == "N0CALL" || grid == "AA00" {
         return None;
     }
-    let reporter = Reporter::start(ReporterConfig::production(callsign, grid));
+    let mut config = ReporterConfig::production(callsign, grid);
+    config.tuning = tuning;
+    let reporter = Reporter::start(config);
     state
         .lock()
         .expect("ui state lock poisoned")
@@ -481,6 +491,109 @@ fn qso_log_path() -> PathBuf {
 
 fn qso_adif_path() -> PathBuf {
     app_config_dir().join(QSO_ADIF_FILE)
+}
+
+fn enrich_qso_from_hamdb(record: &mut QsoRecord, cache: &HamDbCache, now: u64) {
+    let callsign = record.callsign.trim().to_ascii_uppercase();
+    if callsign.is_empty() {
+        return;
+    }
+    let cached = cache
+        .get_fresh(&callsign, now, HAMDB_CACHE_TTL_SECONDS)
+        .ok()
+        .flatten();
+    let Some(entry) = cached else {
+        return;
+    };
+    // QSO-entered values always win over license-record values.
+    if record.grid.trim().is_empty() {
+        record.grid = entry.grid.clone();
+    }
+    if record.state.trim().is_empty() {
+        record.state = entry.state.clone();
+    }
+    record.hamdb = Some(entry);
+}
+
+#[derive(Debug, Deserialize)]
+struct HamDbResponse {
+    hamdb: HamDbPayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct HamDbPayload {
+    callsign: HamDbCallsign,
+}
+
+#[derive(Debug, Deserialize)]
+struct HamDbCallsign {
+    call: String,
+    #[serde(default)]
+    class: String,
+    #[serde(default)]
+    expires: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    grid: String,
+    #[serde(default, alias = "lat")]
+    latitude: String,
+    #[serde(default, alias = "lon")]
+    longitude: String,
+    #[serde(default, alias = "fname")]
+    first_name: String,
+    #[serde(default, alias = "mi")]
+    middle_name: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    suffix: String,
+    #[serde(default, alias = "addr1")]
+    address_line_1: String,
+    #[serde(default, alias = "addr2")]
+    address_line_2: String,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    zip: String,
+    #[serde(default)]
+    country: String,
+}
+
+fn spawn_hamdb_lookup(
+    callsign: String,
+    completed_at_unix: u64,
+) -> mpsc::Receiver<Option<HamDbCacheEntry>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = reqwest::blocking::get(format!(
+            "https://api.hamdb.org/{}/json/QSONaut",
+            callsign.trim()
+        ))
+        .ok()
+        .and_then(|response| response.json::<HamDbResponse>().ok())
+        .map(|response| HamDbCacheEntry {
+            callsign: response.hamdb.callsign.call.trim().to_ascii_uppercase(),
+            class: response.hamdb.callsign.class.trim().to_string(),
+            expires: response.hamdb.callsign.expires.trim().to_string(),
+            status: response.hamdb.callsign.status.trim().to_string(),
+            grid: response.hamdb.callsign.grid.trim().to_ascii_uppercase(),
+            latitude: response.hamdb.callsign.latitude.trim().to_string(),
+            longitude: response.hamdb.callsign.longitude.trim().to_string(),
+            first_name: response.hamdb.callsign.first_name.trim().to_string(),
+            middle_name: response.hamdb.callsign.middle_name.trim().to_string(),
+            name: response.hamdb.callsign.name.trim().to_string(),
+            suffix: response.hamdb.callsign.suffix.trim().to_string(),
+            address_line_1: response.hamdb.callsign.address_line_1.trim().to_string(),
+            address_line_2: response.hamdb.callsign.address_line_2.trim().to_string(),
+            state: response.hamdb.callsign.state.trim().to_ascii_uppercase(),
+            zip: response.hamdb.callsign.zip.trim().to_string(),
+            country: response.hamdb.callsign.country.trim().to_string(),
+            fetched_at_unix: completed_at_unix,
+        });
+        let _ = tx.send(result);
+    });
+    rx
 }
 
 fn qso_timestamp(record: &QsoRecord) -> Option<String> {
@@ -573,31 +686,6 @@ fn call_hit_badge(hit: OperatorCallHit) -> (&'static str, Color32, Color32) {
             Color32::from_rgb(18, 56, 73),
         ),
     }
-}
-
-fn draw_operator_call_banner(
-    ui: &mut egui::Ui,
-    mode: &str,
-    callsign: &str,
-    message: &str,
-    hit: OperatorCallHit,
-) {
-    let (badge, accent, fill) = call_hit_badge(hit);
-    egui::Frame::group(ui.style())
-        .fill(fill)
-        .stroke(egui::Stroke::new(2.0_f32, accent))
-        .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(badge).strong().size(16.0).color(accent));
-                ui.label(
-                    RichText::new(format!("{callsign} lit up the {mode} receiver"))
-                        .strong()
-                        .color(Color32::WHITE),
-                );
-                ui.separator();
-                ui.label(RichText::new(message).monospace().strong().color(accent));
-            });
-        });
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -741,13 +829,13 @@ impl Default for GuiState {
 enum GuiCommand {
     TuneDelta(i64),
     CycleMode,
-    TogglePtt,
     AfGainDelta(i16),
     ApplyWorkspace {
         mode: WorkspaceMode,
         frequency_hz: u64,
     },
     SetFilter(u8),
+    SetControl(ControlId, ControlValue),
     SetPtt(bool),
     SetPttWithAck(bool, mpsc::Sender<std::result::Result<(), String>>),
     Quit,
@@ -978,6 +1066,40 @@ fn spawn_device_scan() -> mpsc::Receiver<DeviceInventory> {
     rx
 }
 
+/// Spawns radio initialization on a background thread with timeout. Returns a receiver for
+/// the result (or None if a timeout of ~5 seconds occurs). This prevents serial port
+/// operations from blocking the UI window appearance.
+fn spawn_radio_init(
+    model: String,
+    port: String,
+    baud_rate: u32,
+    controller_civ_address: u8,
+    radio_civ_address: u8,
+) -> mpsc::Receiver<Option<ConfiguredRadio>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let start = std::time::Instant::now();
+        let _timeout = std::time::Duration::from_secs(5);
+
+        match open_model_with_radio_address(
+            &model,
+            &port,
+            baud_rate,
+            controller_civ_address,
+            Some(radio_civ_address),
+        ) {
+            Ok(radio) => {
+                let _ = tx.send(Some(radio));
+            }
+            Err(err) => {
+                debug!(error = %err, elapsed = ?start.elapsed(), "Radio init failed");
+                let _ = tx.send(None);
+            }
+        }
+    });
+    rx
+}
+
 fn spawn_acceleration_probe(preference: ComputePreference) -> mpsc::Receiver<AccelerationReport> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -1020,12 +1142,18 @@ struct QsonautGuiApp {
     automation_external_transports: HashSet<String>,
     automation_external_outbox: VecDeque<ExternalSendRecord>,
     hunter_unlocked: HashSet<AchievementKind>,
+    hunter_acknowledged: HashSet<AchievementKind>,
+    hunter_show_acknowledged: bool,
+    hunter_alerts_enabled: bool,
     hunter_feed: VecDeque<HunterAlert>,
     hunter_unique_heard: HashSet<String>,
     hunter_directed_hits: u32,
     hunter_dupe_blocks: u32,
     hunter_decode_bursts: u32,
     hunter_custom_rules: Vec<CustomAchievementRule>,
+    radio_profiles: Vec<RadioProfile>,
+    mode_radio_profile: std::collections::BTreeMap<String, String>,
+    radio_profile_name_input: String,
     hunter_custom_title_input: String,
     hunter_custom_detail_input: String,
     hunter_custom_metric_input: HunterMetric,
@@ -1038,6 +1166,9 @@ struct QsonautGuiApp {
     state: Arc<Mutex<GuiState>>,
     command_tx: Option<mpsc::Sender<GuiCommand>>,
     worker_stop: Arc<AtomicBool>,
+    radio_init_rx: Option<mpsc::Receiver<Option<ConfiguredRadio>>>,
+    hamdb_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
+    radio_init_attempted: bool,
     radio_worker_handle: Option<std::thread::JoinHandle<()>>,
     audio_worker_handle: Option<std::thread::JoinHandle<()>>,
     radio_waterfall_texture: Option<TextureHandle>,
@@ -1085,6 +1216,7 @@ struct QsonautGuiApp {
     ft8_last_tx_was_cq: bool,
     digital_compose: String,
     digital_selected: Option<DigitalDecodeEntry>,
+    digital_last_click: Option<(u64, u32, String, Instant)>,
     digital_seq_target: Option<String>,
     ft4_session: Option<QsoSession>,
     ft4_seen_decodes: HashSet<(u64, u32, String)>,
@@ -1164,6 +1296,9 @@ struct QsonautGuiApp {
     acceleration_report: AccelerationReport,
     acceleration_probe: Option<mpsc::Receiver<AccelerationReport>>,
     psk_reporter_enabled: bool,
+    psk_batch_interval_secs: u64,
+    psk_repeat_cache_secs: u64,
+    psk_max_pending: usize,
     psk_reporter: Option<Reporter>,
     server_client: Option<ServerClient>,
     server_instance_id: String,
@@ -1212,47 +1347,33 @@ impl QsonautGuiApp {
 
         let repaint_ctx: Arc<OnceLock<egui::Context>> = Arc::new(OnceLock::new());
 
-        let (command_tx, radio_worker_handle) = if config.radio.enabled {
+        // Spawn radio initialization on a background thread to avoid blocking UI appearance
+        let (radio_init_rx, radio_waterfall_status_init) = if config.radio.enabled {
             let port = config.radio.serial_port.clone().unwrap_or_default();
-            let radio = open_model_with_radio_address(
-                &config.radio.model,
-                port.clone(),
+            let rx = spawn_radio_init(
+                config.radio.model.clone(),
+                port,
                 config.radio.baud_rate,
                 config.radio.controller_civ_address,
-                Some(config.radio.civ_address),
+                config.radio.civ_address,
             );
-            match radio {
-                Ok(radio) => {
-                    let (tx, rx) = mpsc::channel::<GuiCommand>();
-                    let display_port = if port.is_empty() { "auto" } else { &port };
-                    info!(model = %config.radio.model, port = %display_port, baud = config.radio.baud_rate, "Starting GUI radio worker");
-                    let handle = spawn_radio_worker(
-                        radio,
-                        state.clone(),
-                        worker_stop.clone(),
-                        display_tuning.clone(),
-                        rx,
-                        repaint_ctx.clone(),
-                    );
-                    (Some(tx), Some(handle))
-                }
-                Err(error) => {
-                    let mut s = state.lock().expect("ui state lock poisoned");
-                    s.last_error = Some(error.to_string());
-                    s.radio_waterfall_status = "UNAVAILABLE (invalid radio profile)".to_string();
-                    (None, None)
-                }
-            }
+            (Some(rx), "CONNECTING…".to_string())
         } else {
-            {
-                let mut s = state.lock().expect("ui state lock poisoned");
+            (None, "UNAVAILABLE (radio disabled)".to_string())
+        };
+
+        // Set initial radio status
+        {
+            let mut s = state.lock().expect("ui state lock poisoned");
+            s.radio_waterfall_status = radio_waterfall_status_init;
+            if radio_init_rx.is_none() {
                 s.last_error = Some(
                     "Radio is disabled in config; UI running in monitor-only mode".to_string(),
                 );
-                s.radio_waterfall_status = "UNAVAILABLE (radio disabled)".to_string();
             }
-            (None, None)
-        };
+        }
+
+        let (command_tx, radio_worker_handle) = (None, None);
 
         let ft8_tx_active = Arc::new(AtomicBool::new(false));
         let digital_tx_active = Arc::new(AtomicBool::new(false));
@@ -1265,6 +1386,12 @@ impl QsonautGuiApp {
             config.audio.sample_rate_hz,
             config.audio.channels,
             config.audio.input_device.clone(),
+            config.audio.monitor_enabled,
+            config
+                .audio
+                .monitor_output_device
+                .clone()
+                .or_else(|| config.audio.output_device.clone()),
             repaint_ctx.clone(),
             display_tuning.clone(),
         ));
@@ -1310,6 +1437,9 @@ impl QsonautGuiApp {
         let mut gui_scale = default_gui_scale();
         let mut compute_preference = ComputePreference::Auto;
         let mut psk_reporter_enabled = false;
+        let mut psk_batch_interval_secs = default_psk_batch_interval_secs();
+        let mut psk_repeat_cache_secs = default_psk_repeat_cache_secs();
+        let mut psk_max_pending = default_psk_max_pending();
         let mut server_instance_id = new_instance_id();
         let mut contest_enabled = config.contest.enabled;
         let mut contest_operating_mode = config.contest.operating_mode;
@@ -1323,7 +1453,11 @@ impl QsonautGuiApp {
         let mut contest_serial_current = contest_serial_start;
         let mut contest_fake_split_offset_hz = default_contest_fake_split_offset_hz();
         let mut hunter_unlocked = HashSet::new();
+        let mut hunter_acknowledged = HashSet::new();
+        let mut hunter_alerts_enabled = true;
         let mut hunter_custom_rules = Vec::new();
+        let mut radio_profiles = Vec::new();
+        let mut mode_radio_profile = std::collections::BTreeMap::new();
         let profile_io_status: String;
 
         if let Some(p) = load_operator_profile() {
@@ -1358,8 +1492,8 @@ impl QsonautGuiApp {
             if !ft8_hold_tx_freq {
                 tx_tone_hz = rx_tone_hz;
             }
-            ptt_lead_ms = p.ptt_lead_ms.clamp(100, 1_500);
-            ptt_tail_ms = p.ptt_tail_ms.clamp(0, 1_000);
+            ptt_lead_ms = p.ptt_lead_ms.clamp(0, 500);
+            ptt_tail_ms = p.ptt_tail_ms.clamp(0, 500);
             cw_wpm = p.cw_wpm.clamp(5, 40);
             cw_tone_hz = p.cw_tone_hz.clamp(200, 1_200);
             gui_scale = if p.profile_version >= GUI_SCALE_PROFILE_VERSION {
@@ -1370,6 +1504,9 @@ impl QsonautGuiApp {
             };
             compute_preference = p.compute_preference;
             psk_reporter_enabled = p.psk_reporter_enabled;
+            psk_batch_interval_secs = p.psk_batch_interval_secs.clamp(60, 3_600);
+            psk_repeat_cache_secs = p.psk_repeat_cache_secs.clamp(60, 3_600);
+            psk_max_pending = p.psk_max_pending.clamp(1, 2_048);
             server_instance_id = p.server_instance_id;
             if let Some(server) = p.server {
                 config.server = server;
@@ -1385,7 +1522,11 @@ impl QsonautGuiApp {
             contest_serial_current = p.contest_serial_current.max(contest_serial_start).max(1);
             contest_fake_split_offset_hz = p.contest_fake_split_offset_hz.clamp(0, 2_000);
             hunter_unlocked = p.hunter_unlocked.into_iter().collect();
+            hunter_acknowledged = p.hunter_acknowledged.into_iter().collect();
+            hunter_alerts_enabled = p.hunter_alerts_enabled;
             hunter_custom_rules = p.hunter_custom_rules;
+            radio_profiles = p.radio_profiles;
+            mode_radio_profile = p.mode_radio_profile;
             config.station.callsign = Some(station_callsign.clone());
             config.station.grid = Some(station_grid.clone());
             config.contest = ContestProfile {
@@ -1443,6 +1584,9 @@ impl QsonautGuiApp {
                 gui_scale,
                 compute_preference,
                 psk_reporter_enabled,
+                psk_batch_interval_secs,
+                psk_repeat_cache_secs,
+                psk_max_pending,
                 server_instance_id: server_instance_id.clone(),
                 server: Some(config.server.clone()),
                 contest_enabled,
@@ -1456,7 +1600,11 @@ impl QsonautGuiApp {
                 contest_serial_current,
                 contest_fake_split_offset_hz,
                 hunter_unlocked: Vec::new(),
+                hunter_acknowledged: Vec::new(),
+                hunter_alerts_enabled: true,
                 hunter_custom_rules: Vec::new(),
+                radio_profiles: Vec::new(),
+                mode_radio_profile: std::collections::BTreeMap::new(),
             };
             match save_operator_profile(&bootstrap) {
                 Ok(_) => {
@@ -1514,6 +1662,11 @@ impl QsonautGuiApp {
             psk_reporter_enabled,
             &station_callsign,
             &station_grid,
+            ReporterTuning {
+                batch_interval_secs: psk_batch_interval_secs,
+                repeat_cache_secs: psk_repeat_cache_secs,
+                max_pending: psk_max_pending,
+            },
             &state,
         );
 
@@ -1527,12 +1680,18 @@ impl QsonautGuiApp {
             automation_external_transports,
             automation_external_outbox: VecDeque::new(),
             hunter_unlocked,
+            hunter_acknowledged,
+            hunter_show_acknowledged: false,
+            hunter_alerts_enabled,
             hunter_feed: VecDeque::new(),
             hunter_unique_heard: HashSet::new(),
             hunter_directed_hits: 0,
             hunter_dupe_blocks: 0,
             hunter_decode_bursts: 0,
             hunter_custom_rules,
+            radio_profiles,
+            mode_radio_profile,
+            radio_profile_name_input: String::new(),
             hunter_custom_title_input: String::new(),
             hunter_custom_detail_input: String::new(),
             hunter_custom_metric_input: HunterMetric::UniqueHeard,
@@ -1545,6 +1704,9 @@ impl QsonautGuiApp {
             state,
             command_tx,
             worker_stop,
+            radio_init_rx,
+            hamdb_lookup_rx: None,
+            radio_init_attempted: false,
             radio_worker_handle,
             audio_worker_handle,
             radio_waterfall_texture: None,
@@ -1591,6 +1753,7 @@ impl QsonautGuiApp {
             ft8_last_tx_was_cq: false,
             digital_compose: String::new(),
             digital_selected: None,
+            digital_last_click: None,
             digital_seq_target: None,
             ft4_session: None,
             ft4_seen_decodes: HashSet::new(),
@@ -1670,6 +1833,9 @@ impl QsonautGuiApp {
             acceleration_report,
             acceleration_probe,
             psk_reporter_enabled,
+            psk_batch_interval_secs,
+            psk_repeat_cache_secs,
+            psk_max_pending,
             psk_reporter,
             server_client,
             server_instance_id,
@@ -1735,8 +1901,8 @@ impl QsonautGuiApp {
         } else {
             profile.rx_tone_hz
         };
-        self.ptt_lead_ms = profile.ptt_lead_ms.clamp(100, 1_500);
-        self.ptt_tail_ms = profile.ptt_tail_ms.clamp(0, 1_000);
+        self.ptt_lead_ms = profile.ptt_lead_ms.clamp(0, 500);
+        self.ptt_tail_ms = profile.ptt_tail_ms.clamp(0, 500);
         self.cw_wpm = profile.cw_wpm.clamp(5, 40);
         self.cw_tone_hz = profile.cw_tone_hz.clamp(200, 1_200);
         self.contest_enabled = profile.contest_enabled;
@@ -1753,7 +1919,11 @@ impl QsonautGuiApp {
             .max(1);
         self.contest_fake_split_offset_hz = profile.contest_fake_split_offset_hz.clamp(0, 2_000);
         self.hunter_unlocked = profile.hunter_unlocked.into_iter().collect();
+        self.hunter_acknowledged = profile.hunter_acknowledged.into_iter().collect();
+        self.hunter_alerts_enabled = profile.hunter_alerts_enabled;
         self.hunter_custom_rules = profile.hunter_custom_rules;
+        self.radio_profiles = profile.radio_profiles;
+        self.mode_radio_profile = profile.mode_radio_profile;
         self.gui_scale = if profile.profile_version >= GUI_SCALE_PROFILE_VERSION {
             profile.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
         } else {
@@ -1761,6 +1931,9 @@ impl QsonautGuiApp {
         };
         self.compute_preference = profile.compute_preference;
         self.psk_reporter_enabled = profile.psk_reporter_enabled;
+        self.psk_batch_interval_secs = profile.psk_batch_interval_secs.clamp(60, 3_600);
+        self.psk_repeat_cache_secs = profile.psk_repeat_cache_secs.clamp(60, 3_600);
+        self.psk_max_pending = profile.psk_max_pending.clamp(1, 2_048);
         if !profile.server_instance_id.is_empty() {
             self.server_instance_id = profile.server_instance_id;
         }
@@ -1808,7 +1981,74 @@ impl QsonautGuiApp {
         }
     }
 
+    fn pump_hamdb_lookup(&mut self) {
+        let Some(rx) = self.hamdb_lookup_rx.as_ref() else {
+            return;
+        };
+        let Ok(Some(entry)) = rx.try_recv() else {
+            return;
+        };
+        let cache = HamDbCache::open(&hamdb_cache_path()).ok();
+        for record in self
+            .qso_log
+            .contacts
+            .iter_mut()
+            .filter(|record| record.callsign.eq_ignore_ascii_case(&entry.callsign))
+        {
+            if record.grid.trim().is_empty() {
+                record.grid = entry.grid.clone();
+            }
+            if record.state.trim().is_empty() {
+                record.state = entry.state.clone();
+            }
+            record.hamdb = Some(entry.clone());
+        }
+        if let Some(cache) = cache {
+            let _ = cache.upsert(&entry);
+        }
+        self.qso_log_dirty = true;
+        self.persist_qso_log("HamDB details saved to");
+        self.hamdb_lookup_rx = None;
+    }
+
+    fn refresh_hamdb_for_contact(&mut self, index: usize) {
+        let Some(record) = self.qso_log.contacts.get(index) else {
+            return;
+        };
+        let callsign = record.callsign.trim().to_ascii_uppercase();
+        if callsign.is_empty() {
+            self.qso_log_status = "HamDB lookup requires a callsign".to_string();
+            return;
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        self.hamdb_lookup_rx = Some(spawn_hamdb_lookup(callsign, now));
+        self.qso_log_status = "Refreshing HamDB details…".to_string();
+    }
+
     fn append_qso(&mut self, mut record: QsoRecord, status: &str) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        let cache = HamDbCache::open(&hamdb_cache_path()).ok();
+        if let Some(cache) = cache.as_ref() {
+            enrich_qso_from_hamdb(&mut record, cache, now);
+        }
+        if cache
+            .as_ref()
+            .and_then(|cache| {
+                cache
+                    .get_fresh(&record.callsign, now, HAMDB_CACHE_TTL_SECONDS)
+                    .ok()
+            })
+            .flatten()
+            .is_none()
+        {
+            self.hamdb_lookup_rx = Some(spawn_hamdb_lookup(record.callsign.clone(), now));
+        }
         if self
             .qso_log
             .contacts
@@ -1849,6 +2089,81 @@ impl QsonautGuiApp {
             || self.ft8_tx_active.load(Ordering::Acquire)
             || self.ft8_tx_queued_period.is_some()
             || self.digital_tx_active.load(Ordering::Acquire)
+    }
+
+    fn read_radio_profile(&self, name: &str, snapshot: &GuiState) -> RadioProfile {
+        RadioProfile {
+            name: name.to_string(),
+            mode: Some(snapshot.mode.clone()),
+            data_mode: snapshot.data_mode,
+            filter: snapshot.filter,
+            af_gain: snapshot.af_gain,
+            rf_gain: snapshot.rf_gain,
+            rf_power: snapshot.rf_power,
+            preamp: None,
+            attenuator: None,
+            noise_blank: None,
+            noise_reduction: None,
+            agc: None,
+        }
+    }
+
+    fn apply_radio_profile(&mut self, profile: RadioProfile) {
+        let Some(tx) = &self.command_tx else {
+            self.profile_io_status = "Radio tuning unavailable: radio is not connected".to_string();
+            return;
+        };
+        if let Some(mode) = profile.mode.as_deref() {
+            if let Some(workspace_mode) = WORKSPACE_MODES
+                .iter()
+                .copied()
+                .find(|candidate| candidate.label().eq_ignore_ascii_case(mode))
+            {
+                let frequency_hz = self.state.lock().ok().and_then(|state| state.frequency_hz);
+                if let Some(frequency_hz) = frequency_hz {
+                    let _ = tx.send(GuiCommand::ApplyWorkspace {
+                        mode: workspace_mode,
+                        frequency_hz,
+                    });
+                }
+            }
+        }
+        if let Some(filter) = profile.filter {
+            let _ = tx.send(GuiCommand::SetFilter(filter));
+        }
+        for (control, value) in [
+            (ControlId::AfGain, profile.af_gain.map(ControlValue::U8)),
+            (ControlId::RfGain, profile.rf_gain.map(ControlValue::U8)),
+            (ControlId::RfPower, profile.rf_power.map(ControlValue::U8)),
+            (ControlId::Preamp, profile.preamp.map(ControlValue::Bool)),
+            (
+                ControlId::Attenuator,
+                profile.attenuator.map(ControlValue::Bool),
+            ),
+            (
+                ControlId::NoiseBlanker,
+                profile.noise_blank.map(ControlValue::Bool),
+            ),
+            (
+                ControlId::NoiseReduction,
+                profile.noise_reduction.map(ControlValue::Bool),
+            ),
+            (ControlId::Agc, profile.agc.map(ControlValue::U8)),
+        ] {
+            if let Some(value) = value {
+                let _ = tx.send(GuiCommand::SetControl(control, value));
+            }
+        }
+        self.profile_io_status = format!("Applied radio profile {}", profile.name);
+    }
+
+    fn active_radio_profile_name(&self) -> Option<&str> {
+        let mode = self.workspace_mode.label();
+        self.mode_radio_profile
+            .get(mode)
+            .or_else(|| self.mode_radio_profile.get("Other"))
+            .map(String::as_str)
+            .filter(|name| !name.trim().is_empty())
     }
 
     fn disarm_all_tx(&mut self, reason: &str) {
@@ -1897,8 +2212,8 @@ impl QsonautGuiApp {
             hold_tx_freq: self.ft8_hold_tx_freq,
             rx_tone_hz: self.rx_tone_hz,
             tx_tone_hz: self.tx_tone_hz,
-            ptt_lead_ms: self.ptt_lead_ms.clamp(100, 1_500),
-            ptt_tail_ms: self.ptt_tail_ms.clamp(0, 1_000),
+            ptt_lead_ms: self.ptt_lead_ms.clamp(0, 500),
+            ptt_tail_ms: self.ptt_tail_ms.clamp(0, 500),
             cw_wpm: self.cw_wpm.clamp(5, 40),
             cw_tone_hz: self.cw_tone_hz.clamp(200, 1_200),
             audio_input_device: self.config.audio.input_device.clone(),
@@ -1909,6 +2224,9 @@ impl QsonautGuiApp {
             gui_scale: self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX),
             compute_preference: self.compute_preference,
             psk_reporter_enabled: self.psk_reporter_enabled,
+            psk_batch_interval_secs: self.psk_batch_interval_secs.clamp(60, 3_600),
+            psk_repeat_cache_secs: self.psk_repeat_cache_secs.clamp(60, 3_600),
+            psk_max_pending: self.psk_max_pending.clamp(1, 2_048),
             server_instance_id: self.server_instance_id.clone(),
             server: Some(self.config.server.clone()),
             contest_enabled: self.contest_enabled,
@@ -1924,7 +2242,11 @@ impl QsonautGuiApp {
                 .max(self.contest_serial_start.max(1)),
             contest_fake_split_offset_hz: self.contest_fake_split_offset_hz,
             hunter_unlocked: self.hunter_unlocked.iter().copied().collect(),
+            hunter_acknowledged: self.hunter_acknowledged.iter().copied().collect(),
+            hunter_alerts_enabled: self.hunter_alerts_enabled,
             hunter_custom_rules: self.hunter_custom_rules.clone(),
+            radio_profiles: self.radio_profiles.clone(),
+            mode_radio_profile: self.mode_radio_profile.clone(),
         }
     }
 
@@ -2011,6 +2333,11 @@ impl QsonautGuiApp {
             self.psk_reporter_enabled,
             self.station_callsign.trim(),
             self.station_grid.trim(),
+            ReporterTuning {
+                batch_interval_secs: self.psk_batch_interval_secs,
+                repeat_cache_secs: self.psk_repeat_cache_secs,
+                max_pending: self.psk_max_pending,
+            },
             &self.state,
         );
     }
@@ -2101,6 +2428,94 @@ impl QsonautGuiApp {
         }
     }
 
+    fn draw_connection_status(&self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Connections").strong());
+            ui.separator();
+            ui.label(
+                RichText::new(if snapshot.frequency_hz.is_some() {
+                    "Radio CONNECTED"
+                } else {
+                    "Radio OFFLINE"
+                })
+                .color(if snapshot.frequency_hz.is_some() {
+                    Color32::LIGHT_GREEN
+                } else {
+                    Color32::GRAY
+                }),
+            );
+            let (server_label, server_color) = self
+                .server_client
+                .as_ref()
+                .map(|client| match client.status().state {
+                    ServerConnectionState::Connected => {
+                        ("QSONaut Server CONNECTED", Color32::LIGHT_GREEN)
+                    }
+                    ServerConnectionState::Connecting | ServerConnectionState::Reconnecting => {
+                        ("QSONaut Server CONNECTING", Color32::YELLOW)
+                    }
+                    ServerConnectionState::Disabled | ServerConnectionState::Stopped => {
+                        ("QSONaut Server OFFLINE", Color32::GRAY)
+                    }
+                })
+                .unwrap_or(("QSONaut Server DISABLED", Color32::GRAY));
+            ui.separator();
+            ui.label(RichText::new(server_label).color(server_color));
+            ui.separator();
+            for label in ["IRC", "Discord"] {
+                ui.label(RichText::new(format!("{label} NOT IMPLEMENTED")).color(Color32::GRAY));
+                ui.separator();
+            }
+            ui.label(
+                RichText::new(format!("Compute {}", self.acceleration_report.summary()))
+                    .color(Color32::from_rgb(180, 150, 255)),
+            )
+            .on_hover_text(self.acceleration_report.hardware_detail());
+            if let Some(error) = &snapshot.last_error {
+                ui.separator();
+                ui.label(RichText::new("⚠ NEEDS ATTENTION").color(Color32::YELLOW))
+                    .on_hover_text(error);
+            }
+            ui.separator();
+            ui.label(RichText::new("Reporting").strong());
+            if !self.psk_reporter_enabled {
+                ui.label(RichText::new("PSK Reporter OFF").color(Color32::GRAY))
+                    .on_hover_text(
+                        "Enable in the Reporting panel to batch decoded stations to PSK Reporter",
+                    );
+            } else if let Some(reporter) = &self.psk_reporter {
+                let status = reporter.status();
+                let (label, color) = if status.last_error.is_some() {
+                    ("PSK Reporter ERROR".to_string(), Color32::from_rgb(255, 110, 100))
+                } else if !status.active {
+                    ("PSK Reporter STOPPED".to_string(), Color32::YELLOW)
+                } else {
+                    (
+                        format!("PSK Reporter {} queued · {} sent", status.queued, status.sent),
+                        Color32::LIGHT_GREEN,
+                    )
+                };
+                ui.label(RichText::new(label).color(color)).on_hover_text(
+                    status
+                        .last_error
+                        .as_deref()
+                        .map(|error| format!("network error: {error}"))
+                        .unwrap_or_else(|| {
+                            format!(
+                                "Batching every ~{} s · same callsign re-reported after {} s · {} max pending",
+                                self.psk_batch_interval_secs,
+                                self.psk_repeat_cache_secs,
+                                self.psk_max_pending
+                            )
+                        }),
+                );
+            } else {
+                ui.label(RichText::new("PSK Reporter WAITING").color(Color32::YELLOW))
+                    .on_hover_text("Set a real callsign and grid before reporting");
+            }
+        });
+    }
+
     fn draw_banner_radio_controls(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         let supports_levels = find_model(&self.config.radio.model)
             .is_some_and(|profile| matches!(profile.protocol, Protocol::IcomCiV { .. }));
@@ -2113,19 +2528,6 @@ impl QsonautGuiApp {
             }
             if ui.small_button("+1 kHz").clicked() {
                 self.send_command(GuiCommand::TuneDelta(1_000));
-            }
-            if ui
-                .small_button(if snapshot.ptt_on { "PTT OFF" } else { "PTT ON" })
-                .clicked()
-            {
-                if snapshot.ptt_on
-                    || self.ft8_tx_active.load(Ordering::Acquire)
-                    || self.digital_tx_active.load(Ordering::Acquire)
-                {
-                    self.disarm_all_tx("TX/PTT stopped and all modes disarmed");
-                } else {
-                    self.send_command(GuiCommand::TogglePtt);
-                }
             }
             if ui
                 .add_enabled(supports_levels, egui::Button::new("AF-").small())
@@ -2187,112 +2589,6 @@ impl QsonautGuiApp {
             }
         });
     }
-
-    fn draw_connection_strip(&self, ui: &mut egui::Ui, snapshot: &GuiState) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Connections").strong());
-            ui.separator();
-            ui.label(
-                RichText::new(if snapshot.frequency_hz.is_some() {
-                    "Radio CONNECTED"
-                } else {
-                    "Radio OFFLINE"
-                })
-                .color(if snapshot.frequency_hz.is_some() {
-                    Color32::LIGHT_GREEN
-                } else {
-                    Color32::GRAY
-                }),
-            );
-            let (server_label, server_color) = self
-                .server_client
-                .as_ref()
-                .map(|client| match client.status().state {
-                    ServerConnectionState::Connected => {
-                        ("QSONaut Server CONNECTED", Color32::LIGHT_GREEN)
-                    }
-                    ServerConnectionState::Connecting | ServerConnectionState::Reconnecting => {
-                        ("QSONaut Server CONNECTING", Color32::YELLOW)
-                    }
-                    ServerConnectionState::Disabled | ServerConnectionState::Stopped => {
-                        ("QSONaut Server OFFLINE", Color32::GRAY)
-                    }
-                })
-                .unwrap_or(("QSONaut Server DISABLED", Color32::GRAY));
-            ui.separator();
-            ui.label(RichText::new(server_label).color(server_color));
-            for label in ["IRC", "Discord"] {
-                ui.separator();
-                ui.label(RichText::new(format!("{label} NOT IMPLEMENTED")).color(Color32::GRAY));
-            }
-        });
-
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Health").strong());
-            ui.separator();
-            let (audio_label, audio_color) = snapshot.audio_level_dbfs.map_or_else(
-                || ("Audio NO LEVEL".to_string(), Color32::YELLOW),
-                |level| {
-                    if snapshot.audio_clip_percent > 0.1 {
-                        (
-                            "Audio CLIPPING".to_string(),
-                            Color32::from_rgb(255, 110, 100),
-                        )
-                    } else {
-                        (format!("Audio {level:.0} dBFS"), Color32::LIGHT_GREEN)
-                    }
-                },
-            );
-            ui.label(RichText::new(audio_label).color(audio_color))
-                .on_hover_text(format!(
-                    "{} · {:.1}% clipped",
-                    snapshot.audio_spectrum_status, snapshot.audio_clip_percent
-                ));
-
-            let decode_status = if self.workspace_mode == WorkspaceMode::Ft8 {
-                snapshot.ft8_decode_status.as_str()
-            } else {
-                snapshot.digital_decode_status.as_str()
-            };
-            ui.separator();
-            ui.label(
-                RichText::new(format!("Decode {}", self.workspace_mode.label())).color(
-                    if decode_status.contains("failed") || decode_status.contains("NO INPUT") {
-                        Color32::YELLOW
-                    } else {
-                        Color32::LIGHT_BLUE
-                    },
-                ),
-            )
-            .on_hover_text(decode_status);
-
-            ui.separator();
-            ui.label(
-                RichText::new(format!("Compute {}", self.acceleration_report.summary()))
-                    .color(Color32::from_rgb(180, 150, 255)),
-            )
-            .on_hover_text(self.acceleration_report.hardware_detail());
-
-            let telemetry = if self.workspace_mode == WorkspaceMode::Ft8 {
-                snapshot.ft8_compute_telemetry.as_ref()
-            } else {
-                snapshot.digital_compute_telemetry.as_ref()
-            };
-            if let Some(telemetry) = telemetry {
-                ui.separator();
-                ui.label(RichText::new(format!(
-                    "Last decode {}",
-                    telemetry.concise()
-                )))
-                .on_hover_text(telemetry.stage_detail());
-            }
-            if let Some(error) = &snapshot.last_error {
-                ui.separator();
-                ui.label(RichText::new("⚠ NEEDS ATTENTION").color(Color32::YELLOW))
-                    .on_hover_text(error);
-            }
-        });
-    }
 }
 
 impl eframe::App for QsonautGuiApp {
@@ -2303,6 +2599,7 @@ impl eframe::App for QsonautGuiApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.pump_hamdb_lookup();
         if self.pending_maximize {
             self.pending_maximize = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
@@ -2348,6 +2645,53 @@ impl eframe::App for QsonautGuiApp {
                 }
                 Err(mpsc::TryRecvError::Disconnected) => self.device_scan = None,
                 Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+
+        // Poll for radio initialization result from background thread
+        if !self.radio_init_attempted {
+            if let Some(rx) = &self.radio_init_rx {
+                match rx.try_recv() {
+                    Ok(Some(radio)) => {
+                        // Radio initialization succeeded; start the worker
+                        self.radio_init_attempted = true;
+                        let (tx, rx) = mpsc::channel::<GuiCommand>();
+                        let display_port = self
+                            .config
+                            .radio
+                            .serial_port
+                            .clone()
+                            .unwrap_or_else(|| "auto".to_string());
+                        info!(model = %self.config.radio.model, port = %display_port, baud = self.config.radio.baud_rate, "Starting GUI radio worker (deferred initialization)");
+                        let handle = workers::radio::spawn_radio_worker(
+                            radio,
+                            self.state.clone(),
+                            self.worker_stop.clone(),
+                            self.display_tuning.clone(),
+                            rx,
+                            self.repaint_ctx.clone(),
+                        );
+                        self.command_tx = Some(tx);
+                        self.radio_worker_handle = Some(handle);
+                    }
+                    Ok(None) => {
+                        // Radio initialization failed
+                        self.radio_init_attempted = true;
+                        let mut s = self.state.lock().expect("ui state lock poisoned");
+                        s.radio_waterfall_status = "UNAVAILABLE (connection failed)".to_string();
+                        s.last_error =
+                            Some("Failed to open radio after 5 second timeout".to_string());
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        // Thread panicked or dropped
+                        self.radio_init_attempted = true;
+                        let mut s = self.state.lock().expect("ui state lock poisoned");
+                        s.radio_waterfall_status = "UNAVAILABLE (init thread crashed)".to_string();
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {
+                        // Still initializing...
+                    }
+                }
             }
         }
 
@@ -2487,6 +2831,31 @@ impl eframe::App for QsonautGuiApp {
                             .strong()
                             .color(Color32::LIGHT_BLUE),
                     );
+                    let active_profile = self.active_radio_profile_name().unwrap_or("None");
+                    ui.label(
+                        RichText::new(format!("🎛 {active_profile}"))
+                            .small()
+                            .color(if active_profile == "None" {
+                                Color32::GRAY
+                            } else {
+                                Color32::from_rgb(255, 201, 92)
+                            }),
+                    )
+                    .on_hover_text(
+                        "Enabled radio tuning profile for this QSONaut mode; edit it in RADIO TUNING",
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "AF {} · RF {} · PWR {}",
+                            snapshot.af_gain.map_or("—".to_string(), |value| value.to_string()),
+                            snapshot.rf_gain.map_or("—".to_string(), |value| value.to_string()),
+                            snapshot.rf_power.map_or("—".to_string(), |value| value.to_string()),
+                        ))
+                        .small()
+                        .monospace()
+                        .color(Color32::GRAY),
+                    )
+                    .on_hover_text("Current values reported by the radio");
                     ui.separator();
                     ui.label(
                         RichText::new(format!(
@@ -2496,6 +2865,60 @@ impl eframe::App for QsonautGuiApp {
                         .monospace()
                         .color(Color32::from_rgb(135, 220, 145)),
                     );
+                    let monitor_label = if self.config.audio.monitor_enabled {
+                        "🎧 RX MONITOR ON"
+                    } else {
+                        "🎧 RX MONITOR OFF"
+                    };
+                    let monitor_color = if self.config.audio.monitor_enabled {
+                        Color32::LIGHT_GREEN
+                    } else {
+                        Color32::GRAY
+                    };
+                    if ui
+                        .selectable_label(
+                            self.config.audio.monitor_enabled,
+                            RichText::new(monitor_label).color(monitor_color),
+                        )
+                        .on_hover_text("Toggle captured RX audio to the selected monitor output")
+                        .clicked()
+                    {
+                        self.config.audio.monitor_enabled = !self.config.audio.monitor_enabled;
+                        self.device_restart_required = true;
+                        self.profile_dirty = true;
+                        self.persist_profile("Audio monitor saved to");
+                    }
+                    egui::ComboBox::from_id_salt("top_audio_monitor_output")
+                        .selected_text(
+                            self.config
+                                .audio
+                                .monitor_output_device
+                                .as_deref()
+                                .or(self.config.audio.output_device.as_deref())
+                                .unwrap_or("Audio output"),
+                        )
+                        .width(180.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.config.audio.monitor_output_device,
+                                None,
+                                "Audio output",
+                            );
+                            for name in &self.audio_output_devices {
+                                ui.selectable_value(
+                                    &mut self.config.audio.monitor_output_device,
+                                    Some(name.clone()),
+                                    name,
+                                );
+                            }
+                        });
+                    if ui
+                        .small_button("🔊 TX AUDIO")
+                        .on_hover_text("TX audio is sent to the configured Audio output device")
+                        .clicked()
+                    {
+                        self.device_restart_required = true;
+                    }
                     let armed = self.any_tx_armed(&snapshot);
                     ui.label(
                         RichText::new(if snapshot.ptt_on {
@@ -2612,11 +3035,33 @@ impl eframe::App for QsonautGuiApp {
             self.persist_profile("Auto-saved");
         }
 
-        egui::TopBottomPanel::bottom("connection_strip")
+        // Bottom panels are stacked in declaration order: the first one owns
+        // the outermost bottom strip. Declare the compact status strip first
+        // so it remains below the resizable contact log.
+        egui::TopBottomPanel::bottom("connection_status")
             .resizable(false)
-            .exact_height(52.0)
+            .exact_height(30.0)
+            .show(ctx, |ui| self.draw_connection_status(ui, &snapshot));
+
+        egui::TopBottomPanel::bottom("global_contact_log")
+            .resizable(true)
+            .show_separator_line(true)
+            .default_height(260.0)
+            .height_range(150.0..=420.0)
             .show(ctx, |ui| {
-                self.draw_connection_strip(ui, &snapshot);
+                // Keep the log contents inside the panel's exact rectangle. This
+                // mirrors the waterfall deck and prevents the editor controls
+                // from expanding the panel and leaving a black overflow area.
+                let log_rect = ui.available_rect_before_wrap();
+                ui.allocate_rect(log_rect, egui::Sense::hover());
+                let mut log_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .id_salt("global_contact_log_contents")
+                        .max_rect(log_rect)
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                );
+                log_ui.set_clip_rect(log_rect);
+                self.draw_contact_log(&mut log_ui, &snapshot);
             });
 
         if self.show_signal_panel {
@@ -2637,7 +3082,7 @@ impl eframe::App for QsonautGuiApp {
                             (SignalPanelTab::Waterfall, "WATERFALL"),
                             (SignalPanelTab::Settings, "SETTINGS"),
                             (SignalPanelTab::Server, "SERVER"),
-                            (SignalPanelTab::Log, "LOG"),
+                            (SignalPanelTab::RadioTuning, "RADIO TUNING"),
                         ] {
                             let selected = self.signal_panel_tab == tab;
                             let text = if selected {
@@ -2664,7 +3109,9 @@ impl eframe::App for QsonautGuiApp {
                             SignalPanelTab::Waterfall => self.draw_waterfall_panel(ui, &snapshot),
                             SignalPanelTab::Settings => self.draw_settings_panel(ui),
                             SignalPanelTab::Server => self.draw_server_panel(ui),
-                            SignalPanelTab::Log => self.draw_contact_log(ui, &snapshot),
+                            SignalPanelTab::RadioTuning => {
+                                self.draw_radio_tuning_panel(ui, &snapshot)
+                            }
                         });
                 });
         }

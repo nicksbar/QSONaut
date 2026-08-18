@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 
 pub const SLOT_SECONDS: f64 = 15.0;
 pub const AUDIO_START_SECONDS: f64 = 0.5;
-pub const DEFAULT_PTT_LEAD_SECONDS: f64 = 0.25;
+pub const DEFAULT_PTT_LEAD_SECONDS: f64 = 0.20;
+// Match WSJT-X's practical next-slot reply window.
 pub const REPLY_DEADLINE_SECONDS: f64 = 2.0;
 pub const MAX_ATTEMPTS_PER_EXCHANGE: u8 = 6;
 

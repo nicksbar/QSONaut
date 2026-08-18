@@ -36,6 +36,69 @@ pub struct AudioStream {
     requested_channels: usize,
 }
 
+pub struct AudioMonitor {
+    samples_tx: SyncSender<Vec<i16>>,
+    _stream: Stream,
+}
+
+impl AudioMonitor {
+    pub fn open(sample_rate_hz: u32, preferred_device_name: Option<&str>) -> Result<Self> {
+        let host = cpal::default_host();
+        let device = select_device(&host, AudioDeviceKind::Output, preferred_device_name)?;
+        let supported = select_config(&device, AudioDeviceKind::Output, sample_rate_hz, 1)
+            .or_else(|_| device.default_output_config().map_err(anyhow::Error::from))?;
+        let config = supported.config();
+        let channels = config.channels as usize;
+        let (samples_tx, samples_rx) = mpsc::sync_channel::<Vec<i16>>(8);
+        let pending = Arc::new(std::sync::Mutex::new(VecDeque::<i16>::new()));
+        let error_callback = |_error: StreamError| {};
+
+        macro_rules! output_stream {
+            ($sample:ty) => {{
+                let pending = pending.clone();
+                device.build_output_stream(
+                    &config,
+                    move |data: &mut [$sample], _| {
+                        if let Ok(mut queue) = pending.lock() {
+                            while let Ok(chunk) = samples_rx.try_recv() {
+                                queue.extend(chunk);
+                            }
+                            for frame in data.chunks_mut(channels) {
+                                let value = queue.pop_front().unwrap_or_default();
+                                frame.fill(<$sample>::from_sample(value));
+                            }
+                        }
+                    },
+                    error_callback,
+                    None,
+                )?
+            }};
+        }
+        let stream = match supported.sample_format() {
+            SampleFormat::I8 => output_stream!(i8),
+            SampleFormat::I16 => output_stream!(i16),
+            SampleFormat::I32 => output_stream!(i32),
+            SampleFormat::I64 => output_stream!(i64),
+            SampleFormat::U8 => output_stream!(u8),
+            SampleFormat::U16 => output_stream!(u16),
+            SampleFormat::U32 => output_stream!(u32),
+            SampleFormat::U64 => output_stream!(u64),
+            SampleFormat::F32 => output_stream!(f32),
+            SampleFormat::F64 => output_stream!(f64),
+            format => bail!("unsupported output sample format: {format:?}"),
+        };
+        stream.play().context("failed to start audio monitor")?;
+        Ok(Self {
+            samples_tx,
+            _stream: stream,
+        })
+    }
+
+    pub fn push(&self, samples: &[i16]) {
+        let _ = self.samples_tx.try_send(samples.to_vec());
+    }
+}
+
 impl Default for AudioService {
     fn default() -> Self {
         Self::new(None, true)

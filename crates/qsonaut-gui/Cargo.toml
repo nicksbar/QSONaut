@@ -13,6 +13,8 @@ tracing.workspace = true
 rustfft.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
 toml.workspace = true
 mfsk-core = { path = "../../../mfsk-core/mfsk-core", default-features = false, features = ["full"] }
 ditdah = { path = "../../../ditdah" }

@@ -1,0 +1,34 @@
+{
+	"folders": [
+		{
+			"path": "..",
+			"name": "QSONaut"
+
+		},
+		{
+			"path": "../QSONaut-Server",
+			"name": "QSONaut Server"
+		},
+		{
+			"path": "../mfsk-core",
+			"name": "mfsk-core"
+		},
+		{
+			"path": "../ditdah",
+			"name": "ditdah"
+		},
+		{
+			"path": "../rigwright",
+			"name": "rigwright"
+		}
+		
+	],
+	"settings": {
+		"chat.tools.terminal.autoApprove": {
+			"cargo check": true,
+			"cargo fmt": true,
+			"cargo test": true,
+			"git rev-parse": true
+		}
+	}
+}

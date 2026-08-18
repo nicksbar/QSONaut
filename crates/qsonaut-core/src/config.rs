@@ -26,6 +26,10 @@ pub struct AudioConfig {
     pub input_device: Option<String>,
     #[serde(default)]
     pub output_device: Option<String>,
+    #[serde(default)]
+    pub monitor_enabled: bool,
+    #[serde(default)]
+    pub monitor_output_device: Option<String>,
     pub sample_rate_hz: u32,
     pub channels: u8,
 }
@@ -132,6 +136,8 @@ impl Default for AppConfig {
                 enabled: true,
                 input_device: None,
                 output_device: None,
+                monitor_enabled: false,
+                monitor_output_device: None,
                 sample_rate_hz: 48_000,
                 channels: 1,
             },

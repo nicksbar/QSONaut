@@ -7,6 +7,7 @@ use qsonaut_log::app_config_dir;
 use serde::{Deserialize, Serialize};
 
 use super::{
+    default_true,
     modes::exchange::{AutoReplyPolicy, DEFAULT_PTT_LEAD_SECONDS, MAX_ATTEMPTS_PER_EXCHANGE},
     AchievementKind, CustomAchievementRule, WaterfallTheme, GUI_SCALE_BASE,
 };
@@ -90,6 +91,12 @@ pub(super) struct OperatorProfile {
     pub(super) compute_preference: ComputePreference,
     #[serde(default)]
     pub(super) psk_reporter_enabled: bool,
+    #[serde(default = "default_psk_batch_interval_secs")]
+    pub(super) psk_batch_interval_secs: u64,
+    #[serde(default = "default_psk_repeat_cache_secs")]
+    pub(super) psk_repeat_cache_secs: u64,
+    #[serde(default = "default_psk_max_pending")]
+    pub(super) psk_max_pending: usize,
     #[serde(default)]
     pub(super) server_instance_id: String,
     #[serde(default)]
@@ -117,7 +124,42 @@ pub(super) struct OperatorProfile {
     #[serde(default)]
     pub(super) hunter_unlocked: Vec<AchievementKind>,
     #[serde(default)]
+    pub(super) hunter_acknowledged: Vec<AchievementKind>,
+    #[serde(default = "default_true")]
+    pub(super) hunter_alerts_enabled: bool,
+    #[serde(default)]
     pub(super) hunter_custom_rules: Vec<CustomAchievementRule>,
+    #[serde(default)]
+    pub(super) radio_profiles: Vec<RadioProfile>,
+    #[serde(default)]
+    pub(super) mode_radio_profile: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct RadioProfile {
+    pub(super) name: String,
+    #[serde(default)]
+    pub(super) mode: Option<String>,
+    #[serde(default)]
+    pub(super) data_mode: Option<bool>,
+    #[serde(default)]
+    pub(super) filter: Option<u8>,
+    #[serde(default)]
+    pub(super) af_gain: Option<u8>,
+    #[serde(default)]
+    pub(super) rf_gain: Option<u8>,
+    #[serde(default)]
+    pub(super) rf_power: Option<u8>,
+    #[serde(default)]
+    pub(super) preamp: Option<bool>,
+    #[serde(default)]
+    pub(super) attenuator: Option<bool>,
+    #[serde(default)]
+    pub(super) noise_blank: Option<bool>,
+    #[serde(default)]
+    pub(super) noise_reduction: Option<bool>,
+    #[serde(default)]
+    pub(super) agc: Option<u8>,
 }
 
 pub(super) fn default_gui_scale() -> f32 {
@@ -145,7 +187,7 @@ pub(super) fn default_ptt_lead_ms() -> u64 {
 }
 
 pub(super) fn default_ptt_tail_ms() -> u64 {
-    100
+    0
 }
 
 pub(super) fn default_cw_wpm() -> u8 {
@@ -186,6 +228,18 @@ fn default_radio_model() -> String {
 
 fn default_radio_baud_rate() -> u32 {
     115_200
+}
+
+pub(super) fn default_psk_batch_interval_secs() -> u64 {
+    300
+}
+
+pub(super) fn default_psk_repeat_cache_secs() -> u64 {
+    300
+}
+
+pub(super) fn default_psk_max_pending() -> usize {
+    80
 }
 
 fn default_contest_serial_current() -> u32 {

@@ -84,13 +84,17 @@ impl QsonautGuiApp {
         let mut selected = self.qso_selected;
         egui::ScrollArea::vertical()
             .id_salt("qso_log_rows")
-            .max_height(132.0)
+            // Let the table consume the space made available by the resizable
+            // bottom panel instead of leaving an empty/black region beneath it.
+            .max_height((ui.available_height() - 150.0).max(80.0))
             .show(ui, |ui| {
                 egui::Grid::new("qso_log_grid")
                     .striped(true)
                     .min_col_width(38.0)
                     .show(ui, |ui| {
-                        for heading in ["Date", "UTC", "Call", "Band", "Mode"] {
+                        for heading in [
+                            "Date", "UTC", "Call", "Name", "Grid", "State", "Band", "Mode",
+                        ] {
                             ui.label(RichText::new(heading).strong().small());
                         }
                         ui.end_row();
@@ -105,6 +109,27 @@ impl QsonautGuiApp {
                             }
                             ui.label(&contact.time_on);
                             ui.label(RichText::new(&contact.callsign).monospace().strong());
+                            let name = contact
+                                .hamdb
+                                .as_ref()
+                                .map(|hamdb| {
+                                    [
+                                        hamdb.first_name.as_str(),
+                                        hamdb.middle_name.as_str(),
+                                        hamdb.name.as_str(),
+                                        hamdb.suffix.as_str(),
+                                    ]
+                                    .into_iter()
+                                    .map(str::trim)
+                                    .filter(|part| !part.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                                })
+                                .filter(|name| !name.is_empty())
+                                .unwrap_or_else(|| "—".to_string());
+                            ui.label(RichText::new(name).small());
+                            ui.label(RichText::new(&contact.grid).small());
+                            ui.label(RichText::new(&contact.state).small());
                             ui.label(&contact.band);
                             ui.label(&contact.mode);
                             ui.end_row();
@@ -116,8 +141,84 @@ impl QsonautGuiApp {
         let mut changed = false;
         let mut delete_selected = false;
         if let Some(index) = self.qso_selected {
+            let refresh_requested = ui.input(|input| input.key_pressed(egui::Key::F5));
+            if refresh_requested {
+                self.refresh_hamdb_for_contact(index);
+            }
+            let mut refresh_clicked = false;
             if let Some(contact) = self.qso_log.contacts.get_mut(index) {
                 ui.separator();
+                ui.horizontal(|ui| {
+                    if ui
+                        .small_button("Refresh HamDB")
+                        .on_hover_text("Refresh all HamDB fields for this callsign")
+                        .clicked()
+                    {
+                        refresh_clicked = true;
+                    }
+                    if let Some(hamdb) = &contact.hamdb {
+                        let operator_name = [
+                            hamdb.first_name.as_str(),
+                            hamdb.middle_name.as_str(),
+                            hamdb.name.as_str(),
+                            hamdb.suffix.as_str(),
+                        ]
+                        .into_iter()
+                        .map(str::trim)
+                        .filter(|part| !part.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                        ui.label(
+                            RichText::new(if operator_name.is_empty() {
+                                "HamDB: name unavailable"
+                            } else {
+                                "HamDB operator"
+                            })
+                            .small()
+                            .color(Color32::LIGHT_BLUE),
+                        );
+                        if !operator_name.is_empty() {
+                            ui.label(RichText::new(operator_name).strong().color(Color32::WHITE));
+                        }
+                        ui.label(
+                            RichText::new(format!("{} · {}", hamdb.state, hamdb.country))
+                                .small()
+                                .color(Color32::LIGHT_BLUE),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new("HamDB: not loaded")
+                                .small()
+                                .color(Color32::GRAY),
+                        );
+                    }
+                });
+                if let Some(hamdb) = &contact.hamdb {
+                    ui.horizontal_wrapped(|ui| {
+                        for (label, value) in [
+                            ("Class", &hamdb.class),
+                            ("Status", &hamdb.status),
+                            ("Expires", &hamdb.expires),
+                            ("Name", &hamdb.name),
+                            ("Grid", &hamdb.grid),
+                            ("State", &hamdb.state),
+                            ("ZIP", &hamdb.zip),
+                            ("Lat", &hamdb.latitude),
+                            ("Lon", &hamdb.longitude),
+                            ("Country", &hamdb.country),
+                            ("Addr", &hamdb.address_line_1),
+                            ("Addr 2", &hamdb.address_line_2),
+                        ] {
+                            if !value.trim().is_empty() {
+                                ui.label(
+                                    RichText::new(format!("{label}: {value}"))
+                                        .small()
+                                        .color(Color32::GRAY),
+                                );
+                            }
+                        }
+                    });
+                }
                 ui.horizontal(|ui| {
                     ui.label("Call");
                     changed |= ui
@@ -132,6 +233,14 @@ impl QsonautGuiApp {
                         .add(
                             egui::TextEdit::singleline(&mut contact.grid)
                                 .desired_width(72.0)
+                                .font(egui::TextStyle::Monospace),
+                        )
+                        .changed();
+                    ui.label("State");
+                    changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut contact.state)
+                                .desired_width(42.0)
                                 .font(egui::TextStyle::Monospace),
                         )
                         .changed();
@@ -255,6 +364,9 @@ impl QsonautGuiApp {
                         },
                     ));
                 });
+            }
+            if refresh_clicked {
+                self.refresh_hamdb_for_contact(index);
             }
         } else {
             ui.label(

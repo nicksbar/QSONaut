@@ -5,9 +5,46 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.3] - 2026-08-18
 
-## [0.3.3] - 2026-08-17
+### Changed
+- Removed the PTT button from the top radio-control banner. PTT is now controlled only by
+  software (TX automation) or at the radio itself; the TX deck's PTT/stop controls remain.
+- Added explanatory hover tooltips to the "Answer unattended CQs" checkbox in the FT8 and
+  FT4 workspaces so it is clear what enabling it does.
+- Removed the "lit up the receiver" operator-call banner from the FT8 and FT4 workspaces.
+  Operator calls are still highlighted inline in the decode log, which is sufficient.
+- PSK Reporter status now appears in the status bar (off / waiting / queued+sent / error),
+  while the Reporting panel keeps the enable toggle and gains submission-rule controls:
+  batch interval, re-report cache timeout, and max pending spots. These follow PSK
+  Reporter's IPFIX/UDP guidance and mirror WSJT-X's internal knobs.
+- Reworked the FT8 and FT4 workspace layout so global live decodes remain in a vertical,
+  scrollable panel on the left while the active contact conversation appears beside it on
+  the right. The decode deck is vertically resizable and both panels fill its available
+  height.
+- Promoted the Contact Log to a resizable global panel above the compact bottom status bar,
+  removed the duplicate Log side-panel tab, and restored connection, server, compute,
+  reporting, and attention indicators to the bottom status line.
+- Moved PTT lead and tail timing controls into Settings and removed the redundant manual
+  PTT and stop/disarm controls from the TX deck while retaining programmatic TX safety
+  controls.
+- Added a local SQLite HamDB cache with a 30-day TTL. HamDB lookups run in the background,
+  retain the complete returned callsign record, and never overwrite explicit QSO grid or
+  state values.
+- Expanded the Contact Log with callsign, operator name, grid, state, band, and mode columns,
+  complete HamDB detail display, and explicit per-contact HamDB refresh through the button or
+  F5. Refreshed HamDB details are also attached to existing matching log records and included
+  in ADIF comments.
+- Expanded the Achievement Hunter with acknowledgement-based hiding, reversible show/hide
+  acknowledged controls, alert enablement settings, and additional band, grid, mode, time-of-day,
+  contest, weak-signal, and QSO milestone achievements.
+- Added opt-in RX audio monitoring with a bounded cpal output stream, selectable monitor output,
+  and compact 🎧/🔊 indicators in the top radio-details panel. TX audio continues to use the
+  configured TX output path, and monitor controls are persisted with the audio configuration.
+- Added a dedicated Radio Tuning tab with named profile creation, editing, deletion, apply actions,
+  complete stored control visibility, and FT8/FT4/CW/Other default-profile assignments. The top
+  radio-details area now shows the active tuning profile and live AF/RF/power values reported by
+  the connected radio.
 
 ### Fixed
 - Eliminated the Windows startup window flashing. Restored geometry is applied through the
