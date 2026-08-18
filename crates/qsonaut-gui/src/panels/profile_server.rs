@@ -525,6 +525,35 @@ impl QsonautGuiApp {
             .color(Color32::GRAY),
         );
         ui.add_space(8.0);
+        ui.label(RichText::new("Digital TX timing").strong());
+        ui.label(
+            RichText::new("Applied before and after FT8/FT4 audio transmission.")
+                .small()
+                .color(Color32::GRAY),
+        );
+        let previous_ptt_lead = self.ptt_lead_ms;
+        ui.horizontal(|ui| {
+            ui.label("PTT lead");
+            ui.add(
+                egui::DragValue::new(&mut self.ptt_lead_ms)
+                    .range(100..=1_500)
+                    .suffix(" ms"),
+            );
+        });
+        let previous_ptt_tail = self.ptt_tail_ms;
+        ui.horizontal(|ui| {
+            ui.label("PTT tail");
+            ui.add(
+                egui::DragValue::new(&mut self.ptt_tail_ms)
+                    .range(0..=1_000)
+                    .suffix(" ms"),
+            );
+        });
+        if self.ptt_lead_ms != previous_ptt_lead || self.ptt_tail_ms != previous_ptt_tail {
+            self.profile_dirty = true;
+            self.persist_profile("PTT timing saved to");
+        }
+        ui.add_space(8.0);
         self.draw_device_settings(ui);
     }
 

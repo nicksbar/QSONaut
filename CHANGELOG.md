@@ -18,6 +18,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   while the Reporting panel keeps the enable toggle and gains submission-rule controls:
   batch interval, re-report cache timeout, and max pending spots. These follow PSK
   Reporter's IPFIX/UDP guidance and mirror WSJT-X's internal knobs.
+- Reworked the FT8 and FT4 workspace layout so global live decodes remain in a vertical,
+  scrollable panel on the left while the active contact conversation appears beside it on
+  the right. The decode deck is vertically resizable and both panels fill its available
+  height.
+- Promoted the Contact Log to a resizable global panel above the compact bottom status bar,
+  removed the duplicate Log side-panel tab, and restored connection, server, compute,
+  reporting, and attention indicators to the bottom status line.
+- Moved PTT lead and tail timing controls into Settings and removed the redundant manual
+  PTT and stop/disarm controls from the TX deck while retaining programmatic TX safety
+  controls.
 
 ## [0.3.3] - 2026-08-17
 

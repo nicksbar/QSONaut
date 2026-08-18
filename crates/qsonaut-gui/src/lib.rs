@@ -146,7 +146,6 @@ enum SignalPanelTab {
     Waterfall,
     Settings,
     Server,
-    Log,
 }
 
 fn default_true() -> bool {
@@ -721,7 +720,6 @@ impl Default for GuiState {
 enum GuiCommand {
     TuneDelta(i64),
     CycleMode,
-    TogglePtt,
     AfGainDelta(i16),
     ApplyWorkspace {
         mode: WorkspaceMode,
@@ -2136,6 +2134,94 @@ impl QsonautGuiApp {
         }
     }
 
+    fn draw_connection_status(&self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Connections").strong());
+            ui.separator();
+            ui.label(
+                RichText::new(if snapshot.frequency_hz.is_some() {
+                    "Radio CONNECTED"
+                } else {
+                    "Radio OFFLINE"
+                })
+                .color(if snapshot.frequency_hz.is_some() {
+                    Color32::LIGHT_GREEN
+                } else {
+                    Color32::GRAY
+                }),
+            );
+            let (server_label, server_color) = self
+                .server_client
+                .as_ref()
+                .map(|client| match client.status().state {
+                    ServerConnectionState::Connected => {
+                        ("QSONaut Server CONNECTED", Color32::LIGHT_GREEN)
+                    }
+                    ServerConnectionState::Connecting | ServerConnectionState::Reconnecting => {
+                        ("QSONaut Server CONNECTING", Color32::YELLOW)
+                    }
+                    ServerConnectionState::Disabled | ServerConnectionState::Stopped => {
+                        ("QSONaut Server OFFLINE", Color32::GRAY)
+                    }
+                })
+                .unwrap_or(("QSONaut Server DISABLED", Color32::GRAY));
+            ui.separator();
+            ui.label(RichText::new(server_label).color(server_color));
+            ui.separator();
+            for label in ["IRC", "Discord"] {
+                ui.label(RichText::new(format!("{label} NOT IMPLEMENTED")).color(Color32::GRAY));
+                ui.separator();
+            }
+            ui.label(
+                RichText::new(format!("Compute {}", self.acceleration_report.summary()))
+                    .color(Color32::from_rgb(180, 150, 255)),
+            )
+            .on_hover_text(self.acceleration_report.hardware_detail());
+            if let Some(error) = &snapshot.last_error {
+                ui.separator();
+                ui.label(RichText::new("⚠ NEEDS ATTENTION").color(Color32::YELLOW))
+                    .on_hover_text(error);
+            }
+            ui.separator();
+            ui.label(RichText::new("Reporting").strong());
+            if !self.psk_reporter_enabled {
+                ui.label(RichText::new("PSK Reporter OFF").color(Color32::GRAY))
+                    .on_hover_text(
+                        "Enable in the Reporting panel to batch decoded stations to PSK Reporter",
+                    );
+            } else if let Some(reporter) = &self.psk_reporter {
+                let status = reporter.status();
+                let (label, color) = if status.last_error.is_some() {
+                    ("PSK Reporter ERROR".to_string(), Color32::from_rgb(255, 110, 100))
+                } else if !status.active {
+                    ("PSK Reporter STOPPED".to_string(), Color32::YELLOW)
+                } else {
+                    (
+                        format!("PSK Reporter {} queued · {} sent", status.queued, status.sent),
+                        Color32::LIGHT_GREEN,
+                    )
+                };
+                ui.label(RichText::new(label).color(color)).on_hover_text(
+                    status
+                        .last_error
+                        .as_deref()
+                        .map(|error| format!("network error: {error}"))
+                        .unwrap_or_else(|| {
+                            format!(
+                                "Batching every ~{} s · same callsign re-reported after {} s · {} max pending",
+                                self.psk_batch_interval_secs,
+                                self.psk_repeat_cache_secs,
+                                self.psk_max_pending
+                            )
+                        }),
+                );
+            } else {
+                ui.label(RichText::new("PSK Reporter WAITING").color(Color32::YELLOW))
+                    .on_hover_text("Set a real callsign and grid before reporting");
+            }
+        });
+    }
+
     fn draw_banner_radio_controls(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         let supports_levels = find_model(&self.config.radio.model)
             .is_some_and(|profile| matches!(profile.protocol, Protocol::IcomCiV { .. }));
@@ -2209,96 +2295,6 @@ impl QsonautGuiApp {
             }
         });
     }
-
-    fn draw_connection_strip(&self, ui: &mut egui::Ui, snapshot: &GuiState) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Connections").strong());
-            ui.separator();
-            ui.label(
-                RichText::new(if snapshot.frequency_hz.is_some() {
-                    "Radio CONNECTED"
-                } else {
-                    "Radio OFFLINE"
-                })
-                .color(if snapshot.frequency_hz.is_some() {
-                    Color32::LIGHT_GREEN
-                } else {
-                    Color32::GRAY
-                }),
-            );
-            let (server_label, server_color) = self
-                .server_client
-                .as_ref()
-                .map(|client| match client.status().state {
-                    ServerConnectionState::Connected => {
-                        ("QSONaut Server CONNECTED", Color32::LIGHT_GREEN)
-                    }
-                    ServerConnectionState::Connecting | ServerConnectionState::Reconnecting => {
-                        ("QSONaut Server CONNECTING", Color32::YELLOW)
-                    }
-                    ServerConnectionState::Disabled | ServerConnectionState::Stopped => {
-                        ("QSONaut Server OFFLINE", Color32::GRAY)
-                    }
-                })
-                .unwrap_or(("QSONaut Server DISABLED", Color32::GRAY));
-            ui.separator();
-            ui.label(RichText::new(server_label).color(server_color));
-            for label in ["IRC", "Discord"] {
-                ui.separator();
-                ui.label(RichText::new(format!("{label} NOT IMPLEMENTED")).color(Color32::GRAY));
-            }
-            ui.separator();
-            ui.label(
-                RichText::new(format!("Compute {}", self.acceleration_report.summary()))
-                    .color(Color32::from_rgb(180, 150, 255)),
-            )
-            .on_hover_text(self.acceleration_report.hardware_detail());
-
-            if let Some(error) = &snapshot.last_error {
-                ui.separator();
-                ui.label(RichText::new("⚠ NEEDS ATTENTION").color(Color32::YELLOW))
-                    .on_hover_text(error);
-            }
-            ui.label(RichText::new("Reporting").strong());
-            ui.separator();
-            if !self.psk_reporter_enabled {
-                ui.label(RichText::new("PSK Reporter OFF").color(Color32::GRAY))
-                    .on_hover_text("Enable in the Reporting panel to batch decoded stations to PSK Reporter");
-            } else if let Some(reporter) = &self.psk_reporter {
-                let status = reporter.status();
-                let (label, color) = if status.last_error.is_some() {
-                    ("PSK Reporter ERROR".to_string(), Color32::from_rgb(255, 110, 100))
-                } else if !status.active {
-                    ("PSK Reporter STOPPED".to_string(), Color32::YELLOW)
-                } else {
-                    (
-                        format!(
-                            "PSK Reporter {} queued · {} sent",
-                            status.queued, status.sent
-                        ),
-                        Color32::LIGHT_GREEN,
-                    )
-                };
-                ui.label(RichText::new(label).color(color)).on_hover_text(
-                    status
-                        .last_error
-                        .as_deref()
-                        .map(|error| format!("network error: {error}"))
-                        .unwrap_or_else(|| {
-                            format!(
-                                "Batching every ~{} s · same callsign re-reported after {} s · {} max pending",
-                                self.psk_batch_interval_secs,
-                                self.psk_repeat_cache_secs,
-                                self.psk_max_pending
-                            )
-                        }),
-                );
-            } else {
-                ui.label(RichText::new("PSK Reporter WAITING").color(Color32::YELLOW))
-                    .on_hover_text("Set a real callsign and grid before reporting");
-            }
-        });
-    }
 }
 
 impl eframe::App for QsonautGuiApp {
@@ -2365,7 +2361,12 @@ impl eframe::App for QsonautGuiApp {
                         // Radio initialization succeeded; start the worker
                         self.radio_init_attempted = true;
                         let (tx, rx) = mpsc::channel::<GuiCommand>();
-                        let display_port = self.config.radio.serial_port.clone().unwrap_or_else(|| "auto".to_string());
+                        let display_port = self
+                            .config
+                            .radio
+                            .serial_port
+                            .clone()
+                            .unwrap_or_else(|| "auto".to_string());
                         info!(model = %self.config.radio.model, port = %display_port, baud = self.config.radio.baud_rate, "Starting GUI radio worker (deferred initialization)");
                         let handle = workers::radio::spawn_radio_worker(
                             radio,
@@ -2383,7 +2384,8 @@ impl eframe::App for QsonautGuiApp {
                         self.radio_init_attempted = true;
                         let mut s = self.state.lock().expect("ui state lock poisoned");
                         s.radio_waterfall_status = "UNAVAILABLE (connection failed)".to_string();
-                        s.last_error = Some("Failed to open radio after 5 second timeout".to_string());
+                        s.last_error =
+                            Some("Failed to open radio after 5 second timeout".to_string());
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
                         // Thread panicked or dropped
@@ -2659,10 +2661,33 @@ impl eframe::App for QsonautGuiApp {
             self.persist_profile("Auto-saved");
         }
 
-        egui::TopBottomPanel::bottom("connection_strip")
+        // Bottom panels are stacked in declaration order: the first one owns
+        // the outermost bottom strip. Declare the compact status strip first
+        // so it remains below the resizable contact log.
+        egui::TopBottomPanel::bottom("connection_status")
             .resizable(false)
+            .exact_height(30.0)
+            .show(ctx, |ui| self.draw_connection_status(ui, &snapshot));
+
+        egui::TopBottomPanel::bottom("global_contact_log")
+            .resizable(true)
+            .show_separator_line(true)
+            .default_height(260.0)
+            .height_range(150.0..=420.0)
             .show(ctx, |ui| {
-                self.draw_connection_strip(ui, &snapshot);
+                // Keep the log contents inside the panel's exact rectangle. This
+                // mirrors the waterfall deck and prevents the editor controls
+                // from expanding the panel and leaving a black overflow area.
+                let log_rect = ui.available_rect_before_wrap();
+                ui.allocate_rect(log_rect, egui::Sense::hover());
+                let mut log_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .id_salt("global_contact_log_contents")
+                        .max_rect(log_rect)
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                );
+                log_ui.set_clip_rect(log_rect);
+                self.draw_contact_log(&mut log_ui, &snapshot);
             });
 
         if self.show_signal_panel {
@@ -2683,7 +2708,6 @@ impl eframe::App for QsonautGuiApp {
                             (SignalPanelTab::Waterfall, "WATERFALL"),
                             (SignalPanelTab::Settings, "SETTINGS"),
                             (SignalPanelTab::Server, "SERVER"),
-                            (SignalPanelTab::Log, "LOG"),
                         ] {
                             let selected = self.signal_panel_tab == tab;
                             let text = if selected {
@@ -2710,7 +2734,6 @@ impl eframe::App for QsonautGuiApp {
                             SignalPanelTab::Waterfall => self.draw_waterfall_panel(ui, &snapshot),
                             SignalPanelTab::Settings => self.draw_settings_panel(ui),
                             SignalPanelTab::Server => self.draw_server_panel(ui),
-                            SignalPanelTab::Log => self.draw_contact_log(ui, &snapshot),
                         });
                 });
         }

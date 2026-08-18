@@ -305,25 +305,6 @@ pub(crate) fn spawn_radio_worker(
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
-                    GuiCommand::TogglePtt => {
-                        let ptt_target = {
-                            let s = state.lock().expect("ui state lock poisoned");
-                            !s.ptt_on
-                        };
-                        let result = rt
-                            .block_on(radio.set_ptt(ptt_target))
-                            .map_err(|error| error.to_string());
-                        let mut s = state.lock().expect("ui state lock poisoned");
-                        match result {
-                            Ok(()) => {
-                                s.ptt_on = ptt_target;
-                                s.last_error = None;
-                            }
-                            Err(error) => s.last_error = Some(error),
-                        }
-                        drop(s);
-                        poll_radio_core_state(&rt, &radio, &state, true);
-                    }
                     GuiCommand::SetPtt(target) => {
                         let result = rt
                             .block_on(radio.set_ptt(target))

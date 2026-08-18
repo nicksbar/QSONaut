@@ -160,9 +160,7 @@ fn run_worker(
 
     let session_id = session_identifier(&config.receiver_callsign);
     let tuning = &config.tuning;
-    let interval = Duration::from_secs(
-        tuning.batch_interval_secs + u64::from(session_id % 31),
-    );
+    let interval = Duration::from_secs(tuning.batch_interval_secs + u64::from(session_id % 31));
     let mut deadline = Instant::now() + interval;
     let mut queue = Vec::new();
     let mut recent: HashMap<String, Instant> = HashMap::new();
@@ -174,10 +172,9 @@ fn run_worker(
             Ok(Command::Report(report)) => {
                 let key = report.sender_callsign.to_ascii_uppercase();
                 let now = Instant::now();
-                if recent
-                    .get(&key)
-                    .is_none_or(|seen| now.duration_since(*seen) >= Duration::from_secs(tuning.repeat_cache_secs))
-                {
+                if recent.get(&key).is_none_or(|seen| {
+                    now.duration_since(*seen) >= Duration::from_secs(tuning.repeat_cache_secs)
+                }) {
                     recent.insert(key, now);
                     queue.push(report);
                     status.lock().expect("PSK status lock").queued = queue.len();

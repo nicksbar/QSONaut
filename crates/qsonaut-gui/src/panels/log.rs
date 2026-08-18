@@ -84,7 +84,9 @@ impl QsonautGuiApp {
         let mut selected = self.qso_selected;
         egui::ScrollArea::vertical()
             .id_salt("qso_log_rows")
-            .max_height(132.0)
+            // Let the table consume the space made available by the resizable
+            // bottom panel instead of leaving an empty/black region beneath it.
+            .max_height((ui.available_height() - 150.0).max(80.0))
             .show(ui, |ui| {
                 egui::Grid::new("qso_log_grid")
                     .striped(true)

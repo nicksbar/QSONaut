@@ -4,12 +4,9 @@ Chore
 Alerts system, there is no interface for controls or settings.
 Things like worked all states, grids, new stuff, unusual stuff, things that help achievements
 
-Redesign
-wsjtx has it right, global decodes on the left and active channel decodes on the right - effecient use of space.
-The PTT Lead and tail can prob go to the radio settings tab.
-We should be able to massivly compact that TX Deck area and i'm really unsure what the purpose of the bottom section is for, i think we should remove it and use that bottom area to promote the log panel out of the settings and globally available in the main body as a bottom panel, all the control and interaction for logging should be here.
-Remove the PTT button from the tx deck, unecessary, and the stop/disarm - thats a 3rd spot to do the same thing found elsewhere.
-
+Feature request
+Listen to audio.
+This is valuable for a dual op setup where someone would would find value in plugging in headphones to the pc to hear the RX and if possible TX audio.
 
 
 Bug - FT8, prob ft4
