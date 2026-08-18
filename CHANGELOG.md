@@ -5,13 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.4] - Unreleased
+## [0.3.4] - 2026-08-18
 
 ### Added
 - Added an Operator Profile action to load callsign, grid, and QTH details from the
   callsign's HamDB license record.
 - Added asynchronous POTA activator-spot lookup with a short-lived cache. CQ POTA decodes
   are marked with a tree icon and show a matched park reference and name when available.
+- Added a persisted hidden automation-control unlock. The unattended-CQ control appears only
+  after ten logo clicks within ten seconds, with a brief logo-spin unlock indication.
 
 ### Fixed
 - Reworked the Contact Log into a resizable two-column layout with a scrollable contact

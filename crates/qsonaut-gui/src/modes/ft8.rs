@@ -429,17 +429,19 @@ impl QsonautGuiApp {
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
             }
-            if ui
-                .checkbox(&mut self.ft8_auto_answer_cq, "Answer unattended CQs")
-                .on_hover_text(
-                    "When armed, automatically reply to stations calling CQ even if you are not \
-                     actively watching. QSONaut picks the strongest/nearest caller and starts the \
-                     exchange on its own. Leave OFF if you want to choose every caller manually.",
-                )
-                .changed()
-            {
-                self.profile_dirty = true;
-                self.persist_profile("Auto-saved");
+            if self.automation_unlocked {
+                if ui
+                    .checkbox(&mut self.ft8_auto_answer_cq, "Answer unattended CQs")
+                    .on_hover_text(
+                        "When armed, automatically reply to stations calling CQ even if you are not \
+                         actively watching. QSONaut picks the strongest/nearest caller and starts the \
+                         exchange on its own. Leave OFF if you want to choose every caller manually.",
+                    )
+                    .changed()
+                {
+                    self.profile_dirty = true;
+                    self.persist_profile("Auto-saved");
+                }
             }
             ui.separator();
             ui.label("Max unanswered");

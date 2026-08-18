@@ -1218,6 +1218,9 @@ struct QsonautGuiApp {
     ft8_autoseq: bool,
     ft8_auto_reply_policy: AutoReplyPolicy,
     ft8_auto_answer_cq: bool,
+    automation_unlocked: bool,
+    logo_clicks: VecDeque<Instant>,
+    logo_spin_until: Option<Instant>,
     ft8_session: Option<QsoSession>,
     ft8_seq_state: Ft8SeqState,
     ft8_seq_target: Option<String>,
@@ -1443,6 +1446,7 @@ impl QsonautGuiApp {
         let mut ft8_autoseq = false;
         let mut ft8_auto_reply_policy = AutoReplyPolicy::default();
         let mut ft8_auto_answer_cq = false;
+        let mut automation_unlocked = false;
         let mut ft8_cq_only_view = false;
         let mut civ_spectrum_on = false;
         let mut waterfall_theme = WaterfallTheme::default();
@@ -1499,6 +1503,7 @@ impl QsonautGuiApp {
             ft8_autoseq = p.autoseq;
             ft8_auto_reply_policy = p.auto_reply_policy;
             ft8_auto_answer_cq = p.auto_answer_cq;
+            automation_unlocked = p.automation_unlocked;
             ft8_cq_only_view = p.cq_only_view;
             civ_spectrum_on = p.civ_spectrum_on;
             waterfall_theme = p.waterfall_theme;
@@ -1585,6 +1590,7 @@ impl QsonautGuiApp {
                 autoseq: ft8_autoseq,
                 auto_reply_policy: ft8_auto_reply_policy,
                 auto_answer_cq: ft8_auto_answer_cq,
+                automation_unlocked,
                 cq_only_view: ft8_cq_only_view,
                 civ_spectrum_on,
                 waterfall_theme,
@@ -1732,6 +1738,8 @@ impl QsonautGuiApp {
             pota_spots: Vec::new(),
             pota_lookup_rx: None,
             pota_last_lookup: Instant::now() - Duration::from_secs(60),
+            logo_clicks: VecDeque::new(),
+            logo_spin_until: None,
             radio_init_attempted: false,
             radio_worker_handle,
             audio_worker_handle,
@@ -1759,6 +1767,7 @@ impl QsonautGuiApp {
             ft8_autoseq,
             ft8_auto_reply_policy,
             ft8_auto_answer_cq,
+            automation_unlocked,
             ft8_session: None,
             ft8_seq_state: Ft8SeqState::Idle,
             ft8_seq_target: None,
@@ -1914,6 +1923,7 @@ impl QsonautGuiApp {
         self.ft8_autoseq = profile.autoseq;
         self.ft8_auto_reply_policy = profile.auto_reply_policy;
         self.ft8_auto_answer_cq = profile.auto_answer_cq;
+        self.automation_unlocked = profile.automation_unlocked;
         self.ft8_cq_only_view = profile.cq_only_view;
         self.civ_spectrum_on = profile.civ_spectrum_on;
         self.waterfall_theme = profile.waterfall_theme;
@@ -2329,6 +2339,7 @@ impl QsonautGuiApp {
             autoseq: self.ft8_autoseq,
             auto_reply_policy: self.ft8_auto_reply_policy,
             auto_answer_cq: self.ft8_auto_answer_cq,
+            automation_unlocked: self.automation_unlocked,
             cq_only_view: self.ft8_cq_only_view,
             civ_spectrum_on: self.civ_spectrum_on,
             waterfall_theme: self.waterfall_theme,
@@ -2409,6 +2420,26 @@ impl QsonautGuiApp {
             source: "gui.operator_profile".to_string(),
             detail: detail.into(),
         });
+    }
+
+    fn handle_logo_click(&mut self) {
+        let now = Instant::now();
+        while self
+            .logo_clicks
+            .front()
+            .is_some_and(|clicked| now.duration_since(*clicked) > Duration::from_secs(10))
+        {
+            self.logo_clicks.pop_front();
+        }
+        self.logo_clicks.push_back(now);
+        if self.logo_clicks.len() >= 10 {
+            self.logo_clicks.clear();
+            self.automation_unlocked = true;
+            self.logo_spin_until = Some(now + Duration::from_millis(700));
+            self.profile_dirty = true;
+            self.persist_profile("Automation controls unlocked");
+            self.profile_io_status = "Automation controls unlocked".to_string();
+        }
     }
 
     fn emit_radio_state_hook_if_changed(&mut self, snapshot: &GuiState) {
@@ -2905,10 +2936,24 @@ impl eframe::App for QsonautGuiApp {
             .max_height(240.0)
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.add(
-                        egui::Image::new((self.brand_icon.id(), egui::vec2(46.0, 46.0)))
-                            .corner_radius(8.0),
-                    );
+                    let spin_angle = self.logo_spin_until.map_or(0.0, |until| {
+                        let remaining = until.saturating_duration_since(Instant::now());
+                        (1.0 - remaining.as_secs_f32() / 0.7).clamp(0.0, 1.0)
+                            * std::f32::consts::TAU
+                    });
+                    let logo = egui::Image::new((self.brand_icon.id(), egui::vec2(46.0, 46.0)))
+                        .corner_radius(8.0)
+                        .rotate(spin_angle, egui::Vec2::splat(0.5))
+                        .sense(egui::Sense::click());
+                    let logo_response = ui.add(logo);
+                    if logo_response.clicked() {
+                        self.handle_logo_click();
+                    }
+                    if self.logo_spin_until.is_some_and(|until| Instant::now() < until) {
+                        ui.ctx().request_repaint();
+                    } else {
+                        self.logo_spin_until = None;
+                    }
                     ui.vertical(|ui| {
                         ui.label(
                             RichText::new("QSONaut")
