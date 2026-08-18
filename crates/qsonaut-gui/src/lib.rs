@@ -2337,6 +2337,14 @@ impl QsonautGuiApp {
         }
     }
 
+    fn station_grid_for_ft8(&self) -> String {
+        self.station_grid_or_default()
+            .chars()
+            .take(4)
+            .collect::<String>()
+            .to_ascii_uppercase()
+    }
+
     fn emit_operator_profile_hook(&self, detail: impl Into<String>) {
         self.app_events.publish(AppEvent::AutomationHook {
             kind: "operator_profile".to_string(),

@@ -65,6 +65,12 @@ impl QsonautGuiApp {
         }
 
         if self.has_logged_contact_with(&target_call, mode.label(), band) {
+            tracing::warn!(
+                target = %target_call,
+                mode = %mode.label(),
+                band = %band,
+                "duplicate-contact guard rejected TX"
+            );
             let status = format!(
                 "Dupe check blocked TX: {target_call} already worked on {band} {}",
                 mode.label()

@@ -20,6 +20,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   rate, and report monitor startup failures instead of silently disabling playback.
 - Calling CQ now clears the previously selected FT8 decode/contact and returns the RX/TX
   audio channel to the normal operating frequency unless HOLD TX FREQ is enabled.
+- Pauses the RX audio monitor while transmitting and restores it after TX, preventing
+  Windows audio-device contention from blocking unattended or manually armed CQ output.
+- Prevents a stale canceled-TX state from permanently blocking subsequent FT8 transmissions,
+  and adds diagnostic logging for TX requests and gate conditions.
+- Normalizes six-character station locators such as `CN84JU` to the required four-character
+  FT8 locator (`CN84`) when composing CQ and exchange messages.
 
 ## [0.3.3] - 2026-08-18
 

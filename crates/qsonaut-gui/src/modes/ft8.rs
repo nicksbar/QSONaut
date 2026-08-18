@@ -107,17 +107,17 @@ impl QsonautGuiApp {
             }
         }
         for entry in &self.ft8_tx_chat {
-            let belongs = if let Some(target) = target.as_deref() {
-                parse_message(&entry.message).is_some_and(|message| {
+            let belongs = parse_message(&entry.message).is_some_and(|message| {
+                if let Some(target) = target.as_deref() {
                     super::exchange::callsign_eq(&message.from, target)
                         || message
                             .to
                             .as_deref()
                             .is_some_and(|to| super::exchange::callsign_eq(to, target))
-                })
-            } else {
-                false
-            };
+                } else {
+                    message.is_cq && super::exchange::callsign_eq(&message.from, &operator_call)
+                }
+            });
             if belongs {
                 lines.push(Ft8ChatLine {
                     period: entry.period,
@@ -697,13 +697,13 @@ impl QsonautGuiApp {
                                             if let Some(parsed) = parse_message(&entry.message) {
                                                 let call = parsed.from.clone();
                                                 let my = self.station_callsign_or_default();
-                                                let grid = self.station_grid_or_default();
+                                                let grid = self.station_grid_for_ft8();
                                                 let mut session =
                                                     QsoSession::start(call.clone(), entry.period);
                                                 if let Some(response) = session.response_to(
                                                     &parsed,
                                                     my,
-                                                    grid,
+                                                    &grid,
                                                     entry.snr_db,
                                                     entry.period,
                                                 ) {
@@ -822,7 +822,7 @@ impl QsonautGuiApp {
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 let my = self.station_callsign_or_default().to_string();
-                let grid = self.station_grid_or_default().to_string();
+                let grid = self.station_grid_for_ft8();
                 let target = self.ft8_seq_target.clone();
                 if ui.small_button("CALL CQ").clicked() {
                     self.ft8_compose = format!("CQ {my} {grid}");
@@ -947,7 +947,7 @@ impl QsonautGuiApp {
                     });
                     ui.horizontal_wrapped(|ui| {
                         let my = self.station_callsign_or_default();
-                        let grid = self.station_grid_or_default();
+                        let grid = self.station_grid_for_ft8();
                         if let Some(call) = parse_message(&e.message).map(|message| message.from) {
                             if ui.small_button(format!("Reply → {call}")).clicked() {
                                 self.ft8_compose = format!("{call} {my} {grid}");
