@@ -225,9 +225,13 @@ impl QsonautGuiApp {
             }
             return;
         }
-        if completed_period.is_some_and(|period| {
+        let last_tx_period = if mode == WorkspaceMode::Ft4 {
             self.ft4_last_tx_period
-                .is_some_and(|last_tx| period == last_tx.saturating_add(1))
+        } else {
+            self.native_last_tx_periods.get(&mode).copied()
+        };
+        if completed_period.is_some_and(|period| {
+            last_tx_period.is_some_and(|last_tx| period == last_tx.saturating_add(1))
         }) {
             let attempts = if mode == WorkspaceMode::Ft4 {
                 self.ft4_session
@@ -392,10 +396,14 @@ impl QsonautGuiApp {
             self.digital_tx_status = match event {
                 DigitalTxEvent::AudioStarted(mode, period) => {
                     self.digital_tx_started = Some((mode, period));
-                    if mode == WorkspaceMode::Ft4 {
-                        if let Some(session) = self.ft4_session.as_mut() {
-                            session.tx_attempts = session.tx_attempts.saturating_add(1);
-                        }
+                    let session = if mode == WorkspaceMode::Ft4 {
+                        self.ft4_session.as_mut()
+                    } else {
+                        self.native_sessions.get_mut(&mode)
+                    };
+                    if let Some(session) = session {
+                        session.tx_attempts = session.tx_attempts.saturating_add(1);
+                        self.native_attempts.insert(mode, session.tx_attempts);
                     }
                     if let Some(message) = self.digital_queued_tx_message.clone() {
                         let utc = utc_hhmmss_millis(
@@ -417,17 +425,24 @@ impl QsonautGuiApp {
                     let completed_mode = self.digital_tx_started.take().map(|(mode, period)| {
                         if mode == WorkspaceMode::Ft4 {
                             self.ft4_last_tx_period = Some(period);
+                        } else {
+                            self.native_last_tx_periods.insert(mode, period);
                         }
                         mode
                     });
-                    let completed_session = (completed_mode == Some(WorkspaceMode::Ft4))
-                        .then(|| {
+                    let completed_session = completed_mode.and_then(|mode| {
+                        if mode == WorkspaceMode::Ft4 {
                             self.ft4_session
                                 .as_ref()
                                 .filter(|session| should_finalize_after_tx(session.stage))
                                 .cloned()
-                        })
-                        .flatten();
+                        } else {
+                            self.native_sessions
+                                .get(&mode)
+                                .filter(|session| should_finalize_after_tx(session.stage))
+                                .cloned()
+                        }
+                    });
                     self.digital_last_tx_message = self.digital_queued_tx_message.take();
                     let mut status = if completed_mode == Some(WorkspaceMode::Ft4)
                         && self.ft4_stop_policy == AutoTxStopPolicy::AfterNextTx
@@ -442,15 +457,30 @@ impl QsonautGuiApp {
                     };
                     if let Some(session) = completed_session {
                         let target = session.target.clone();
-                        self.log_completed_native_session(&session, WorkspaceMode::Ft4);
-                        self.ft4_session = None;
+                        let mode = completed_mode.expect("session implies completed mode");
+                        self.log_completed_native_session(&session, mode);
+                        if mode == WorkspaceMode::Ft4 {
+                            self.ft4_session = None;
+                        } else {
+                            self.native_sessions.remove(&mode);
+                        }
                         self.digital_seq_target = None;
-                        if self.ft4_stop_policy == AutoTxStopPolicy::AfterCurrentQso {
+                        let stop_policy = if mode == WorkspaceMode::Ft4 {
+                            self.ft4_stop_policy
+                        } else {
+                            self.native_stop_policy
+                        };
+                        if stop_policy == AutoTxStopPolicy::AfterCurrentQso {
                             self.ft4_autoseq = false;
                             self.ft4_stop_policy = AutoTxStopPolicy::Continuous;
+                            self.native_autoseq_mode = None;
+                            self.native_stop_policy = AutoTxStopPolicy::Continuous;
                         }
-                        status = format!("🏁 FT4 QSO with {target} complete and logged");
-                        if !self.ft4_autoseq {
+                        status =
+                            format!("🏁 {} QSO with {target} complete and logged", mode.label());
+                        if (mode == WorkspaceMode::Ft4 && !self.ft4_autoseq)
+                            || (mode != WorkspaceMode::Ft4 && self.native_autoseq_mode.is_none())
+                        {
                             status.push_str(" · automatic TX stopped");
                         }
                     }
@@ -467,6 +497,8 @@ impl QsonautGuiApp {
                     self.ft4_autoseq = false;
                     self.ft4_session = None;
                     self.digital_seq_target = None;
+                    self.native_sessions.clear();
+                    self.native_autoseq_mode = None;
                     format!("⚠ TX failed · {error}")
                 }
             };
