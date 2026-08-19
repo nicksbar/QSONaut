@@ -63,6 +63,8 @@ pub(crate) fn spawn_radio_worker(
             let mut last_scope_divisions = 0_u64;
             let mut last_dropped_sweeps = 0_u64;
             let mut dropped_sweeps_delta = 0_u64;
+            let waterfall_repaint_interval = Duration::from_millis(66);
+            let mut last_waterfall_repaint = Instant::now() - waterfall_repaint_interval;
 
             let Some(stream_radio) = stream_radio else {
                 let mut s = stream_state.lock().expect("ui state lock poisoned");
@@ -240,7 +242,13 @@ pub(crate) fn spawn_radio_worker(
                         );
                         drop(s);
                         if let Some(ctx) = stream_repaint.get() {
-                            ctx.request_repaint();
+                            let elapsed = last_waterfall_repaint.elapsed();
+                            if elapsed >= waterfall_repaint_interval {
+                                last_waterfall_repaint = Instant::now();
+                                ctx.request_repaint();
+                            } else {
+                                ctx.request_repaint_after(waterfall_repaint_interval - elapsed);
+                            }
                         }
                     }
                     Err(err) => {

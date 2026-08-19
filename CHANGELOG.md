@@ -8,6 +8,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [0.3.4] - 2026-08-18
 
 ### Added
+- Current release state includes dedicated WSPR, FST4, JT9, JT65, and Q65 workspaces;
+  FST4 supports the five submodes exposed by `mfsk-core`, while WSPR remains a Type-1,
+  one-shot 120-second beacon workflow.
 - Added an initial WSPR Type-1 transmit path using callsign, 4-character locator, and dBm
   power entered as `CALL GRID POWER_DBM`; the waveform uses the native 120-second slot.
 - Added late-slot protection and timing telemetry to native digital TX, preventing FT4/FST4/JT9/
@@ -23,6 +26,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   after ten logo clicks within ten seconds, with a brief logo-spin unlock indication.
 
 ### Fixed
+- Throttled radio waterfall repaint requests to the same approximately 15 FPS cadence as
+  audio waterfall updates, preventing high-rate scope sweeps from making the display chunky.
 - Added RX monitor diagnostics: a live monitor-volume control and a short 700 Hz test tone
   make it possible to verify the selected output device independently of radio input audio.
 - Clears stale FT4 session state after a failed or canceled transmission so automation can start
