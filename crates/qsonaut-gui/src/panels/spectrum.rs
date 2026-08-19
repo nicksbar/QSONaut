@@ -208,8 +208,20 @@ impl QsonautGuiApp {
         ui.separator();
 
         let bw_hz = filter_bandwidth_hz(&snapshot.mode, snapshot.filter);
-        let is_cw = snapshot.mode.eq_ignore_ascii_case("CW");
-        let channel_hz = if is_cw { 80 } else { 50 };
+        let is_cw = self.workspace_mode == WorkspaceMode::Cw;
+        let channel_hz = if is_cw {
+            80
+        } else {
+            match self.workspace_mode {
+                WorkspaceMode::Ft8 => 50,
+                WorkspaceMode::Ft4 => 90,
+                WorkspaceMode::Fst4 => 70,
+                WorkspaceMode::Wspr => 6,
+                WorkspaceMode::Jt9 => 16,
+                WorkspaceMode::Jt65 | WorkspaceMode::Q65 => 180,
+                _ => 50,
+            }
+        };
         let display_bins = ((bw_hz.min(AUDIO_MAX_FREQ_HZ) as f32 / AUDIO_MAX_FREQ_HZ as f32)
             * AUDIO_BINS as f32)
             .round() as usize;
@@ -262,7 +274,7 @@ impl QsonautGuiApp {
                         pick_hz.saturating_sub(channel_hz / 2)
                     };
                     self.rx_tone_hz = selected_hz;
-                    if !self.ft8_hold_tx_freq {
+                    if is_cw || !self.ft8_hold_tx_freq {
                         self.tx_tone_hz = selected_hz;
                     }
                     self.profile_dirty = true;
@@ -270,11 +282,15 @@ impl QsonautGuiApp {
                     self.profile_io_status = format!("RX audio cursor set: {} Hz", self.rx_tone_hz);
                 }
                 if response.secondary_clicked() {
-                    self.tx_tone_hz = if is_cw {
+                    let selected_hz = if is_cw {
                         pick_hz
                     } else {
                         pick_hz.saturating_sub(channel_hz / 2)
                     };
+                    if is_cw {
+                        self.rx_tone_hz = selected_hz;
+                    }
+                    self.tx_tone_hz = selected_hz;
                     self.profile_dirty = true;
                     self.persist_profile("Auto-saved");
                     self.profile_io_status = format!("TX tone set: {} Hz", self.tx_tone_hz);
@@ -289,26 +305,38 @@ impl QsonautGuiApp {
 
             let channel_half_width =
                 (channel_hz as f32 / bw * response.rect.width() / 2.0).max(2.0);
-            let rx_band = egui::Rect::from_min_max(
-                egui::pos2(rx_x - channel_half_width, response.rect.top()),
-                egui::pos2(rx_x + channel_half_width, response.rect.bottom()),
-            );
+            let rx_band = if is_cw {
+                egui::Rect::from_min_max(
+                    egui::pos2(rx_x - channel_half_width, response.rect.top()),
+                    egui::pos2(rx_x + channel_half_width, response.rect.bottom()),
+                )
+            } else {
+                egui::Rect::from_min_max(
+                    egui::pos2(rx_x, response.rect.top()),
+                    egui::pos2(rx_x + channel_half_width * 2.0, response.rect.bottom()),
+                )
+            };
             ui.painter().rect_filled(
                 rx_band,
                 0.0,
                 Color32::from_rgba_unmultiplied(80, 220, 110, 32),
             );
-            if self.tx_tone_hz.abs_diff(self.rx_tone_hz) > 12 {
-                let tx_band = egui::Rect::from_min_max(
+            let tx_band = if is_cw {
+                egui::Rect::from_min_max(
                     egui::pos2(tx_x - channel_half_width, response.rect.top()),
                     egui::pos2(tx_x + channel_half_width, response.rect.bottom()),
-                );
-                ui.painter().rect_filled(
-                    tx_band,
-                    0.0,
-                    Color32::from_rgba_unmultiplied(240, 150, 60, 32),
-                );
-            }
+                )
+            } else {
+                egui::Rect::from_min_max(
+                    egui::pos2(tx_x, response.rect.top()),
+                    egui::pos2(tx_x + channel_half_width * 2.0, response.rect.bottom()),
+                )
+            };
+            ui.painter().rect_filled(
+                tx_band,
+                0.0,
+                Color32::from_rgba_unmultiplied(240, 150, 60, 28),
+            );
 
             ui.painter().line_segment(
                 [

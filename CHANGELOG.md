@@ -26,6 +26,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   after ten logo clicks within ten seconds, with a brief logo-spin unlock indication.
 
 ### Fixed
+- Corrected audio waterfall cursor semantics to use the selected QSONaut workspace mode:
+  CW keeps RX/TX centered and linked, while digital modes show their distinct channel widths
+  and edge-oriented selection behavior.
 - Audio waterfall selection now shows the active channel bandwidth and marks the selected
   edge for digital modes; CW keeps a centered tone marker because its decoder is tone-centered.
 - Removed an audio-waterfall rendering regression where every repaint copied and cropped the
