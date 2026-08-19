@@ -101,8 +101,8 @@ use tx_audio::{
 };
 use ui_format::{format_signal_report, ft8_period_progress, qso_stage_label, utc_hhmmss_millis};
 use visuals::{
-    audio_cursor_level, build_scope_waterfall_image, build_waterfall_image_with_theme,
-    downsample_bins, fft_buffer_to_display_bins, scale_scope_levels,
+    audio_cursor_level, build_scope_waterfall_image, downsample_bins, fft_buffer_to_display_bins,
+    scale_scope_levels,
 };
 #[cfg(test)]
 use workers::decode::{
@@ -1264,6 +1264,12 @@ struct QsonautGuiApp {
     digital_tx_event_tx: mpsc::Sender<DigitalTxEvent>,
     digital_tx_event_rx: mpsc::Receiver<DigitalTxEvent>,
     monitor_volume: Arc<AtomicU32>,
+    native_autoseq_mode: Option<WorkspaceMode>,
+    native_auto_reply_policy: AutoReplyPolicy,
+    native_stop_policy: AutoTxStopPolicy,
+    native_sessions: HashMap<WorkspaceMode, QsoSession>,
+    native_seen_decodes: HashMap<WorkspaceMode, HashSet<(u64, u32, String)>>,
+    native_attempts: HashMap<WorkspaceMode, u8>,
     ft8_stop_policy: AutoTxStopPolicy,
     ft8_max_attempts: u8,
     ft4_stop_policy: AutoTxStopPolicy,
@@ -1821,6 +1827,12 @@ impl QsonautGuiApp {
             digital_tx_event_tx,
             digital_tx_event_rx,
             monitor_volume,
+            native_autoseq_mode: None,
+            native_auto_reply_policy: AutoReplyPolicy::default(),
+            native_stop_policy: AutoTxStopPolicy::Continuous,
+            native_sessions: HashMap::new(),
+            native_seen_decodes: HashMap::new(),
+            native_attempts: HashMap::new(),
             ft8_stop_policy,
             ft8_max_attempts,
             ft4_stop_policy: AutoTxStopPolicy::Continuous,
@@ -2961,6 +2973,23 @@ impl eframe::App for QsonautGuiApp {
             self.ft4_seen_decode_period = completed_ft4_period;
         }
         self.handle_ft4_decodes(&ft4_decodes, completed_ft4_period);
+        for mode in [
+            WorkspaceMode::Fst4,
+            WorkspaceMode::Jt9,
+            WorkspaceMode::Jt65,
+            WorkspaceMode::Q65,
+        ] {
+            let native_decodes = {
+                let shared = self.state.lock().expect("ui state lock poisoned");
+                shared
+                    .digital_decodes
+                    .iter()
+                    .filter(|entry| entry.mode == mode)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            self.handle_native_sequence(mode, &native_decodes, None);
+        }
         self.handle_ft8_decodes(&new_decodes, completed_decode_period);
         self.ft8_log.extend(new_decodes);
         // Keep the log bounded.

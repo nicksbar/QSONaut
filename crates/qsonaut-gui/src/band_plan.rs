@@ -2,7 +2,7 @@ use qsonaut_radio::BaseMode;
 
 use crate::modes::{cw, fst4, ft4, ft8, jt65, jt9, native, q65, wspr};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum WorkspaceMode {
     Ft8,
     Ft4,

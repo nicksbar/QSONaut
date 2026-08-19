@@ -110,6 +110,44 @@ impl QsonautGuiApp {
             _ => "Native digital TX is one-shot and slot-timed; use STOP TX to disarm a queued frame.",
         };
         ui.label(RichText::new(mode_guidance).small().color(Color32::GRAY));
+        if matches!(
+            mode,
+            WorkspaceMode::Fst4 | WorkspaceMode::Jt9 | WorkspaceMode::Jt65 | WorkspaceMode::Q65
+        ) {
+            ui.horizontal_wrapped(|ui| {
+                let mut armed = self.native_autoseq_mode == Some(mode);
+                if ui.checkbox(&mut armed, "Automatic exchange").changed() {
+                    self.native_autoseq_mode = armed.then_some(mode);
+                    if !armed {
+                        self.native_stop_policy = AutoTxStopPolicy::Continuous;
+                    }
+                }
+                ui.label("Reply priority");
+                egui::ComboBox::from_id_salt(("native_reply_policy", mode.label()))
+                    .selected_text(self.native_auto_reply_policy.label())
+                    .show_ui(ui, |ui| {
+                        for policy in AutoReplyPolicy::ALL {
+                            ui.selectable_value(
+                                &mut self.native_auto_reply_policy,
+                                policy,
+                                policy.label(),
+                            );
+                        }
+                    });
+                ui.label("Stop");
+                egui::ComboBox::from_id_salt(("native_stop_policy", mode.label()))
+                    .selected_text(self.native_stop_policy.label())
+                    .show_ui(ui, |ui| {
+                        for policy in AutoTxStopPolicy::ALL {
+                            ui.selectable_value(
+                                &mut self.native_stop_policy,
+                                policy,
+                                policy.label(),
+                            );
+                        }
+                    });
+            });
+        }
         ui.add_space(4.0);
         if let Some(slot_seconds) = mode.slot_seconds(self.fst4_submode) {
             let now_s = SystemTime::now()

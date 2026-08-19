@@ -1,18 +1,21 @@
 use super::super::*;
 
 impl QsonautGuiApp {
-    fn log_completed_ft4_session(&mut self, session: &QsoSession) {
+    fn log_completed_native_session(&mut self, session: &QsoSession, mode: WorkspaceMode) {
         let frequency_hz = self
             .state
             .lock()
             .expect("ui state lock poisoned")
             .frequency_hz
             .unwrap_or_default();
-        let started_at = (session.started_period as f64 * FT4_SLOT_SECONDS) as u64;
-        let ended_at = (session.last_rx_period.saturating_add(1) as f64 * FT4_SLOT_SECONDS) as u64;
+        let slot_seconds = mode
+            .slot_seconds(self.fst4_submode)
+            .unwrap_or(FT4_SLOT_SECONDS);
+        let started_at = (session.started_period as f64 * slot_seconds) as u64;
+        let ended_at = (session.last_rx_period.saturating_add(1) as f64 * slot_seconds) as u64;
         let mut record = QsoRecord::new(
             &session.target,
-            "FT4",
+            mode.label(),
             band_for_frequency(frequency_hz),
             frequency_hz,
             started_at,
@@ -35,7 +38,7 @@ impl QsonautGuiApp {
             self.profile_dirty = true;
             self.persist_profile("Auto-saved");
         }
-        self.append_qso(record, "Auto-logged FT4");
+        self.append_qso(record, "Auto-logged");
     }
 
     pub(crate) fn handle_ft4_decodes(
@@ -43,15 +46,21 @@ impl QsonautGuiApp {
         decodes: &[DigitalDecodeEntry],
         completed_period: Option<u64>,
     ) {
+        self.handle_native_sequence(WorkspaceMode::Ft4, decodes, completed_period);
+    }
+
+    pub(crate) fn handle_native_sequence(
+        &mut self,
+        mode: WorkspaceMode,
+        decodes: &[DigitalDecodeEntry],
+        completed_period: Option<u64>,
+    ) {
+        let seen = self.native_seen_decodes.entry(mode).or_default();
         let fresh: Vec<DigitalDecodeEntry> = decodes
             .iter()
             .filter(|entry| {
-                entry.mode == WorkspaceMode::Ft4
-                    && self.ft4_seen_decodes.insert((
-                        entry.period,
-                        entry.freq_hz,
-                        entry.message.clone(),
-                    ))
+                entry.mode == mode
+                    && seen.insert((entry.period, entry.freq_hz, entry.message.clone()))
             })
             .cloned()
             .collect();
@@ -75,7 +84,7 @@ impl QsonautGuiApp {
                     .map(|parsed| parsed.from)
                     .unwrap_or_default();
                 self.app_events.publish(AppEvent::CallsignHit {
-                    mode: "FT4".to_string(),
+                    mode: mode.label().to_string(),
                     call,
                     snr_db: entry.snr_db,
                     freq_hz: entry.freq_hz,
@@ -85,7 +94,12 @@ impl QsonautGuiApp {
             }
         }
 
-        if !self.ft4_autoseq || self.digital_tx_active.load(Ordering::Acquire) {
+        let auto_sequence = if mode == WorkspaceMode::Ft4 {
+            self.ft4_autoseq
+        } else {
+            self.native_autoseq_mode == Some(mode)
+        };
+        if !auto_sequence || self.digital_tx_active.load(Ordering::Acquire) {
             return;
         }
 
@@ -95,7 +109,12 @@ impl QsonautGuiApp {
             .digital_last_tx_message
             .as_deref()
             .is_some_and(|message| message.starts_with("CQ "));
-        if self.ft4_session.is_none() {
+        let has_session = if mode == WorkspaceMode::Ft4 {
+            self.ft4_session.is_some()
+        } else {
+            self.native_sessions.contains_key(&mode)
+        };
+        if !has_session {
             let candidates = fresh.iter().enumerate().filter_map(|(index, entry)| {
                 let parsed = parse_message(&entry.message)?;
                 let eligible = (awaiting_cq_caller && parsed.directed_to(&my_call))
@@ -113,10 +132,13 @@ impl QsonautGuiApp {
             if let Some(chosen) =
                 select_candidate(candidates, self.ft4_auto_reply_policy, self.rx_tone_hz)
             {
-                self.ft4_session = Some(QsoSession::start(
-                    chosen.parsed.from.clone(),
-                    fresh[chosen.index].period,
-                ));
+                let session =
+                    QsoSession::start(chosen.parsed.from.clone(), fresh[chosen.index].period);
+                if mode == WorkspaceMode::Ft4 {
+                    self.ft4_session = Some(session);
+                } else {
+                    self.native_sessions.insert(mode, session);
+                }
                 self.digital_seq_target = Some(chosen.parsed.from.clone());
                 self.digital_tx_status = format!(
                     "🎯 {} selected by {} priority",
@@ -130,7 +152,12 @@ impl QsonautGuiApp {
             let Some(parsed) = parse_message(&entry.message) else {
                 continue;
             };
-            let Some(session) = self.ft4_session.as_mut() else {
+            let session = if mode == WorkspaceMode::Ft4 {
+                self.ft4_session.as_mut()
+            } else {
+                self.native_sessions.get_mut(&mode)
+            };
+            let Some(session) = session else {
                 continue;
             };
             let response = session.response_to(
@@ -142,16 +169,27 @@ impl QsonautGuiApp {
             );
             if session.stage == QsoStage::Complete {
                 let completed = session.clone();
-                self.log_completed_ft4_session(&completed);
+                self.log_completed_native_session(&completed, mode);
                 self.digital_tx_status = format!(
                     "🏁 FT4 QSO with {} complete · nice contact!",
                     completed.target
                 );
-                self.ft4_session = None;
+                if mode == WorkspaceMode::Ft4 {
+                    self.ft4_session = None;
+                } else {
+                    self.native_sessions.remove(&mode);
+                }
                 self.digital_seq_target = None;
-                if self.ft4_stop_policy == AutoTxStopPolicy::AfterCurrentQso {
+                let stop_policy = if mode == WorkspaceMode::Ft4 {
+                    self.ft4_stop_policy
+                } else {
+                    self.native_stop_policy
+                };
+                if stop_policy == AutoTxStopPolicy::AfterCurrentQso {
                     self.ft4_autoseq = false;
+                    self.native_autoseq_mode = None;
                     self.ft4_stop_policy = AutoTxStopPolicy::Continuous;
+                    self.native_stop_policy = AutoTxStopPolicy::Continuous;
                     self.digital_tx_status.push_str(" · automatic TX stopped");
                 }
                 break;
@@ -162,7 +200,7 @@ impl QsonautGuiApp {
                 if !self.ft8_hold_tx_freq {
                     self.tx_tone_hz = entry.freq_hz;
                 }
-                self.queue_native_digital_tx(WorkspaceMode::Ft4);
+                self.queue_native_digital_tx(mode);
                 queued_response = true;
                 break;
             }
@@ -170,7 +208,12 @@ impl QsonautGuiApp {
         if queued_response {
             return;
         }
-        if self.ft4_session.is_none() {
+        let has_session = if mode == WorkspaceMode::Ft4 {
+            self.ft4_session.is_some()
+        } else {
+            self.native_sessions.contains_key(&mode)
+        };
+        if !has_session {
             if should_repeat_cq(
                 self.ft4_autoseq,
                 awaiting_cq_caller,
@@ -178,7 +221,7 @@ impl QsonautGuiApp {
                 completed_period,
             ) {
                 self.digital_tx_status = "📣 No FT4 caller yet · repeating CQ".to_string();
-                self.queue_native_digital_tx(WorkspaceMode::Ft4);
+                self.queue_native_digital_tx(mode);
             }
             return;
         }
@@ -186,23 +229,38 @@ impl QsonautGuiApp {
             self.ft4_last_tx_period
                 .is_some_and(|last_tx| period == last_tx.saturating_add(1))
         }) {
-            let attempts = self
-                .ft4_session
-                .as_ref()
-                .map(|session| session.tx_attempts)
-                .unwrap_or_default();
-            if attempts >= self.ft4_max_attempts {
+            let attempts = if mode == WorkspaceMode::Ft4 {
+                self.ft4_session
+                    .as_ref()
+                    .map(|s| s.tx_attempts)
+                    .unwrap_or_default()
+            } else {
+                *self.native_attempts.get(&mode).unwrap_or(&0)
+            };
+            let max_attempts = if mode == WorkspaceMode::Ft4 {
+                self.ft4_max_attempts
+            } else {
+                6
+            };
+            if attempts >= max_attempts {
                 self.ft4_autoseq = false;
                 self.ft4_stop_policy = AutoTxStopPolicy::Continuous;
-                self.ft4_session = None;
+                if mode == WorkspaceMode::Ft4 {
+                    self.ft4_session = None;
+                } else {
+                    self.native_sessions.remove(&mode);
+                }
                 self.digital_tx_status = format!(
-                    "FT4 stopped after {} unanswered attempts",
+                    "{} stopped after {} unanswered attempts",
+                    mode.label(),
                     self.ft4_max_attempts
                 );
             } else if !self.digital_compose.trim().is_empty() {
-                self.digital_tx_status =
-                    "🔁 No FT4 reply yet · repeating the last exchange".to_string();
-                self.queue_native_digital_tx(WorkspaceMode::Ft4);
+                self.digital_tx_status = format!(
+                    "🔁 No {} reply yet · repeating the last exchange",
+                    mode.label()
+                );
+                self.queue_native_digital_tx(mode);
             }
         }
     }
@@ -384,7 +442,7 @@ impl QsonautGuiApp {
                     };
                     if let Some(session) = completed_session {
                         let target = session.target.clone();
-                        self.log_completed_ft4_session(&session);
+                        self.log_completed_native_session(&session, WorkspaceMode::Ft4);
                         self.ft4_session = None;
                         self.digital_seq_target = None;
                         if self.ft4_stop_policy == AutoTxStopPolicy::AfterCurrentQso {

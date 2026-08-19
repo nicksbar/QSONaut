@@ -8,5 +8,6 @@ mod ft8_runtime;
 pub(super) mod jt65;
 pub(super) mod jt9;
 pub(super) mod native;
+pub(super) mod native_sequence;
 pub(super) mod q65;
 pub(super) mod wspr;
