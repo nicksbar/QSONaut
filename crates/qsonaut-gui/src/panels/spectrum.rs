@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::visuals::crop_audio_rows;
+use crate::visuals::build_audio_waterfall_image_with_theme;
 
 impl QsonautGuiApp {
     pub(in super::super) fn draw_radio_waterfall(
@@ -208,12 +208,12 @@ impl QsonautGuiApp {
         ui.separator();
 
         let bw_hz = filter_bandwidth_hz(&snapshot.mode, snapshot.filter);
+        let is_cw = snapshot.mode.eq_ignore_ascii_case("CW");
+        let channel_hz = if is_cw { 80 } else { 50 };
         let display_bins = ((bw_hz.min(AUDIO_MAX_FREQ_HZ) as f32 / AUDIO_MAX_FREQ_HZ as f32)
             * AUDIO_BINS as f32)
             .round() as usize;
         let display_bins = display_bins.clamp(16, AUDIO_BINS);
-        let visible_audio_rows = crop_audio_rows(&snapshot.audio_waterfall_rows, bw_hz);
-
         // Capture layout geometry before texture ops — available_width() can change mid-frame.
         let display_size = egui::vec2(
             ui.available_width().max(1.0),
@@ -225,8 +225,9 @@ impl QsonautGuiApp {
             || self.audio_waterfall_texture_bins != display_bins
             || self.audio_waterfall_texture_theme != self.waterfall_theme
         {
-            let image = build_waterfall_image_with_theme(
-                &visible_audio_rows,
+            let image = build_audio_waterfall_image_with_theme(
+                &snapshot.audio_waterfall_rows,
+                bw_hz,
                 display_bins,
                 AUDIO_WF_HEIGHT,
                 self.waterfall_theme,
@@ -255,16 +256,25 @@ impl QsonautGuiApp {
                 let pick_hz = ((rel * capped_bw as f32).round() as u32).clamp(100, capped_bw);
 
                 if response.clicked() {
-                    self.rx_tone_hz = pick_hz;
+                    let selected_hz = if is_cw {
+                        pick_hz
+                    } else {
+                        pick_hz.saturating_sub(channel_hz / 2)
+                    };
+                    self.rx_tone_hz = selected_hz;
                     if !self.ft8_hold_tx_freq {
-                        self.tx_tone_hz = pick_hz;
+                        self.tx_tone_hz = selected_hz;
                     }
                     self.profile_dirty = true;
                     self.persist_profile("Auto-saved");
                     self.profile_io_status = format!("RX audio cursor set: {} Hz", self.rx_tone_hz);
                 }
                 if response.secondary_clicked() {
-                    self.tx_tone_hz = pick_hz;
+                    self.tx_tone_hz = if is_cw {
+                        pick_hz
+                    } else {
+                        pick_hz.saturating_sub(channel_hz / 2)
+                    };
                     self.profile_dirty = true;
                     self.persist_profile("Auto-saved");
                     self.profile_io_status = format!("TX tone set: {} Hz", self.tx_tone_hz);
@@ -277,7 +287,8 @@ impl QsonautGuiApp {
             let tx_x = response.rect.left()
                 + (self.tx_tone_hz.min(bw as u32) as f32 / bw) * response.rect.width();
 
-            let channel_half_width = (12.5 / bw * response.rect.width()).max(2.0);
+            let channel_half_width =
+                (channel_hz as f32 / bw * response.rect.width() / 2.0).max(2.0);
             let rx_band = egui::Rect::from_min_max(
                 egui::pos2(rx_x - channel_half_width, response.rect.top()),
                 egui::pos2(rx_x + channel_half_width, response.rect.bottom()),
@@ -306,6 +317,16 @@ impl QsonautGuiApp {
                 ],
                 egui::Stroke::new(1.5_f32, Color32::from_rgb(120, 220, 120)),
             );
+            if !is_cw {
+                let edge_x = rx_x + channel_half_width;
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(edge_x, response.rect.top()),
+                        egui::pos2(edge_x, response.rect.bottom()),
+                    ],
+                    egui::Stroke::new(1.0_f32, Color32::from_rgb(120, 220, 120)),
+                );
+            }
             ui.painter().line_segment(
                 [
                     egui::pos2(tx_x, response.rect.top()),
@@ -317,7 +338,11 @@ impl QsonautGuiApp {
             ui.painter().text(
                 egui::pos2(response.rect.left() + 6.0, response.rect.top() + 4.0),
                 egui::Align2::LEFT_TOP,
-                format!("RX {} Hz", self.rx_tone_hz),
+                format!(
+                    "{} RX {} Hz",
+                    if is_cw { "CW CENTER" } else { "RX EDGE" },
+                    self.rx_tone_hz
+                ),
                 egui::TextStyle::Small.resolve(ui.style()),
                 Color32::from_rgb(120, 220, 120),
             );
@@ -330,9 +355,10 @@ impl QsonautGuiApp {
             );
         }
         ui.label(format!(
-            "Audio: {}  |  0\u{2013}{} Hz ({} {})  |  L-click RX / R-click TX",
+            "Audio: {}  |  0\u{2013}{} Hz · channel {} Hz ({} {})  |  L-click RX / R-click TX",
             snapshot.audio_spectrum_status,
             bw_hz.min(AUDIO_MAX_FREQ_HZ),
+            channel_hz,
             snapshot.mode,
             snapshot
                 .filter

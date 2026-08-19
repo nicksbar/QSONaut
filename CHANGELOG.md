@@ -26,6 +26,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   after ten logo clicks within ten seconds, with a brief logo-spin unlock indication.
 
 ### Fixed
+- Audio waterfall selection now shows the active channel bandwidth and marks the selected
+  edge for digital modes; CW keeps a centered tone marker because its decoder is tone-centered.
+- Removed an audio-waterfall rendering regression where every repaint copied and cropped the
+  entire rolling row buffer; the selected bandwidth is now sampled directly while building the
+  texture, reducing allocation and UI work.
 - Throttled radio waterfall repaint requests to the same approximately 15 FPS cadence as
   audio waterfall updates, preventing high-rate scope sweeps from making the display chunky.
 - Added RX monitor diagnostics: a live monitor-volume control and a short 700 Hz test tone
