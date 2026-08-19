@@ -4,9 +4,8 @@ CW decoder sucks. We need to take another run at implementation with ditdah. USB
 DONE
 VBW setting now defaults off, explains its smoothing behavior on hover, and persists with the operator profile.
 
-ISSUE
-The decoding panels are above everything it seems.
-So if you expand the log panel far enough, they end up over the top of it.
+DONE
+Decode decks now use bounded in-flow containers instead of nested top panels, so expanding the contact log cannot place them over other panels.
 
 ISSUE
 RX monitoring still doesn't produce any audio.

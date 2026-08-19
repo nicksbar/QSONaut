@@ -473,232 +473,216 @@ impl QsonautGuiApp {
         }
         let operator_call = self.station_callsign_or_default().to_string();
         let active_band = snapshot.frequency_hz.map(band_for_frequency).unwrap_or("");
-        egui::TopBottomPanel::top("ft4_decode_deck")
-            .resizable(true)
-            .show_separator_line(true)
-            .default_height(360.0)
-            .height_range(220.0..=700.0)
-            .show_inside(ui, |ui| {
-                let deck_rect = ui.available_rect_before_wrap();
-                ui.allocate_rect(deck_rect, egui::Sense::hover());
-                let mut deck_ui = ui.new_child(
-                    egui::UiBuilder::new()
-                        .id_salt("ft4_decode_deck_contents")
-                        .max_rect(deck_rect)
-                        .layout(egui::Layout::top_down(egui::Align::Min)),
-                );
-                deck_ui.set_clip_rect(deck_rect);
-                let panel_h = deck_ui.available_height();
-                let decode_h = panel_h;
-                let conversation_h = panel_h;
-                deck_ui.columns(2, |columns| {
-                    let left = &mut columns[0];
-                    left.set_min_width(0.0);
-                    egui::Frame::dark_canvas(left.style()).show(left, |ui| {
-                        ui.set_min_height(decode_h);
-                        ui.set_max_height(decode_h);
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new("⚡ FT4 LIVE DECODES")
-                                    .strong()
-                                    .color(Color32::LIGHT_BLUE),
-                            );
-                            ui.separator();
-                            if ui.checkbox(&mut self.ft4_cq_only_view, "CQ only").changed() {
-                                self.profile_dirty = true;
-                                self.persist_profile("Auto-saved");
-                            }
-                            if ui.checkbox(&mut self.ft4_follow_log, "Follow").changed() {
-                                self.profile_dirty = true;
-                                self.persist_profile("Auto-saved");
-                            }
-                            ui.label("Keep");
-                            if ui
-                                .add(
-                                    egui::DragValue::new(&mut self.ft4_max_log_entries)
-                                        .range(80..=300)
-                                        .speed(5),
-                                )
-                                .changed()
-                            {
-                                self.profile_dirty = true;
-                                self.persist_profile("Auto-saved");
-                            }
-                            ui.label("rows");
-                            ui.label(format!("{} msgs", entries.len()));
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui.small_button("Clear").clicked() {
-                                        self.state
-                                            .lock()
-                                            .expect("ui state lock poisoned")
-                                            .digital_decodes
-                                            .retain(|entry| entry.mode != WorkspaceMode::Ft4);
-                                        self.digital_selected = None;
-                                        self.digital_seq_target = None;
-                                        self.ft4_session = None;
-                                        self.digital_tx_chat
-                                            .retain(|entry| entry.mode != WorkspaceMode::Ft4);
-                                    }
-                                },
-                            );
-                        });
-                        ui.separator();
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_min_height(220.0);
+            let deck_rect = ui.available_rect_before_wrap();
+            ui.allocate_rect(deck_rect, egui::Sense::hover());
+            let mut deck_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("ft4_decode_deck_contents")
+                    .max_rect(deck_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            deck_ui.set_clip_rect(deck_rect);
+            let panel_h = deck_ui.available_height();
+            let decode_h = panel_h;
+            let conversation_h = panel_h;
+            deck_ui.columns(2, |columns| {
+                let left = &mut columns[0];
+                left.set_min_width(0.0);
+                egui::Frame::dark_canvas(left.style()).show(left, |ui| {
+                    ui.set_min_height(decode_h);
+                    ui.set_max_height(decode_h);
+                    ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new("UTC          SNR     dT      Hz  Message")
-                                .monospace()
-                                .strong(),
+                            RichText::new("⚡ FT4 LIVE DECODES")
+                                .strong()
+                                .color(Color32::LIGHT_BLUE),
                         );
                         ui.separator();
-                        egui::ScrollArea::vertical()
-                            .id_salt("ft4_global_decodes")
-                            .stick_to_bottom(self.ft4_follow_log)
-                            .show(ui, |ui| {
-                                if entries.is_empty() {
-                                    ui.label(
-                                        RichText::new(
-                                            "🌊 Listening hard… collecting the next FT4 waveform.",
-                                        )
-                                        .color(Color32::GRAY),
-                                    );
-                                }
-                                for entry in &entries {
-                                    let selected =
-                                        self.digital_selected.as_ref().is_some_and(|selected| {
-                                            selected.period == entry.period
-                                                && selected.freq_hz == entry.freq_hz
-                                                && selected.message == entry.message
-                                        });
-                                    let call_hit =
-                                        operator_call_hit(&entry.message, &operator_call);
-                                    let worked_call =
-                                        parse_message(&entry.message).map(|parsed| parsed.from);
-                                    let is_worked = worked_call.as_ref().is_some_and(|call| {
-                                        !call.is_empty()
-                                            && !active_band.is_empty()
-                                            && self.has_logged_contact_with(
-                                                call,
-                                                "FT4",
-                                                active_band,
-                                            )
-                                    });
-                                    let row = RichText::new(format!(
-                                        "{:12}  {:+5.1}  {:+6.2}  {:>5}  {}",
-                                        entry.utc,
-                                        entry.snr_db,
-                                        entry.dt_s,
-                                        entry.freq_hz,
-                                        entry.message
-                                    ))
-                                    .monospace()
-                                    .color(
-                                        if let Some(hit) = call_hit {
-                                            call_hit_badge(hit).1
-                                        } else if entry.message.starts_with("CQ ") {
-                                            Color32::LIGHT_GREEN
-                                        } else {
-                                            Color32::LIGHT_GRAY
-                                        },
-                                    );
-                                    let response = if let Some(hit) = call_hit {
-                                        let (badge, accent, fill) = call_hit_badge(hit);
-                                        egui::Frame::group(ui.style())
-                                            .fill(fill)
-                                            .stroke(egui::Stroke::new(1.5_f32, accent))
-                                            .show(ui, |ui| {
-                                                ui.horizontal(|ui| {
-                                                    ui.label(
-                                                        RichText::new(badge).strong().color(accent),
-                                                    );
-                                                    ui.selectable_label(selected, row)
-                                                })
-                                                .inner
-                                            })
-                                            .inner
-                                    } else if is_worked {
-                                        egui::Frame::group(ui.style())
-                                            .fill(Color32::from_rgb(20, 58, 30))
-                                            .stroke(egui::Stroke::new(
-                                                1.2_f32,
-                                                Color32::from_rgb(120, 220, 145),
-                                            ))
-                                            .show(ui, |ui| {
-                                                ui.horizontal(|ui| {
-                                                    ui.label(
-                                                        RichText::new("✅ WORKED").strong().color(
-                                                            Color32::from_rgb(120, 220, 145),
-                                                        ),
-                                                    );
-                                                    ui.selectable_label(selected, row)
-                                                })
-                                                .inner
-                                            })
-                                            .inner
-                                    } else {
-                                        ui.selectable_label(selected, row)
-                                    };
-                                    let now = Instant::now();
-                                    let synthetic_double = self
-                                        .digital_last_click
-                                        .as_ref()
-                                        .is_some_and(|(period, freq_hz, message, at)| {
-                                            *period == entry.period
-                                                && *freq_hz == entry.freq_hz
-                                                && message == &entry.message
-                                                && now.duration_since(*at)
-                                                    <= Duration::from_millis(500)
-                                        });
-                                    if response.clicked() {
-                                        self.digital_last_click = Some((
-                                            entry.period,
-                                            entry.freq_hz,
-                                            entry.message.clone(),
-                                            now,
-                                        ));
-                                        self.digital_selected = Some(entry.clone());
-                                        self.digital_seq_target = parse_message(&entry.message)
-                                            .map(|message| message.from);
-                                        self.rx_tone_hz = entry.freq_hz;
-                                        if !self.ft8_hold_tx_freq {
-                                            self.tx_tone_hz = entry.freq_hz;
-                                        }
-                                    }
-                                    if synthetic_double || response.double_clicked() {
-                                        if let Some(message) = parse_message(&entry.message) {
-                                            let my_call =
-                                                self.station_callsign_or_default().to_string();
-                                            let my_grid =
-                                                self.station_grid_or_default().to_string();
-                                            let mut session = QsoSession::start(
-                                                message.from.clone(),
-                                                entry.period,
-                                            );
-                                            if let Some(reply) = session.response_to(
-                                                &message,
-                                                &my_call,
-                                                &my_grid,
-                                                entry.snr_db.round() as i8,
-                                                entry.period,
-                                            ) {
-                                                self.digital_compose = reply;
-                                                self.digital_seq_target = Some(message.from);
-                                                self.ft4_session = Some(session);
-                                                self.ft4_autoseq = true;
-                                                self.queue_native_digital_tx(WorkspaceMode::Ft4);
-                                                self.profile_dirty = true;
-                                                self.persist_profile("Auto-saved");
-                                            }
-                                        }
-                                    }
-                                }
-                            });
+                        if ui.checkbox(&mut self.ft4_cq_only_view, "CQ only").changed() {
+                            self.profile_dirty = true;
+                            self.persist_profile("Auto-saved");
+                        }
+                        if ui.checkbox(&mut self.ft4_follow_log, "Follow").changed() {
+                            self.profile_dirty = true;
+                            self.persist_profile("Auto-saved");
+                        }
+                        ui.label("Keep");
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut self.ft4_max_log_entries)
+                                    .range(80..=300)
+                                    .speed(5),
+                            )
+                            .changed()
+                        {
+                            self.profile_dirty = true;
+                            self.persist_profile("Auto-saved");
+                        }
+                        ui.label("rows");
+                        ui.label(format!("{} msgs", entries.len()));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("Clear").clicked() {
+                                self.state
+                                    .lock()
+                                    .expect("ui state lock poisoned")
+                                    .digital_decodes
+                                    .retain(|entry| entry.mode != WorkspaceMode::Ft4);
+                                self.digital_selected = None;
+                                self.digital_seq_target = None;
+                                self.ft4_session = None;
+                                self.digital_tx_chat
+                                    .retain(|entry| entry.mode != WorkspaceMode::Ft4);
+                            }
+                        });
                     });
-                    let right = &mut columns[1];
-                    right.set_min_width(0.0);
-                    self.draw_ft4_conversation(right, snapshot, conversation_h);
+                    ui.separator();
+                    ui.label(
+                        RichText::new("UTC          SNR     dT      Hz  Message")
+                            .monospace()
+                            .strong(),
+                    );
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .id_salt("ft4_global_decodes")
+                        .stick_to_bottom(self.ft4_follow_log)
+                        .show(ui, |ui| {
+                            if entries.is_empty() {
+                                ui.label(
+                                    RichText::new(
+                                        "🌊 Listening hard… collecting the next FT4 waveform.",
+                                    )
+                                    .color(Color32::GRAY),
+                                );
+                            }
+                            for entry in &entries {
+                                let selected =
+                                    self.digital_selected.as_ref().is_some_and(|selected| {
+                                        selected.period == entry.period
+                                            && selected.freq_hz == entry.freq_hz
+                                            && selected.message == entry.message
+                                    });
+                                let call_hit = operator_call_hit(&entry.message, &operator_call);
+                                let worked_call =
+                                    parse_message(&entry.message).map(|parsed| parsed.from);
+                                let is_worked = worked_call.as_ref().is_some_and(|call| {
+                                    !call.is_empty()
+                                        && !active_band.is_empty()
+                                        && self.has_logged_contact_with(call, "FT4", active_band)
+                                });
+                                let row = RichText::new(format!(
+                                    "{:12}  {:+5.1}  {:+6.2}  {:>5}  {}",
+                                    entry.utc,
+                                    entry.snr_db,
+                                    entry.dt_s,
+                                    entry.freq_hz,
+                                    entry.message
+                                ))
+                                .monospace()
+                                .color(
+                                    if let Some(hit) = call_hit {
+                                        call_hit_badge(hit).1
+                                    } else if entry.message.starts_with("CQ ") {
+                                        Color32::LIGHT_GREEN
+                                    } else {
+                                        Color32::LIGHT_GRAY
+                                    },
+                                );
+                                let response = if let Some(hit) = call_hit {
+                                    let (badge, accent, fill) = call_hit_badge(hit);
+                                    egui::Frame::group(ui.style())
+                                        .fill(fill)
+                                        .stroke(egui::Stroke::new(1.5_f32, accent))
+                                        .show(ui, |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    RichText::new(badge).strong().color(accent),
+                                                );
+                                                ui.selectable_label(selected, row)
+                                            })
+                                            .inner
+                                        })
+                                        .inner
+                                } else if is_worked {
+                                    egui::Frame::group(ui.style())
+                                        .fill(Color32::from_rgb(20, 58, 30))
+                                        .stroke(egui::Stroke::new(
+                                            1.2_f32,
+                                            Color32::from_rgb(120, 220, 145),
+                                        ))
+                                        .show(ui, |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    RichText::new("✅ WORKED")
+                                                        .strong()
+                                                        .color(Color32::from_rgb(120, 220, 145)),
+                                                );
+                                                ui.selectable_label(selected, row)
+                                            })
+                                            .inner
+                                        })
+                                        .inner
+                                } else {
+                                    ui.selectable_label(selected, row)
+                                };
+                                let now = Instant::now();
+                                let synthetic_double = self
+                                    .digital_last_click
+                                    .as_ref()
+                                    .is_some_and(|(period, freq_hz, message, at)| {
+                                        *period == entry.period
+                                            && *freq_hz == entry.freq_hz
+                                            && message == &entry.message
+                                            && now.duration_since(*at) <= Duration::from_millis(500)
+                                    });
+                                if response.clicked() {
+                                    self.digital_last_click = Some((
+                                        entry.period,
+                                        entry.freq_hz,
+                                        entry.message.clone(),
+                                        now,
+                                    ));
+                                    self.digital_selected = Some(entry.clone());
+                                    self.digital_seq_target =
+                                        parse_message(&entry.message).map(|message| message.from);
+                                    self.rx_tone_hz = entry.freq_hz;
+                                    if !self.ft8_hold_tx_freq {
+                                        self.tx_tone_hz = entry.freq_hz;
+                                    }
+                                }
+                                if synthetic_double || response.double_clicked() {
+                                    if let Some(message) = parse_message(&entry.message) {
+                                        let my_call =
+                                            self.station_callsign_or_default().to_string();
+                                        let my_grid = self.station_grid_or_default().to_string();
+                                        let mut session =
+                                            QsoSession::start(message.from.clone(), entry.period);
+                                        if let Some(reply) = session.response_to(
+                                            &message,
+                                            &my_call,
+                                            &my_grid,
+                                            entry.snr_db.round() as i8,
+                                            entry.period,
+                                        ) {
+                                            self.digital_compose = reply;
+                                            self.digital_seq_target = Some(message.from);
+                                            self.ft4_session = Some(session);
+                                            self.ft4_autoseq = true;
+                                            self.queue_native_digital_tx(WorkspaceMode::Ft4);
+                                            self.profile_dirty = true;
+                                            self.persist_profile("Auto-saved");
+                                        }
+                                    }
+                                }
+                            }
+                        });
                 });
+                let right = &mut columns[1];
+                right.set_min_width(0.0);
+                self.draw_ft4_conversation(right, snapshot, conversation_h);
             });
+        });
         ui.add_space(4.0);
 
         let tx_h = (ui.available_height() * 0.22).clamp(88.0, 180.0);
