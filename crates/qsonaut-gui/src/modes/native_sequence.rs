@@ -1,4 +1,3 @@
-use super::super::*;
 use super::exchange::DEFAULT_PTT_LEAD_SECONDS;
 
 /// Shared manual/automatic exchange controller for native slot modes. The
