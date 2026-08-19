@@ -136,7 +136,7 @@ pub(in super::super) fn run_native_digital_decode(
                     result.snr_db,
                     result.dt_sec,
                     result.freq_hz,
-                    result.message.to_string(),
+                    format!("{} · drift {:+.2} Hz", result.message, result.drift_hz),
                 );
             }
         }
