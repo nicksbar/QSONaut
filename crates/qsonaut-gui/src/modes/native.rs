@@ -37,44 +37,56 @@ impl QsonautGuiApp {
         snapshot: &GuiState,
         mode: WorkspaceMode,
     ) {
-        ui.columns(2, |columns| {
-            let (left_columns, right_columns) = columns.split_at_mut(1);
-            let left = &mut left_columns[0];
-            let right = &mut right_columns[0];
-            left.set_min_width(0.0);
-            right.set_min_width(0.0);
-            egui::Frame::dark_canvas(left.style()).show(left, |ui| {
-                self.draw_mfsk_mode_details(ui, snapshot, mode);
-            });
-            egui::Frame::group(right.style()).show(right, |ui| {
-                let lines = self
-                    .digital_tx_chat
-                    .iter()
-                    .filter(|entry| entry.mode == mode)
-                    .map(|entry| Ft8ChatLine {
-                        period: entry.period,
-                        utc: entry.utc.clone(),
-                        message: entry.message.clone(),
-                        detail: "TX".to_string(),
-                        direction: Ft8ChatDirection::Tx,
-                    })
-                    .collect();
-                draw_digital_conversation(
-                    ui,
-                    ui.available_height(),
-                    "native-conversation",
-                    format!("💬 {} CONVERSATION", mode.label()),
-                    self.native_sessions
-                        .get(&mode)
-                        .map(|session| qso_stage_label(session.stage)),
-                    "Select a decode to track that callsign here.",
-                    &self.station_callsign_or_default(),
-                    self.rx_tone_hz,
-                    self.tx_tone_hz,
-                    audio_cursor_level(&snapshot.audio_waterfall_rows, self.rx_tone_hz),
-                    audio_cursor_level(&snapshot.audio_waterfall_rows, self.tx_tone_hz),
-                    lines,
-                );
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_min_height(360.0);
+            let deck_rect = ui.available_rect_before_wrap();
+            ui.allocate_rect(deck_rect, egui::Sense::hover());
+            let mut deck_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt(("native-mode-deck", mode.label()))
+                    .max_rect(deck_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            deck_ui.set_clip_rect(deck_rect);
+            deck_ui.columns(2, |columns| {
+                let (left_columns, right_columns) = columns.split_at_mut(1);
+                let left = &mut left_columns[0];
+                let right = &mut right_columns[0];
+                left.set_min_width(0.0);
+                right.set_min_width(0.0);
+                egui::Frame::dark_canvas(left.style()).show(left, |ui| {
+                    self.draw_mfsk_mode_details(ui, snapshot, mode);
+                });
+                egui::Frame::group(right.style()).show(right, |ui| {
+                    let lines = self
+                        .digital_tx_chat
+                        .iter()
+                        .filter(|entry| entry.mode == mode)
+                        .map(|entry| Ft8ChatLine {
+                            period: entry.period,
+                            utc: entry.utc.clone(),
+                            message: entry.message.clone(),
+                            detail: "TX".to_string(),
+                            direction: Ft8ChatDirection::Tx,
+                        })
+                        .collect();
+                    draw_digital_conversation(
+                        ui,
+                        ui.available_height(),
+                        "native-conversation",
+                        format!("💬 {} CONVERSATION", mode.label()),
+                        self.native_sessions
+                            .get(&mode)
+                            .map(|session| qso_stage_label(session.stage)),
+                        "Select a decode to track that callsign here.",
+                        &self.station_callsign_or_default(),
+                        self.rx_tone_hz,
+                        self.tx_tone_hz,
+                        audio_cursor_level(&snapshot.audio_waterfall_rows, self.rx_tone_hz),
+                        audio_cursor_level(&snapshot.audio_waterfall_rows, self.tx_tone_hz),
+                        lines,
+                    );
+                });
             });
         });
     }
