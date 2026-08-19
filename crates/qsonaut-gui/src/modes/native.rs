@@ -36,6 +36,120 @@ impl QsonautGuiApp {
         snapshot: &GuiState,
         mode: WorkspaceMode,
     ) {
+        ui.columns(2, |columns| {
+            let (left_columns, right_columns) = columns.split_at_mut(1);
+            let left = &mut left_columns[0];
+            let right = &mut right_columns[0];
+            left.set_min_width(0.0);
+            right.set_min_width(0.0);
+            egui::Frame::dark_canvas(left.style()).show(left, |ui| {
+                self.draw_mfsk_mode_details(ui, snapshot, mode);
+            });
+            egui::Frame::group(right.style()).show(right, |ui| {
+                self.draw_native_conversation(ui, snapshot, mode);
+            });
+        });
+    }
+
+    fn draw_native_conversation(
+        &mut self,
+        ui: &mut egui::Ui,
+        snapshot: &GuiState,
+        mode: WorkspaceMode,
+    ) {
+        ui.heading(format!("{} CONVERSATION", mode.label()));
+        ui.separator();
+        let target = if mode == WorkspaceMode::Ft4 {
+            self.digital_seq_target.clone()
+        } else {
+            self.native_sessions
+                .get(&mode)
+                .map(|session| session.target.clone())
+        };
+        ui.label(
+            RichText::new(target.as_deref().unwrap_or("No station selected"))
+                .strong()
+                .color(if target.is_some() {
+                    Color32::LIGHT_GREEN
+                } else {
+                    Color32::GRAY
+                }),
+        );
+        ui.label(
+            RichText::new(if self.native_autoseq_mode == Some(mode) {
+                "AUTOMATIC EXCHANGE ARMED"
+            } else {
+                "MANUAL / ONE-SHOT MODE"
+            })
+            .small()
+            .color(Color32::YELLOW),
+        );
+        ui.separator();
+        let session = if mode == WorkspaceMode::Ft4 {
+            self.ft4_session.as_ref()
+        } else {
+            self.native_sessions.get(&mode)
+        };
+        if let Some(session) = session {
+            ui.label(format!("Stage: {}", qso_stage_label(session.stage)));
+            ui.label(format!("Attempts: {}", session.tx_attempts));
+            if let Some(grid) = &session.remote_grid {
+                ui.label(format!("Grid: {grid}"));
+            }
+            if let Some(report) = session.report_received {
+                ui.label(format!("Report received: {report:+}"));
+            }
+        } else {
+            ui.label(
+                RichText::new("Select a directed decode to begin an exchange.")
+                    .color(Color32::GRAY),
+            );
+        }
+        ui.separator();
+        ui.label(RichText::new("TX HISTORY").strong());
+        egui::ScrollArea::vertical()
+            .id_salt(("native-tx-history", mode.label()))
+            .max_height(220.0)
+            .show(ui, |ui| {
+                let mut shown = 0;
+                for entry in self
+                    .digital_tx_chat
+                    .iter()
+                    .filter(|entry| entry.mode == mode)
+                    .rev()
+                    .take(20)
+                {
+                    shown += 1;
+                    ui.label(
+                        RichText::new(format!("{}  {}", entry.utc, entry.message)).monospace(),
+                    );
+                }
+                if shown == 0 {
+                    ui.label(RichText::new("No transmissions yet").color(Color32::GRAY));
+                }
+            });
+        ui.separator();
+        ui.label(RichText::new(&self.digital_tx_status).color(Color32::GRAY));
+        ui.label(
+            RichText::new(format!(
+                "{} decode entries",
+                snapshot
+                    .digital_decodes
+                    .iter()
+                    .filter(|entry| entry.mode == mode)
+                    .count()
+            ))
+            .small()
+            .color(Color32::GRAY),
+        );
+    }
+
+    fn draw_mfsk_mode_details(
+        &mut self,
+        ui: &mut egui::Ui,
+        snapshot: &GuiState,
+        mode: WorkspaceMode,
+    ) {
         let preset = workspace_radio_preset(mode);
         let preset_label = match (preset.base_mode, preset.data_mode) {
             (BaseMode::Usb, true) => "USB-D",
