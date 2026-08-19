@@ -1,6 +1,6 @@
 use qsonaut_radio::BaseMode;
 
-use crate::modes::{cw, ft4, ft8, native};
+use crate::modes::{cw, ft4, ft8, native, wspr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum WorkspaceMode {
@@ -105,7 +105,7 @@ pub(super) fn workspace_band_plan(mode: WorkspaceMode) -> &'static [(&'static st
         WorkspaceMode::Ft8 => ft8::BAND_PLAN,
         WorkspaceMode::Ft4 => ft4::BAND_PLAN,
         WorkspaceMode::Fst4 => native::FST4_BAND_PLAN,
-        WorkspaceMode::Wspr => native::WSPR_BAND_PLAN,
+        WorkspaceMode::Wspr => wspr::BAND_PLAN,
         WorkspaceMode::Jt9 => native::JT9_BAND_PLAN,
         WorkspaceMode::Jt65 => native::JT65_BAND_PLAN,
         WorkspaceMode::Q65 => native::Q65_BAND_PLAN,
