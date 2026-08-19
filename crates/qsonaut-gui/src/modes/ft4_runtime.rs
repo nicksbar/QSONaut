@@ -401,6 +401,13 @@ impl QsonautGuiApp {
                     self.digital_tx_started = None;
                     self.digital_queued_tx_message = None;
                     self.ft4_stop_policy = AutoTxStopPolicy::Continuous;
+                    // A failed or canceled waveform must not leave the QSO
+                    // session armed for a reply that can no longer arrive.
+                    // Otherwise the next automation cycle inherits stale
+                    // exchange state and appears permanently stuck.
+                    self.ft4_autoseq = false;
+                    self.ft4_session = None;
+                    self.digital_seq_target = None;
                     format!("⚠ TX failed · {error}")
                 }
             };

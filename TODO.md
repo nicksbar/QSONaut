@@ -17,8 +17,8 @@ TODO
 We need to build out all the other digital modes supported in the app, with the lessons learned.
 Focus on HF ones first, then WSPR. Disable the UHF modes, i don't have a radio. Group them at the end of the panel and disable the access.
 
-ISSUE
-The automation gets stuck. If a cycle is incomplete, partially complete, or previously started - we are stuck. I can break that cycle by responding manually or restarting the app.
+DONE
+Failed FT4 transmissions now clear the pending session and target, disarm automation, and return the next cycle to a clean state instead of inheriting stale exchange state.
 
 FEATURE REQUEST
 We should support common radio interfaces, like rigctrl, dxlab, other...

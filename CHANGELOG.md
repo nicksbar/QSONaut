@@ -16,6 +16,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   after ten logo clicks within ten seconds, with a brief logo-spin unlock indication.
 
 ### Fixed
+- Clears stale FT4 session state after a failed or canceled transmission so automation can start
+  a fresh cycle without requiring a manual response or application restart.
 - Reworked the Contact Log into a resizable two-column layout with a scrollable contact
   list, a selected-contact editor, and an explicit Close action for the editor.
 - Removed the misleading resize cursor and inactive resize boundary between the radio
