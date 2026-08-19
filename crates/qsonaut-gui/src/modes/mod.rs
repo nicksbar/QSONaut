@@ -1,4 +1,5 @@
 pub(super) mod cw;
+pub(super) mod digital_conversation;
 pub(super) mod exchange;
 pub(super) mod fst4;
 pub(super) mod ft4;
