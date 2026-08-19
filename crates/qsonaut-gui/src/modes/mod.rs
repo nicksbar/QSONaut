@@ -1,5 +1,6 @@
 pub(super) mod cw;
 pub(super) mod exchange;
+pub(super) mod fst4;
 pub(super) mod ft4;
 mod ft4_runtime;
 pub(super) mod ft8;

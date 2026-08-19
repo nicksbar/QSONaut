@@ -2599,10 +2599,10 @@ impl QsonautGuiApp {
         match self.workspace_mode {
             WorkspaceMode::Ft8 => self.draw_ft8_workspace(ui, ctx, snapshot),
             WorkspaceMode::Ft4 => self.draw_ft4_workspace(ui, snapshot),
+            WorkspaceMode::Fst4 => self.draw_fst4_workspace(ui, snapshot),
             WorkspaceMode::Wspr => self.draw_wspr_workspace(ui, snapshot),
             WorkspaceMode::Cw => self.draw_cw_workspace(ui, snapshot),
-            WorkspaceMode::Fst4
-            | WorkspaceMode::Jt9
+            WorkspaceMode::Jt9
             | WorkspaceMode::Jt65
             | WorkspaceMode::Q65
             | WorkspaceMode::Msk144
