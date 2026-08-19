@@ -8,9 +8,8 @@ RX monitoring now has a live volume control and a 700 Hz test tone for separatin
 TODO
 Lessons learned from ft8 need to flow into ft4.
 
-TODO
-We need to build out all the other digital modes supported in the app, with the lessons learned.
-Focus on HF ones first, then WSPR. Disable the UHF modes, i don't have a radio. Group them at the end of the panel and disable the access.
+IN PROGRESS
+Digital modes are now grouped into HF/primary and other/experimental sections. MSK144 is disabled because this station has no UHF radio; the remaining native modes need deeper FT8/FT4-quality workflows, especially WSPR.
 
 FEATURE REQUEST
 We should support common radio interfaces, like rigctrl, dxlab, other...

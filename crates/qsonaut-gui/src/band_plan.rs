@@ -48,6 +48,10 @@ impl WorkspaceMode {
     pub(super) fn has_native_decoder(self) -> bool {
         !matches!(self, Self::Cw | Self::Fldigi)
     }
+
+    pub(super) fn is_uhf(self) -> bool {
+        matches!(self, Self::Msk144)
+    }
 }
 
 pub(super) const WORKSPACE_MODES: [WorkspaceMode; 10] = [
@@ -62,6 +66,20 @@ pub(super) const WORKSPACE_MODES: [WorkspaceMode; 10] = [
     WorkspaceMode::Cw,
     WorkspaceMode::Fldigi,
 ];
+
+pub(super) const HF_WORKSPACE_MODES: [WorkspaceMode; 8] = [
+    WorkspaceMode::Ft8,
+    WorkspaceMode::Ft4,
+    WorkspaceMode::Fst4,
+    WorkspaceMode::Wspr,
+    WorkspaceMode::Jt9,
+    WorkspaceMode::Jt65,
+    WorkspaceMode::Q65,
+    WorkspaceMode::Cw,
+];
+
+pub(super) const OTHER_WORKSPACE_MODES: [WorkspaceMode; 2] =
+    [WorkspaceMode::Msk144, WorkspaceMode::Fldigi];
 
 pub(super) fn band_for_frequency(frequency_hz: u64) -> &'static str {
     match frequency_hz {

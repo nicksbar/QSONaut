@@ -8,6 +8,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [0.3.4] - 2026-08-18
 
 ### Added
+- Grouped digital workspace modes into HF/primary and other/experimental sections; MSK144
+  is visibly disabled for stations without a UHF radio while WSPR and the other HF modes
+  remain directly accessible.
 - Added an Operator Profile action to load callsign, grid, and QTH details from the
   callsign's HamDB license record.
 - Added asynchronous POTA activator-spot lookup with a short-lived cache. CQ POTA decodes

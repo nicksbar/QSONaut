@@ -69,7 +69,8 @@ use automation_hunter::{
     AchievementKind, CustomAchievementRule, ExternalSendRecord, HunterAlert, HunterMetric,
 };
 use band_plan::{
-    band_for_frequency, workspace_band_plan, workspace_radio_preset, WorkspaceMode, WORKSPACE_MODES,
+    band_for_frequency, workspace_band_plan, workspace_radio_preset, WorkspaceMode,
+    HF_WORKSPACE_MODES, OTHER_WORKSPACE_MODES, WORKSPACE_MODES,
 };
 use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
@@ -2726,7 +2727,8 @@ impl QsonautGuiApp {
             }
             ui.separator();
             ui.label(RichText::new("Mode").strong());
-            for mode in WORKSPACE_MODES {
+            ui.label(RichText::new("HF / primary").strong());
+            for mode in HF_WORKSPACE_MODES {
                 if ui
                     .selectable_label(self.workspace_mode == mode, mode.label())
                     .clicked()
@@ -2737,6 +2739,30 @@ impl QsonautGuiApp {
                     {
                         self.send_command(GuiCommand::ApplyWorkspace { mode, frequency_hz });
                     }
+                }
+            }
+            ui.separator();
+            ui.label(
+                RichText::new("Other / experimental")
+                    .strong()
+                    .color(Color32::GRAY),
+            );
+            for mode in OTHER_WORKSPACE_MODES {
+                let enabled = !mode.is_uhf();
+                let response = ui.add_enabled(
+                    enabled,
+                    egui::Button::selectable(self.workspace_mode == mode, mode.label()),
+                );
+                if response.clicked() && enabled {
+                    self.workspace_mode = mode;
+                    if let Some(frequency_hz) =
+                        workspace_frequency_for_current_band(mode, snapshot.frequency_hz)
+                    {
+                        self.send_command(GuiCommand::ApplyWorkspace { mode, frequency_hz });
+                    }
+                }
+                if !enabled {
+                    response.on_hover_text("Disabled: no UHF radio is configured for this station");
                 }
             }
         });
