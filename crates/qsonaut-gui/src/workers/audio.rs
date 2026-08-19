@@ -513,6 +513,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     thread::spawn(move || {
                                         run_native_digital_decode(
                                             WorkspaceMode::Ft4,
+                                            crate::modes::fst4::Submode::default(),
                                             samples,
                                             decoded_period,
                                             utc,
@@ -531,8 +532,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                             .to_string();
                                 }
                             }
-                        } else if let Some(slot_seconds) = active_workspace_mode.core_slot_seconds()
-                        {
+                        } else if let Some(slot_seconds) = active_workspace_mode.slot_seconds(
+                            state.lock().expect("ui state lock poisoned").fst4_submode,
+                        ) {
                             digital_buf.extend_from_slice(&ds);
                             let slot_samples = (slot_seconds * 12_000.0).round() as usize;
                             if digital_buf.len() > slot_samples {
@@ -591,9 +593,12 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         utc,
                                         "digital decode triggered"
                                     );
+                                    let fst4_submode =
+                                        state.lock().expect("ui state lock poisoned").fst4_submode;
                                     thread::spawn(move || {
                                         run_native_digital_decode(
                                             active_workspace_mode,
+                                            fst4_submode,
                                             samples,
                                             decoded_period,
                                             utc,

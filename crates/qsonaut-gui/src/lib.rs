@@ -785,6 +785,7 @@ struct GuiState {
     ft4_last_decode_period: Option<u64>,
     digital_tx_period: Option<(WorkspaceMode, u64)>,
     selected_audio_hz: u32,
+    fst4_submode: modes::fst4::Submode,
     compute_backend: ActiveBackend,
     ft8_compute_telemetry: Option<DecodeTelemetry>,
     digital_compute_telemetry: Option<DecodeTelemetry>,
@@ -836,6 +837,7 @@ impl Default for GuiState {
             ft4_last_decode_period: None,
             digital_tx_period: None,
             selected_audio_hz: default_rx_tone_hz(),
+            fst4_submode: modes::fst4::Submode::default(),
             compute_backend: ActiveBackend::CpuSimd,
             ft8_compute_telemetry: None,
             digital_compute_telemetry: None,
@@ -1206,6 +1208,7 @@ struct QsonautGuiApp {
     audio_waterfall_texture_bins: usize,
     audio_waterfall_texture_theme: WaterfallTheme,
     workspace_mode: WorkspaceMode,
+    fst4_submode: modes::fst4::Submode,
     display_tuning: Arc<Mutex<DisplayTuning>>,
     repaint_ctx: Arc<OnceLock<egui::Context>>,
     // FT8 workspace UX state (app-local, not shared with workers)
@@ -1765,6 +1768,7 @@ impl QsonautGuiApp {
             audio_waterfall_texture_bins: 0,
             audio_waterfall_texture_theme: WaterfallTheme::RadioBlue,
             workspace_mode: WorkspaceMode::Ft8,
+            fst4_submode: modes::fst4::Submode::default(),
             display_tuning,
             repaint_ctx,
             ft8_log: Vec::new(),
@@ -2908,6 +2912,7 @@ impl eframe::App for QsonautGuiApp {
         let (new_decodes, latest_decode_period) = {
             let mut s = self.state.lock().expect("ui state lock poisoned");
             s.workspace_mode = self.workspace_mode;
+            s.fst4_submode = self.fst4_submode;
             s.ft8_deep_decode = self.ft8_deep_decode;
             s.ft4_deep_decode = self.ft4_deep_decode;
             s.selected_audio_hz = if self.workspace_mode == WorkspaceMode::Cw {
@@ -3907,8 +3912,15 @@ mod tests {
             } else {
                 "CQ W1AW AA00"
             };
-            let (pcm, offset) = build_native_digital_tx_pcm(mode, message, 1_500, 20, 600)
-                .unwrap_or_else(|error| panic!("{} synthesis failed: {error}", mode.label()));
+            let (pcm, offset) = build_native_digital_tx_pcm(
+                mode,
+                message,
+                1_500,
+                modes::fst4::Submode::default(),
+                20,
+                600,
+            )
+            .unwrap_or_else(|error| panic!("{} synthesis failed: {error}", mode.label()));
             assert!(!pcm.is_empty(), "{} synthesis was empty", mode.label());
             assert!(pcm.iter().any(|sample| *sample != 0));
             assert!(offset >= 0.0);
@@ -3917,8 +3929,15 @@ mod tests {
 
     #[test]
     fn cw_builder_round_trips_through_ditdah() {
-        let (pcm, offset) = build_native_digital_tx_pcm(WorkspaceMode::Cw, "SOS", 600, 20, 600)
-            .expect("CW synthesis");
+        let (pcm, offset) = build_native_digital_tx_pcm(
+            WorkspaceMode::Cw,
+            "SOS",
+            600,
+            modes::fst4::Submode::default(),
+            20,
+            600,
+        )
+        .expect("CW synthesis");
         assert_eq!(offset, 0.0);
         let samples: Vec<f32> = pcm
             .iter()
@@ -3932,16 +3951,29 @@ mod tests {
 
     #[test]
     fn cw_builder_rejects_unsupported_punctuation() {
-        let error = build_native_digital_tx_pcm(WorkspaceMode::Cw, "CQ?", 600, 20, 600)
-            .expect_err("punctuation must be rejected");
+        let error = build_native_digital_tx_pcm(
+            WorkspaceMode::Cw,
+            "CQ?",
+            600,
+            modes::fst4::Submode::default(),
+            20,
+            600,
+        )
+        .expect_err("punctuation must be rejected");
         assert!(error.to_string().contains("does not support '?'"));
     }
 
     #[test]
     fn ft4_workspace_adapter_decodes_generated_audio() {
-        let (pcm, offset_s) =
-            build_native_digital_tx_pcm(WorkspaceMode::Ft4, "CQ W1AW AA00", 1_500, 20, 600)
-                .expect("FT4 synthesis");
+        let (pcm, offset_s) = build_native_digital_tx_pcm(
+            WorkspaceMode::Ft4,
+            "CQ W1AW AA00",
+            1_500,
+            modes::fst4::Submode::default(),
+            20,
+            600,
+        )
+        .expect("FT4 synthesis");
         let mut slot = vec![0.0f32; (7.5 * 12_000.0) as usize];
         let start = (offset_s * 12_000.0) as usize;
         for (dst, sample) in slot[start..].iter_mut().zip(pcm) {
@@ -3950,6 +3982,7 @@ mod tests {
         let state = Arc::new(Mutex::new(GuiState::default()));
         run_native_digital_decode(
             WorkspaceMode::Ft4,
+            modes::fst4::Submode::default(),
             slot,
             10,
             "00:01:15.000".to_string(),
@@ -3966,9 +3999,15 @@ mod tests {
 
     #[test]
     fn jt9_workspace_adapter_decodes_generated_audio() {
-        let (pcm, offset_s) =
-            build_native_digital_tx_pcm(WorkspaceMode::Jt9, "CQ W1AW AA00", 1_500, 20, 600)
-                .expect("JT9 synthesis");
+        let (pcm, offset_s) = build_native_digital_tx_pcm(
+            WorkspaceMode::Jt9,
+            "CQ W1AW AA00",
+            1_500,
+            modes::fst4::Submode::default(),
+            20,
+            600,
+        )
+        .expect("JT9 synthesis");
         let slot_samples = (60.0 * 12_000.0) as usize;
         let mut slot = vec![0.0f32; slot_samples];
         let start = (offset_s * 12_000.0) as usize;
@@ -3978,6 +4017,7 @@ mod tests {
         let state = Arc::new(Mutex::new(GuiState::default()));
         run_native_digital_decode(
             WorkspaceMode::Jt9,
+            modes::fst4::Submode::default(),
             slot,
             10,
             "00:10:00.000".to_string(),
@@ -3998,9 +4038,15 @@ mod tests {
 
     #[test]
     fn early_ft4_capture_contains_a_deliberately_late_decodable_waveform() {
-        let (pcm, _) =
-            build_native_digital_tx_pcm(WorkspaceMode::Ft4, "CQ W1AW AA00", 1_500, 20, 600)
-                .expect("FT4 synthesis");
+        let (pcm, _) = build_native_digital_tx_pcm(
+            WorkspaceMode::Ft4,
+            "CQ W1AW AA00",
+            1_500,
+            modes::fst4::Submode::default(),
+            20,
+            600,
+        )
+        .expect("FT4 synthesis");
         let captured = (FT4_EARLY_DECODE_S * 12_000.0).round() as usize;
         let prehistory = 12_000 * 2;
         let mut rolling = vec![0.0f32; prehistory + captured];
@@ -4014,6 +4060,7 @@ mod tests {
         let state = Arc::new(Mutex::new(GuiState::default()));
         run_native_digital_decode(
             WorkspaceMode::Ft4,
+            modes::fst4::Submode::default(),
             slot,
             10,
             "00:01:15.000".to_string(),

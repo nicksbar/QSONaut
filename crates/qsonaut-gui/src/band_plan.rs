@@ -45,6 +45,14 @@ impl WorkspaceMode {
         }
     }
 
+    pub(super) fn slot_seconds(self, fst4_submode: crate::modes::fst4::Submode) -> Option<f64> {
+        if self == Self::Fst4 {
+            Some(fst4_submode.seconds())
+        } else {
+            self.core_slot_seconds()
+        }
+    }
+
     pub(super) fn has_native_decoder(self) -> bool {
         !matches!(self, Self::Cw | Self::Fldigi)
     }

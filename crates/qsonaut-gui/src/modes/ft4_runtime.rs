@@ -226,7 +226,7 @@ impl QsonautGuiApp {
             self.digital_tx_status = "TX unavailable: radio control is disabled".to_string();
             return;
         };
-        let slot_seconds = mode.core_slot_seconds();
+        let slot_seconds = mode.slot_seconds(self.fst4_submode);
         if slot_seconds.is_none() && mode != WorkspaceMode::Cw {
             self.digital_tx_status = format!("{} TX backend is not available", mode.label());
             return;
@@ -236,6 +236,7 @@ impl QsonautGuiApp {
             mode,
             &self.digital_compose,
             tx_tone_hz,
+            self.fst4_submode,
             self.cw_wpm,
             self.cw_tone_hz,
         ) {
@@ -340,7 +341,7 @@ impl QsonautGuiApp {
                     }
                     if let Some(message) = self.digital_queued_tx_message.clone() {
                         let utc = utc_hhmmss_millis(
-                            period as f64 * mode.core_slot_seconds().unwrap_or(1.0),
+                            period as f64 * mode.slot_seconds(self.fst4_submode).unwrap_or(1.0),
                         );
                         self.digital_tx_chat.push_back(DigitalTxChatEntry {
                             mode,

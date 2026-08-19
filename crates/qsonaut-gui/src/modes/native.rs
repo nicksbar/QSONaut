@@ -78,7 +78,7 @@ impl QsonautGuiApp {
             (BaseMode::Rtty | BaseMode::RttyR, false) => "RTTY",
             _ => "DIGITAL",
         };
-        let slot_s = mode.core_slot_seconds().map_or_else(
+        let slot_s = mode.slot_seconds(self.fst4_submode).map_or_else(
             || "Continuous".to_string(),
             |seconds| {
                 if seconds.fract() == 0.0 {
@@ -142,7 +142,7 @@ impl QsonautGuiApp {
         };
         ui.label(RichText::new(mode_guidance).small().color(Color32::GRAY));
         ui.add_space(4.0);
-        if let Some(slot_seconds) = mode.core_slot_seconds() {
+        if let Some(slot_seconds) = mode.slot_seconds(self.fst4_submode) {
             let now_s = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|duration| duration.as_secs_f64())

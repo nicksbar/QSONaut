@@ -32,6 +32,7 @@ pub(super) fn build_native_digital_tx_pcm(
     mode: WorkspaceMode,
     compose: &str,
     tx_tone_hz: u32,
+    fst4_submode: crate::modes::fst4::Submode,
     cw_wpm: u8,
     cw_tone_hz: u16,
 ) -> Result<(Vec<i16>, f64)> {
@@ -58,9 +59,54 @@ pub(super) fn build_native_digital_tx_pcm(
                 ))
             } else {
                 let tones = mfsk_core::fst4::encode::message_to_tones(&bits);
+                let pcm = match fst4_submode {
+                    crate::modes::fst4::Submode::S15 => {
+                        mfsk_core::fst4::encode::tones_to_i16_with_gfsk(
+                            &tones,
+                            tone,
+                            FT8_TX_AMPLITUDE_I16,
+                            &mfsk_core::fst4::encode::FST4_15_GFSK,
+                        )
+                    }
+                    crate::modes::fst4::Submode::S30 => {
+                        mfsk_core::fst4::encode::tones_to_i16_with_gfsk(
+                            &tones,
+                            tone,
+                            FT8_TX_AMPLITUDE_I16,
+                            &mfsk_core::fst4::encode::FST4_30_GFSK,
+                        )
+                    }
+                    crate::modes::fst4::Submode::S60 => {
+                        mfsk_core::fst4::encode::tones_to_i16_with_gfsk(
+                            &tones,
+                            tone,
+                            FT8_TX_AMPLITUDE_I16,
+                            &mfsk_core::fst4::encode::FST4_60A_GFSK,
+                        )
+                    }
+                    crate::modes::fst4::Submode::S120 => {
+                        mfsk_core::fst4::encode::tones_to_i16_with_gfsk(
+                            &tones,
+                            tone,
+                            FT8_TX_AMPLITUDE_I16,
+                            &mfsk_core::fst4::encode::FST4_120_GFSK,
+                        )
+                    }
+                    crate::modes::fst4::Submode::S300 => {
+                        mfsk_core::fst4::encode::tones_to_i16_with_gfsk(
+                            &tones,
+                            tone,
+                            FT8_TX_AMPLITUDE_I16,
+                            &mfsk_core::fst4::encode::FST4_300_GFSK,
+                        )
+                    }
+                };
                 Ok((
-                    mfsk_core::fst4::encode::tones_to_i16(&tones, tone, FT8_TX_AMPLITUDE_I16),
-                    1.0,
+                    pcm,
+                    match fst4_submode {
+                        crate::modes::fst4::Submode::S15 => 0.5,
+                        _ => 1.0,
+                    },
                 ))
             }
         }
