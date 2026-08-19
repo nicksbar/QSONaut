@@ -5,5 +5,6 @@ pub(super) mod ft4;
 mod ft4_runtime;
 pub(super) mod ft8;
 mod ft8_runtime;
+pub(super) mod jt9;
 pub(super) mod native;
 pub(super) mod wspr;

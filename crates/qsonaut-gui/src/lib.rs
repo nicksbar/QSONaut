@@ -2605,9 +2605,9 @@ impl QsonautGuiApp {
             WorkspaceMode::Ft4 => self.draw_ft4_workspace(ui, snapshot),
             WorkspaceMode::Fst4 => self.draw_fst4_workspace(ui, snapshot),
             WorkspaceMode::Wspr => self.draw_wspr_workspace(ui, snapshot),
+            WorkspaceMode::Jt9 => self.draw_jt9_workspace(ui, snapshot),
             WorkspaceMode::Cw => self.draw_cw_workspace(ui, snapshot),
-            WorkspaceMode::Jt9
-            | WorkspaceMode::Jt65
+            WorkspaceMode::Jt65
             | WorkspaceMode::Q65
             | WorkspaceMode::Msk144
             | WorkspaceMode::Fldigi => {
