@@ -16,6 +16,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   after ten logo clicks within ten seconds, with a brief logo-spin unlock indication.
 
 ### Fixed
+- Added RX monitor diagnostics: a live monitor-volume control and a short 700 Hz test tone
+  make it possible to verify the selected output device independently of radio input audio.
 - Clears stale FT4 session state after a failed or canceled transmission so automation can start
   a fresh cycle without requiring a manual response or application restart.
 - Reworked the Contact Log into a resizable two-column layout with a scrollable contact

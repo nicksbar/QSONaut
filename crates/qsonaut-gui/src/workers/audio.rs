@@ -7,6 +7,7 @@ use super::decode::{
     run_native_digital_decode, warm_ft8_decoder,
 };
 use qsonaut_audio::resample::Decimator;
+use std::sync::atomic::AtomicU32;
 
 #[allow(clippy::too_many_arguments)]
 pub(in super::super) fn spawn_audio_spectrum_worker(
@@ -20,6 +21,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
     preferred_device: Option<String>,
     monitor_enabled: bool,
     monitor_output_device: Option<String>,
+    monitor_volume: Arc<AtomicU32>,
     repaint_ctx: Arc<OnceLock<egui::Context>>,
     display_tuning: Arc<Mutex<DisplayTuning>>,
 ) -> std::thread::JoinHandle<()> {
@@ -54,6 +56,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         } else {
             (None, String::new())
         };
+        if let Some(monitor) = &monitor {
+            monitor.set_volume(f32::from_bits(monitor_volume.load(Ordering::Relaxed)));
+        }
 
         let mut fft_planner = FftPlanner::<f32>::new();
         let audio_fft = fft_planner.plan_fft_forward(FFT_SIZE);
@@ -119,6 +124,16 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
             match stream.read_chunk(chunk_bytes) {
                 Ok(samples) => {
                     if let Some(monitor) = &monitor {
+                        monitor.set_volume(f32::from_bits(monitor_volume.load(Ordering::Relaxed)));
+                        let test_tone = {
+                            let mut shared = state.lock().expect("ui state lock poisoned");
+                            let requested = shared.monitor_test_tone;
+                            shared.monitor_test_tone = false;
+                            requested
+                        };
+                        if test_tone {
+                            monitor.push_test_tone(sample_rate_hz, 700.0, 350);
+                        }
                         monitor.push(&samples);
                         let dropped_chunks = monitor.take_dropped_chunks();
                         if dropped_chunks > 0 {

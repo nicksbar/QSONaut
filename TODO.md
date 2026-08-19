@@ -2,8 +2,8 @@ IN PROGRESS
 CW decoding is being reworked around USB-D reception. The decoder now searches around the selected tone and estimates a local noise floor; continuous boundary handling and broader noisy-radio validation remain.
 
 
-ISSUE
-RX monitoring still doesn't produce any audio.
+IN PROGRESS
+RX monitoring now has a live volume control and a 700 Hz test tone for separating output-device problems from radio-input problems. Hardware/system-audio validation is still required.
 
 TODO
 Lessons learned from ft8 need to flow into ft4.

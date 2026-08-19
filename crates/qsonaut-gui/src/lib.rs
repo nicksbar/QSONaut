@@ -56,7 +56,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::f32::consts::PI;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -768,6 +768,7 @@ struct GuiState {
     audio_waterfall_revision: u64,
     audio_level_dbfs: Option<f32>,
     audio_clip_percent: f32,
+    monitor_test_tone: bool,
     ft8_decode_status: String,
     ft8_clock_offset_s: Option<f32>,
     ft4_clock_offset_s: Option<f32>,
@@ -818,6 +819,7 @@ impl Default for GuiState {
             audio_waterfall_revision: 0,
             audio_level_dbfs: None,
             audio_clip_percent: 0.0,
+            monitor_test_tone: false,
             ft8_decode_status: "STARTING".to_string(),
             ft8_clock_offset_s: None,
             ft4_clock_offset_s: None,
@@ -1257,6 +1259,7 @@ struct QsonautGuiApp {
     digital_suppress_canceled_tx_events: bool,
     digital_tx_event_tx: mpsc::Sender<DigitalTxEvent>,
     digital_tx_event_rx: mpsc::Receiver<DigitalTxEvent>,
+    monitor_volume: Arc<AtomicU32>,
     ft8_stop_policy: AutoTxStopPolicy,
     ft8_max_attempts: u8,
     ft4_stop_policy: AutoTxStopPolicy,
@@ -1402,6 +1405,7 @@ impl QsonautGuiApp {
 
         let ft8_tx_active = Arc::new(AtomicBool::new(false));
         let digital_tx_active = Arc::new(AtomicBool::new(false));
+        let monitor_volume = Arc::new(AtomicU32::new(config.audio.monitor_volume.to_bits()));
         let audio_worker_handle = Some(spawn_audio_spectrum_worker(
             state.clone(),
             worker_stop.clone(),
@@ -1417,6 +1421,7 @@ impl QsonautGuiApp {
                 .monitor_output_device
                 .clone()
                 .or_else(|| config.audio.output_device.clone()),
+            monitor_volume.clone(),
             repaint_ctx.clone(),
             display_tuning.clone(),
         ));
@@ -1810,6 +1815,7 @@ impl QsonautGuiApp {
             digital_suppress_canceled_tx_events: false,
             digital_tx_event_tx,
             digital_tx_event_rx,
+            monitor_volume,
             ft8_stop_policy,
             ft8_max_attempts,
             ft4_stop_policy: AutoTxStopPolicy::Continuous,

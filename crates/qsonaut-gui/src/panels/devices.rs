@@ -148,6 +148,39 @@ impl QsonautGuiApp {
             });
 
         ui.add_space(6.0);
+        ui.label(RichText::new("RX monitor diagnostics").strong());
+        ui.label(
+            RichText::new("The monitor plays captured audio from the selected monitor output. Use the test tone to verify that output device, stream, and system volume are working independently of the radio input.")
+                .small()
+                .color(Color32::GRAY),
+        );
+        ui.horizontal(|ui| {
+            ui.label("Monitor volume");
+            let mut volume = self.config.audio.monitor_volume;
+            if ui
+                .add(egui::Slider::new(&mut volume, 0.0..=2.0).suffix("×"))
+                .changed()
+            {
+                self.config.audio.monitor_volume = volume;
+                self.monitor_volume
+                    .store(volume.to_bits(), Ordering::Relaxed);
+                self.profile_dirty = true;
+                self.persist_profile("RX monitor volume saved to");
+            }
+            if ui.button("Play test tone").clicked() {
+                self.state
+                    .lock()
+                    .expect("ui state lock poisoned")
+                    .monitor_test_tone = true;
+            }
+        });
+        ui.label(
+            RichText::new("Test tone: 700 Hz for 350 ms · increase the control only as needed; system output volume still applies.")
+                .small()
+                .color(Color32::GRAY),
+        );
+
+        ui.add_space(6.0);
         if let Some(profile) = find_model(&self.config.radio.model) {
             let maturity = if profile.support == SupportLevel::HardwareValidated {
                 "hardware validated"

@@ -41,6 +41,7 @@ pub struct AudioMonitor {
     errors_rx: Receiver<String>,
     dropped_chunks: Arc<std::sync::atomic::AtomicU64>,
     resampler: std::sync::Mutex<MonitorResampler>,
+    volume: Arc<std::sync::atomic::AtomicU32>,
     _stream: Stream,
 }
 
@@ -149,15 +150,42 @@ impl AudioMonitor {
                 sample_rate_hz,
                 output_sample_rate_hz,
             )),
+            volume: Arc::new(std::sync::atomic::AtomicU32::new(1.0_f32.to_bits())),
             _stream: stream,
         })
     }
 
+    pub fn set_volume(&self, volume: f32) {
+        self.volume
+            .store(volume.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn push_test_tone(&self, sample_rate_hz: u32, frequency_hz: f32, duration_ms: u32) {
+        let count = (sample_rate_hz as u64 * duration_ms as u64 / 1_000) as usize;
+        let amplitude = 0.18_f32;
+        let samples = (0..count)
+            .map(|index| {
+                (2.0 * std::f32::consts::PI * frequency_hz * index as f32
+                    / sample_rate_hz.max(1) as f32)
+                    .sin()
+                    * amplitude
+                    * i16::MAX as f32
+            })
+            .map(|sample| sample.round() as i16)
+            .collect::<Vec<_>>();
+        self.push(&samples);
+    }
+
     pub fn push(&self, samples: &[i16]) {
+        let volume = f32::from_bits(self.volume.load(Ordering::Relaxed));
+        let samples = samples
+            .iter()
+            .map(|sample| (*sample as f32 * volume).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+            .collect::<Vec<_>>();
         let samples = self
             .resampler
             .lock()
-            .map(|mut resampler| resampler.process(samples))
+            .map(|mut resampler| resampler.process(&samples))
             .unwrap_or_default();
         if self.samples_tx.try_send(samples).is_err() {
             self.dropped_chunks.fetch_add(1, Ordering::Relaxed);

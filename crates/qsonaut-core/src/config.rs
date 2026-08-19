@@ -30,6 +30,8 @@ pub struct AudioConfig {
     pub monitor_enabled: bool,
     #[serde(default)]
     pub monitor_output_device: Option<String>,
+    #[serde(default = "default_monitor_volume")]
+    pub monitor_volume: f32,
     pub sample_rate_hz: u32,
     pub channels: u8,
 }
@@ -138,6 +140,7 @@ impl Default for AppConfig {
                 output_device: None,
                 monitor_enabled: false,
                 monitor_output_device: None,
+                monitor_volume: default_monitor_volume(),
                 sample_rate_hz: 48_000,
                 channels: 1,
             },
@@ -154,6 +157,10 @@ impl Default for AppConfig {
             contest: ContestProfile::default(),
         }
     }
+}
+
+fn default_monitor_volume() -> f32 {
+    1.0
 }
 
 impl AppConfig {
