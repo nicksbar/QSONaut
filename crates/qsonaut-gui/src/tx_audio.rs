@@ -6,6 +6,7 @@ const FT8_TX_MONITOR_FFT_SIZE: usize = 2_048;
 const FT8_TX_MONITOR_HOP_SAMPLES: usize = 500;
 pub(super) const FT8_TX_AUDIO_START_S: f64 = modes::exchange::AUDIO_START_SECONDS;
 const FT8_MAX_AUDIO_LATE_S: f64 = 1.75;
+const DIGITAL_MAX_AUDIO_LATE_S: f64 = 1.0;
 
 pub(super) fn build_ft8_tx_pcm(compose: &str, tx_tone_hz: u32) -> Result<Vec<i16>> {
     let tokens: Vec<&str> = compose.split_whitespace().collect();
@@ -324,9 +325,22 @@ pub(super) fn run_digital_tx_job(job: DigitalTxJob) {
         wait_until_epoch(ptt_start_s, &job.abort)?;
         request_ptt(&job.command_tx, true, Duration::from_secs(2))?;
         wait_until_epoch(audio_start_s, &job.abort)?;
+        let now_s = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64())
+            .unwrap_or(audio_start_s);
+        let audio_late_s = now_s - audio_start_s;
+        if job.mode != WorkspaceMode::Cw && audio_late_s > DIGITAL_MAX_AUDIO_LATE_S {
+            anyhow::bail!(
+                "{} audio arrived too late for a valid slot ({:.0} ms)",
+                job.mode.label(),
+                audio_late_s * 1_000.0
+            );
+        }
         info!(
             mode = job.mode.label(),
             period = job.period,
+            audio_late_ms = (audio_late_s.max(0.0) * 1_000.0).round() as u64,
             "digital TX audio starting"
         );
         let _ = job
