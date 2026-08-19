@@ -1,6 +1,6 @@
 use super::super::*;
 
-pub(crate) const JT65_BAND_PLAN: &[(&str, u64)] = &[
+pub(crate) const Q65_BAND_PLAN: &[(&str, u64)] = &[
     ("160m", 1_838_000),
     ("80m", 3_573_000),
     ("60m", 5_357_000),
@@ -12,10 +12,7 @@ pub(crate) const JT65_BAND_PLAN: &[(&str, u64)] = &[
     ("12m", 24_924_000),
     ("10m", 28_076_000),
     ("6m", 50_323_000),
-    ("2m", 144_174_000),
-    ("70cm", 432_074_000),
 ];
-pub(crate) const Q65_BAND_PLAN: &[(&str, u64)] = JT65_BAND_PLAN;
 pub(crate) const MSK144_BAND_PLAN: &[(&str, u64)] = &[
     ("160m", 1_840_000),
     ("80m", 3_579_000),
