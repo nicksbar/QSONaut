@@ -9,7 +9,7 @@ TODO
 Lessons learned from ft8 need to flow into ft4.
 
 IN PROGRESS
-Digital modes are now grouped into HF/primary and other/experimental sections. MSK144 is disabled because this station has no UHF radio; the remaining native modes need deeper FT8/FT4-quality workflows, especially WSPR.
+Digital modes are now grouped into HF/primary and other/experimental sections. MSK144 is disabled because this station has no UHF radio; FT4 timing hardening and an initial WSPR Type-1 transmitter are now in place, while WSPR scheduling/duty-cycle controls and richer native-mode workflows remain.
 
 FEATURE REQUEST
 We should support common radio interfaces, like rigctrl, dxlab, other...

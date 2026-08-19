@@ -3896,12 +3896,18 @@ mod tests {
     fn native_digital_tx_builders_generate_audio() {
         for mode in [
             WorkspaceMode::Ft4,
+            WorkspaceMode::Wspr,
             WorkspaceMode::Fst4,
             WorkspaceMode::Jt9,
             WorkspaceMode::Jt65,
             WorkspaceMode::Q65,
         ] {
-            let (pcm, offset) = build_native_digital_tx_pcm(mode, "CQ W1AW AA00", 1_500, 20, 600)
+            let message = if mode == WorkspaceMode::Wspr {
+                "K1ABC FN42 37"
+            } else {
+                "CQ W1AW AA00"
+            };
+            let (pcm, offset) = build_native_digital_tx_pcm(mode, message, 1_500, 20, 600)
                 .unwrap_or_else(|error| panic!("{} synthesis failed: {error}", mode.label()));
             assert!(!pcm.is_empty(), "{} synthesis was empty", mode.label());
             assert!(pcm.iter().any(|sample| *sample != 0));

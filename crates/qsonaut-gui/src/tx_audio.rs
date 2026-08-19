@@ -79,6 +79,31 @@ pub(super) fn build_native_digital_tx_pcm(
                 .map(|audio| (to_i16(audio), 1.0))
                 .ok_or_else(|| anyhow!("unable to pack Q65 message"))
         }
+        WorkspaceMode::Wspr => {
+            let callsign = tokens
+                .first()
+                .copied()
+                .ok_or_else(|| anyhow!("WSPR TX requires CALL GRID POWER_D​​BM"))?;
+            let grid = tokens
+                .get(1)
+                .copied()
+                .ok_or_else(|| anyhow!("WSPR TX requires CALL GRID POWER_DBM"))?;
+            let power_dbm = tokens
+                .get(2)
+                .ok_or_else(|| anyhow!("WSPR TX requires CALL GRID POWER_DBM"))?
+                .parse::<i32>()
+                .map_err(|_| anyhow!("WSPR power must be an integer dBm value"))?;
+            let audio = mfsk_core::wspr::synthesize_type1(
+                callsign,
+                grid,
+                power_dbm,
+                FT8_TX_SAMPLE_RATE_HZ,
+                tone,
+                0.8,
+            )
+            .ok_or_else(|| anyhow!("invalid WSPR callsign, locator, or power"))?;
+            Ok((to_i16(audio), 0.0))
+        }
         WorkspaceMode::Cw => {
             let text = compose.trim().to_ascii_uppercase();
             if text.is_empty() {

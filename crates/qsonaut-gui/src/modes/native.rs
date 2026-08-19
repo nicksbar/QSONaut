@@ -139,7 +139,6 @@ impl QsonautGuiApp {
                 snapshot.mode
             ));
         });
-
         ui.add_space(8.0);
         if let Some(slot_seconds) = mode.core_slot_seconds() {
             let now_s = SystemTime::now()
@@ -159,7 +158,6 @@ impl QsonautGuiApp {
                         .text(format!("{:.1}s", slot_seconds * (1.0 - progress))),
                 );
             });
-
             ui.separator();
             ui.horizontal(|ui| {
                 ui.label(
@@ -220,11 +218,16 @@ impl QsonautGuiApp {
             );
             ui.horizontal(|ui| {
                 ui.label(RichText::new("TX").strong());
+                let hint = if mode == WorkspaceMode::Wspr {
+                    "CALL GRID POWER_DBM (for example N0CALL FN20 37)"
+                } else {
+                    "CQ W1AW FN20"
+                };
                 ui.add_enabled(
                     can_transmit && !self.digital_tx_active.load(Ordering::Acquire),
                     egui::TextEdit::singleline(&mut self.digital_compose)
                         .desired_width((ui.available_width() - 250.0).max(180.0))
-                        .hint_text("CQ W1AW FN20")
+                        .hint_text(hint)
                         .font(egui::TextStyle::Monospace),
                 );
                 if ui

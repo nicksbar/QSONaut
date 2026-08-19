@@ -8,6 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [0.3.4] - 2026-08-18
 
 ### Added
+- Added an initial WSPR Type-1 transmit path using callsign, 4-character locator, and dBm
+  power entered as `CALL GRID POWER_DBM`; the waveform uses the native 120-second slot.
 - Added late-slot protection and timing telemetry to native digital TX, preventing FT4/FST4/JT9/
   JT65/Q65 frames from launching after their valid transmit window.
 - Grouped digital workspace modes into HF/primary and other/experimental sections; MSK144
