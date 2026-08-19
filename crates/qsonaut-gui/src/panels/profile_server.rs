@@ -878,7 +878,18 @@ impl QsonautGuiApp {
             &mut self.radio_scope_lock_if_to_filter,
             "Match span to selected FIL",
         );
-        ui.checkbox(&mut self.radio_scope_vbw_wide, "Wide video bandwidth");
+        let vbw_changed = ui
+            .checkbox(&mut self.radio_scope_vbw_wide, "Wide video bandwidth")
+            .on_hover_text(
+                "Wide VBW smooths the radio scope display by averaging more video bandwidth. "
+                    .to_string()
+                    + "Leave it off for a sharper waterfall and faster response.",
+            )
+            .changed();
+        if vbw_changed {
+            self.profile_dirty = true;
+            self.persist_profile("Auto-saved");
+        }
         if self.radio_scope_lock_if_to_filter {
             self.radio_scope_span_code = scope_span_for_filter(&snapshot.mode, snapshot.filter);
             ui.small(format!(

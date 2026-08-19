@@ -56,6 +56,8 @@ pub(super) struct OperatorProfile {
     #[serde(default)]
     pub(super) civ_spectrum_on: bool,
     #[serde(default)]
+    pub(super) radio_scope_vbw_wide: bool,
+    #[serde(default)]
     pub(super) waterfall_theme: WaterfallTheme,
     #[serde(default = "default_waterfall_deck_height")]
     pub(super) waterfall_deck_height: f32,

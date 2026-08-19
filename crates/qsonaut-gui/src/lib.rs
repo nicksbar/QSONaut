@@ -1449,6 +1449,7 @@ impl QsonautGuiApp {
         let mut automation_unlocked = false;
         let mut ft8_cq_only_view = false;
         let mut civ_spectrum_on = false;
+        let mut radio_scope_vbw_wide = false;
         let mut waterfall_theme = WaterfallTheme::default();
         let mut waterfall_deck_height = default_waterfall_deck_height();
         let ft8_stop_policy = AutoTxStopPolicy::Continuous;
@@ -1509,6 +1510,7 @@ impl QsonautGuiApp {
             automation_unlocked = p.automation_unlocked;
             ft8_cq_only_view = p.cq_only_view;
             civ_spectrum_on = p.civ_spectrum_on;
+            radio_scope_vbw_wide = p.radio_scope_vbw_wide;
             waterfall_theme = p.waterfall_theme;
             waterfall_deck_height = p.waterfall_deck_height.clamp(170.0, 560.0);
             ft8_max_attempts = p.ft8_max_attempts.clamp(1, 20);
@@ -1596,6 +1598,7 @@ impl QsonautGuiApp {
                 automation_unlocked,
                 cq_only_view: ft8_cq_only_view,
                 civ_spectrum_on,
+                radio_scope_vbw_wide,
                 waterfall_theme,
                 waterfall_deck_height,
                 halt_after_tx: false,
@@ -1855,7 +1858,7 @@ impl QsonautGuiApp {
             device_scan: Some(spawn_device_scan()),
             radio_scope_contrast: 1.2,
             radio_scope_span_code: 0,
-            radio_scope_vbw_wide: true,
+            radio_scope_vbw_wide,
             radio_scope_hold: false,
             radio_scope_reference_tenths_db: 0,
             radio_scope_view: RadioScopeView::Narrow,
@@ -1932,6 +1935,7 @@ impl QsonautGuiApp {
         self.automation_unlocked = profile.automation_unlocked;
         self.ft8_cq_only_view = profile.cq_only_view;
         self.civ_spectrum_on = profile.civ_spectrum_on;
+        self.radio_scope_vbw_wide = profile.radio_scope_vbw_wide;
         self.waterfall_theme = profile.waterfall_theme;
         self.waterfall_deck_height = profile.waterfall_deck_height.clamp(170.0, 560.0);
         self.ft8_stop_policy = AutoTxStopPolicy::Continuous;
@@ -2348,6 +2352,7 @@ impl QsonautGuiApp {
             automation_unlocked: self.automation_unlocked,
             cq_only_view: self.ft8_cq_only_view,
             civ_spectrum_on: self.civ_spectrum_on,
+            radio_scope_vbw_wide: self.radio_scope_vbw_wide,
             waterfall_theme: self.waterfall_theme,
             waterfall_deck_height: self.waterfall_deck_height,
             // This control is deliberately one-shot and is not restored on launch.
