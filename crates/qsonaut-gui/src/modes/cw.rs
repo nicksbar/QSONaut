@@ -174,6 +174,13 @@ impl QsonautGuiApp {
             .small()
             .color(Color32::YELLOW),
         );
+        ui.label(
+            RichText::new(
+                "RX automatically searches ±120 Hz around the selected tone. The decoder estimates the local noise floor from the quietest 15% of the window; there is no fixed squelch to tune.",
+            )
+            .small()
+            .color(Color32::GRAY),
+        );
 
         let cw_tx: Vec<_> = self
             .digital_tx_chat

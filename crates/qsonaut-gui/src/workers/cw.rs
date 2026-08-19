@@ -4,7 +4,9 @@ pub(super) const CW_DECODE_WINDOW_SAMPLES: usize = 12_000 * 8;
 pub(super) const CW_DECODE_MIN_SAMPLES: usize = 12_000 * 3;
 pub(super) const CW_DECODE_HOP_SAMPLES: usize = 12_000;
 
-const CW_FILTER_BANDWIDTH_HZ: f32 = 120.0;
+const CW_FILTER_BANDWIDTH_HZ: f32 = 80.0;
+const CW_TONE_SEARCH_HZ: i32 = 120;
+const CW_TONE_SEARCH_STEP_HZ: i32 = 20;
 const CW_MIN_PEAK_DBFS: f32 = -65.0;
 const CW_MIN_KEYING_CONTRAST_DB: f32 = 9.0;
 const CW_MIN_TONE_SHARE: f32 = 0.10;
@@ -36,7 +38,10 @@ fn percentile(sorted: &[f32], fraction: f32) -> f32 {
 fn narrow_cw_bandpass(samples: &[f32], sample_rate: u32, tone_hz: u32) -> Vec<f32> {
     let sample_rate = sample_rate.max(1) as f32;
     let tone_hz = (tone_hz as f32).clamp(200.0, sample_rate * 0.45);
-    let q = (tone_hz / CW_FILTER_BANDWIDTH_HZ).max(0.5);
+    // Keep the passband narrow enough for the tone search to distinguish
+    // neighboring USB-D carriers, while retaining a little margin for radio
+    // clock and filter error.
+    let q = (tone_hz / CW_FILTER_BANDWIDTH_HZ).max(2.0);
     let omega = 2.0 * PI * tone_hz / sample_rate;
     let alpha = omega.sin() / (2.0 * q);
     let a0 = 1.0 + alpha;
@@ -62,33 +67,53 @@ fn narrow_cw_bandpass(samples: &[f32], sample_rate: u32, tone_hz: u32) -> Vec<f3
         .collect()
 }
 
-pub(crate) fn prepare_cw_signal(
-    samples: &[f32],
+fn tone_power(samples: &[f32], sample_rate: u32, tone_hz: u32) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let frequency = tone_hz as f32;
+    let sample_rate = sample_rate.max(1) as f32;
+    let (mut in_phase, mut quadrature) = (0.0_f32, 0.0_f32);
+    for (index, sample) in samples.iter().enumerate() {
+        let phase = 2.0 * PI * frequency * index as f32 / sample_rate;
+        in_phase += sample * phase.cos();
+        quadrature += sample * phase.sin();
+    }
+    let scale = 2.0 / samples.len() as f32;
+    let in_phase = in_phase * scale;
+    let quadrature = quadrature * scale;
+    in_phase.mul_add(in_phase, quadrature * quadrature)
+}
+
+fn classify_cw_signal(
+    filtered: &[f32],
+    broadband: &[f32],
     sample_rate: u32,
-    tone_hz: u32,
-) -> Result<(Vec<f32>, CwSignalQuality), String> {
-    let filtered = narrow_cw_bandpass(samples, sample_rate, tone_hz);
+) -> Result<CwSignalQuality, String> {
     let block_len = (sample_rate as usize / 50).max(32);
-    let mut tone_levels = block_rms(&filtered, block_len);
-    let mut broadband_levels = block_rms(samples, block_len);
+    let mut tone_levels = block_rms(filtered, block_len);
+    let mut broadband_levels = block_rms(broadband, block_len);
     if tone_levels.len() < 20 || broadband_levels.len() != tone_levels.len() {
         return Err("waiting for enough CW audio".to_string());
     }
     tone_levels.sort_unstable_by(|left, right| left.total_cmp(right));
     broadband_levels.sort_unstable_by(|left, right| left.total_cmp(right));
-    let low = percentile(&tone_levels, 0.20).max(1e-9);
-    let high = percentile(&tone_levels, 0.90).max(low);
+    // Use a low percentile as the noise estimate rather than the minimum.
+    // The minimum is too sensitive to USB-D muting gaps and can make the
+    // threshold jump wildly between adjacent rolling windows.
+    let noise_floor = percentile(&tone_levels, 0.15).max(1e-9);
+    let signal_level = percentile(&tone_levels, 0.90).max(noise_floor);
     let broadband_high = percentile(&broadband_levels, 0.90).max(1e-9);
-    let threshold = (low * high).sqrt();
+    let threshold = (noise_floor * signal_level).sqrt();
     let active_fraction = tone_levels
         .iter()
         .filter(|level| **level > threshold)
         .count() as f32
         / tone_levels.len() as f32;
     let quality = CwSignalQuality {
-        peak_dbfs: 20.0 * high.log10(),
-        keying_contrast_db: 20.0 * (high / low).log10(),
-        tone_share: high / broadband_high,
+        peak_dbfs: 20.0 * signal_level.log10(),
+        keying_contrast_db: 20.0 * (signal_level / noise_floor).log10(),
+        tone_share: signal_level / broadband_high,
         active_fraction,
     };
     if quality.peak_dbfs < CW_MIN_PEAK_DBFS {
@@ -102,7 +127,53 @@ pub(crate) fn prepare_cw_signal(
     {
         return Err("tone is not showing a CW keying envelope".to_string());
     }
+    Ok(quality)
+}
+
+pub(crate) fn prepare_cw_signal(
+    samples: &[f32],
+    sample_rate: u32,
+    tone_hz: u32,
+) -> Result<(Vec<f32>, CwSignalQuality), String> {
+    let filtered = narrow_cw_bandpass(samples, sample_rate, tone_hz);
+    let quality = classify_cw_signal(&filtered, samples, sample_rate)?;
     Ok((filtered, quality))
+}
+
+fn prepare_cw_signal_adaptive(
+    samples: &[f32],
+    sample_rate: u32,
+    requested_tone_hz: u32,
+) -> Result<(Vec<f32>, CwSignalQuality, u32), String> {
+    let center = requested_tone_hz as i32;
+    let mut best: Option<(Vec<f32>, CwSignalQuality, u32)> = None;
+    for offset in (-CW_TONE_SEARCH_HZ..=CW_TONE_SEARCH_HZ).step_by(CW_TONE_SEARCH_STEP_HZ as usize)
+    {
+        let candidate = (center + offset).clamp(200, (sample_rate as i32 * 45) / 100) as u32;
+        let filtered = narrow_cw_bandpass(samples, sample_rate, candidate);
+        let Ok(quality) = classify_cw_signal(&filtered, samples, sample_rate) else {
+            continue;
+        };
+        // Prefer the candidate with the strongest narrow-band energy. A
+        // keying-only score can favor filter ringing at a neighboring tone,
+        // especially when the rolling window starts during a character gap.
+        let tone_db = 10.0
+            * tone_power(samples, sample_rate, candidate)
+                .max(1e-12)
+                .log10();
+        let score = tone_db + quality.keying_contrast_db * 0.25 + quality.peak_dbfs * 0.05;
+        let replace = best.as_ref().is_none_or(|(_, current, current_tone_hz)| {
+            let current_tone_db = 10.0
+                * tone_power(samples, sample_rate, *current_tone_hz)
+                    .max(1e-12)
+                    .log10();
+            score > current_tone_db + current.keying_contrast_db * 0.25 + current.peak_dbfs * 0.05
+        });
+        if replace {
+            best = Some((filtered, quality, candidate));
+        }
+    }
+    best.ok_or_else(|| "no keyed signal near selected CW tone".to_string())
 }
 
 fn is_no_signal_error(message: &str) -> bool {
@@ -152,16 +223,17 @@ pub(super) fn run_cw_decode(
     tone_hz: u32,
     state: Arc<Mutex<GuiState>>,
 ) {
-    let (samples, quality) = match prepare_cw_signal(&samples, 12_000, tone_hz) {
-        Ok(prepared) => prepared,
-        Err(reason) => {
-            state
-                .lock()
-                .expect("ui state lock poisoned")
-                .digital_decode_status = format!("LIVE CW · {reason}");
-            return;
-        }
-    };
+    let (samples, quality, detected_tone_hz) =
+        match prepare_cw_signal_adaptive(&samples, 12_000, tone_hz) {
+            Ok(prepared) => prepared,
+            Err(reason) => {
+                state
+                    .lock()
+                    .expect("ui state lock poisoned")
+                    .digital_decode_status = format!("LIVE CW · {reason}");
+                return;
+            }
+        };
     let result = ditdah::decode_samples(&samples, 12_000);
     let mut shared = state.lock().expect("ui state lock poisoned");
     match result {
@@ -177,7 +249,7 @@ pub(super) fn run_cw_decode(
                     utc,
                     snr_db: 0.0,
                     dt_s: 0.0,
-                    freq_hz: tone_hz,
+                    freq_hz: detected_tone_hz,
                     message: incremental,
                 });
                 while shared.digital_decodes.len() > 300 {
@@ -248,6 +320,15 @@ mod tests {
         let (_, quality) = prepare_cw_signal(&samples, 12_000, 600).unwrap();
         assert!(quality.keying_contrast_db >= CW_MIN_KEYING_CONTRAST_DB);
         assert!(quality.tone_share >= CW_MIN_TONE_SHARE);
+    }
+
+    #[test]
+    fn adaptive_prepare_finds_usb_d_tone_offset() {
+        let samples = keyed_tone(12_000, 680.0, 3.0);
+        let (_, quality, detected_tone_hz) =
+            prepare_cw_signal_adaptive(&samples, 12_000, 600).unwrap();
+        assert_eq!(detected_tone_hz, 680);
+        assert!(quality.keying_contrast_db >= CW_MIN_KEYING_CONTRAST_DB);
     }
 
     #[test]
