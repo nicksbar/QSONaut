@@ -14,6 +14,21 @@ pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
     ("6m", 50_293_000),
 ];
 
+const WSPR_POWER_DBM: [i32; 19] = [
+    0, 3, 7, 10, 13, 17, 20, 23, 27, 30, 33, 37, 40, 43, 47, 50, 53, 57, 60,
+];
+
+fn parse_beacon(message: &str) -> Option<(&str, &str, i32)> {
+    let mut fields = message.split_whitespace();
+    let callsign = fields.next()?;
+    let grid = fields.next()?;
+    let power = fields.next()?.parse().ok()?;
+    if fields.next().is_some() {
+        return None;
+    }
+    Some((callsign, grid, power))
+}
+
 impl QsonautGuiApp {
     pub(crate) fn draw_wspr_workspace(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         ui.heading("WSPR · Propagation Beacon");
@@ -32,6 +47,41 @@ impl QsonautGuiApp {
             ));
             ui.separator();
             ui.label(RichText::new(&snapshot.digital_decode_status).monospace());
+        });
+        ui.separator();
+        ui.label(RichText::new("Beacon settings").strong());
+        ui.label(
+            RichText::new("The backend currently supports WSPR Type-1: callsign, four-character locator, and one of the standard WSPR dBm power values.")
+                .small()
+                .color(Color32::GRAY),
+        );
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("FILL FROM STATION").clicked() {
+                self.digital_compose = format!(
+                    "{} {} 37",
+                    self.station_callsign_or_default(),
+                    self.station_grid_or_default()
+                );
+            }
+            ui.label("Power");
+            let mut power = parse_beacon(&self.digital_compose)
+                .map(|(_, _, power)| power)
+                .unwrap_or(37);
+            egui::ComboBox::from_id_salt("wspr_power_dbm")
+                .selected_text(format!("{power} dBm"))
+                .show_ui(ui, |ui| {
+                    for candidate in WSPR_POWER_DBM {
+                        if ui
+                            .selectable_value(&mut power, candidate, format!("{candidate} dBm"))
+                            .clicked()
+                        {
+                            if let Some((callsign, grid, _)) = parse_beacon(&self.digital_compose) {
+                                self.digital_compose = format!("{callsign} {grid} {power}");
+                            }
+                        }
+                    }
+                });
+            ui.label("120-second slot · one-shot only");
         });
         ui.separator();
         ui.label(RichText::new("Recent spots").strong());
@@ -74,7 +124,13 @@ impl QsonautGuiApp {
             if ui
                 .add_enabled(
                     !self.digital_tx_active.load(Ordering::Acquire)
-                        && !self.digital_compose.trim().is_empty(),
+                        && parse_beacon(&self.digital_compose).is_some_and(
+                            |(callsign, grid, power)| {
+                                callsign.len() <= 6
+                                    && grid.len() == 4
+                                    && WSPR_POWER_DBM.contains(&power)
+                            },
+                        ),
                     egui::Button::new("TRANSMIT ONCE"),
                 )
                 .clicked()
@@ -92,6 +148,26 @@ impl QsonautGuiApp {
             }
         });
         ui.label(RichText::new(&self.digital_tx_status).color(Color32::GRAY));
+        if let Some((callsign, grid, power)) = parse_beacon(&self.digital_compose) {
+            let valid = callsign.len() <= 6 && grid.len() == 4 && WSPR_POWER_DBM.contains(&power);
+            ui.label(
+                RichText::new(if valid {
+                    format!("Ready: {callsign} {grid} at {power} dBm")
+                } else {
+                    "Invalid WSPR Type-1 beacon fields".to_string()
+                })
+                .color(if valid {
+                    Color32::LIGHT_GREEN
+                } else {
+                    Color32::YELLOW
+                }),
+            );
+        } else {
+            ui.label(
+                RichText::new("Enter CALL GRID POWER_DBM to enable transmit")
+                    .color(Color32::YELLOW),
+            );
+        }
         ui.label(
             RichText::new("Format: CALL GRID POWER_DBM, for example K1ABC FN42 37. TX is one-shot and starts on the next valid 2-minute slot.")
                 .small()
