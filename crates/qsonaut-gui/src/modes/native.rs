@@ -140,6 +140,26 @@ impl QsonautGuiApp {
             ));
         });
         ui.add_space(8.0);
+        let mode_guidance = match mode {
+            WorkspaceMode::Wspr => {
+                "WSPR is a 120-second propagation beacon. TX format: CALL GRID POWER_DBM; use one-shot transmissions only."
+            }
+            WorkspaceMode::Fst4 => {
+                "FST4-60 is currently selected by the decoder. TX is one timed frame; verify the slot countdown before sending."
+            }
+            WorkspaceMode::Jt9 => {
+                "JT9 uses 60-second slots. The native panel provides manual one-shot TX; sequencing is not enabled yet."
+            }
+            WorkspaceMode::Jt65 => {
+                "JT65 uses 60-second slots. The native panel provides manual one-shot TX; sequencing is not enabled yet."
+            }
+            WorkspaceMode::Q65 => {
+                "Q65-A30 is currently selected by the decoder. The native panel provides manual one-shot TX."
+            }
+            _ => "Native digital TX is one-shot and slot-timed; use STOP TX to disarm a queued frame.",
+        };
+        ui.label(RichText::new(mode_guidance).small().color(Color32::GRAY));
+        ui.add_space(4.0);
         if let Some(slot_seconds) = mode.core_slot_seconds() {
             let now_s = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -230,7 +250,18 @@ impl QsonautGuiApp {
                         .hint_text(hint)
                         .font(egui::TextStyle::Monospace),
                 );
-                if ui
+                if mode == WorkspaceMode::Wspr {
+                    if ui
+                        .add_enabled(can_transmit, egui::Button::new("FILL BEACON"))
+                        .clicked()
+                    {
+                        self.digital_compose = format!(
+                            "{} {} 37",
+                            self.station_callsign_or_default(),
+                            self.station_grid_or_default()
+                        );
+                    }
+                } else if ui
                     .add_enabled(can_transmit, egui::Button::new("CQ"))
                     .clicked()
                 {
