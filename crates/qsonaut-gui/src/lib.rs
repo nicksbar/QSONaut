@@ -2629,6 +2629,31 @@ impl QsonautGuiApp {
         }
     }
 
+    fn draw_bounded_workspace(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        snapshot: &GuiState,
+    ) {
+        if matches!(self.workspace_mode, WorkspaceMode::Ft8 | WorkspaceMode::Ft4) {
+            self.draw_workspace(ui, ctx, snapshot);
+        } else {
+            egui::ScrollArea::both()
+                .id_salt("workspace_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| self.draw_workspace(ui, ctx, snapshot));
+        }
+    }
+
+    fn split_decode_workspace_height(available_height: f32) -> (f32, f32) {
+        const GAP: f32 = 4.0;
+        const TX_MIN: f32 = 72.0;
+        const TX_MAX: f32 = 180.0;
+        let tx_height = (available_height * 0.22).clamp(TX_MIN, TX_MAX);
+        let decode_height = (available_height - GAP - tx_height).max(0.0);
+        (decode_height, tx_height)
+    }
+
     fn draw_connection_status(&self, ui: &mut egui::Ui, snapshot: &GuiState) {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Connections").strong());
@@ -3377,10 +3402,7 @@ impl eframe::App for QsonautGuiApp {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            egui::ScrollArea::both()
-                .id_salt("workspace_scroll")
-                .auto_shrink([false, false])
-                .show(ui, |ui| self.draw_workspace(ui, ctx, &snapshot));
+            self.draw_bounded_workspace(ui, ctx, &snapshot);
         });
     }
 }
@@ -3836,6 +3858,24 @@ mod tests {
     fn gui_scale_percent_mapping_clamps_to_supported_range() {
         assert_eq!(gui_scale_from_percent(10), GUI_SCALE_MIN);
         assert_eq!(gui_scale_from_percent(500), GUI_SCALE_MAX);
+    }
+
+    #[test]
+    fn decode_workspace_height_split_fits_available_viewport() {
+        for available_height in [180.0, 320.0, 600.0, 1_000.0] {
+            let (decode_height, tx_height) =
+                QsonautGuiApp::split_decode_workspace_height(available_height);
+            assert!(decode_height >= 0.0);
+            assert!((decode_height + tx_height + 4.0 - available_height).abs() < 0.01);
+            assert!(tx_height <= 180.0);
+        }
+    }
+
+    #[test]
+    fn decode_workspace_height_split_does_not_force_large_minimums() {
+        let (decode_height, tx_height) = QsonautGuiApp::split_decode_workspace_height(180.0);
+        assert!(decode_height < 120.0);
+        assert_eq!(tx_height, 72.0);
     }
 
     #[test]

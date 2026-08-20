@@ -473,9 +473,15 @@ impl QsonautGuiApp {
         }
         let operator_call = self.station_callsign_or_default().to_string();
         let active_band = snapshot.frequency_hz.map(band_for_frequency).unwrap_or("");
+        let (decode_h, tx_h) = Self::split_decode_workspace_height(ui.available_height());
         egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.set_min_height(220.0);
-            let deck_rect = ui.available_rect_before_wrap();
+            ui.set_min_height(decode_h);
+            ui.set_max_height(decode_h);
+            let available_rect = ui.available_rect_before_wrap();
+            let deck_rect = egui::Rect::from_min_size(
+                available_rect.min,
+                egui::vec2(available_rect.width(), decode_h),
+            );
             ui.allocate_rect(deck_rect, egui::Sense::hover());
             let mut deck_ui = ui.new_child(
                 egui::UiBuilder::new()
@@ -685,10 +691,9 @@ impl QsonautGuiApp {
         });
         ui.add_space(4.0);
 
-        let tx_h = (ui.available_height() * 0.22).clamp(88.0, 180.0);
-
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_min_height(tx_h);
+            ui.set_max_height(tx_h);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("📣 FT4 TX DECK").strong());
                 ui.add_enabled(
