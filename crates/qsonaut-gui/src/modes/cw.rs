@@ -130,7 +130,7 @@ impl QsonautGuiApp {
             ui.separator();
             ui.label("RX/TX CW tone");
             if ui
-                .add(egui::Slider::new(&mut self.cw_tone_hz, 200..=1_200).suffix(" Hz"))
+                .add(egui::Slider::new(&mut self.cw_tone_hz, 200..=3_000).suffix(" Hz"))
                 .changed()
             {
                 self.profile_dirty = true;
@@ -180,6 +180,13 @@ impl QsonautGuiApp {
             )
             .small()
             .color(Color32::GRAY),
+        );
+        ui.label(
+            RichText::new(
+                "CW is channel-based, not a whole-waterfall decoder: QSONaut listens to the selected audio tone, collects a rolling 3–8 second window, and sends that window to DitDah. Align the green CW CENTER marker with the audible carrier; the waterfall is for choosing the channel, not decoding every signal at once.",
+            )
+            .small()
+            .color(Color32::LIGHT_BLUE),
         );
 
         let cw_tx: Vec<_> = self

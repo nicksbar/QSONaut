@@ -579,20 +579,41 @@ fn configure_radio_scope(
                 rt.block_on(radio.set_scope_center_fixed_mode(false))?;
                 rt.block_on(radio.set_scope_span_hz(scope_span_hz(config.span_code)))?;
             }
-            rt.block_on(radio.set_scope_vbw_wide(config.vbw_wide))?;
+            rt.block_on(
+                radio.set_scope_vbw_wide(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
+            )?;
         }
         RadioScopeView::Overview => {
             let (low_hz, high_hz) = config.edges.context("active band edges unavailable")?;
             rt.block_on(radio.set_scope_fixed_edge_frequencies(1, low_hz, high_hz))?;
             rt.block_on(radio.set_scope_fixed_edge_number(1))?;
             rt.block_on(radio.set_scope_center_fixed_mode(true))?;
-            rt.block_on(radio.set_scope_vbw_wide(true))?;
+            rt.block_on(
+                radio.set_scope_vbw_wide(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
+            )?;
         }
     }
     if let Some(hold) = hold_update {
         rt.block_on(radio.set_scope_hold(hold))?;
     }
     Ok(())
+}
+
+fn scope_vbw_wide_for_view(_view: RadioScopeView, user_vbw_wide: bool) -> bool {
+    user_vbw_wide
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scope_vbw_respects_checkbox_in_narrow_and_overview_views() {
+        for view in [RadioScopeView::Narrow, RadioScopeView::Overview] {
+            assert!(!scope_vbw_wide_for_view(view, false));
+            assert!(scope_vbw_wide_for_view(view, true));
+        }
+    }
 }
 
 fn read_u8_control<R: RadioHal + ?Sized>(

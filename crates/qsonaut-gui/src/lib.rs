@@ -812,7 +812,7 @@ impl Default for GuiState {
             radio_waterfall_revision: 0,
             radio_scope_contrast: 1.2,
             radio_scope_span_code: 0,
-            radio_scope_vbw_wide: true,
+            radio_scope_vbw_wide: false,
             radio_scope_hold: false,
             radio_scope_reference_tenths_db: 0,
             radio_scope_view: RadioScopeView::Narrow,
@@ -1543,7 +1543,7 @@ impl QsonautGuiApp {
             ptt_lead_ms = p.ptt_lead_ms.clamp(0, 500);
             ptt_tail_ms = p.ptt_tail_ms.clamp(0, 500);
             cw_wpm = p.cw_wpm.clamp(5, 40);
-            cw_tone_hz = p.cw_tone_hz.clamp(200, 1_200);
+            cw_tone_hz = p.cw_tone_hz.clamp(200, 3_000);
             gui_scale = if p.profile_version >= GUI_SCALE_PROFILE_VERSION {
                 p.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
             } else {
@@ -1975,7 +1975,7 @@ impl QsonautGuiApp {
         self.ptt_lead_ms = profile.ptt_lead_ms.clamp(0, 500);
         self.ptt_tail_ms = profile.ptt_tail_ms.clamp(0, 500);
         self.cw_wpm = profile.cw_wpm.clamp(5, 40);
-        self.cw_tone_hz = profile.cw_tone_hz.clamp(200, 1_200);
+        self.cw_tone_hz = profile.cw_tone_hz.clamp(200, 3_000);
         self.contest_enabled = profile.contest_enabled;
         self.contest_operating_mode = profile.contest_operating_mode;
         self.contest_split_policy = profile.contest_split_policy;
@@ -2389,7 +2389,7 @@ impl QsonautGuiApp {
             ptt_lead_ms: self.ptt_lead_ms.clamp(0, 500),
             ptt_tail_ms: self.ptt_tail_ms.clamp(0, 500),
             cw_wpm: self.cw_wpm.clamp(5, 40),
-            cw_tone_hz: self.cw_tone_hz.clamp(200, 1_200),
+            cw_tone_hz: self.cw_tone_hz.clamp(200, 3_000),
             audio_input_device: self.config.audio.input_device.clone(),
             audio_output_device: self.config.audio.output_device.clone(),
             radio_serial_port: self.config.radio.serial_port.clone(),
@@ -3818,6 +3818,11 @@ mod tests {
             state.radio_waterfall_rows.back().unwrap(),
             &[0, 0, 255, 0, 0]
         );
+    }
+
+    #[test]
+    fn gui_state_defaults_to_sharp_radio_scope_vbw() {
+        assert!(!GuiState::default().radio_scope_vbw_wide);
     }
 
     #[test]

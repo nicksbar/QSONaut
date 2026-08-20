@@ -165,7 +165,7 @@ pub(super) fn build_native_digital_tx_pcm(
             }
             let generator = ditdah::MorseGenerator::new(
                 FT8_TX_SAMPLE_RATE_HZ,
-                f32::from(cw_tone_hz.clamp(200, 1_200)),
+                f32::from(cw_tone_hz.clamp(200, 3_000)),
                 f32::from(cw_wpm.clamp(5, 40)),
             );
             let temporary_directory = tempfile::tempdir().context("create CW audio workspace")?;

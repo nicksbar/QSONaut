@@ -1,7 +1,5 @@
 use super::super::*;
-use super::cw::{
-    run_cw_decode, CW_DECODE_HOP_SAMPLES, CW_DECODE_MIN_SAMPLES, CW_DECODE_WINDOW_SAMPLES,
-};
+use super::cw::{CW_DECODE_MIN_SAMPLES, CW_DECODE_WINDOW_SAMPLES};
 use super::decode::{
     prepare_early_digital_slot, prepare_early_ft8_slot, run_ft8_decode_worker,
     run_native_digital_decode, warm_ft8_decoder,
@@ -100,6 +98,10 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut digital_buf: Vec<f32> = Vec::with_capacity(12_000 * 120);
         let mut cw_buf: Vec<f32> = Vec::with_capacity(CW_DECODE_WINDOW_SAMPLES);
         let mut cw_samples_since_decode = 0usize;
+        // Built lazily on the first CW chunk so the search window always
+        // brackets the operator's currently selected audio tone.
+        let mut cw_stream_decoder: Option<ditdah::StreamingDecoder> = None;
+        let mut cw_stream_tone_hz = 0_u32;
         let mut digital_slot_gate = DigitalSlotGate::default();
         let mut ft4_slot_gate = Ft8SlotGate::default();
         let mut decode_workspace_last: Option<WorkspaceMode> = None;
@@ -217,6 +219,8 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             digital_buf.clear();
                             cw_buf.clear();
                             cw_samples_since_decode = 0;
+                            cw_stream_decoder = None;
+                            cw_stream_tone_hz = 0;
                             ft8_slot_gate.reset();
                             ft4_slot_gate.reset();
                             digital_slot_gate.reset();
@@ -363,45 +367,46 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             if cw_buf.len() > CW_DECODE_WINDOW_SAMPLES {
                                 cw_buf.drain(..cw_buf.len() - CW_DECODE_WINDOW_SAMPLES);
                             }
-                            if cw_buf.len() >= CW_DECODE_MIN_SAMPLES
-                                && cw_samples_since_decode >= CW_DECODE_HOP_SAMPLES
-                            {
-                                let in_progress = digital_decode_in_progress.clone();
-                                if in_progress
-                                    .compare_exchange(
-                                        false,
-                                        true,
-                                        Ordering::AcqRel,
-                                        Ordering::Relaxed,
-                                    )
-                                    .is_ok()
-                                {
-                                    cw_samples_since_decode = 0;
-                                    let samples = cw_buf.clone();
-                                    let now_s = SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .map(|duration| duration.as_secs_f64())
-                                        .unwrap_or_default();
-                                    let window_id = now_s.floor() as u64;
-                                    let utc = utc_hhmmss_millis(now_s);
-                                    let tone_hz = state
-                                        .lock()
-                                        .expect("ui state lock poisoned")
-                                        .selected_audio_hz;
-                                    let state_d = state.clone();
-                                    thread::spawn(move || {
-                                        run_cw_decode(samples, window_id, utc, tone_hz, state_d);
-                                        in_progress.store(false, Ordering::Release);
+                            let selected_tone_hz = state
+                                .lock()
+                                .expect("ui state lock poisoned")
+                                .selected_audio_hz;
+                            if selected_tone_hz != cw_stream_tone_hz {
+                                cw_stream_decoder = ditdah::StreamingDecoder::with_frequency_range(
+                                    12_000,
+                                    12_000,
+                                    selected_tone_hz.saturating_sub(120).max(200) as f32,
+                                    (selected_tone_hz + 120).min(3_000) as f32,
+                                )
+                                .ok();
+                                cw_stream_tone_hz = selected_tone_hz;
+                            }
+                            if let Some(decoder) = cw_stream_decoder.as_mut() {
+                                if let Ok(Some(text)) = decoder.push_samples(&ds) {
+                                    let mut shared = state.lock().expect("ui state lock poisoned");
+                                    shared.cw_live_text.push_str(&text);
+                                    shared.digital_decode_status =
+                                        format!("LIVE CW · streaming · +{}", text);
+                                    shared.digital_decodes.push_back(DigitalDecodeEntry {
+                                        mode: WorkspaceMode::Cw,
+                                        period: SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .map(|d| d.as_secs())
+                                            .unwrap_or_default(),
+                                        utc: utc_hhmmss_millis(
+                                            SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .map(|d| d.as_secs_f64())
+                                                .unwrap_or_default(),
+                                        ),
+                                        snr_db: 0.0,
+                                        dt_s: 0.0,
+                                        freq_hz: selected_tone_hz,
+                                        message: text,
                                     });
-                                } else {
-                                    state
-                                        .lock()
-                                        .expect("ui state lock poisoned")
-                                        .digital_decode_status =
-                                        "LIVE CW · decoder busy; retaining rolling audio"
-                                            .to_string();
                                 }
-                            } else if cw_buf.len() < CW_DECODE_MIN_SAMPLES {
+                            }
+                            if cw_buf.len() < CW_DECODE_MIN_SAMPLES {
                                 state
                                     .lock()
                                     .expect("ui state lock poisoned")

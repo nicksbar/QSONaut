@@ -207,8 +207,19 @@ impl QsonautGuiApp {
         ui.heading("Audio Waterfall (RX Input / TX Output)");
         ui.separator();
 
-        let bw_hz = filter_bandwidth_hz(&snapshot.mode, snapshot.filter);
+        let filter_bw_hz = filter_bandwidth_hz(&snapshot.mode, snapshot.filter);
         let is_cw = self.workspace_mode == WorkspaceMode::Cw;
+        let bw_hz = filter_bw_hz;
+        let rx_cursor_hz = if is_cw {
+            u32::from(self.cw_tone_hz)
+        } else {
+            self.rx_tone_hz
+        };
+        let tx_cursor_hz = if is_cw {
+            u32::from(self.cw_tone_hz)
+        } else {
+            self.tx_tone_hz
+        };
         let channel_hz = if is_cw {
             80
         } else {
@@ -269,10 +280,13 @@ impl QsonautGuiApp {
 
                 if response.clicked() {
                     let selected_hz = if is_cw {
-                        pick_hz
+                        pick_hz.clamp(200, 3_000)
                     } else {
                         pick_hz.saturating_sub(channel_hz / 2)
                     };
+                    if is_cw {
+                        self.cw_tone_hz = selected_hz as u16;
+                    }
                     self.rx_tone_hz = selected_hz;
                     if is_cw || !self.ft8_hold_tx_freq {
                         self.tx_tone_hz = selected_hz;
@@ -283,11 +297,12 @@ impl QsonautGuiApp {
                 }
                 if response.secondary_clicked() {
                     let selected_hz = if is_cw {
-                        pick_hz
+                        pick_hz.clamp(200, 3_000)
                     } else {
                         pick_hz.saturating_sub(channel_hz / 2)
                     };
                     if is_cw {
+                        self.cw_tone_hz = selected_hz as u16;
                         self.rx_tone_hz = selected_hz;
                     }
                     self.tx_tone_hz = selected_hz;
@@ -299,9 +314,9 @@ impl QsonautGuiApp {
 
             let bw = bw_hz.clamp(1, AUDIO_MAX_FREQ_HZ) as f32;
             let rx_x = response.rect.left()
-                + (self.rx_tone_hz.min(bw as u32) as f32 / bw) * response.rect.width();
+                + (rx_cursor_hz.min(bw as u32) as f32 / bw) * response.rect.width();
             let tx_x = response.rect.left()
-                + (self.tx_tone_hz.min(bw as u32) as f32 / bw) * response.rect.width();
+                + (tx_cursor_hz.min(bw as u32) as f32 / bw) * response.rect.width();
 
             let channel_half_width =
                 (channel_hz as f32 / bw * response.rect.width() / 2.0).max(2.0);
@@ -369,7 +384,7 @@ impl QsonautGuiApp {
                 format!(
                     "{} RX {} Hz",
                     if is_cw { "CW CENTER" } else { "RX EDGE" },
-                    self.rx_tone_hz
+                    rx_cursor_hz
                 ),
                 egui::TextStyle::Small.resolve(ui.style()),
                 Color32::from_rgb(120, 220, 120),
@@ -383,10 +398,15 @@ impl QsonautGuiApp {
             );
         }
         ui.label(format!(
-            "Audio: {}  |  0\u{2013}{} Hz · channel {} Hz ({} {})  |  L-click RX / R-click TX",
+            "Audio: {}  |  0\u{2013}{} Hz · channel {} Hz · {} ({} {})  |  L-click RX / R-click TX",
             snapshot.audio_spectrum_status,
             bw_hz.min(AUDIO_MAX_FREQ_HZ),
             channel_hz,
+            if is_cw {
+                "CW tone search ±120 Hz"
+            } else {
+                "digital channel edge"
+            },
             snapshot.mode,
             snapshot
                 .filter
