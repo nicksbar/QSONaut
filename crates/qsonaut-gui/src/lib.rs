@@ -42,7 +42,9 @@ use qsonaut_pskreporter::{
     ReceptionReport, ReportSender, Reporter, ReporterConfig, ReporterTuning,
 };
 use qsonaut_radio::{
-    drivers::{open_model_with_radio_address, ConfiguredRadio},
+    drivers::{
+        open_dxlab, open_model_with_radio_address, open_null, open_rigctld, ConfiguredRadio,
+    },
     enumerate_serial_port_descriptors,
     models::{find_model, Protocol, SupportLevel, POPULAR_RADIOS},
     BaseMode, ControlId, ControlValue, IcomCiVRadio, Mode, RadioHal, SerialPortDescriptor,
@@ -61,7 +63,7 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::error::TryRecvError;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 const QSONAUT_ICON_PNG: &[u8] = include_bytes!("../../../assets/branding/qsonaut-icon.png");
 
@@ -1130,8 +1132,10 @@ fn spawn_device_scan() -> mpsc::Receiver<DeviceInventory> {
 /// the result (or None if a timeout of ~5 seconds occurs). This prevents serial port
 /// operations from blocking the UI window appearance.
 fn spawn_radio_init(
+    backend: String,
     model: String,
     port: String,
+    endpoint: String,
     baud_rate: u32,
     controller_civ_address: u8,
     radio_civ_address: u8,
@@ -1141,18 +1145,40 @@ fn spawn_radio_init(
         let start = std::time::Instant::now();
         let _timeout = std::time::Duration::from_secs(5);
 
-        match open_model_with_radio_address(
-            &model,
-            &port,
-            baud_rate,
-            controller_civ_address,
-            Some(radio_civ_address),
-        ) {
-            Ok(radio) => {
+        let radio = match backend.trim().to_ascii_lowercase().as_str() {
+            "none" => None,
+            "null" | "mock" => Some(open_null()),
+            "rigctld" | "rigctl" => Some(open_rigctld(endpoint)),
+            "dxlab" | "dxlab-commander" | "commander" => Some(open_dxlab(endpoint)),
+            _ => match open_model_with_radio_address(
+                &model,
+                &port,
+                baud_rate,
+                controller_civ_address,
+                Some(radio_civ_address),
+            ) {
+                Ok(radio) => Some(radio),
+                Err(err) => {
+                    error!(
+                        backend = %backend,
+                        model = %model,
+                        endpoint = %endpoint,
+                        port = %port,
+                        baud = baud_rate,
+                        error = %err,
+                        elapsed = ?start.elapsed(),
+                        "Radio initialization failed"
+                    );
+                    None
+                }
+            },
+        };
+
+        match radio {
+            Some(radio) => {
                 let _ = tx.send(Some(radio));
             }
-            Err(err) => {
-                debug!(error = %err, elapsed = ?start.elapsed(), "Radio init failed");
+            None => {
                 let _ = tx.send(None);
             }
         }
@@ -1406,6 +1432,11 @@ impl QsonautGuiApp {
                 config.audio.input_device = profile.audio_input_device;
                 config.audio.output_device = profile.audio_output_device;
                 config.radio.serial_port = profile.radio_serial_port;
+                config.radio.backend = profile.radio_backend;
+                config.radio.endpoint = profile.radio_endpoint;
+                if config.radio.backend.trim().eq_ignore_ascii_case("none") {
+                    config.radio.backend = "native".to_string();
+                }
                 if profile.profile_version >= 8 {
                     config.radio.model = profile.radio_model;
                     config.radio.baud_rate = profile.radio_baud_rate;
@@ -1427,8 +1458,10 @@ impl QsonautGuiApp {
         let (radio_init_rx, radio_waterfall_status_init) = if config.radio.enabled {
             let port = config.radio.serial_port.clone().unwrap_or_default();
             let rx = spawn_radio_init(
+                config.radio.backend.clone(),
                 config.radio.model.clone(),
                 port,
+                config.radio.endpoint.clone(),
                 config.radio.baud_rate,
                 config.radio.controller_civ_address,
                 config.radio.civ_address,
@@ -1666,6 +1699,8 @@ impl QsonautGuiApp {
                 audio_input_device: config.audio.input_device.clone(),
                 audio_output_device: config.audio.output_device.clone(),
                 radio_serial_port: config.radio.serial_port.clone(),
+                radio_backend: config.radio.backend.clone(),
+                radio_endpoint: config.radio.endpoint.clone(),
                 radio_model: config.radio.model.clone(),
                 radio_baud_rate: config.radio.baud_rate,
                 gui_scale,
@@ -2054,6 +2089,8 @@ impl QsonautGuiApp {
             self.config.audio.input_device = profile.audio_input_device;
             self.config.audio.output_device = profile.audio_output_device;
             self.config.radio.serial_port = profile.radio_serial_port;
+            self.config.radio.backend = profile.radio_backend;
+            self.config.radio.endpoint = profile.radio_endpoint;
             if profile.profile_version >= 8 {
                 self.config.radio.model = profile.radio_model;
                 self.config.radio.baud_rate = profile.radio_baud_rate;
@@ -2430,6 +2467,8 @@ impl QsonautGuiApp {
             audio_input_device: self.config.audio.input_device.clone(),
             audio_output_device: self.config.audio.output_device.clone(),
             radio_serial_port: self.config.radio.serial_port.clone(),
+            radio_backend: self.config.radio.backend.clone(),
+            radio_endpoint: self.config.radio.endpoint.clone(),
             radio_model: self.config.radio.model.clone(),
             radio_baud_rate: self.config.radio.baud_rate,
             gui_scale: self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX),
@@ -2950,7 +2989,14 @@ impl eframe::App for QsonautGuiApp {
                             .serial_port
                             .clone()
                             .unwrap_or_else(|| "auto".to_string());
-                        info!(model = %self.config.radio.model, port = %display_port, baud = self.config.radio.baud_rate, "Starting GUI radio worker (deferred initialization)");
+                        info!(
+                            backend = %self.config.radio.backend,
+                            model = %self.config.radio.model,
+                            endpoint = %self.config.radio.endpoint,
+                            port = %display_port,
+                            baud = self.config.radio.baud_rate,
+                            "Starting GUI radio worker (deferred initialization)"
+                        );
                         let handle = workers::radio::spawn_radio_worker(
                             radio,
                             self.state.clone(),
@@ -2967,8 +3013,13 @@ impl eframe::App for QsonautGuiApp {
                         self.radio_init_attempted = true;
                         let mut s = self.state.lock().expect("ui state lock poisoned");
                         s.radio_waterfall_status = "UNAVAILABLE (connection failed)".to_string();
-                        s.last_error =
-                            Some("Failed to open radio after 5 second timeout".to_string());
+                        s.last_error = Some(format!(
+                            "Failed to initialize radio backend '{}' (model '{}', endpoint '{}', serial port '{}')",
+                            self.config.radio.backend,
+                            self.config.radio.model,
+                            self.config.radio.endpoint,
+                            self.config.radio.serial_port.as_deref().unwrap_or("auto"),
+                        ));
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
                         // Thread panicked or dropped

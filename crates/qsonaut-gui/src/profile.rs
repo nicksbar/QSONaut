@@ -13,7 +13,7 @@ use super::{
 };
 
 pub(super) const OPERATOR_PROFILE_FILE: &str = "profile.toml";
-pub(super) const OPERATOR_PROFILE_VERSION: u32 = 10;
+pub(super) const OPERATOR_PROFILE_VERSION: u32 = 11;
 const LEGACY_OPERATOR_PROFILE_FILE: &str = ".rigforge_profile.toml";
 const DEFAULT_PROFILE_NAME: &str = "Default";
 const OPERATOR_PROFILES_DIR: &str = "profiles";
@@ -85,6 +85,10 @@ pub(super) struct OperatorProfile {
     pub(super) audio_output_device: Option<String>,
     #[serde(default)]
     pub(super) radio_serial_port: Option<String>,
+    #[serde(default = "default_radio_backend")]
+    pub(super) radio_backend: String,
+    #[serde(default = "default_radio_endpoint")]
+    pub(super) radio_endpoint: String,
     #[serde(default = "default_radio_model")]
     pub(super) radio_model: String,
     #[serde(default = "default_radio_baud_rate")]
@@ -232,6 +236,14 @@ fn default_radio_model() -> String {
 
 fn default_radio_baud_rate() -> u32 {
     115_200
+}
+
+fn default_radio_backend() -> String {
+    "native".to_string()
+}
+
+fn default_radio_endpoint() -> String {
+    "127.0.0.1:4532".to_string()
 }
 
 pub(super) fn default_psk_batch_interval_secs() -> u64 {

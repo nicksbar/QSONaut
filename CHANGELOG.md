@@ -5,6 +5,44 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-08-21
+
+### Added
+- Added selectable native serial, Hamlib `rigctld`, and DX Lab Suite Commander
+  radio backends through Rigwright `v0.1.5`.
+- Added endpoint configuration and in-app radio reconnect support.
+- Added dedicated native-mode workspaces for FST4, JT9, JT65, and Q65, with
+  per-mode layouts and shared digital conversation handling.
+- Added FST4 submode selection for the slow-mode variants exposed by
+  `mfsk-core`.
+- Added a WSPR Type-1 beacon workflow with callsign, four-character locator,
+  dBm power, timing, and backend-drift status controls.
+- Added per-mode native digital transmit sequencing with shared timing logic,
+  isolated sequencing state, late-slot protection, and complete TX lifecycle
+  handling.
+- Replaced the previous CW implementation with `cw-dit` streaming DSP and
+  Morse components, including signal tracking, selected-channel decoding, and
+  generated audio transmission.
+- Added explicit CW and digital waterfall channel selection behavior, including
+  bandwidth indicators and mode-specific cursor placement.
+
+### Fixed
+- Persisted radio backend and endpoint selections in operator profiles.
+- Made native serial control the default and migrated legacy `none` settings.
+- Added detailed radio initialization diagnostics.
+- Improved native digital TX timing so late or canceled transmissions cannot
+  leave stale automation state that blocks subsequent cycles.
+- Kept native-mode decode decks inside the available layout bounds and matched
+  native-mode sizing with the FT8 workspace.
+- Shared the digital conversation component across native digital workspaces,
+  reducing duplicated UI state and behavior.
+- Improved light-theme text contrast and clarified native digital mode
+  operation in the UI.
+- Smoothed radio waterfall repainting and reduced unnecessary redraw work.
+- Preserved radio scope VBW preferences across sessions.
+- Improved CW waterfall signal tracking and separated CW cursor behavior from
+  digital channel selection.
+
 ## [0.3.4] - 2026-08-18
 
 ### Added

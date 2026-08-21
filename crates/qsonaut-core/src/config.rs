@@ -40,6 +40,8 @@ pub struct AudioConfig {
 pub struct RadioConfig {
     pub enabled: bool,
     pub backend: String,
+    #[serde(default = "default_radio_endpoint")]
+    pub endpoint: String,
     #[serde(default = "default_radio_model")]
     pub model: String,
     pub serial_port: Option<String>,
@@ -146,7 +148,8 @@ impl Default for AppConfig {
             },
             radio: RadioConfig {
                 enabled: true,
-                backend: "none".to_string(),
+                backend: "native".to_string(),
+                endpoint: default_radio_endpoint(),
                 model: default_radio_model(),
                 serial_port: None,
                 baud_rate: default_radio_baud_rate(),
@@ -267,6 +270,15 @@ impl AppConfig {
         if let Ok(backend) = std::env::var("QSONAUT_RADIO_BACKEND") {
             cfg.radio.backend = backend;
         }
+        // `none` was an internal placeholder. Radio enablement is controlled
+        // by `radio.enabled`; migrate older configurations to the real
+        // default backend instead of silently disabling radio control.
+        if cfg.radio.backend.trim().eq_ignore_ascii_case("none") {
+            cfg.radio.backend = "native".to_string();
+        }
+        if let Ok(endpoint) = std::env::var("QSONAUT_RADIO_ENDPOINT") {
+            cfg.radio.endpoint = endpoint;
+        }
         if let Ok(model) = std::env::var("QSONAUT_RADIO_MODEL") {
             cfg.radio.model = model;
         }
@@ -306,6 +318,10 @@ fn default_radio_baud_rate() -> u32 {
 
 fn default_radio_model() -> String {
     "IC-7300".to_string()
+}
+
+fn default_radio_endpoint() -> String {
+    "127.0.0.1:4532".to_string()
 }
 
 fn default_radio_civ_address() -> u8 {
@@ -409,5 +425,11 @@ backend = "none"
         assert!(body.contains("[contest]"));
         assert!(body.contains("serial_start = 1"));
         assert!(body.contains("dupe_check = true"));
+    }
+
+    #[test]
+    fn native_radio_is_the_default_backend() {
+        assert_eq!(AppConfig::default().radio.backend, "native");
+        assert_eq!(AppConfig::default().radio.endpoint, "127.0.0.1:4532");
     }
 }

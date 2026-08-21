@@ -1,6 +1,42 @@
 use super::super::*;
 
 impl QsonautGuiApp {
+    fn reconnect_radio(&mut self) {
+        if let Some(tx) = &self.command_tx {
+            let _ = tx.send(GuiCommand::Quit);
+        }
+        self.worker_stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.radio_worker_handle.take() {
+            let _ = handle.join();
+        }
+        self.command_tx = None;
+        self.worker_stop = Arc::new(AtomicBool::new(false));
+
+        if !self.config.radio.enabled {
+            self.radio_init_rx = None;
+            self.radio_init_attempted = true;
+            let mut state = self.state.lock().expect("ui state lock poisoned");
+            state.radio_waterfall_status = "UNAVAILABLE (radio disabled)".to_string();
+            return;
+        }
+
+        let port = self.config.radio.serial_port.clone().unwrap_or_default();
+        self.radio_init_rx = Some(spawn_radio_init(
+            self.config.radio.backend.clone(),
+            self.config.radio.model.clone(),
+            port,
+            self.config.radio.endpoint.clone(),
+            self.config.radio.baud_rate,
+            self.config.radio.controller_civ_address,
+            self.config.radio.civ_address,
+        ));
+        self.radio_init_attempted = false;
+        self.device_restart_required = false;
+        let mut state = self.state.lock().expect("ui state lock poisoned");
+        state.radio_waterfall_status = "CONNECTING…".to_string();
+        state.last_error = None;
+    }
+
     pub(in super::super) fn draw_device_settings(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("Devices");
@@ -25,6 +61,8 @@ impl QsonautGuiApp {
         let old_input = self.config.audio.input_device.clone();
         let old_output = self.config.audio.output_device.clone();
         let old_port = self.config.radio.serial_port.clone();
+        let old_backend = self.config.radio.backend.clone();
+        let old_endpoint = self.config.radio.endpoint.clone();
         let old_model = self.config.radio.model.clone();
         let old_baud = self.config.radio.baud_rate;
         let old_monitor = self.config.audio.monitor_enabled;
@@ -34,6 +72,30 @@ impl QsonautGuiApp {
             .num_columns(2)
             .spacing([10.0, 6.0])
             .show(ui, |ui| {
+                ui.label("Radio backend");
+                egui::ComboBox::from_id_salt("radio_backend")
+                    .selected_text(&self.config.radio.backend)
+                    .width(ui.available_width().max(180.0))
+                    .show_ui(ui, |ui| {
+                        for backend in ["native", "rigctld", "dxlab"] {
+                            ui.selectable_value(
+                                &mut self.config.radio.backend,
+                                backend.to_string(),
+                                backend,
+                            );
+                        }
+                    });
+                ui.end_row();
+
+                if matches!(
+                    self.config.radio.backend.to_ascii_lowercase().as_str(),
+                    "rigctld" | "rigctl" | "dxlab" | "dxlab-commander" | "commander"
+                ) {
+                    ui.label("Backend endpoint");
+                    ui.text_edit_singleline(&mut self.config.radio.endpoint);
+                    ui.end_row();
+                }
+
                 ui.label("Radio model");
                 egui::ComboBox::from_id_salt("radio_model")
                     .selected_text(&self.config.radio.model)
@@ -222,9 +284,26 @@ impl QsonautGuiApp {
             );
         }
 
+        ui.label(
+            RichText::new(format!(
+                "Active backend: {} · endpoint: {} · serial: {}",
+                self.config.radio.backend,
+                self.config.radio.endpoint,
+                self.config
+                    .radio
+                    .serial_port
+                    .as_deref()
+                    .unwrap_or("auto-detect"),
+            ))
+            .small()
+            .color(theme_muted(ui)),
+        );
+
         if old_input != self.config.audio.input_device
             || old_output != self.config.audio.output_device
             || old_port != self.config.radio.serial_port
+            || old_backend != self.config.radio.backend
+            || old_endpoint != self.config.radio.endpoint
             || old_model != self.config.radio.model
             || old_baud != self.config.radio.baud_rate
             || old_monitor != self.config.audio.monitor_enabled
@@ -253,9 +332,12 @@ impl QsonautGuiApp {
 
         if self.device_restart_required {
             ui.add_space(4.0);
+            if ui.button("Reconnect radio now").clicked() {
+                self.reconnect_radio();
+            }
             ui.label(
                 RichText::new(
-                    "Output changes apply to the next transmission. Restart QSONaut to reconnect input or radio devices.",
+                    "Radio settings are saved. Reconnect now to apply the selected backend and endpoint.",
                 )
                 .small()
                 .color(theme_warning(ui)),
