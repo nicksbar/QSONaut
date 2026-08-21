@@ -964,6 +964,39 @@ const WINDOW_GEOMETRY_FILE: &str = "window.json";
 const WINDOW_MIN_SIZE: [f32; 2] = [980.0, 680.0];
 const WINDOW_DEFAULT_SIZE: [f32; 2] = [1280.0, 860.0];
 
+/// Keep warning text readable in both egui visual modes.
+pub(crate) fn theme_warning(ui: &egui::Ui) -> Color32 {
+    if ui.visuals().dark_mode {
+        Color32::YELLOW
+    } else {
+        Color32::from_rgb(146, 92, 0)
+    }
+}
+
+pub(crate) fn theme_muted(ui: &egui::Ui) -> Color32 {
+    if ui.visuals().dark_mode {
+        Color32::GRAY
+    } else {
+        Color32::from_rgb(75, 85, 99)
+    }
+}
+
+pub(crate) fn theme_accent(ui: &egui::Ui) -> Color32 {
+    if ui.visuals().dark_mode {
+        Color32::LIGHT_BLUE
+    } else {
+        Color32::from_rgb(29, 78, 121)
+    }
+}
+
+pub(crate) fn theme_success(ui: &egui::Ui) -> Color32 {
+    if ui.visuals().dark_mode {
+        Color32::LIGHT_GREEN
+    } else {
+        Color32::from_rgb(21, 128, 61)
+    }
+}
+
 /// Native window geometry restored by QSONaut instead of eframe. Applying it to
 /// the `ViewportBuilder` means winit configures the window once, while it is
 /// still hidden, instead of showing and re-hiding it for each late change.
@@ -2682,7 +2715,7 @@ impl QsonautGuiApp {
                         ("QSONaut Server CONNECTED", Color32::LIGHT_GREEN)
                     }
                     ServerConnectionState::Connecting | ServerConnectionState::Reconnecting => {
-                        ("QSONaut Server CONNECTING", Color32::YELLOW)
+                        ("QSONaut Server CONNECTING", theme_warning(ui))
                     }
                     ServerConnectionState::Disabled | ServerConnectionState::Stopped => {
                         ("QSONaut Server OFFLINE", Color32::GRAY)
@@ -2703,7 +2736,7 @@ impl QsonautGuiApp {
             .on_hover_text(self.acceleration_report.hardware_detail());
             if let Some(error) = &snapshot.last_error {
                 ui.separator();
-                ui.label(RichText::new("⚠ NEEDS ATTENTION").color(Color32::YELLOW))
+                ui.label(RichText::new("⚠ NEEDS ATTENTION").color(theme_warning(ui)))
                     .on_hover_text(error);
             }
             ui.separator();
@@ -2718,7 +2751,7 @@ impl QsonautGuiApp {
                 let (label, color) = if status.last_error.is_some() {
                     ("PSK Reporter ERROR".to_string(), Color32::from_rgb(255, 110, 100))
                 } else if !status.active {
-                    ("PSK Reporter STOPPED".to_string(), Color32::YELLOW)
+                    ("PSK Reporter STOPPED".to_string(), theme_warning(ui))
                 } else {
                     (
                         format!("PSK Reporter {} queued · {} sent", status.queued, status.sent),
@@ -2740,7 +2773,7 @@ impl QsonautGuiApp {
                         }),
                 );
             } else {
-                ui.label(RichText::new("PSK Reporter WAITING").color(Color32::YELLOW))
+                ui.label(RichText::new("PSK Reporter WAITING").color(theme_warning(ui)))
                     .on_hover_text("Set a real callsign and grid before reporting");
             }
         });
@@ -3089,7 +3122,7 @@ impl eframe::App for QsonautGuiApp {
                             .color(if snapshot.frequency_hz.is_some() {
                                 Color32::from_rgb(120, 225, 255)
                             } else {
-                                Color32::YELLOW
+                                theme_warning(ui)
                             }),
                     );
                     if let Some(hz) = snapshot.frequency_hz {
@@ -3266,7 +3299,7 @@ impl eframe::App for QsonautGuiApp {
                     let wf_color = if snapshot.radio_spectrum_enabled {
                         Color32::LIGHT_GREEN
                     } else if self.civ_spectrum_on {
-                        Color32::YELLOW
+                        theme_warning(ui)
                     } else {
                         Color32::GRAY
                     };

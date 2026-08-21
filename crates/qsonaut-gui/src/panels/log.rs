@@ -206,7 +206,7 @@ impl QsonautGuiApp {
                                 "HamDB operator"
                             })
                             .small()
-                            .color(Color32::LIGHT_BLUE),
+                            .color(theme_accent(ui)),
                         );
                         if !operator_name.is_empty() {
                             ui.label(RichText::new(operator_name).strong().color(Color32::WHITE));
@@ -214,13 +214,13 @@ impl QsonautGuiApp {
                         ui.label(
                             RichText::new(format!("{} · {}", hamdb.state, hamdb.country))
                                 .small()
-                                .color(Color32::LIGHT_BLUE),
+                                .color(theme_accent(ui)),
                         );
                     } else {
                         ui.label(
                             RichText::new("HamDB: not loaded")
                                 .small()
-                                .color(Color32::GRAY),
+                                .color(theme_muted(ui)),
                         );
                     }
                 });
@@ -244,7 +244,7 @@ impl QsonautGuiApp {
                                 ui.label(
                                     RichText::new(format!("{label}: {value}"))
                                         .small()
-                                        .color(Color32::GRAY),
+                                        .color(theme_muted(ui)),
                                 );
                             }
                         }
@@ -389,9 +389,9 @@ impl QsonautGuiApp {
                     }
                     ui.label(RichText::new(&self.qso_log_status).small().color(
                         if self.qso_log_dirty {
-                            Color32::YELLOW
+                            theme_warning(ui)
                         } else {
-                            Color32::GRAY
+                            theme_muted(ui)
                         },
                     ));
                 });
@@ -403,7 +403,7 @@ impl QsonautGuiApp {
             ui.label(
                 RichText::new(&self.qso_log_status)
                     .small()
-                    .color(Color32::GRAY),
+                    .color(theme_muted(ui)),
             );
         }
 

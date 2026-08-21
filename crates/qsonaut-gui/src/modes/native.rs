@@ -137,7 +137,7 @@ impl QsonautGuiApp {
                     .color(if mode.has_native_decoder() {
                         Color32::LIGHT_GREEN
                     } else {
-                        Color32::YELLOW
+                        theme_warning(ui)
                     }),
             );
             ui.separator();
@@ -353,7 +353,7 @@ impl QsonautGuiApp {
                 .color(if can_transmit {
                     Color32::GRAY
                 } else {
-                    Color32::YELLOW
+                    theme_warning(ui)
                 }),
             );
         } else {
@@ -362,7 +362,7 @@ impl QsonautGuiApp {
                 RichText::new(
                     "FLDIGI is currently a radio preset and waterfall view. No XML-RPC modem connection is active yet.",
                 )
-                .color(Color32::YELLOW),
+                .color(theme_warning(ui)),
             );
         }
     }

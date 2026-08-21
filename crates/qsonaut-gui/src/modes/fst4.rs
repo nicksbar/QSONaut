@@ -76,7 +76,7 @@ impl QsonautGuiApp {
                 "FST4 submodes use the matching mfsk-core decoder and waveform configuration.",
             )
             .small()
-            .color(Color32::GRAY),
+            .color(theme_muted(ui)),
         );
     }
 }

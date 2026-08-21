@@ -355,7 +355,7 @@ impl QsonautGuiApp {
                     "DECODE: FAST"
                 };
                 let deep_color = if self.ft8_deep_decode {
-                    Color32::YELLOW
+                    theme_warning(ui)
                 } else {
                     Color32::LIGHT_GREEN
                 };
@@ -459,7 +459,7 @@ impl QsonautGuiApp {
             );
             if let Some(level) = snapshot.audio_level_dbfs {
                 let color = if snapshot.audio_clip_percent > 0.1 || level < -45.0 {
-                    Color32::YELLOW
+                    theme_warning(ui)
                 } else {
                     Color32::LIGHT_GREEN
                 };
@@ -474,7 +474,7 @@ impl QsonautGuiApp {
             }
             if let Some(offset) = snapshot.ft8_clock_offset_s {
                 let color = if offset.abs() > 1.0 {
-                    Color32::YELLOW
+                    theme_warning(ui)
                 } else {
                     Color32::LIGHT_GREEN
                 };

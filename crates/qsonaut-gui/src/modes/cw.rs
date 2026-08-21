@@ -25,7 +25,7 @@ impl QsonautGuiApp {
             ui.label(
                 RichText::new("Backend: cw-dit")
                     .strong()
-                    .color(Color32::LIGHT_GREEN),
+                    .color(theme_success(ui)),
             );
             ui.separator();
             ui.label("Timing: Continuous");
@@ -44,7 +44,7 @@ impl QsonautGuiApp {
             ui.label(
                 RichText::new(&snapshot.digital_decode_status)
                     .monospace()
-                    .color(Color32::LIGHT_GREEN),
+                    .color(theme_success(ui)),
             );
             if let Some(level) = snapshot.audio_level_dbfs {
                 ui.separator();
@@ -69,7 +69,7 @@ impl QsonautGuiApp {
             ui.label(
                 RichText::new(&snapshot.cw_recording_status)
                     .small()
-                    .color(Color32::GRAY),
+                    .color(theme_muted(ui)),
             );
         });
         ui.separator();
@@ -82,7 +82,7 @@ impl QsonautGuiApp {
                     RichText::new("LIVE DECODE")
                         .small()
                         .strong()
-                        .color(Color32::LIGHT_GREEN),
+                        .color(theme_success(ui)),
                 );
                 ui.label(
                     RichText::new(if snapshot.cw_live_text.is_empty() {
@@ -132,7 +132,7 @@ impl QsonautGuiApp {
                 if shown == 0 {
                     ui.label(
                         RichText::new("Listening for the first stable CW characters…")
-                            .color(Color32::GRAY),
+                            .color(theme_muted(ui)),
                     );
                 }
             });
@@ -186,27 +186,27 @@ impl QsonautGuiApp {
                 self.stop_native_digital_tx();
             }
         });
-        ui.label(RichText::new(&self.digital_tx_status).color(Color32::GRAY));
+        ui.label(RichText::new(&self.digital_tx_status).color(theme_muted(ui)));
         ui.label(
             RichText::new(
                 "Software CW uses USB-D and cw-dit. The selected tone feeds an adaptive Goertzel, noise-floor slicer, debouncer, and streaming Morse decoder. A-Z, 0-9, and spaces are supported; prosigns, punctuation, paddle/keyed-carrier CW, and automatic QSO sequencing are not yet available.",
             )
             .small()
-            .color(Color32::YELLOW),
+            .color(theme_warning(ui)),
         );
         ui.label(
             RichText::new(
                 "RX automatically searches ±120 Hz around the selected tone. The decoder estimates the local noise floor from the quietest 15% of the window; there is no fixed squelch to tune.",
             )
             .small()
-            .color(Color32::GRAY),
+            .color(theme_muted(ui)),
         );
         ui.label(
             RichText::new(
                 "CW is channel-based, not a whole-waterfall decoder: QSONaut feeds the selected audio tone continuously into cw-dit. Align the green CW CENTER marker with the audible carrier; the waterfall is for choosing the channel, not decoding every signal at once.",
             )
             .small()
-            .color(Color32::LIGHT_BLUE),
+            .color(theme_accent(ui)),
         );
 
         let cw_tx: Vec<_> = self

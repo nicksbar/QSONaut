@@ -22,7 +22,7 @@ impl QsonautGuiApp {
                 "Q65-A30 is the configured mfsk-core submode. QSONaut currently exposes the backend's 30-second decode and standard waveform TX with manual one-shot operation.",
             )
             .small()
-            .color(Color32::GRAY),
+            .color(theme_muted(ui)),
         );
     }
 }

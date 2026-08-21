@@ -37,7 +37,7 @@ impl QsonautGuiApp {
             RichText::new(
                 "WSPR uses 2-minute UTC slots. This first operating workflow transmits one Type-1 beacon at a time; it does not create QSO records or run FT8/FT4 sequencing.",
             )
-            .color(Color32::LIGHT_BLUE),
+            .color(theme_accent(ui)),
         );
         ui.horizontal_wrapped(|ui| {
             ui.label(format!(
@@ -53,7 +53,7 @@ impl QsonautGuiApp {
         ui.label(
             RichText::new("The backend currently supports WSPR Type-1: callsign, four-character locator, and one of the standard WSPR dBm power values.")
                 .small()
-                .color(Color32::GRAY),
+                .color(theme_muted(ui)),
         );
         ui.horizontal_wrapped(|ui| {
             if ui.button("FILL FROM STATION").clicked() {
@@ -108,7 +108,7 @@ impl QsonautGuiApp {
                 if shown == 0 {
                     ui.label(
                         RichText::new("Waiting for a complete 120-second WSPR slot…")
-                            .color(Color32::GRAY),
+                            .color(theme_muted(ui)),
                     );
                 }
             });
@@ -147,7 +147,7 @@ impl QsonautGuiApp {
                 self.stop_native_digital_tx();
             }
         });
-        ui.label(RichText::new(&self.digital_tx_status).color(Color32::GRAY));
+        ui.label(RichText::new(&self.digital_tx_status).color(theme_muted(ui)));
         if let Some((callsign, grid, power)) = parse_beacon(&self.digital_compose) {
             let valid = callsign.len() <= 6 && grid.len() == 4 && WSPR_POWER_DBM.contains(&power);
             ui.label(
@@ -157,21 +157,21 @@ impl QsonautGuiApp {
                     "Invalid WSPR Type-1 beacon fields".to_string()
                 })
                 .color(if valid {
-                    Color32::LIGHT_GREEN
+                    theme_success(ui)
                 } else {
-                    Color32::YELLOW
+                    theme_warning(ui)
                 }),
             );
         } else {
             ui.label(
                 RichText::new("Enter CALL GRID POWER_DBM to enable transmit")
-                    .color(Color32::YELLOW),
+                    .color(theme_warning(ui)),
             );
         }
         ui.label(
             RichText::new("Format: CALL GRID POWER_DBM, for example K1ABC FN42 37. TX is one-shot and starts on the next valid 2-minute slot.")
                 .small()
-                .color(Color32::YELLOW),
+                .color(theme_warning(ui)),
         );
     }
 }

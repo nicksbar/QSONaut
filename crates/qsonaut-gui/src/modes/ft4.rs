@@ -304,7 +304,7 @@ impl QsonautGuiApp {
                 };
                 if ui
                     .button(RichText::new(deep_label).color(if self.ft4_deep_decode {
-                        Color32::YELLOW
+                        theme_warning(ui)
                     } else {
                         Color32::LIGHT_GREEN
                     }))
@@ -398,7 +398,7 @@ impl QsonautGuiApp {
                     RichText::new(format!("Adaptive clock dT {offset:+.2}s"))
                         .small()
                         .color(if offset.abs() > 0.5 {
-                            Color32::YELLOW
+                            theme_warning(ui)
                         } else {
                             Color32::LIGHT_GREEN
                         }),

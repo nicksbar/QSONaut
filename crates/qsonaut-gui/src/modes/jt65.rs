@@ -22,7 +22,7 @@ impl QsonautGuiApp {
                 "JT65A is the mfsk-core submode currently available here. The workspace uses the backend's standard 60-second decoder and synthesizer with manual one-shot TX.",
             )
             .small()
-            .color(Color32::GRAY),
+            .color(theme_muted(ui)),
         );
     }
 }

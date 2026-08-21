@@ -22,7 +22,7 @@ impl QsonautGuiApp {
                 "JT9 uses mfsk-core's 60-second decoder and standard message synthesizer. QSONaut currently provides manual one-shot slot TX; no JT9 sequencing is implied.",
             )
             .small()
-            .color(Color32::GRAY),
+            .color(theme_muted(ui)),
         );
     }
 }

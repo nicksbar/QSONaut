@@ -182,7 +182,7 @@ impl QsonautGuiApp {
             RichText::new(&self.profile_io_status)
                 .small()
                 .color(if self.profile_dirty {
-                    Color32::YELLOW
+                    theme_warning(ui)
                 } else {
                     Color32::GRAY
                 }),
@@ -428,7 +428,7 @@ impl QsonautGuiApp {
                 ui.label(
                     RichText::new("Set a real callsign and grid before reporting")
                         .small()
-                        .color(Color32::YELLOW),
+                        .color(theme_warning(ui)),
                 );
             }
         } else {
@@ -799,7 +799,7 @@ impl QsonautGuiApp {
                 .color(if snapshot.radio_spectrum_enabled {
                     Color32::LIGHT_GREEN
                 } else if self.civ_spectrum_on {
-                    Color32::YELLOW
+                    theme_warning(ui)
                 } else {
                     Color32::GRAY
                 }),
@@ -1003,7 +1003,7 @@ impl QsonautGuiApp {
             } else if self.profile_io_status.contains("rejected")
                 || self.profile_io_status.contains("could not")
             {
-                Color32::YELLOW
+                theme_warning(ui)
             } else {
                 Color32::LIGHT_BLUE
             };
@@ -1023,8 +1023,8 @@ impl QsonautGuiApp {
                     let status = client.status();
                     let (label, color) = match status.state {
                         ServerConnectionState::Connected => ("CONNECTED", Color32::LIGHT_GREEN),
-                        ServerConnectionState::Connecting => ("CONNECTING", Color32::YELLOW),
-                        ServerConnectionState::Reconnecting => ("RECONNECTING", Color32::YELLOW),
+                        ServerConnectionState::Connecting => ("CONNECTING", theme_warning(ui)),
+                        ServerConnectionState::Reconnecting => ("RECONNECTING", theme_warning(ui)),
                         ServerConnectionState::Disabled | ServerConnectionState::Stopped => {
                             ("OFFLINE", Color32::GRAY)
                         }
@@ -1042,7 +1042,7 @@ impl QsonautGuiApp {
                         .color(Color32::GRAY),
                     );
                     if let Some(error) = status.last_error {
-                        ui.label(RichText::new(error).small().color(Color32::YELLOW));
+                        ui.label(RichText::new(error).small().color(theme_warning(ui)));
                     }
                 } else {
                     ui.label(RichText::new("DISABLED").monospace().color(Color32::GRAY));

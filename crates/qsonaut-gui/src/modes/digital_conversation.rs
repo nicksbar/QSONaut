@@ -20,7 +20,7 @@ pub(super) fn draw_digital_conversation(
             ui.set_min_height(height);
             ui.set_max_height(height);
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(title).strong().color(Color32::LIGHT_BLUE));
+                ui.label(RichText::new(title).strong().color(theme_accent(ui)));
                 if let Some(stage) = stage {
                     ui.label(
                         RichText::new(stage)
@@ -49,7 +49,7 @@ pub(super) fn draw_digital_conversation(
                 .show(ui, |ui| {
                     if lines.is_empty() {
                         ui.centered_and_justified(|ui| {
-                            ui.label(RichText::new(empty_text).color(Color32::GRAY));
+                            ui.label(RichText::new(empty_text).color(theme_muted(ui)));
                         });
                     }
                     for line in lines {
@@ -77,7 +77,7 @@ pub(super) fn draw_digital_conversation(
                                 ui.label(
                                     RichText::new(format!("{} · {}", line.utc, line.detail))
                                         .small()
-                                        .color(Color32::GRAY),
+                                        .color(theme_muted(ui)),
                                 );
                             });
                         });

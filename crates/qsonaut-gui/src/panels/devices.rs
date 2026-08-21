@@ -14,7 +14,7 @@ impl QsonautGuiApp {
                     std::env::consts::ARCH
                 ))
                 .small()
-                .color(Color32::GRAY),
+                .color(theme_muted(ui)),
             );
         });
         ui.separator();
@@ -152,7 +152,7 @@ impl QsonautGuiApp {
         ui.label(
             RichText::new("The monitor plays captured audio from the selected monitor output. Use the test tone to verify that output device, stream, and system volume are working independently of the radio input.")
                 .small()
-                .color(Color32::GRAY),
+                .color(theme_muted(ui)),
         );
         ui.horizontal(|ui| {
             ui.label("Monitor volume");
@@ -177,7 +177,7 @@ impl QsonautGuiApp {
         ui.label(
             RichText::new("Test tone: 700 Hz for 350 ms · increase the control only as needed; system output volume still applies.")
                 .small()
-                .color(Color32::GRAY),
+                .color(theme_muted(ui)),
         );
 
         ui.add_space(6.0);
@@ -199,9 +199,9 @@ impl QsonautGuiApp {
                 ))
                 .small()
                 .color(if profile.support == SupportLevel::HardwareValidated {
-                    Color32::LIGHT_GREEN
+                    theme_success(ui)
                 } else {
-                    Color32::YELLOW
+                    theme_warning(ui)
                 }),
             );
         }
@@ -209,7 +209,7 @@ impl QsonautGuiApp {
             ui.label(
                 RichText::new("Detected radios: none recognized yet (serial bridge only or unsupported model)")
                     .small()
-                    .color(Color32::YELLOW),
+                    .color(theme_warning(ui)),
             );
         } else {
             ui.label(
@@ -218,7 +218,7 @@ impl QsonautGuiApp {
                     self.radio_detected_models.join(", ")
                 ))
                 .small()
-                .color(Color32::LIGHT_GREEN),
+                .color(theme_success(ui)),
             );
         }
 
@@ -258,13 +258,13 @@ impl QsonautGuiApp {
                     "Output changes apply to the next transmission. Restart QSONaut to reconnect input or radio devices.",
                 )
                 .small()
-                .color(Color32::YELLOW),
+                .color(theme_warning(ui)),
             );
         } else if input_devices.is_empty() && output_devices.is_empty() {
             ui.label(
                 RichText::new("No audio devices were reported by the operating system.")
                     .small()
-                    .color(Color32::YELLOW),
+                    .color(theme_warning(ui)),
             );
         }
     }
