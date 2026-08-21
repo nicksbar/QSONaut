@@ -14,19 +14,14 @@ pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
     ("6m", 50_313_000),
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum Submode {
     S15,
     S30,
+    #[default]
     S60,
     S120,
     S300,
-}
-
-impl Default for Submode {
-    fn default() -> Self {
-        Self::S60
-    }
 }
 
 impl Submode {

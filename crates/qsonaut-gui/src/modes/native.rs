@@ -79,7 +79,7 @@ impl QsonautGuiApp {
                             .get(&mode)
                             .map(|session| qso_stage_label(session.stage)),
                         "Select a decode to track that callsign here.",
-                        &self.station_callsign_or_default(),
+                        self.station_callsign_or_default(),
                         self.rx_tone_hz,
                         self.tx_tone_hz,
                         audio_cursor_level(&snapshot.audio_waterfall_rows, self.rx_tone_hz),

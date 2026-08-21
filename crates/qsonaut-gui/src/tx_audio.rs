@@ -129,7 +129,7 @@ pub(super) fn build_native_digital_tx_pcm(
             let callsign = tokens
                 .first()
                 .copied()
-                .ok_or_else(|| anyhow!("WSPR TX requires CALL GRID POWER_D​​BM"))?;
+                .ok_or_else(|| anyhow!("WSPR TX requires CALL GRID POWER_DBM"))?;
             let grid = tokens
                 .get(1)
                 .copied()

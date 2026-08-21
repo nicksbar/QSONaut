@@ -12,6 +12,8 @@ use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 
+type CwRecording = (WavWriter<BufWriter<File>>, BufWriter<File>, PathBuf, u64);
+
 #[allow(clippy::too_many_arguments)]
 pub(in super::super) fn spawn_audio_spectrum_worker(
     state: Arc<Mutex<GuiState>>,
@@ -107,8 +109,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut cw_stream_tone_hz = 0_u32;
         let mut last_cw_diagnostics = Instant::now();
         let mut last_cw_status = Instant::now() - Duration::from_secs(1);
-        let mut cw_recording: Option<(WavWriter<BufWriter<File>>, BufWriter<File>, PathBuf, u64)> =
-            None;
+        let mut cw_recording: Option<CwRecording> = None;
         let mut digital_slot_gate = DigitalSlotGate::default();
         let mut ft4_slot_gate = Ft8SlotGate::default();
         let mut decode_workspace_last: Option<WorkspaceMode> = None;
@@ -747,10 +748,7 @@ fn open_cw_recording(
     Ok((writer, metadata, wav_path))
 }
 
-fn finish_cw_recording(
-    recording: &mut Option<(WavWriter<BufWriter<File>>, BufWriter<File>, PathBuf, u64)>,
-    state: &Arc<Mutex<GuiState>>,
-) {
+fn finish_cw_recording(recording: &mut Option<CwRecording>, state: &Arc<Mutex<GuiState>>) {
     if let Some((writer, mut metadata, path, samples)) = recording.take() {
         let _ = writer.finalize();
         use std::io::Write;

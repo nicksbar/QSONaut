@@ -69,6 +69,7 @@ pub(in super::super) fn prepare_early_digital_slot(
     slot
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in super::super) fn run_native_digital_decode(
     mode: WorkspaceMode,
     fst4_submode: crate::modes::fst4::Submode,

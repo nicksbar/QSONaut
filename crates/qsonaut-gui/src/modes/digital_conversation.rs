@@ -1,5 +1,6 @@
 use super::super::*;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_digital_conversation(
     ui: &mut egui::Ui,
     height: f32,
