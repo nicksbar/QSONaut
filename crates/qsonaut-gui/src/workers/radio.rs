@@ -16,6 +16,15 @@ struct RadioScopeStreamConfig {
     reference_tenths_db: i16,
 }
 
+fn workspace_audio_controls_clear_noise() -> (ControlId, ControlValue, ControlId, ControlValue) {
+    (
+        ControlId::NoiseReduction,
+        ControlValue::Bool(false),
+        ControlId::NoiseBlanker,
+        ControlValue::Bool(false),
+    )
+}
+
 pub(crate) fn spawn_radio_worker(
     radio: ConfiguredRadio,
     state: Arc<Mutex<GuiState>>,
@@ -352,13 +361,19 @@ pub(crate) fn spawn_radio_worker(
                         let preset = workspace_radio_preset(workspace_mode);
                         let filter = preset.filter.clamp(1, 3);
                         let frequency_result = rt.block_on(radio.set_frequency_hz(frequency_hz));
+                        let (nr_id, nr_value, nb_id, nb_value) =
+                            workspace_audio_controls_clear_noise();
+                        let noise_result = rt
+                            .block_on(radio.set_control(nr_id, nr_value))
+                            .and_then(|_| rt.block_on(radio.set_control(nb_id, nb_value)));
                         if let Some(icom) = radio.as_icom() {
                             let mode_result = rt.block_on(icom.set_operating_mode_details(
                                 preset.base_mode,
                                 preset.data_mode,
                                 filter,
                             ));
-                            if let Err(error) = frequency_result.and(mode_result) {
+                            if let Err(error) = frequency_result.and(mode_result).and(noise_result)
+                            {
                                 state.lock().expect("ui state lock poisoned").last_error =
                                     Some(error.to_string());
                             }
@@ -624,5 +639,19 @@ fn read_u8_control<R: RadioHal + ?Sized>(
     match rt.block_on(radio.get_control(id)).ok().flatten() {
         Some(ControlValue::U8(v)) => Some(v),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+
+    #[test]
+    fn software_workspace_clears_noise_processing() {
+        let (nr_id, nr_value, nb_id, nb_value) = workspace_audio_controls_clear_noise();
+        assert_eq!(nr_id, ControlId::NoiseReduction);
+        assert_eq!(nr_value, ControlValue::Bool(false));
+        assert_eq!(nb_id, ControlId::NoiseBlanker);
+        assert_eq!(nb_value, ControlValue::Bool(false));
     }
 }

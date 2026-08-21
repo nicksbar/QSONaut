@@ -37,7 +37,7 @@ This is an honest snapshot, not a compatibility promise:
 | FT4 | Native RX/TX workflow using the same safety model; younger and less exercised than FT8 |
 | FST4-60, JT9, JT65, Q65-30A | Native receive and scheduled transmit paths exist; experimental |
 | WSPR, MSK144 | Receive-only integration |
-| CW | Software audio CW via USB-D: native continuous-window decode and generated subband TX through [DitDah](https://github.com/yuvadm/ditdah); A-Z/0-9/spaces only, with no paddle/keyed-carrier mode, prosigns, punctuation, or auto-sequencing yet |
+| CW | Software audio CW via USB-D: selected-channel streaming decode through [cw-dit](https://github.com/nicksbar/cw-dit), adaptive timing, noise-floor slicing, and generated subband TX; A-Z/0-9/spaces only, with no paddle/keyed-carrier mode, prosigns, punctuation, or auto-sequencing yet |
 | FLDIGI | UI/integration surface only; no XML-RPC modem connection is active yet |
 | Radio control | Selectable Rigwright profiles cover popular Icom, Yaesu (including FTdx101 and FT-857D), and Kenwood radios; IC-7300 is hardware-validated, while the other serial drivers remain experimental |
 | PSK Reporter | Optional, off by default, batched UDP reporting for decoded stations |
@@ -247,7 +247,7 @@ Git dependency with `../rigwright` without changing committed manifests. Run
 `cargo update -p rigwright` when you intentionally want the latest GitHub head.
 - `crates/qsonaut-audio` — real-time audio and high-quality 48→12 kHz decimation
 - `mfsk-core` — WSJT-family modem encoding and decoding
-- [`DitDah`](https://github.com/yuvadm/ditdah) — Morse/CW audio decoding and generation (MIT)
+- [`cw-dit`](https://github.com/nicksbar/cw-dit) — reusable Rust CW DSP and streaming Morse components (`cwdit-dsp`, `cwdit-morse`), MIT OR Apache-2.0
 - `crates/qsonaut-log`, `qsonaut-pskreporter` — local logging and opt-in reporting
 - `crates/qsonaut-server-client` — optional authenticated WSS synchronization
 - `crates/qsonaut-accelerate` — measured compute-backend selection

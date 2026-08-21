@@ -163,30 +163,11 @@ pub(super) fn build_native_digital_tx_pcm(
                     "CW TX does not support '{character}'; use A-Z, 0-9, and spaces only"
                 );
             }
-            let generator = ditdah::MorseGenerator::new(
-                FT8_TX_SAMPLE_RATE_HZ,
+            let pcm = synthesize_cw_pcm(
+                &text,
                 f32::from(cw_tone_hz.clamp(200, 3_000)),
                 f32::from(cw_wpm.clamp(5, 40)),
-            );
-            let temporary_directory = tempfile::tempdir().context("create CW audio workspace")?;
-            let wav_path = temporary_directory.path().join("cw.wav");
-            generator
-                .generate_wav_file(&text, &wav_path)
-                .context("generate CW audio")?;
-            let mut reader =
-                hound::WavReader::open(&wav_path).context("read generated CW audio")?;
-            let spec = reader.spec();
-            if spec.channels != 1
-                || spec.sample_rate != FT8_TX_SAMPLE_RATE_HZ
-                || spec.sample_format != hound::SampleFormat::Int
-                || spec.bits_per_sample != 16
-            {
-                anyhow::bail!("DitDah generated an unsupported CW WAV format");
-            }
-            let pcm: Vec<i16> = reader
-                .samples::<i16>()
-                .collect::<std::result::Result<_, _>>()
-                .context("read CW PCM samples")?;
+            )?;
             if pcm.is_empty() {
                 anyhow::bail!("CW TX did not produce audio");
             }
@@ -195,6 +176,81 @@ pub(super) fn build_native_digital_tx_pcm(
         }
         _ => anyhow::bail!("{} transmit synthesis is not available", mode.label()),
     }
+}
+
+fn synthesize_cw_pcm(text: &str, tone_hz: f32, wpm: f32) -> Result<Vec<i16>> {
+    let dot_samples = (FT8_TX_SAMPLE_RATE_HZ as f32 * 1.2 / wpm).round() as usize;
+    let mut pcm = Vec::new();
+    for (word_index, word) in text.split_whitespace().enumerate() {
+        for (char_index, character) in word.chars().enumerate() {
+            let pattern = morse_pattern(character)
+                .ok_or_else(|| anyhow!("unsupported CW character '{character}'"))?;
+            for (element_index, element) in pattern.chars().enumerate() {
+                let length = if element == '-' {
+                    dot_samples * 3
+                } else {
+                    dot_samples
+                };
+                for index in 0..length {
+                    let phase = 2.0 * std::f32::consts::PI * tone_hz * index as f32
+                        / FT8_TX_SAMPLE_RATE_HZ as f32;
+                    pcm.push((phase.sin() * FT8_TX_AMPLITUDE_I16 as f32).round() as i16);
+                }
+                if element_index + 1 < pattern.len() {
+                    pcm.extend(std::iter::repeat_n(0, dot_samples));
+                }
+            }
+            if char_index + 1 < word.len() {
+                pcm.extend(std::iter::repeat_n(0, dot_samples * 3));
+            }
+        }
+        if word_index + 1 < text.split_whitespace().count() {
+            pcm.extend(std::iter::repeat_n(0, dot_samples * 7));
+        }
+    }
+    Ok(pcm)
+}
+
+fn morse_pattern(character: char) -> Option<&'static str> {
+    Some(match character {
+        'A' => ".-",
+        'B' => "-...",
+        'C' => "-.-.",
+        'D' => "-..",
+        'E' => ".",
+        'F' => "..-.",
+        'G' => "--.",
+        'H' => "....",
+        'I' => "..",
+        'J' => ".---",
+        'K' => "-.-",
+        'L' => ".-..",
+        'M' => "--",
+        'N' => "-.",
+        'O' => "---",
+        'P' => ".--.",
+        'Q' => "--.-",
+        'R' => ".-.",
+        'S' => "...",
+        'T' => "-",
+        'U' => "..-",
+        'V' => "...-",
+        'W' => ".--",
+        'X' => "-..-",
+        'Y' => "-.--",
+        'Z' => "--..",
+        '0' => "-----",
+        '1' => ".----",
+        '2' => "..---",
+        '3' => "...--",
+        '4' => "....-",
+        '5' => ".....",
+        '6' => "-....",
+        '7' => "--...",
+        '8' => "---..",
+        '9' => "----.",
+        _ => return None,
+    })
 }
 
 fn play_ft8_tx_pcm(pcm: &[i16], abort: Arc<AtomicBool>, output_device: Option<&str>) -> Result<()> {

@@ -27,9 +27,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 - Restored the parent radio/filter bandwidth as the full CW waterfall display range. Only the
-  selected tone is constrained to DitDah's 200–1200 Hz decoder range, so the right side remains
+  selected tone is constrained to cw-dit's supported audio range, so the right side remains
   visible and clickable instead of being silently discarded.
-- Limited the CW audio waterfall to the DitDah-supported 0–1.2 kHz tone range so the full
+- Limited the CW audio waterfall to the cw-dit-supported audio tone range so the full
   visible view maps to valid decoder tones; CW selection is no longer compressed into the left
   portion of a wider USB-D filter view.
 - Corrected audio waterfall cursor semantics to use the selected QSONaut workspace mode:
@@ -148,7 +148,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Rolling live CW receive decoding from the same audio stream used by the waterfall, with
   one-second updates over an eight-second context and overlap-aware transcript updates.
 - Selected-tone CW signal gating that rejects broadband noise and steady carriers before
-  invoking DitDah.
+  invoking cw-dit.
 - Explicit QSONaut Server diagnostic delivery feedback for queued, accepted, rejected, and
   unavailable-client states.
 

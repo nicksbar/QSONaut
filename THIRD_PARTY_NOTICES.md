@@ -32,24 +32,20 @@ WSJT-X, the reference implementation by Joe Taylor K1JT and collaborators.
 Its upstream README and source tree contain the detailed algorithm-level
 attributions and notices.
 
-## DitDah
+## cw-dit
 
-- Project: [`yuvadm/ditdah`](https://github.com/yuvadm/ditdah)
-- Author and contributors: [`DitDah` contributor history](https://github.com/yuvadm/ditdah/graphs/contributors)
-- License: [`MIT`](https://github.com/yuvadm/ditdah/blob/main/LICENSE)
-- Integrated version: local checkout of `0.2.0` from the `main` branch
+- Project: [`nicksbar/cw-dit`](https://github.com/nicksbar/cw-dit)
+- Upstream project: [`swilcox/cw-dit`](https://github.com/swilcox/cw-dit)
+- Components used: `cwdit-dsp`, `cwdit-morse`
+- License: `MIT OR Apache-2.0`
 
-QSONaut directly links DitDah for Morse/CW audio decoding and waveform
-generation. DitDah provides automatic CW pitch and speed detection over
-bounded receive windows and generates keyed audio for QSONaut's CW transmit
-path. The current integration supports letters A-Z, digits 0-9, and spaces.
+QSONaut directly uses the reusable cw-dit DSP and Morse crates for selected-channel
+CW receive decoding. QSONaut's own PCM synthesizer is used for CW transmit audio.
+The current integration supports letters A-Z, digits 0-9, and spaces.
 
-DitDah is Copyright its respective author and contributors and is distributed
-under the MIT License. The full upstream source and license are available at:
+cw-dit is Copyright its respective author and contributors and is distributed
+under the MIT OR Apache-2.0 license. The full upstream source and license are available at:
 
-<https://github.com/yuvadm/ditdah>
+<https://github.com/nicksbar/cw-dit>
 
-DitDah's upstream license notes that its concepts and approaches were inspired
-by [`ggerganov/ggmorse`](https://github.com/ggerganov/ggmorse), also licensed
-under the MIT License. QSONaut preserves that notice in the packaged DitDah
-license.
+QSONaut uses only the reusable crates, not the cw-dit CLI, server, or web UI.

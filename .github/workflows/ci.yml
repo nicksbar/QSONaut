@@ -29,12 +29,12 @@ jobs:
           ref: bfcac2c93bf3add38f1214a809705e9838cac9c3
           path: mfsk-core
 
-      - name: Check out DitDah
+      - name: Check out cw-dit
         uses: actions/checkout@v6
         with:
-          repository: yuvadm/ditdah
+          repository: nicksbar/cw-dit
           ref: main
-          path: ditdah
+          path: cw-dit
 
       - name: Install Linux native libraries
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev

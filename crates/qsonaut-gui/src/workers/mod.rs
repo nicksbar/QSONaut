@@ -1,5 +1,5 @@
 mod audio;
-pub(super) mod cw;
+pub(super) mod cwdit_adapter;
 pub(super) mod decode;
 pub(super) mod radio;
 

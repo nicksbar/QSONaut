@@ -398,10 +398,11 @@ impl QsonautGuiApp {
             );
         }
         ui.label(format!(
-            "Audio: {}  |  0\u{2013}{} Hz · channel {} Hz · {} ({} {})  |  L-click RX / R-click TX",
+            "Audio: {}  |  0\u{2013}{} Hz · channel {} Hz · selected level {}/255 · {} ({} {})  |  L-click RX / R-click TX",
             snapshot.audio_spectrum_status,
             bw_hz.min(AUDIO_MAX_FREQ_HZ),
             channel_hz,
+            audio_cursor_level(&snapshot.audio_waterfall_rows, rx_cursor_hz),
             if is_cw {
                 "CW tone search ±120 Hz"
             } else {

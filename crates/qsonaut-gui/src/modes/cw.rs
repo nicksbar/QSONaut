@@ -23,7 +23,7 @@ impl QsonautGuiApp {
             ui.heading("CW · Software Audio");
             ui.separator();
             ui.label(
-                RichText::new("Backend: DitDah")
+                RichText::new("Backend: cw-dit")
                     .strong()
                     .color(Color32::LIGHT_GREEN),
             );
@@ -50,6 +50,27 @@ impl QsonautGuiApp {
                 ui.separator();
                 ui.label(format!("Input {level:.0} dBFS"));
             }
+        });
+        ui.horizontal_wrapped(|ui| {
+            let mut record_rx = self
+                .state
+                .lock()
+                .expect("ui state lock poisoned")
+                .cw_record_rx;
+            if ui.checkbox(&mut record_rx, "Record RX stream").changed() {
+                let mut state = self.state.lock().expect("ui state lock poisoned");
+                state.cw_record_rx = record_rx;
+                state.cw_recording_status = if record_rx {
+                    "Recording will start on next audio block".to_string()
+                } else {
+                    "Recording stopping".to_string()
+                };
+            }
+            ui.label(
+                RichText::new(&snapshot.cw_recording_status)
+                    .small()
+                    .color(Color32::GRAY),
+            );
         });
         ui.separator();
 
@@ -89,7 +110,6 @@ impl QsonautGuiApp {
                         .digital_decodes
                         .retain(|entry| entry.mode != WorkspaceMode::Cw);
                     state.cw_live_text.clear();
-                    state.cw_last_window_text.clear();
                 }
             });
         });
@@ -169,7 +189,7 @@ impl QsonautGuiApp {
         ui.label(RichText::new(&self.digital_tx_status).color(Color32::GRAY));
         ui.label(
             RichText::new(
-                "Software CW uses USB-D. The selected CW tone centers a narrow RX decoder gate and sets the TX audio pitch; broadband noise and steady carriers are rejected before DitDah. DitDah supports A-Z, 0-9, and spaces; prosigns, punctuation, paddle/keyed-carrier CW, and automatic QSO sequencing are not yet available.",
+                "Software CW uses USB-D and cw-dit. The selected tone feeds an adaptive Goertzel, noise-floor slicer, debouncer, and streaming Morse decoder. A-Z, 0-9, and spaces are supported; prosigns, punctuation, paddle/keyed-carrier CW, and automatic QSO sequencing are not yet available.",
             )
             .small()
             .color(Color32::YELLOW),
@@ -183,7 +203,7 @@ impl QsonautGuiApp {
         );
         ui.label(
             RichText::new(
-                "CW is channel-based, not a whole-waterfall decoder: QSONaut listens to the selected audio tone, collects a rolling 3–8 second window, and sends that window to DitDah. Align the green CW CENTER marker with the audible carrier; the waterfall is for choosing the channel, not decoding every signal at once.",
+                "CW is channel-based, not a whole-waterfall decoder: QSONaut feeds the selected audio tone continuously into cw-dit. Align the green CW CENTER marker with the audible carrier; the waterfall is for choosing the channel, not decoding every signal at once.",
             )
             .small()
             .color(Color32::LIGHT_BLUE),
