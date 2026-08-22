@@ -9,7 +9,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 - Added selectable native serial, Hamlib `rigctld`, and DX Lab Suite Commander
-  radio backends through Rigwright `v0.1.5`.
+  radio backends through Rigwright `v0.1.6`.
 - Added endpoint configuration and in-app radio reconnect support.
 - Added dedicated native-mode workspaces for FST4, JT9, JT65, and Q65, with
   per-mode layouts and shared digital conversation handling.
@@ -27,6 +27,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   bandwidth indicators and mode-specific cursor placement.
 
 ### Fixed
+- Updated the committed Rigwright dependency and lockfile to the published
+  `v0.1.6` release, including the new model catalog and profile-driven native
+  radio drivers.
+- Kept CI and release builds aligned with the tagged Rigwright `v0.1.6`
+  dependency instead of relying on the ignored local sibling checkout.
+- Fixed audio monitor and added a volume control
+- Removed TX audio monitor, unsupported idea
 - Persisted radio backend and endpoint selections in operator profiles.
 - Made native serial control the default and migrated legacy `none` settings.
 - Added detailed radio initialization diagnostics.
