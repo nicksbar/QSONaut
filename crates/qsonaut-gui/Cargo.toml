@@ -17,8 +17,8 @@ reqwest.workspace = true
 rusqlite.workspace = true
 toml.workspace = true
 mfsk-core = { git = "https://github.com/jl1nie/mfsk-core.git", rev = "5334e11176ac78fabda51ba2ec9d5bce359f3e83", default-features = false, features = ["full"] }
-cwdit-dsp = { path = "../../../cw-dit/cwdit-dsp" }
-cwdit-morse = { path = "../../../cw-dit/cwdit-morse" }
+cwdit-dsp = { git = "https://github.com/swilcox/cw-dit.git", rev = "153fc247ce6e4934c94e0cd2dcbf7887e368ec29" }
+cwdit-morse = { git = "https://github.com/swilcox/cw-dit.git", rev = "153fc247ce6e4934c94e0cd2dcbf7887e368ec29" }
 hound = "3.5"
 tempfile = "3"
 

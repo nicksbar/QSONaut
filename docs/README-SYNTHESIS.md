@@ -24,7 +24,7 @@ Both repositories use Rust and share versioning conventions but maintain separat
 | Crate | Purpose | Version | Notes |
 |-------|---------|---------|-------|
 | mfsk-core | DSP/decoding | 0.10.0 (unreleased) | Pinned upstream Git dependency |
-| cw-dit | Morse/CW DSP and streaming decoding (`cwdit-dsp`, `cwdit-morse`) | 0.1.0 | Path dependency from sibling fork; MIT OR Apache-2.0 |
+| cw-dit | Morse/CW DSP and streaming decoding (`cwdit-dsp`, `cwdit-morse`) | 0.1.0 | Pinned upstream Git dependency; MIT OR Apache-2.0 |
 | rigwright | CI-V radio HAL | 0.1.2 | Git dependency (https://github.com/nicksbar/rigwright) |
 | eframe 0.33 | GUI framework | 0.33 | With wgpu, wayland, vulkan |
 | tokio 1 | Async runtime | 1 | Multi-threaded |

@@ -55,3 +55,6 @@ is now represented as 100%.
 local checkout is required. The release archive includes QSONaut's
 `THIRD_PARTY_NOTICES.md`, which identifies the upstream GPL-3.0-or-later
 license and source location.
+
+`cw-dit` is likewise resolved from its pinned upstream Git dependency; no
+local checkout is required for CW builds.

@@ -16,6 +16,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   highlighting, and copy support.
 - Added an opt-in redacted application-log tail to manual server diagnostics;
   logs are never uploaded continuously.
+- Resolved the cw-dit DSP and Morse crates from a pinned upstream Git revision
+  so builds no longer depend on a local sibling checkout.
 
 ### Changed
 - Refocused the README on current station, digital-mode, CW, radio-control,

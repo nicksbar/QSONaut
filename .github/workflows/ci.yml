@@ -15,19 +15,11 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      # cw-dit remains a sibling checkout; mfsk-core is resolved from Cargo's
-      # upstream Git dependency.
+      # cw-dit and mfsk-core are resolved from pinned upstream Git dependencies.
       - name: Check out QSONaut
         uses: actions/checkout@v6
         with:
           path: QSONaut
-
-      - name: Check out cw-dit
-        uses: actions/checkout@v6
-        with:
-          repository: nicksbar/cw-dit
-          ref: main
-          path: cw-dit
 
       # Rigwright is resolved from the v0.1.7 Git tag declared by the Cargo
       # manifests; no sibling checkout or local path override is used in CI.
