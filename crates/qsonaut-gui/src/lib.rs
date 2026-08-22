@@ -2,6 +2,7 @@ mod automation_hunter;
 mod band_plan;
 mod contest;
 mod decode_model;
+mod local_ai;
 mod modes;
 mod panels;
 mod profile;
@@ -78,6 +79,7 @@ use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
     DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, OperatorCallHit, PendingFt8Decode, PotaSpot,
 };
+use local_ai::{LocalImageEvent, LocalImageProvider, LocalImageSettings};
 use modes::exchange::{
     callsign_eq, is_probable_callsign, next_reply_period, next_tx_period, parse_message,
     select_candidate, should_finalize_after_tx, should_repeat_cq, should_retry_after_decode,
@@ -311,6 +313,7 @@ fn parse_workspace_mode_token(mode: &str) -> Option<WorkspaceMode> {
         "Q65" => Some(WorkspaceMode::Q65),
         "MSK144" => Some(WorkspaceMode::Msk144),
         "CW" => Some(WorkspaceMode::Cw),
+        "SSTV" => Some(WorkspaceMode::Sstv),
         "FLDIGI" => Some(WorkspaceMode::Fldigi),
         _ => None,
     }
@@ -325,6 +328,7 @@ fn workspace_mode_supports_native_tx(mode: WorkspaceMode) -> bool {
             | WorkspaceMode::Jt65
             | WorkspaceMode::Q65
             | WorkspaceMode::Cw
+            | WorkspaceMode::Sstv
     )
 }
 
@@ -810,6 +814,10 @@ struct GuiState {
     cw_record_rx: bool,
     cw_recording_status: String,
     cw_wpm: u8,
+    sstv_status: String,
+    sstv_progress: Option<f32>,
+    sstv_rgb: Vec<u8>,
+    sstv_revision: u64,
     ft4_last_decode_period: Option<u64>,
     digital_tx_period: Option<(WorkspaceMode, u64)>,
     selected_audio_hz: u32,
@@ -863,6 +871,10 @@ impl Default for GuiState {
             cw_record_rx: false,
             cw_recording_status: "Recording off".to_string(),
             cw_wpm: default_cw_wpm(),
+            sstv_status: "READY: listening for a Martin M1 VIS header".to_string(),
+            sstv_progress: None,
+            sstv_rgb: Vec::new(),
+            sstv_revision: 0,
             ft4_last_decode_period: None,
             digital_tx_period: None,
             selected_audio_hz: default_rx_tone_hz(),
@@ -1309,6 +1321,16 @@ struct QsonautGuiApp {
     audio_waterfall_texture_revision: u64,
     audio_waterfall_texture_bins: usize,
     audio_waterfall_texture_theme: WaterfallTheme,
+    sstv_texture: Option<TextureHandle>,
+    sstv_texture_revision: u64,
+    sstv_tx_armed: bool,
+    sstv_image_path: String,
+    sstv_ai_prompt: String,
+    local_image_settings: LocalImageSettings,
+    local_image_models: Vec<String>,
+    local_image_status: String,
+    local_image_event_tx: mpsc::Sender<LocalImageEvent>,
+    local_image_event_rx: mpsc::Receiver<LocalImageEvent>,
     workspace_mode: WorkspaceMode,
     fst4_submode: modes::fst4::Submode,
     display_tuning: Arc<Mutex<DisplayTuning>>,
@@ -1827,6 +1849,7 @@ impl QsonautGuiApp {
 
         let (ft8_tx_event_tx, ft8_tx_event_rx) = mpsc::channel();
         let (digital_tx_event_tx, digital_tx_event_rx) = mpsc::channel();
+        let (local_image_event_tx, local_image_event_rx) = mpsc::channel();
         let (qso_log, qso_log_status) = match QsoLog::load(&qso_log_path()) {
             Ok(log) => {
                 let count = log.contacts.len();
@@ -1907,6 +1930,16 @@ impl QsonautGuiApp {
             audio_waterfall_texture_revision: 0,
             audio_waterfall_texture_bins: 0,
             audio_waterfall_texture_theme: WaterfallTheme::RadioBlue,
+            sstv_texture: None,
+            sstv_texture_revision: 0,
+            sstv_tx_armed: false,
+            sstv_image_path: String::new(),
+            sstv_ai_prompt: String::new(),
+            local_image_settings: LocalImageSettings::load(),
+            local_image_models: Vec::new(),
+            local_image_status: "Local image server not checked".to_string(),
+            local_image_event_tx,
+            local_image_event_rx,
             workspace_mode: WorkspaceMode::Ft8,
             fst4_submode: modes::fst4::Submode::default(),
             display_tuning,
@@ -2445,6 +2478,7 @@ impl QsonautGuiApp {
             || self.ft8_tx_active.load(Ordering::Acquire)
             || self.ft8_tx_queued_period.is_some()
             || self.digital_tx_active.load(Ordering::Acquire)
+            || self.sstv_tx_armed
     }
 
     fn read_radio_profile(&self, name: &str, snapshot: &GuiState) -> RadioProfile {
@@ -2527,6 +2561,7 @@ impl QsonautGuiApp {
         self.stop_native_digital_tx();
         self.ft8_autoseq = false;
         self.ft4_autoseq = false;
+        self.sstv_tx_armed = false;
         self.ft8_stop_policy = AutoTxStopPolicy::Continuous;
         self.ft4_stop_policy = AutoTxStopPolicy::Continuous;
         self.ft4_session = None;
@@ -2759,14 +2794,14 @@ impl QsonautGuiApp {
                 Color32::from_rgb(73, 35, 24),
                 Color32::from_rgb(255, 137, 61),
                 "🔥 TRANSMIT ARMED",
-                "FT8/FT4 automation, queued audio, or PTT can transmit",
+                "Digital automation, SSTV, queued audio, or PTT can transmit",
             )
         } else {
             (
                 Color32::from_rgb(22, 48, 59),
                 Color32::from_rgb(77, 184, 211),
                 "🔒 ALL TX DISARMED",
-                "Safe state · arm from the FT8 or FT4 workspace",
+                "Safe state · arm explicitly from a transmit workspace",
             )
         };
 
@@ -2813,6 +2848,7 @@ impl QsonautGuiApp {
             WorkspaceMode::Jt65 => self.draw_jt65_workspace(ui, snapshot),
             WorkspaceMode::Q65 => self.draw_q65_workspace(ui, snapshot),
             WorkspaceMode::Cw => self.draw_cw_workspace(ui, snapshot),
+            WorkspaceMode::Sstv => self.draw_sstv_workspace(ui, ctx, snapshot),
             WorkspaceMode::Msk144 | WorkspaceMode::Fldigi => {
                 self.draw_mfsk_mode_workspace(ui, snapshot, self.workspace_mode)
             }
@@ -4584,6 +4620,10 @@ mod tests {
         assert_eq!(parse_workspace_mode_token("FT8"), Some(WorkspaceMode::Ft8));
         assert_eq!(parse_workspace_mode_token("ft4"), Some(WorkspaceMode::Ft4));
         assert_eq!(
+            parse_workspace_mode_token("sstv"),
+            Some(WorkspaceMode::Sstv)
+        );
+        assert_eq!(
             parse_workspace_mode_token("JT65"),
             Some(WorkspaceMode::Jt65)
         );
@@ -4595,6 +4635,7 @@ mod tests {
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Ft4));
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Jt9));
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Cw));
+        assert!(workspace_mode_supports_native_tx(WorkspaceMode::Sstv));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Ft8));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Wspr));
     }
@@ -4612,6 +4653,10 @@ mod tests {
         assert_eq!(
             workspace_frequency_for_current_band(WorkspaceMode::Ft8, None),
             None
+        );
+        assert_eq!(
+            workspace_frequency_for_current_band(WorkspaceMode::Sstv, Some(14_074_000)),
+            Some(14_230_000)
         );
     }
 }

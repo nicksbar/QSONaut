@@ -457,7 +457,9 @@ pub(super) fn run_digital_tx_job(job: DigitalTxJob) {
             .map(|duration| duration.as_secs_f64())
             .unwrap_or(audio_start_s);
         let audio_late_s = now_s - audio_start_s;
-        if job.mode != WorkspaceMode::Cw && audio_late_s > DIGITAL_MAX_AUDIO_LATE_S {
+        if !matches!(job.mode, WorkspaceMode::Cw | WorkspaceMode::Sstv)
+            && audio_late_s > DIGITAL_MAX_AUDIO_LATE_S
+        {
             anyhow::bail!(
                 "{} audio arrived too late for a valid slot ({:.0} ms)",
                 job.mode.label(),

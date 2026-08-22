@@ -1,6 +1,6 @@
 use qsonaut_radio::BaseMode;
 
-use crate::modes::{cw, fst4, ft4, ft8, jt65, jt9, native, q65, wspr};
+use crate::modes::{cw, fst4, ft4, ft8, jt65, jt9, native, q65, sstv, wspr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum WorkspaceMode {
@@ -13,6 +13,7 @@ pub(super) enum WorkspaceMode {
     Q65,
     Msk144,
     Cw,
+    Sstv,
     Fldigi,
 }
 
@@ -28,6 +29,7 @@ impl WorkspaceMode {
             Self::Q65 => "Q65",
             Self::Msk144 => "MSK144",
             Self::Cw => "CW",
+            Self::Sstv => "SSTV",
             Self::Fldigi => "FLDIGI",
         }
     }
@@ -41,7 +43,7 @@ impl WorkspaceMode {
             Self::Jt9 | Self::Jt65 => Some(60.0),
             Self::Q65 => Some(30.0),
             Self::Msk144 => Some(15.0),
-            Self::Cw | Self::Fldigi => None,
+            Self::Cw | Self::Sstv | Self::Fldigi => None,
         }
     }
 
@@ -54,7 +56,7 @@ impl WorkspaceMode {
     }
 
     pub(super) fn has_native_decoder(self) -> bool {
-        !matches!(self, Self::Cw | Self::Fldigi)
+        !matches!(self, Self::Cw | Self::Sstv | Self::Fldigi)
     }
 
     pub(super) fn is_uhf(self) -> bool {
@@ -62,7 +64,7 @@ impl WorkspaceMode {
     }
 }
 
-pub(super) const WORKSPACE_MODES: [WorkspaceMode; 10] = [
+pub(super) const WORKSPACE_MODES: [WorkspaceMode; 11] = [
     WorkspaceMode::Ft8,
     WorkspaceMode::Ft4,
     WorkspaceMode::Fst4,
@@ -72,10 +74,11 @@ pub(super) const WORKSPACE_MODES: [WorkspaceMode; 10] = [
     WorkspaceMode::Q65,
     WorkspaceMode::Msk144,
     WorkspaceMode::Cw,
+    WorkspaceMode::Sstv,
     WorkspaceMode::Fldigi,
 ];
 
-pub(super) const HF_WORKSPACE_MODES: [WorkspaceMode; 8] = [
+pub(super) const HF_WORKSPACE_MODES: [WorkspaceMode; 9] = [
     WorkspaceMode::Ft8,
     WorkspaceMode::Ft4,
     WorkspaceMode::Fst4,
@@ -84,6 +87,7 @@ pub(super) const HF_WORKSPACE_MODES: [WorkspaceMode; 8] = [
     WorkspaceMode::Jt65,
     WorkspaceMode::Q65,
     WorkspaceMode::Cw,
+    WorkspaceMode::Sstv,
 ];
 
 pub(super) const OTHER_WORKSPACE_MODES: [WorkspaceMode; 2] =
@@ -119,6 +123,7 @@ pub(super) fn workspace_band_plan(mode: WorkspaceMode) -> &'static [(&'static st
         WorkspaceMode::Q65 => q65::BAND_PLAN,
         WorkspaceMode::Msk144 => native::MSK144_BAND_PLAN,
         WorkspaceMode::Cw => cw::BAND_PLAN,
+        WorkspaceMode::Sstv => sstv::BAND_PLAN,
         WorkspaceMode::Fldigi => native::FLDIGI_BAND_PLAN,
     }
 }
@@ -130,7 +135,14 @@ pub(super) struct WorkspaceRadioPreset {
     pub(super) filter: u8,
 }
 
-pub(super) fn workspace_radio_preset(_mode: WorkspaceMode) -> WorkspaceRadioPreset {
+pub(super) fn workspace_radio_preset(mode: WorkspaceMode) -> WorkspaceRadioPreset {
+    if mode == WorkspaceMode::Sstv {
+        return WorkspaceRadioPreset {
+            base_mode: BaseMode::Usb,
+            data_mode: false,
+            filter: 1,
+        };
+    }
     WorkspaceRadioPreset {
         // Software modes operate on generated/received audio tones. USB-D keeps
         // a wide receive passband and lets the mode place audio-tone cursors.
@@ -174,6 +186,18 @@ mod tests {
         let preset = workspace_radio_preset(WorkspaceMode::Cw);
         assert_eq!(preset.base_mode, BaseMode::Usb);
         assert!(preset.data_mode);
+        assert_eq!(preset.filter, 1);
+    }
+
+    #[test]
+    fn sstv_uses_arrl_calling_centers_and_voice_usb() {
+        let sstv = workspace_band_plan(WorkspaceMode::Sstv);
+        assert!(sstv.contains(&("80m", 3_845_000)));
+        assert!(sstv.contains(&("20m", 14_230_000)));
+        assert!(sstv.contains(&("10m", 28_680_000)));
+        let preset = workspace_radio_preset(WorkspaceMode::Sstv);
+        assert_eq!(preset.base_mode, BaseMode::Usb);
+        assert!(!preset.data_mode);
         assert_eq!(preset.filter, 1);
     }
 }

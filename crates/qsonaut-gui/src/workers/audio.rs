@@ -111,6 +111,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut last_cw_diagnostics = Instant::now();
         let mut last_cw_status = Instant::now() - Duration::from_secs(1);
         let mut cw_recording: Option<CwRecording> = None;
+        let mut sstv_receiver = qsonaut_sstv::MartinM1Receiver::default();
         let mut digital_slot_gate = DigitalSlotGate::default();
         let mut ft4_slot_gate = Ft8SlotGate::default();
         let mut decode_workspace_last: Option<WorkspaceMode> = None;
@@ -229,6 +230,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             ft8_slot_gate.reset();
                             ft4_slot_gate.reset();
                             digital_slot_gate.reset();
+                            sstv_receiver.reset();
                             *dec = Decimator::new(sample_rate_hz);
                             let mut s = state.lock().expect("ui state lock poisoned");
                             if active_workspace_mode == WorkspaceMode::Ft8 {
@@ -238,6 +240,10 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 s.digital_decode_status =
                                     "READY: live CW decode starts after 3 seconds".to_string();
                                 s.cw_live_text.clear();
+                            } else if active_workspace_mode == WorkspaceMode::Sstv {
+                                s.sstv_status =
+                                    "READY: listening for a Martin M1 VIS header".to_string();
+                                s.sstv_progress = None;
                             } else if active_workspace_mode.has_native_decoder() {
                                 s.digital_decode_status = format!(
                                     "READY: collecting a fresh {} slot",
@@ -350,6 +356,31 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     info!(
                                         "FT8 decode deferred: previous decode pass still running"
                                     );
+                                }
+                            }
+                        } else if active_workspace_mode == WorkspaceMode::Sstv {
+                            if tx_active.load(Ordering::Acquire)
+                                || digital_tx_active.load(Ordering::Acquire)
+                            {
+                                sstv_receiver.reset();
+                                let mut shared = state.lock().expect("ui state lock poisoned");
+                                shared.sstv_status = "SSTV TX active; RX reset".to_string();
+                                shared.sstv_progress = None;
+                            } else {
+                                let decoded = sstv_receiver.push(&ds);
+                                let progress = sstv_receiver.progress();
+                                let mut shared = state.lock().expect("ui state lock poisoned");
+                                shared.sstv_progress = progress;
+                                shared.sstv_status = progress.map_or_else(
+                                    || "LISTENING: waiting for Martin M1 VIS 44".to_string(),
+                                    |value| format!("RECEIVING MARTIN M1 · {:.0}%", value * 100.0),
+                                );
+                                if let Some(image) = decoded {
+                                    shared.sstv_rgb = image.rgb;
+                                    shared.sstv_revision = shared.sstv_revision.wrapping_add(1);
+                                    shared.sstv_progress = None;
+                                    shared.sstv_status =
+                                        "RECEIVED: Martin M1 image complete".to_string();
                                 }
                             }
                         } else if active_workspace_mode == WorkspaceMode::Cw {

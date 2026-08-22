@@ -5,7 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.6] - Unreleased
+## [0.3.7] - 2026-08-22
+
+### Added
+- Added native Martin M1 SSTV receive and transmit at 12 kHz, including VIS 44
+  detection, live receive progress, 320×256 image preview, standard HF calling
+  frequencies, and one-shot TX through the global disarm/PTT safety path.
+- Added strictly local image generation for SSTV activity artwork through
+  Ollama and Lemonade Server, with server/model selection, activity-aware
+  prompts, local image persistence, and hard loopback-only URL enforcement.
+- Added the reusable `qsonaut-sstv` modem crate with encode/decode and streaming
+  receiver tests.
+
+### Changed
+- Extended the prominent global TX safety control to cover armed, queued, and
+  active SSTV transmissions.
+- Documented local image-server setup, SSTV operating frequencies, format
+  boundaries, and the distinction between software validation and on-air
+  validation.
+
+## [0.3.6] - 2026-08-21
 
 ### Added
 - Added selectable native serial, Hamlib `rigctld`, and DX Lab Suite Commander

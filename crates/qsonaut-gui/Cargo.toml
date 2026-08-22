@@ -21,6 +21,8 @@ cwdit-dsp = { git = "https://github.com/swilcox/cw-dit.git", rev = "153fc247ce6e
 cwdit-morse = { git = "https://github.com/swilcox/cw-dit.git", rev = "153fc247ce6e4934c94e0cd2dcbf7887e368ec29" }
 hound = "3.5"
 tempfile = "3"
+base64.workspace = true
+image.workspace = true
 
 qsonaut-audio = { path = "../qsonaut-audio" }
 qsonaut-accelerate = { path = "../qsonaut-accelerate" }
@@ -30,3 +32,4 @@ qsonaut-log = { path = "../qsonaut-log" }
 qsonaut-radio = { package = "rigwright", git = "https://github.com/nicksbar/rigwright", tag = "v0.1.7" }
 qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }
 qsonaut-server-client = { path = "../qsonaut-server-client" }
+qsonaut-sstv = { path = "../qsonaut-sstv" }
