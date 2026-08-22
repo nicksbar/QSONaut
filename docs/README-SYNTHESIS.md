@@ -48,7 +48,7 @@ apps/qsonaut (main CLI entry)
 - ✅ Optional server integration via WebSocket
 - ✅ Multi-radio selection with model-aware profiles
 - ✅ Persistent UI state (window geometry, radio selection)
-- ✅ CI-V scope controls (IC-7300, FTdx101, FT-857D)
+- ✅ CI-V scope controls (hardware-validated on IC-7300)
 - ✅ Contest workflow with Fox/Hound roles
 - ✅ ADIF import/export
 - ✅ Achievement Hunter persistence

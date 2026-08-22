@@ -1,6 +1,6 @@
 # Optional local development override.
 # Copy this file to `.cargo/config.toml` when Rigwright is checked out beside
 # QSONaut. The copied file is ignored by Git; CI and other users resolve the
-# version declared in Cargo.toml from crates.io.
+# tagged Git dependency declared in Cargo.toml.
 
 paths = ["../rigwright"]

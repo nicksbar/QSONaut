@@ -46,8 +46,8 @@ use qsonaut_radio::{
         open_dxlab, open_model_with_radio_address, open_null, open_rigctld, ConfiguredRadio,
     },
     enumerate_serial_port_descriptors,
-    models::{find_model, Protocol, SupportLevel, POPULAR_RADIOS},
-    BaseMode, ControlId, ControlValue, IcomCiVRadio, Mode, RadioHal, SerialPortDescriptor,
+    models::{find_model, Manufacturer, Protocol, SupportLevel, POPULAR_RADIOS},
+    BaseMode, ControlId, ControlValue, IcomCiVRadio, Mode, Radio, SerialPortDescriptor,
 };
 use qsonaut_server_client::{
     log_idempotency_key, new_instance_id, ConnectionConfig as ServerConnectionConfig,
@@ -999,6 +999,17 @@ pub(crate) fn theme_success(ui: &egui::Ui) -> Color32 {
     }
 }
 
+fn native_radio_profile(
+    backend: &str,
+    model: &str,
+) -> Option<&'static qsonaut_radio::models::RadioModelProfile> {
+    backend
+        .trim()
+        .eq_ignore_ascii_case("native")
+        .then(|| find_model(model))
+        .flatten()
+}
+
 /// Native window geometry restored by QSONaut instead of eframe. Applying it to
 /// the `ViewportBuilder` means winit configures the window once, while it is
 /// still hidden, instead of showing and re-hiding it for each late change.
@@ -1150,7 +1161,7 @@ fn spawn_radio_init(
             "null" | "mock" => Some(open_null()),
             "rigctld" | "rigctl" => Some(open_rigctld(endpoint)),
             "dxlab" | "dxlab-commander" | "commander" => Some(open_dxlab(endpoint)),
-            _ => match open_model_with_radio_address(
+            "native" => match open_model_with_radio_address(
                 &model,
                 &port,
                 baud_rate,
@@ -1172,6 +1183,10 @@ fn spawn_radio_init(
                     None
                 }
             },
+            unsupported => {
+                error!(backend = unsupported, "Unsupported radio backend");
+                None
+            }
         };
 
         match radio {
@@ -1761,7 +1776,9 @@ impl QsonautGuiApp {
             })
         });
 
-        if !find_model(&config.radio.model).is_some_and(|profile| profile.capabilities.spectrum) {
+        if !native_radio_profile(&config.radio.backend, &config.radio.model)
+            .is_some_and(|profile| profile.capabilities.spectrum)
+        {
             civ_spectrum_on = false;
         }
 
@@ -2819,10 +2836,12 @@ impl QsonautGuiApp {
     }
 
     fn draw_banner_radio_controls(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
-        let supports_levels = find_model(&self.config.radio.model)
-            .is_some_and(|profile| matches!(profile.protocol, Protocol::IcomCiV { .. }));
-        let supports_filter = find_model(&self.config.radio.model)
-            .is_some_and(|profile| matches!(profile.protocol, Protocol::IcomCiV { .. }));
+        let native_profile =
+            native_radio_profile(&self.config.radio.backend, &self.config.radio.model);
+        let supports_levels =
+            native_profile.is_some_and(|profile| profile.supports_control(ControlId::AfGain));
+        let supports_filter =
+            native_profile.is_some_and(|profile| profile.supports_control(ControlId::Filter));
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Radio").strong());
             if ui.small_button("-1 kHz").clicked() {
@@ -3327,8 +3346,9 @@ impl eframe::App for QsonautGuiApp {
                 self.draw_banner_radio_controls(ui, &snapshot);
             });
 
-        let supports_radio_scope = find_model(&self.config.radio.model)
-            .is_some_and(|profile| profile.capabilities.spectrum);
+        let supports_radio_scope =
+            native_radio_profile(&self.config.radio.backend, &self.config.radio.model)
+                .is_some_and(|profile| profile.capabilities.spectrum);
         let radio_scope_visible = self.civ_spectrum_on
             && supports_radio_scope
             && !snapshot.radio_waterfall_status.starts_with("UNAVAILABLE");
@@ -3725,6 +3745,16 @@ mod tests {
     use super::*;
 
     const LEGACY_GUI_SCALE_BASE: f32 = 1.6;
+
+    #[test]
+    fn radio_profiles_apply_only_to_the_native_backend() {
+        assert_eq!(
+            native_radio_profile("native", "IC-7300").map(|profile| profile.model),
+            Some("IC-7300")
+        );
+        assert!(native_radio_profile("rigctld", "IC-7300").is_none());
+        assert!(native_radio_profile("null", "IC-7300").is_none());
+    }
 
     fn decode_pcm_samples(bytes: &[u8]) -> Vec<i16> {
         bytes

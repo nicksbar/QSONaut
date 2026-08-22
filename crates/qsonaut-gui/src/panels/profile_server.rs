@@ -781,8 +781,9 @@ impl QsonautGuiApp {
     ) {
         ui.heading("Waterfall");
         ui.separator();
-        let supports_radio_scope = find_model(&self.config.radio.model)
-            .is_some_and(|profile| profile.capabilities.spectrum);
+        let supports_radio_scope =
+            native_radio_profile(&self.config.radio.backend, &self.config.radio.model)
+                .is_some_and(|profile| profile.capabilities.spectrum);
         if ui
             .add_enabled(
                 supports_radio_scope,

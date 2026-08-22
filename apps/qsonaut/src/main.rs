@@ -12,7 +12,7 @@ use qsonaut_gui::run_gui;
 use qsonaut_log::log_file_path;
 use qsonaut_radio::{
     drivers::open_model_with_radio_address, enumerate_serial_ports, ControlId, ControlValue,
-    IcomCiVRadio, Mode, RadioHal,
+    IcomCiVRadio, Mode, Radio,
 };
 use tracing::{error, info};
 
@@ -299,7 +299,7 @@ async fn async_main() -> Result<()> {
 
         if let Some(mode) = cli.set_mode {
             let target: Mode = mode.into();
-            RadioHal::set_mode(&radio, target)
+            Radio::set_mode(&radio, target)
                 .await
                 .with_context(|| format!("failed to set mode on {port}"))?;
             println!("Set mode: {mode:?}");
@@ -633,6 +633,12 @@ fn format_core_mode(mode: Mode) -> &'static str {
         Mode::Lsb => "LSB",
         Mode::Cw => "CW",
         Mode::Data => "DATA",
+        Mode::Am => "AM",
+        Mode::Fm => "FM",
+        Mode::Wfm => "WFM",
+        Mode::Rtty => "RTTY",
+        Mode::CwReverse => "CW-R",
+        Mode::RttyReverse => "RTTY-R",
     }
 }
 
@@ -640,7 +646,7 @@ async fn apply_profile(radio: &IcomCiVRadio, profile: CliProfile) -> Result<()> 
     match profile {
         CliProfile::Ft8_20m => {
             radio.set_frequency_hz(14_074_000).await?;
-            RadioHal::set_mode(radio, Mode::Data).await?;
+            Radio::set_mode(radio, Mode::Data).await?;
             radio.set_ptt(false).await?;
         }
     }
@@ -690,5 +696,7 @@ fn format_control_value(value: &ControlValue) -> String {
         ControlValue::Mode(v) => format_core_mode(*v).to_string(),
         ControlValue::Text(v) => v.clone(),
         ControlValue::Raw(v) => format_hex_bytes(v),
+        ControlValue::Vfo(v) => format!("VFO {v}"),
+        ControlValue::Receiver(v) => format!("receiver {v}"),
     }
 }

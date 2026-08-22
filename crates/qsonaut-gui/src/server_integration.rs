@@ -80,18 +80,12 @@ impl QsonautGuiApp {
             .map(band_for_frequency)
             .filter(|band| !band.is_empty())
             .map(str::to_owned);
-        let radio_model = details.then(|| self.config.radio.model.clone());
-        let radio_manufacturer = radio_model.as_deref().and_then(|model| {
-            if model.starts_with("IC-") {
-                Some("Icom".to_string())
-            } else if model.starts_with("FT-") || model.starts_with("FTDX") {
-                Some("Yaesu".to_string())
-            } else if model.starts_with("TS-") {
-                Some("Kenwood".to_string())
-            } else {
-                None
-            }
-        });
+        let radio_profile = details
+            .then(|| native_radio_profile(&self.config.radio.backend, &self.config.radio.model))
+            .flatten();
+        let radio_model = radio_profile.map(|profile| profile.model.to_string());
+        let radio_manufacturer =
+            radio_profile.map(|profile| profile.manufacturer.label().to_string());
         client.publish_presence(ServerPresence {
             instance_id: self.server_instance_id.clone(),
             station_label: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),

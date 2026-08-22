@@ -74,14 +74,14 @@ impl QsonautGuiApp {
             .show(ui, |ui| {
                 ui.label("Radio backend");
                 egui::ComboBox::from_id_salt("radio_backend")
-                    .selected_text(&self.config.radio.backend)
+                    .selected_text(radio_backend_label(&self.config.radio.backend))
                     .width(ui.available_width().max(180.0))
                     .show_ui(ui, |ui| {
-                        for backend in ["native", "rigctld", "dxlab"] {
+                        for (backend, label) in RADIO_BACKENDS {
                             ui.selectable_value(
                                 &mut self.config.radio.backend,
                                 backend.to_string(),
-                                backend,
+                                *label,
                             );
                         }
                     });
@@ -96,25 +96,33 @@ impl QsonautGuiApp {
                     ui.end_row();
                 }
 
-                ui.label("Radio model");
-                egui::ComboBox::from_id_salt("radio_model")
-                    .selected_text(&self.config.radio.model)
-                    .width(ui.available_width().max(180.0))
-                    .show_ui(ui, |ui| {
-                        for profile in POPULAR_RADIOS {
-                            let maturity = if profile.support == SupportLevel::HardwareValidated {
-                                "validated"
-                            } else {
-                                "experimental"
-                            };
-                            ui.selectable_value(
-                                &mut self.config.radio.model,
-                                profile.model.to_string(),
-                                format!("{} — {maturity}", profile.model),
-                            );
-                        }
-                    });
-                ui.end_row();
+                if self.config.radio.backend.eq_ignore_ascii_case("native") {
+                    ui.label("Radio model");
+                    egui::ComboBox::from_id_salt("radio_model")
+                        .selected_text(selected_radio_label(&self.config.radio.model))
+                        .width(ui.available_width().max(180.0))
+                        .show_ui(ui, |ui| {
+                            for manufacturer in Manufacturer::ALL {
+                                ui.label(RichText::new(manufacturer.label()).strong());
+                                for profile in POPULAR_RADIOS
+                                    .iter()
+                                    .filter(|profile| profile.manufacturer == manufacturer)
+                                {
+                                    ui.selectable_value(
+                                        &mut self.config.radio.model,
+                                        profile.model.to_string(),
+                                        format!(
+                                            "{} — {}",
+                                            profile.model,
+                                            profile.support.short_label()
+                                        ),
+                                    );
+                                }
+                                ui.separator();
+                            }
+                        });
+                    ui.end_row();
+                }
 
                 ui.label("Audio input");
                 egui::ComboBox::from_id_salt("audio_input_device")
@@ -243,12 +251,25 @@ impl QsonautGuiApp {
         );
 
         ui.add_space(6.0);
-        if let Some(profile) = find_model(&self.config.radio.model) {
-            let maturity = if profile.support == SupportLevel::HardwareValidated {
-                "hardware validated"
-            } else {
-                "experimental — hardware validation pending"
-            };
+        if matches!(
+            self.config.radio.backend.to_ascii_lowercase().as_str(),
+            "null" | "mock"
+        ) {
+            ui.label(
+                RichText::new("Offline test radio · no hardware connection")
+                    .small()
+                    .color(Color32::LIGHT_GREEN),
+            );
+        } else if !self.config.radio.backend.eq_ignore_ascii_case("native") {
+            ui.label(
+                RichText::new(format!(
+                    "External backend: {} · capabilities are negotiated by that service",
+                    radio_backend_label(&self.config.radio.backend)
+                ))
+                .small()
+                .color(Color32::YELLOW),
+            );
+        } else if let Some(profile) = find_model(&self.config.radio.model) {
             let scope = if profile.capabilities.spectrum {
                 "radio scope available"
             } else {
@@ -256,8 +277,12 @@ impl QsonautGuiApp {
             };
             ui.label(
                 RichText::new(format!(
-                    "Selected profile: {} · {maturity} · {scope}",
-                    profile.model
+                    "{} {} · {} · {} · {}",
+                    profile.manufacturer.label(),
+                    profile.model,
+                    profile.protocol.label(),
+                    profile.support.detail_label(),
+                    scope,
                 ))
                 .small()
                 .color(if profile.support == SupportLevel::HardwareValidated {
@@ -265,6 +290,23 @@ impl QsonautGuiApp {
                 } else {
                     theme_warning(ui)
                 }),
+            );
+            ui.label(
+                RichText::new(format!(
+                    "Rigwright controls: {}",
+                    radio_capability_summary(*profile)
+                ))
+                .small()
+                .color(theme_muted(ui)),
+            );
+        } else {
+            ui.label(
+                RichText::new(format!(
+                    "Unknown native radio profile '{}'; choose a Rigwright model",
+                    self.config.radio.model
+                ))
+                .small()
+                .color(theme_warning(ui)),
             );
         }
         if self.radio_detected_models.is_empty() {
@@ -311,15 +353,10 @@ impl QsonautGuiApp {
         {
             if old_model != self.config.radio.model {
                 if let Some(profile) = find_model(&self.config.radio.model) {
-                    self.config.radio.baud_rate = match profile.protocol {
-                        Protocol::YaesuLegacyCat => 4_800,
-                        Protocol::YaesuCat => 38_400,
-                        Protocol::IcomCiV { default_address } => {
-                            self.config.radio.civ_address = default_address;
-                            115_200
-                        }
-                        Protocol::KenwoodCat => 115_200,
-                    };
+                    self.config.radio.baud_rate = profile.preferred_baud_rate();
+                    if let Protocol::IcomCiV { default_address } = profile.protocol {
+                        self.config.radio.civ_address = default_address;
+                    }
                     if !profile.capabilities.spectrum {
                         self.civ_spectrum_on = false;
                     }
@@ -349,5 +386,92 @@ impl QsonautGuiApp {
                     .color(theme_warning(ui)),
             );
         }
+    }
+}
+
+const RADIO_BACKENDS: &[(&str, &str)] = &[
+    ("native", "Native Rigwright"),
+    ("rigctld", "Hamlib rigctld"),
+    ("dxlab", "DX Lab Commander"),
+    ("null", "Offline test radio"),
+];
+
+fn radio_backend_label(backend: &str) -> &str {
+    RADIO_BACKENDS
+        .iter()
+        .find(|(value, _)| value.eq_ignore_ascii_case(backend))
+        .map(|(_, label)| *label)
+        .unwrap_or(backend)
+}
+
+fn selected_radio_label(model: &str) -> String {
+    find_model(model)
+        .map(|profile| {
+            format!(
+                "{} {} — {}",
+                profile.manufacturer.label(),
+                profile.model,
+                profile.support.short_label()
+            )
+        })
+        .unwrap_or_else(|| format!("Unknown profile: {model}"))
+}
+
+fn radio_capability_summary(profile: qsonaut_radio::models::RadioModelProfile) -> String {
+    let capabilities = profile.driver_capabilities();
+    let mut labels = Vec::new();
+    if capabilities.can_get_frequency && capabilities.can_set_frequency {
+        labels.push("frequency");
+    }
+    if capabilities.can_get_mode && capabilities.can_set_mode {
+        labels.push("mode");
+    }
+    if capabilities.can_set_ptt {
+        labels.push(if capabilities.can_get_ptt {
+            "read/write PTT"
+        } else {
+            "write-only PTT"
+        });
+    }
+    if profile.supports_control(ControlId::AfGain) {
+        labels.push("AF gain");
+    }
+    if profile.supports_control(ControlId::RfPower) {
+        labels.push("RF power");
+    }
+    if profile.supports_control(ControlId::Filter) {
+        labels.push("filter");
+    }
+    if profile.supports_control(ControlId::Split) {
+        labels.push("split");
+    }
+    if profile.capabilities.spectrum {
+        labels.push("spectrum");
+    }
+    labels.join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_radio_labels_and_controls_follow_rigwright_profiles() {
+        assert_eq!(
+            selected_radio_label("FTDX10"),
+            "Yaesu FTDX10 — experimental"
+        );
+        assert!(radio_capability_summary(*find_model("FTDX10").unwrap()).contains("split"));
+        assert!(!radio_capability_summary(*find_model("FT-991A").unwrap()).contains("split"));
+        assert!(
+            radio_capability_summary(*find_model("TS-890S").unwrap()).contains("write-only PTT")
+        );
+    }
+
+    #[test]
+    fn backend_labels_are_ui_owned_connection_labels() {
+        assert_eq!(radio_backend_label("native"), "Native Rigwright");
+        assert_eq!(radio_backend_label("RIGCTLD"), "Hamlib rigctld");
+        assert_eq!(radio_backend_label("custom"), "custom");
     }
 }

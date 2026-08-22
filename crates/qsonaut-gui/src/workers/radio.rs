@@ -315,8 +315,9 @@ pub(crate) fn spawn_radio_worker(
                             Mode::Lsb => Mode::Cw,
                             Mode::Cw => Mode::Data,
                             Mode::Data => Mode::Usb,
+                            _ => Mode::Usb,
                         };
-                        if let Err(err) = rt.block_on(RadioHal::set_mode(&radio, next)) {
+                        if let Err(err) = rt.block_on(Radio::set_mode(&radio, next)) {
                             let mut s = state.lock().expect("ui state lock poisoned");
                             s.last_error = Some(err.to_string());
                         }
@@ -387,7 +388,7 @@ pub(crate) fn spawn_radio_worker(
                                     _ => Mode::Usb,
                                 }
                             };
-                            let mode_result = rt.block_on(RadioHal::set_mode(&radio, mode));
+                            let mode_result = rt.block_on(Radio::set_mode(&radio, mode));
                             if let Err(error) = frequency_result.and(mode_result) {
                                 state.lock().expect("ui state lock poisoned").last_error =
                                     Some(error.to_string());
@@ -488,6 +489,12 @@ fn poll_radio_core_state(
                     Mode::Lsb => "LSB",
                     Mode::Cw => "CW",
                     Mode::Data => "DATA",
+                    Mode::Am => "AM",
+                    Mode::Fm => "FM",
+                    Mode::Wfm => "WFM",
+                    Mode::Rtty => "RTTY",
+                    Mode::CwReverse => "CW-R",
+                    Mode::RttyReverse => "RTTY-R",
                 }
                 .to_string();
                 s.data_mode = Some(mode == Mode::Data);
@@ -631,7 +638,7 @@ mod tests {
     }
 }
 
-fn read_u8_control<R: RadioHal + ?Sized>(
+fn read_u8_control<R: Radio + ?Sized>(
     rt: &tokio::runtime::Runtime,
     radio: &R,
     id: ControlId,
