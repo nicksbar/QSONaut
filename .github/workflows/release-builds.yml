@@ -60,7 +60,7 @@ jobs:
           ref: main
           path: cw-dit
 
-      # Rigwright is resolved from the v0.1.6 Git tag declared by the Cargo
+      # Rigwright is resolved from the v0.1.7 Git tag declared by the Cargo
       # manifests; no sibling checkout or local path override is used here.
 
       - name: Install Linux native libraries
