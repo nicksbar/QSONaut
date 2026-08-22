@@ -858,18 +858,27 @@ impl QsonautGuiApp {
 
         ui.add_space(6.0);
         ui.label(RichText::new("Radio scope only").strong());
+        let mut scope_view_changed = false;
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(
-                &mut self.radio_scope_view,
-                RadioScopeView::Narrow,
-                "Narrow passband",
-            );
-            ui.selectable_value(
-                &mut self.radio_scope_view,
-                RadioScopeView::Overview,
-                "Active band overview",
-            );
+            scope_view_changed |= ui
+                .selectable_value(
+                    &mut self.radio_scope_view,
+                    RadioScopeView::Narrow,
+                    "Narrow passband",
+                )
+                .changed();
+            scope_view_changed |= ui
+                .selectable_value(
+                    &mut self.radio_scope_view,
+                    RadioScopeView::Overview,
+                    "Active band overview",
+                )
+                .changed();
         });
+        if scope_view_changed {
+            self.profile_dirty = true;
+            self.persist_profile("Auto-saved");
+        }
         ui.add(
             egui::Slider::new(&mut self.radio_scope_contrast, 0.7..=3.0)
                 .text("Intensity")

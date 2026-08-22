@@ -647,8 +647,9 @@ enum WaterfallSpeed {
     Fast,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 enum RadioScopeView {
+    #[default]
     Narrow,
     Overview,
 }
@@ -1560,6 +1561,7 @@ impl QsonautGuiApp {
         let mut ft8_cq_only_view = false;
         let mut civ_spectrum_on = false;
         let mut radio_scope_vbw_wide = false;
+        let mut radio_scope_view = RadioScopeView::Narrow;
         let mut waterfall_theme = WaterfallTheme::default();
         let mut waterfall_deck_height = default_waterfall_deck_height();
         let ft8_stop_policy = AutoTxStopPolicy::Continuous;
@@ -1621,6 +1623,7 @@ impl QsonautGuiApp {
             ft8_cq_only_view = p.cq_only_view;
             civ_spectrum_on = p.civ_spectrum_on;
             radio_scope_vbw_wide = p.radio_scope_vbw_wide;
+            radio_scope_view = p.radio_scope_view;
             waterfall_theme = p.waterfall_theme;
             waterfall_deck_height = p.waterfall_deck_height.clamp(170.0, 560.0);
             ft8_max_attempts = p.ft8_max_attempts.clamp(1, 20);
@@ -1709,6 +1712,7 @@ impl QsonautGuiApp {
                 cq_only_view: ft8_cq_only_view,
                 civ_spectrum_on,
                 radio_scope_vbw_wide,
+                radio_scope_view,
                 waterfall_theme,
                 waterfall_deck_height,
                 halt_after_tx: false,
@@ -1988,7 +1992,7 @@ impl QsonautGuiApp {
             radio_scope_vbw_wide,
             radio_scope_hold: false,
             radio_scope_reference_tenths_db: 0,
-            radio_scope_view: RadioScopeView::Narrow,
+            radio_scope_view,
             radio_scope_lock_if_to_filter: true,
             waterfall_theme,
             waterfall_deck_height,
@@ -2077,6 +2081,7 @@ impl QsonautGuiApp {
         self.ft8_cq_only_view = profile.cq_only_view;
         self.civ_spectrum_on = profile.civ_spectrum_on;
         self.radio_scope_vbw_wide = profile.radio_scope_vbw_wide;
+        self.radio_scope_view = profile.radio_scope_view;
         self.waterfall_theme = profile.waterfall_theme;
         self.waterfall_deck_height = profile.waterfall_deck_height.clamp(170.0, 560.0);
         self.ft8_stop_policy = AutoTxStopPolicy::Continuous;
@@ -2524,6 +2529,7 @@ impl QsonautGuiApp {
             cq_only_view: self.ft8_cq_only_view,
             civ_spectrum_on: self.civ_spectrum_on,
             radio_scope_vbw_wide: self.radio_scope_vbw_wide,
+            radio_scope_view: self.radio_scope_view,
             waterfall_theme: self.waterfall_theme,
             waterfall_deck_height: self.waterfall_deck_height,
             // This control is deliberately one-shot and is not restored on launch.
