@@ -43,10 +43,6 @@ impl QsonautGuiApp {
             let _ = handle.join();
         }
         self.audio_worker_stop = Arc::new(AtomicBool::new(false));
-        self.state
-            .lock()
-            .expect("ui state lock poisoned")
-            .monitor_test_tone = false;
         self.audio_worker_handle = Some(spawn_audio_spectrum_worker(
             self.state.clone(),
             self.audio_worker_stop.clone(),
@@ -252,7 +248,7 @@ impl QsonautGuiApp {
         ui.add_space(6.0);
         ui.label(RichText::new("RX monitor diagnostics").strong());
         ui.label(
-            RichText::new("The monitor plays captured audio from the selected monitor output. The test tone verifies the active monitor stream after audio input has started.")
+            RichText::new("The monitor plays captured audio from the selected monitor output.")
                 .small()
                 .color(theme_muted(ui)),
         );
@@ -269,23 +265,7 @@ impl QsonautGuiApp {
                 self.profile_dirty = true;
                 self.persist_profile("RX monitor volume saved to");
             }
-            let can_test = self.config.audio.monitor_enabled && !self.audio_restart_required;
-            if ui
-                .add_enabled(can_test, egui::Button::new("Play test tone"))
-                .on_disabled_hover_text("Enable and apply the RX monitor first")
-                .clicked()
-            {
-                self.state
-                    .lock()
-                    .expect("ui state lock poisoned")
-                    .monitor_test_tone = true;
-            }
         });
-        ui.label(
-            RichText::new("Test tone: 700 Hz for 350 ms · increase the control only as needed; system output volume still applies.")
-                .small()
-                .color(theme_muted(ui)),
-        );
 
         ui.add_space(6.0);
         if matches!(

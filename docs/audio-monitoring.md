@@ -28,8 +28,7 @@ QSONaut uses CPAL's normal platform backend:
 
 Select the radio's USB audio codec as **Audio input** and speakers or headphones
 as **RX monitor output**. Start with monitor volume below `1.0x`; both that
-control and the operating-system output volume apply. The test tone exercises
-the active monitor stream after the capture stream has started.
+control and the operating-system output volume apply.
 
 If no devices appear, verify that the OS can record from and play to the device
 first. On Windows, also allow desktop applications microphone access under

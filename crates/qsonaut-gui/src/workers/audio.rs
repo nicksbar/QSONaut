@@ -140,15 +140,6 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                     };
                     if let Some(monitor) = &monitor {
                         monitor.set_volume(f32::from_bits(monitor_volume.load(Ordering::Relaxed)));
-                        let test_tone = {
-                            let mut shared = state.lock().expect("ui state lock poisoned");
-                            let requested = shared.monitor_test_tone;
-                            shared.monitor_test_tone = false;
-                            requested
-                        };
-                        if test_tone {
-                            monitor.push_test_tone(sample_rate_hz, 700.0, 350);
-                        }
                         if monitor_raw_audio {
                             monitor.push(&samples);
                         }
