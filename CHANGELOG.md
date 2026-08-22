@@ -24,6 +24,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   boundaries, and the distinction between software validation and on-air
   validation.
 
+### Fixed
+- Replaced the misleading movable narrow-channel markers in SSTV mode with the
+  fixed 1100–2300 Hz SSTV passband and disabled waterfall selection there.
+- Added explicit SSTV RX diagnostics for audio without a complete header,
+  unsupported parity-valid VIS modes, configured sample-rate incompatibility,
+  and the requirement to begin capture before the VIS header.
+
 ## [0.3.6] - 2026-08-21
 
 ### Added

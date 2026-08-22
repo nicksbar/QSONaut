@@ -44,6 +44,8 @@ pub struct MartinM1Receiver {
     buffer: Vec<f32>,
     image_start: Option<usize>,
     search_from: usize,
+    last_vis: Option<u8>,
+    frequency_offset_hz: Option<f32>,
 }
 
 impl MartinM1Receiver {
@@ -51,6 +53,8 @@ impl MartinM1Receiver {
         self.buffer.clear();
         self.image_start = None;
         self.search_from = 0;
+        self.last_vis = None;
+        self.frequency_offset_hz = None;
     }
 
     pub fn progress(&self) -> Option<f32> {
@@ -61,6 +65,16 @@ impl MartinM1Receiver {
         )
     }
 
+    /// Most recent parity-valid VIS code observed since reset.
+    pub fn detected_vis(&self) -> Option<u8> {
+        self.last_vis
+    }
+
+    /// Frequency correction inferred from the 1900 Hz VIS leader.
+    pub fn frequency_offset_hz(&self) -> Option<f32> {
+        self.frequency_offset_hz
+    }
+
     pub fn push(&mut self, samples: &[f32]) -> Option<DecodedImage> {
         self.buffer.extend_from_slice(samples);
         if self.image_start.is_none() {
@@ -69,7 +83,10 @@ impl MartinM1Receiver {
         if let Some(start) = self.image_start {
             let needed = start + ms_samples(IMAGE_MS);
             if self.buffer.len() >= needed {
-                let decoded = decode_image_audio(&self.buffer[start..needed]);
+                let decoded = decode_image_audio(
+                    &self.buffer[start..needed],
+                    self.frequency_offset_hz.unwrap_or(0.0),
+                );
                 self.reset();
                 return decoded.ok();
             }
@@ -88,9 +105,19 @@ impl MartinM1Receiver {
         let header = ms_samples(HEADER_MS);
         let step = ms_samples(10.0);
         while self.search_from + header <= self.buffer.len() {
-            if header_matches(&self.buffer[self.search_from..self.search_from + header]) {
-                self.image_start = Some(self.search_from + header);
-                return;
+            if let Some((vis, frequency_offset_hz)) =
+                decode_vis_header(&self.buffer[self.search_from..self.search_from + header])
+            {
+                self.last_vis = Some(vis);
+                self.frequency_offset_hz = Some(frequency_offset_hz);
+                if vis == VIS_CODE_MARTIN_M1 {
+                    self.image_start = Some(self.search_from + header);
+                    return;
+                }
+                // Skip this complete unsupported header while retaining enough
+                // trailing audio to find the next transmission.
+                self.search_from += header;
+                continue;
             }
             self.search_from += step;
         }
@@ -98,6 +125,13 @@ impl MartinM1Receiver {
 }
 
 pub fn encode_martin_m1(rgb: &[u8]) -> Result<Vec<i16>, SstvError> {
+    encode_martin_m1_with_offset(rgb, 0.0)
+}
+
+fn encode_martin_m1_with_offset(
+    rgb: &[u8],
+    frequency_offset_hz: f64,
+) -> Result<Vec<i16>, SstvError> {
     if rgb.len() != WIDTH * HEIGHT * 3 {
         return Err(SstvError::InvalidImage);
     }
@@ -109,29 +143,15 @@ pub fn encode_martin_m1(rgb: &[u8]) -> Result<Vec<i16>, SstvError> {
         fractional_samples += duration_ms * SAMPLE_RATE_HZ as f64 / 1000.0;
         let count = fractional_samples.floor() as usize;
         fractional_samples -= count as f64;
-        let step = std::f64::consts::TAU * frequency / SAMPLE_RATE_HZ as f64;
+        let step =
+            std::f64::consts::TAU * (frequency + frequency_offset_hz) / SAMPLE_RATE_HZ as f64;
         for _ in 0..count {
             out.push((phase.sin() * 18_000.0).round() as i16);
             phase = (phase + step) % std::f64::consts::TAU;
         }
     };
 
-    tone(1900.0, LEADER_MS, &mut out);
-    tone(1200.0, VIS_BREAK_MS, &mut out);
-    tone(1900.0, LEADER_MS, &mut out);
-    tone(1200.0, VIS_BIT_MS, &mut out);
-    let mut ones = 0;
-    for bit in 0..7 {
-        let one = VIS_CODE_MARTIN_M1 & (1 << bit) != 0;
-        ones += usize::from(one);
-        tone(if one { 1100.0 } else { 1300.0 }, VIS_BIT_MS, &mut out);
-    }
-    tone(
-        if ones % 2 == 1 { 1100.0 } else { 1300.0 },
-        VIS_BIT_MS,
-        &mut out,
-    );
-    tone(1200.0, VIS_BIT_MS, &mut out);
+    append_vis_header(VIS_CODE_MARTIN_M1, &mut tone, &mut out);
 
     for y in 0..HEIGHT {
         tone(1200.0, SYNC_MS, &mut out);
@@ -156,13 +176,16 @@ pub fn decode_martin_m1(audio: &[f32]) -> Result<DecodedImage, SstvError> {
     if audio.len() < header + ms_samples(IMAGE_MS) {
         return Err(SstvError::IncompleteAudio);
     }
-    if !header_matches(&audio[..header]) {
+    let Some((vis, frequency_offset_hz)) = decode_vis_header(&audio[..header]) else {
+        return Err(SstvError::UnsupportedVis);
+    };
+    if vis != VIS_CODE_MARTIN_M1 {
         return Err(SstvError::UnsupportedVis);
     }
-    decode_image_audio(&audio[header..])
+    decode_image_audio(&audio[header..], frequency_offset_hz)
 }
 
-fn decode_image_audio(audio: &[f32]) -> Result<DecodedImage, SstvError> {
+fn decode_image_audio(audio: &[f32], frequency_offset_hz: f32) -> Result<DecodedImage, SstvError> {
     if audio.len() < ms_samples(IMAGE_MS) {
         return Err(SstvError::IncompleteAudio);
     }
@@ -175,7 +198,7 @@ fn decode_image_audio(audio: &[f32]) -> Result<DecodedImage, SstvError> {
             for x in 0..WIDTH {
                 let center_ms = channel_start_ms + (x as f64 + 0.5) * CHANNEL_MS / WIDTH as f64;
                 let index = ms_samples(center_ms).min(frequencies.len() - 1);
-                let frequency = frequencies[index].clamp(1500.0, 2300.0);
+                let frequency = (frequencies[index] - frequency_offset_hz).clamp(1500.0, 2300.0);
                 rgb[(y * WIDTH + x) * 3 + channel] =
                     (((frequency - 1500.0) * 255.0 / 800.0).round() as i32).clamp(0, 255) as u8;
             }
@@ -189,37 +212,85 @@ fn decode_image_audio(audio: &[f32]) -> Result<DecodedImage, SstvError> {
     })
 }
 
-fn header_matches(audio: &[f32]) -> bool {
-    let leader1 = dominant_frequency(slice_ms(audio, 40.0, 260.0));
-    let break_tone = dominant_frequency(slice_ms(audio, 301.0, 309.0));
-    let leader2 = dominant_frequency(slice_ms(audio, 350.0, 570.0));
-    if !near(leader1, 1900.0, 90.0)
-        || !near(break_tone, 1200.0, 110.0)
-        || !near(leader2, 1900.0, 90.0)
-    {
-        return false;
+pub fn vis_mode_name(vis: u8) -> &'static str {
+    match vis {
+        0x2c => "Martin M1",
+        0x28 => "Martin M2",
+        0x3c => "Scottie S1",
+        0x38 => "Scottie S2",
+        0x4c => "Scottie DX",
+        0x08 => "Robot 36",
+        0x0c => "Robot 72",
+        0x63 => "PD90",
+        0x5f => "PD120",
+        0x62 => "PD160",
+        0x60 => "PD180",
+        0x61 => "PD240",
+        0x5e => "PD290",
+        _ => "unknown SSTV mode",
+    }
+}
+
+fn decode_vis_header(audio: &[f32]) -> Option<(u8, f32)> {
+    let leader1_audio = slice_ms(audio, 40.0, 260.0);
+    if dominant_frequency(leader1_audio, 0.0) != 1900.0 {
+        return None;
+    }
+    let actual_leader_hz = peak_frequency(leader1_audio, 1_700, 2_100, 10);
+    let frequency_offset_hz = actual_leader_hz - 1900.0;
+    if frequency_offset_hz.abs() > 150.0 {
+        return None;
+    }
+    let classify = |start_ms, end_ms| {
+        dominant_frequency(slice_ms(audio, start_ms, end_ms), frequency_offset_hz)
+    };
+    if classify(301.0, 309.0) != 1200.0 || classify(350.0, 570.0) != 1900.0 {
+        return None;
+    }
+    if classify(614.0, 636.0) != 1200.0 {
+        return None;
     }
     let bits_start = LEADER_MS * 2.0 + VIS_BREAK_MS + VIS_BIT_MS;
     let mut vis = 0_u8;
     let mut ones = 0;
     for bit in 0..7 {
         let start = bits_start + bit as f64 * VIS_BIT_MS;
-        let frequency = dominant_frequency(slice_ms(audio, start + 4.0, start + 26.0));
-        if near(frequency, 1100.0, 90.0) {
+        let frequency = classify(start + 4.0, start + 26.0);
+        if frequency == 1100.0 {
             vis |= 1 << bit;
             ones += 1;
-        } else if !near(frequency, 1300.0, 90.0) {
-            return false;
+        } else if frequency != 1300.0 {
+            return None;
         }
     }
     let parity_start = bits_start + 7.0 * VIS_BIT_MS;
-    let parity = dominant_frequency(slice_ms(audio, parity_start + 4.0, parity_start + 26.0));
+    let parity = classify(parity_start + 4.0, parity_start + 26.0);
     let parity_ok = if ones % 2 == 1 {
-        near(parity, 1100.0, 90.0)
+        parity == 1100.0
     } else {
-        near(parity, 1300.0, 90.0)
+        parity == 1300.0
     };
-    parity_ok && vis == VIS_CODE_MARTIN_M1
+    let stop_start = parity_start + VIS_BIT_MS;
+    let stop = classify(stop_start + 4.0, stop_start + 26.0);
+    (parity_ok && stop == 1200.0).then_some((vis, frequency_offset_hz))
+}
+
+fn append_vis_header<F>(vis_code: u8, tone: &mut F, out: &mut Vec<i16>)
+where
+    F: FnMut(f64, f64, &mut Vec<i16>),
+{
+    tone(1900.0, LEADER_MS, out);
+    tone(1200.0, VIS_BREAK_MS, out);
+    tone(1900.0, LEADER_MS, out);
+    tone(1200.0, VIS_BIT_MS, out);
+    let mut ones = 0;
+    for bit in 0..7 {
+        let one = vis_code & (1 << bit) != 0;
+        ones += usize::from(one);
+        tone(if one { 1100.0 } else { 1300.0 }, VIS_BIT_MS, out);
+    }
+    tone(if ones % 2 == 1 { 1100.0 } else { 1300.0 }, VIS_BIT_MS, out);
+    tone(1200.0, VIS_BIT_MS, out);
 }
 
 fn crossing_frequency(audio: &[f32]) -> Vec<f32> {
@@ -242,18 +313,10 @@ fn crossing_frequency(audio: &[f32]) -> Vec<f32> {
     result
 }
 
-fn dominant_frequency(audio: &[f32]) -> f32 {
+fn dominant_frequency(audio: &[f32], offset_hz: f32) -> f32 {
     let mut best = (0.0_f32, 0.0_f32);
     for frequency in [1100, 1200, 1300, 1900] {
-        let omega = TAU * frequency as f32 / SAMPLE_RATE_HZ as f32;
-        let coeff = 2.0 * omega.cos();
-        let (mut q1, mut q2) = (0.0_f32, 0.0_f32);
-        for &sample in audio {
-            let q0 = coeff * q1 - q2 + sample;
-            q2 = q1;
-            q1 = q0;
-        }
-        let power = q1 * q1 + q2 * q2 - coeff * q1 * q2;
+        let power = tone_power(audio, frequency as f32 + offset_hz);
         if power > best.1 {
             best = (frequency as f32, power);
         }
@@ -261,14 +324,31 @@ fn dominant_frequency(audio: &[f32]) -> f32 {
     best.0
 }
 
+fn peak_frequency(audio: &[f32], start_hz: u32, end_hz: u32, step_hz: usize) -> f32 {
+    (start_hz..=end_hz)
+        .step_by(step_hz)
+        .map(|frequency| (frequency as f32, tone_power(audio, frequency as f32)))
+        .max_by(|left, right| left.1.total_cmp(&right.1))
+        .map(|(frequency, _)| frequency)
+        .unwrap_or(1900.0)
+}
+
+fn tone_power(audio: &[f32], frequency_hz: f32) -> f32 {
+    let omega = TAU * frequency_hz / SAMPLE_RATE_HZ as f32;
+    let coeff = 2.0 * omega.cos();
+    let (mut q1, mut q2) = (0.0_f32, 0.0_f32);
+    for &sample in audio {
+        let q0 = coeff * q1 - q2 + sample;
+        q2 = q1;
+        q1 = q0;
+    }
+    q1 * q1 + q2 * q2 - coeff * q1 * q2
+}
+
 fn slice_ms(audio: &[f32], start_ms: f64, end_ms: f64) -> &[f32] {
     let start = ms_samples(start_ms).min(audio.len());
     let end = ms_samples(end_ms).min(audio.len()).max(start);
     &audio[start..end]
-}
-
-fn near(value: f32, expected: f32, tolerance: f32) -> bool {
-    (value - expected).abs() <= tolerance
 }
 
 fn ms_samples(ms: f64) -> usize {
@@ -318,5 +398,55 @@ mod tests {
             result = receiver.push(chunk).or(result);
         }
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn streaming_receiver_reports_an_unsupported_vis_mode() {
+        let mut pcm = Vec::new();
+        let mut phase = 0.0_f64;
+        let mut remainder = 0.0_f64;
+        let mut tone = |frequency: f64, duration_ms: f64, out: &mut Vec<i16>| {
+            remainder += duration_ms * SAMPLE_RATE_HZ as f64 / 1000.0;
+            let count = remainder.floor() as usize;
+            remainder -= count as f64;
+            let step = std::f64::consts::TAU * frequency / SAMPLE_RATE_HZ as f64;
+            for _ in 0..count {
+                out.push((phase.sin() * 18_000.0).round() as i16);
+                phase = (phase + step) % std::f64::consts::TAU;
+            }
+        };
+        append_vis_header(0x3c, &mut tone, &mut pcm);
+        let audio: Vec<f32> = pcm
+            .iter()
+            .map(|sample| *sample as f32 / i16::MAX as f32)
+            .collect();
+        let mut receiver = MartinM1Receiver::default();
+        assert!(receiver.push(&audio).is_none());
+        assert_eq!(receiver.detected_vis(), Some(0x3c));
+        assert_eq!(vis_mode_name(0x3c), "Scottie S1");
+        assert!(receiver.progress().is_none());
+    }
+
+    #[test]
+    fn martin_m1_afc_accepts_a_frequency_shifted_signal() {
+        let source = vec![127_u8; WIDTH * HEIGHT * 3];
+        let pcm = encode_martin_m1_with_offset(&source, 60.0).unwrap();
+        let audio: Vec<f32> = pcm
+            .iter()
+            .map(|sample| *sample as f32 / i16::MAX as f32)
+            .collect();
+        let mut receiver = MartinM1Receiver::default();
+        let mut result = None;
+        for chunk in audio.chunks(4096) {
+            result = receiver.push(chunk).or(result);
+        }
+        let decoded = result.expect("shifted Martin M1 should decode");
+        let mean = decoded
+            .rgb
+            .iter()
+            .map(|value| u64::from(*value))
+            .sum::<u64>() as f64
+            / decoded.rgb.len() as f64;
+        assert!((mean - 127.0).abs() < 35.0, "decoded mean was {mean}");
     }
 }

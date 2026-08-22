@@ -46,6 +46,13 @@ impl QsonautGuiApp {
                 .small()
                 .color(theme_warning(ui)),
         );
+        ui.label(
+            RichText::new(
+                "RX uses the fixed 1100–2300 Hz SSTV audio passband; waterfall clicks are intentionally disabled. Start listening before the VIS header. This release decodes Martin M1 (VIS 44) only and reports other recognized VIS modes by name.",
+            )
+            .small()
+            .color(theme_accent(ui)),
+        );
         ui.add_space(4.0);
 
         ui.columns(2, |columns| {

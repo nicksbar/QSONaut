@@ -21,10 +21,18 @@ progress, and publishes a completed image to the workspace. The transmitter
 generates phase-continuous audio and uses QSONaut's existing PTT acknowledgement,
 abort, tail, and unconditional PTT-release handling.
 
+SSTV does not use a movable narrow audio channel. QSONaut decodes the fixed
+1100–2300 Hz SSTV tone range inside the radio's approximately 3 kHz USB
+passband. In SSTV mode, the audio waterfall shows that fixed range and disables
+RX/TX cursor selection. Tune the radio so the received sync tone is at 1200 Hz.
+Reception must begin before the roughly 0.9-second VIS header; joining an image
+mid-transmission cannot recover its mode or missing lines.
+
 The implementation is software-tested with encode/decode round trips and
 streaming acquisition. It is **not yet on-air validated**. Slant correction,
 automatic clock calibration, Scottie, Robot, PD modes, and FSK ID are not part
-of this release.
+of this release. A parity-valid unsupported VIS header is shown by code and
+mode name so an audible SSTV signal does not look like decoder silence.
 
 ## Frequency presets
 

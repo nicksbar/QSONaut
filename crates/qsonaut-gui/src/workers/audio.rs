@@ -91,11 +91,11 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 .expect("ui state lock poisoned")
                 .ft8_decode_status = "READY: waiting for full slot".to_string();
         } else {
-            state
-                .lock()
-                .expect("ui state lock poisoned")
-                .ft8_decode_status =
+            let mut shared = state.lock().expect("ui state lock poisoned");
+            shared.ft8_decode_status =
                 format!("UNAVAILABLE: FT8 requires 48 kHz input (configured {sample_rate_hz} Hz)");
+            shared.sstv_status =
+                format!("UNAVAILABLE: SSTV requires 48 kHz input (configured {sample_rate_hz} Hz)");
         }
         // 15-second accumulation buffer at 12 kHz (180 000 samples)
         // Retain pre-boundary audio so adaptive timing can compensate for a
@@ -112,6 +112,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut last_cw_status = Instant::now() - Duration::from_secs(1);
         let mut cw_recording: Option<CwRecording> = None;
         let mut sstv_receiver = qsonaut_sstv::MartinM1Receiver::default();
+        let mut last_sstv_vis: Option<u8> = None;
         let mut digital_slot_gate = DigitalSlotGate::default();
         let mut ft4_slot_gate = Ft8SlotGate::default();
         let mut decode_workspace_last: Option<WorkspaceMode> = None;
@@ -231,6 +232,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             ft4_slot_gate.reset();
                             digital_slot_gate.reset();
                             sstv_receiver.reset();
+                            last_sstv_vis = None;
                             *dec = Decimator::new(sample_rate_hz);
                             let mut s = state.lock().expect("ui state lock poisoned");
                             if active_workspace_mode == WorkspaceMode::Ft8 {
@@ -369,12 +371,43 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             } else {
                                 let decoded = sstv_receiver.push(&ds);
                                 let progress = sstv_receiver.progress();
+                                let detected_vis = sstv_receiver.detected_vis();
+                                let frequency_offset_hz =
+                                    sstv_receiver.frequency_offset_hz().unwrap_or_default();
+                                if detected_vis != last_sstv_vis {
+                                    if let Some(vis) = detected_vis {
+                                        info!(
+                                            vis,
+                                            mode = qsonaut_sstv::vis_mode_name(vis),
+                                            supported = vis == qsonaut_sstv::VIS_CODE_MARTIN_M1,
+                                            frequency_offset_hz,
+                                            input_rms_dbfs = 20.0 * rms.max(1e-9).log10(),
+                                            "SSTV VIS header detected"
+                                        );
+                                    }
+                                    last_sstv_vis = detected_vis;
+                                }
                                 let mut shared = state.lock().expect("ui state lock poisoned");
                                 shared.sstv_progress = progress;
-                                shared.sstv_status = progress.map_or_else(
-                                    || "LISTENING: waiting for Martin M1 VIS 44".to_string(),
-                                    |value| format!("RECEIVING MARTIN M1 · {:.0}%", value * 100.0),
-                                );
+                                shared.sstv_status = if let Some(value) = progress {
+                                    format!(
+                                        "RECEIVING MARTIN M1 · {:.0}% · AFC {frequency_offset_hz:+.0} Hz",
+                                        value * 100.0
+                                    )
+                                } else if let Some(vis) = detected_vis {
+                                    format!(
+                                        "VIS {vis} DETECTED: {} · AFC {frequency_offset_hz:+.0} Hz · unsupported in 0.3.7 (Martin M1 only)",
+                                        qsonaut_sstv::vis_mode_name(vis),
+                                    )
+                                } else if rms >= 0.005 {
+                                    format!(
+                                        "AUDIO PRESENT ({:.0} dBFS) · no complete VIS header; start RX before the image",
+                                        20.0 * rms.max(1e-9).log10()
+                                    )
+                                } else {
+                                    "LISTENING: fixed 1100–2300 Hz SSTV passband · waiting for VIS 44"
+                                        .to_string()
+                                };
                                 if let Some(image) = decoded {
                                     shared.sstv_rgb = image.rgb;
                                     shared.sstv_revision = shared.sstv_revision.wrapping_add(1);

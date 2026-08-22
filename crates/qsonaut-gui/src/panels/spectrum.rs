@@ -209,13 +209,18 @@ impl QsonautGuiApp {
 
         let filter_bw_hz = filter_bandwidth_hz(&snapshot.mode, snapshot.filter);
         let is_cw = self.workspace_mode == WorkspaceMode::Cw;
+        let is_sstv = self.workspace_mode == WorkspaceMode::Sstv;
         let bw_hz = filter_bw_hz;
-        let rx_cursor_hz = if is_cw {
+        let rx_cursor_hz = if is_sstv {
+            1_100
+        } else if is_cw {
             u32::from(self.cw_tone_hz)
         } else {
             self.rx_tone_hz
         };
-        let tx_cursor_hz = if is_cw {
+        let tx_cursor_hz = if is_sstv {
+            1_100
+        } else if is_cw {
             u32::from(self.cw_tone_hz)
         } else {
             self.tx_tone_hz
@@ -230,6 +235,7 @@ impl QsonautGuiApp {
                 WorkspaceMode::Wspr => 6,
                 WorkspaceMode::Jt9 => 16,
                 WorkspaceMode::Jt65 | WorkspaceMode::Q65 => 180,
+                WorkspaceMode::Sstv => 1_200,
                 _ => 50,
             }
         };
@@ -269,8 +275,11 @@ impl QsonautGuiApp {
             self.audio_waterfall_texture_theme = self.waterfall_theme;
         }
         if let Some(tex) = &self.audio_waterfall_texture {
-            let image_widget =
-                egui::Image::new((tex.id(), display_size)).sense(egui::Sense::click());
+            let image_widget = egui::Image::new((tex.id(), display_size)).sense(if is_sstv {
+                egui::Sense::hover()
+            } else {
+                egui::Sense::click()
+            });
             let response = ui.add(image_widget);
 
             if let Some(pos) = response.interact_pointer_pos() {
@@ -278,7 +287,7 @@ impl QsonautGuiApp {
                 let capped_bw = bw_hz.clamp(100, AUDIO_MAX_FREQ_HZ);
                 let pick_hz = ((rel * capped_bw as f32).round() as u32).clamp(100, capped_bw);
 
-                if response.clicked() {
+                if response.clicked() && !is_sstv {
                     let selected_hz = if is_cw {
                         pick_hz.clamp(200, 3_000)
                     } else {
@@ -295,7 +304,7 @@ impl QsonautGuiApp {
                     self.persist_profile("Auto-saved");
                     self.profile_io_status = format!("RX audio cursor set: {} Hz", self.rx_tone_hz);
                 }
-                if response.secondary_clicked() {
+                if response.secondary_clicked() && !is_sstv {
                     let selected_hz = if is_cw {
                         pick_hz.clamp(200, 3_000)
                     } else {
@@ -347,11 +356,13 @@ impl QsonautGuiApp {
                     egui::pos2(tx_x + channel_half_width * 2.0, response.rect.bottom()),
                 )
             };
-            ui.painter().rect_filled(
-                tx_band,
-                0.0,
-                Color32::from_rgba_unmultiplied(240, 150, 60, 28),
-            );
+            if !is_sstv {
+                ui.painter().rect_filled(
+                    tx_band,
+                    0.0,
+                    Color32::from_rgba_unmultiplied(240, 150, 60, 28),
+                );
+            }
 
             ui.painter().line_segment(
                 [
@@ -361,7 +372,12 @@ impl QsonautGuiApp {
                 egui::Stroke::new(1.5_f32, Color32::from_rgb(120, 220, 120)),
             );
             if !is_cw {
-                let edge_x = rx_x + channel_half_width;
+                let edge_x = rx_x
+                    + if is_sstv {
+                        channel_half_width * 2.0
+                    } else {
+                        channel_half_width
+                    };
                 ui.painter().line_segment(
                     [
                         egui::pos2(edge_x, response.rect.top()),
@@ -370,49 +386,72 @@ impl QsonautGuiApp {
                     egui::Stroke::new(1.0_f32, Color32::from_rgb(120, 220, 120)),
                 );
             }
-            ui.painter().line_segment(
-                [
-                    egui::pos2(tx_x, response.rect.top()),
-                    egui::pos2(tx_x, response.rect.bottom()),
-                ],
-                egui::Stroke::new(1.5_f32, Color32::from_rgb(220, 160, 80)),
-            );
+            if !is_sstv {
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(tx_x, response.rect.top()),
+                        egui::pos2(tx_x, response.rect.bottom()),
+                    ],
+                    egui::Stroke::new(1.5_f32, Color32::from_rgb(220, 160, 80)),
+                );
+            }
 
             ui.painter().text(
                 egui::pos2(response.rect.left() + 6.0, response.rect.top() + 4.0),
                 egui::Align2::LEFT_TOP,
-                format!(
-                    "{} RX {} Hz",
-                    if is_cw { "CW CENTER" } else { "RX EDGE" },
-                    rx_cursor_hz
-                ),
+                if is_sstv {
+                    "SSTV FIXED 1100–2300 Hz".to_string()
+                } else {
+                    format!(
+                        "{} RX {} Hz",
+                        if is_cw { "CW CENTER" } else { "RX EDGE" },
+                        rx_cursor_hz
+                    )
+                },
                 egui::TextStyle::Small.resolve(ui.style()),
                 Color32::from_rgb(120, 220, 120),
             );
             ui.painter().text(
                 egui::pos2(response.rect.left() + 6.0, response.rect.top() + 20.0),
                 egui::Align2::LEFT_TOP,
-                format!("TX {} Hz", self.tx_tone_hz),
+                if is_sstv {
+                    "Sync 1200 · pixels 1500–2300 Hz".to_string()
+                } else {
+                    format!("TX {} Hz", self.tx_tone_hz)
+                },
                 egui::TextStyle::Small.resolve(ui.style()),
                 Color32::from_rgb(220, 160, 80),
             );
         }
-        ui.label(format!(
-            "Audio: {}  |  0\u{2013}{} Hz · channel {} Hz · selected level {}/255 · {} ({} {})  |  L-click RX / R-click TX",
-            snapshot.audio_spectrum_status,
-            bw_hz.min(AUDIO_MAX_FREQ_HZ),
-            channel_hz,
-            audio_cursor_level(&snapshot.audio_waterfall_rows, rx_cursor_hz),
-            if is_cw {
-                "CW tone search ±120 Hz"
-            } else {
-                "digital channel edge"
-            },
-            snapshot.mode,
-            snapshot
-                .filter
-                .map(|f| format!("FIL{f}"))
-                .unwrap_or_default(),
-        ));
+        if is_sstv {
+            ui.label(format!(
+                "Audio: {}  |  radio passband 0–{} Hz · SSTV decode fixed at 1100–2300 Hz · tune the radio, not an audio cursor ({} {})",
+                snapshot.audio_spectrum_status,
+                bw_hz.min(AUDIO_MAX_FREQ_HZ),
+                snapshot.mode,
+                snapshot
+                    .filter
+                    .map(|f| format!("FIL{f}"))
+                    .unwrap_or_default(),
+            ));
+        } else {
+            ui.label(format!(
+                "Audio: {}  |  0\u{2013}{} Hz · channel {} Hz · selected level {}/255 · {} ({} {})  |  L-click RX / R-click TX",
+                snapshot.audio_spectrum_status,
+                bw_hz.min(AUDIO_MAX_FREQ_HZ),
+                channel_hz,
+                audio_cursor_level(&snapshot.audio_waterfall_rows, rx_cursor_hz),
+                if is_cw {
+                    "CW tone search ±120 Hz"
+                } else {
+                    "digital channel edge"
+                },
+                snapshot.mode,
+                snapshot
+                    .filter
+                    .map(|f| format!("FIL{f}"))
+                    .unwrap_or_default(),
+            ));
+        }
     }
 }
