@@ -48,7 +48,7 @@ impl QsonautGuiApp {
         );
         ui.label(
             RichText::new(
-                "RX uses the fixed 1100–2300 Hz SSTV audio passband; waterfall clicks are intentionally disabled. Start listening before the VIS header. This release decodes Martin M1 (VIS 44) only and reports other recognized VIS modes by name.",
+                "RX starts at the standard 1100–2300 Hz SSTV audio window. Click the signal center in the audio waterfall to align the decoder when received tones are shifted. Start listening before the VIS header. This release decodes Martin M1 (VIS 44) only and reports other recognized VIS modes by name.",
             )
             .small()
             .color(theme_accent(ui)),
@@ -86,14 +86,15 @@ impl QsonautGuiApp {
                             .text(format!("Receiving {:.0}%", progress * 100.0)),
                     );
                 }
-                ui.label(RichText::new("TX image").strong());
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.sstv_image_path)
-                            .hint_text("Path to PNG or JPEG")
-                            .desired_width((ui.available_width() - 95.0).max(100.0)),
-                    );
-                    if ui.button("Open existing image").clicked() {
+                ui.separator();
+                ui.label(RichText::new("OPEN AN EXISTING TX IMAGE").strong());
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.sstv_image_path)
+                        .hint_text("Paste the full path to a PNG or JPEG")
+                        .desired_width(ui.available_width()),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("📂 LOAD PNG / JPEG").clicked() {
                         match std::fs::read(self.sstv_image_path.trim()) {
                             Ok(bytes) => self.install_sstv_image(&bytes, "Loaded image"),
                             Err(error) => {
@@ -101,6 +102,11 @@ impl QsonautGuiApp {
                             }
                         }
                     }
+                    ui.label(
+                        RichText::new("Resized for SSTV transmission")
+                            .small()
+                            .color(theme_muted(ui)),
+                    );
                 });
             });
 

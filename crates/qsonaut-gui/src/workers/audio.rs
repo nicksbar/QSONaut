@@ -112,6 +112,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut last_cw_status = Instant::now() - Duration::from_secs(1);
         let mut cw_recording: Option<CwRecording> = None;
         let mut sstv_receiver = qsonaut_sstv::MartinM1Receiver::default();
+        let mut sstv_tuning_offset_hz = 0_i32;
         let mut last_sstv_vis: Option<u8> = None;
         let mut digital_slot_gate = DigitalSlotGate::default();
         let mut ft4_slot_gate = Ft8SlotGate::default();
@@ -369,11 +370,23 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 shared.sstv_status = "SSTV TX active; RX reset".to_string();
                                 shared.sstv_progress = None;
                             } else {
+                                let requested_offset_hz = state
+                                    .lock()
+                                    .expect("ui state lock poisoned")
+                                    .sstv_tuning_offset_hz;
+                                if requested_offset_hz != sstv_tuning_offset_hz {
+                                    sstv_tuning_offset_hz = requested_offset_hz;
+                                    sstv_receiver
+                                        .set_tuning_offset_hz(sstv_tuning_offset_hz as f32);
+                                    last_sstv_vis = None;
+                                }
                                 let decoded = sstv_receiver.push(&ds);
                                 let progress = sstv_receiver.progress();
                                 let detected_vis = sstv_receiver.detected_vis();
                                 let frequency_offset_hz =
                                     sstv_receiver.frequency_offset_hz().unwrap_or_default();
+                                let afc_residual_hz =
+                                    frequency_offset_hz - sstv_tuning_offset_hz as f32;
                                 if detected_vis != last_sstv_vis {
                                     if let Some(vis) = detected_vis {
                                         info!(
@@ -391,8 +404,8 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 shared.sstv_progress = progress;
                                 shared.sstv_status = if let Some(value) = progress {
                                     format!(
-                                        "RECEIVING MARTIN M1 · {:.0}% · AFC {frequency_offset_hz:+.0} Hz",
-                                        value * 100.0
+                                        "RECEIVING MARTIN M1 · {:.0}% · decoder {sstv_tuning_offset_hz:+} Hz · AFC residual {afc_residual_hz:+.0} Hz",
+                                        value * 100.0,
                                     )
                                 } else if let Some(vis) = detected_vis {
                                     format!(
@@ -405,8 +418,11 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         20.0 * rms.max(1e-9).log10()
                                     )
                                 } else {
-                                    "LISTENING: fixed 1100–2300 Hz SSTV passband · waiting for VIS 44"
-                                        .to_string()
+                                    format!(
+                                        "LISTENING: decoder {}–{} Hz ({sstv_tuning_offset_hz:+} Hz) · waiting for VIS",
+                                        1_100 + sstv_tuning_offset_hz,
+                                        2_300 + sstv_tuning_offset_hz,
+                                    )
                                 };
                                 if let Some(image) = decoded {
                                     shared.sstv_rgb = image.rgb;

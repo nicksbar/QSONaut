@@ -7,3 +7,5 @@ authors.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+image.workspace = true
+komitoto-sstv = { git = "https://github.com/IRendy/komitoto.git", rev = "c98945f7c89f714b3182457a86b15a0c43cb6de6" }

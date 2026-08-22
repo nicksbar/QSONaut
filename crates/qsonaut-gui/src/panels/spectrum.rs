@@ -151,8 +151,8 @@ impl QsonautGuiApp {
             }
             if response.clicked() {
                 if let Some(pos) = response.interact_pointer_pos() {
-                    let rel = ((pos.x - response.rect.left()) / response.rect.width())
-                        .clamp(0.0, 1.0);
+                    let rel =
+                        ((pos.x - response.rect.left()) / response.rect.width()).clamp(0.0, 1.0);
                     let target = match self.radio_scope_view {
                         RadioScopeView::Narrow => snapshot.frequency_hz.map(|frequency| {
                             let half_span = scope_span_hz(self.radio_scope_span_code);
@@ -169,7 +169,7 @@ impl QsonautGuiApp {
                                 }
                             };
                             low.saturating_add(
-                                ((high.saturating_sub(low)) as f32 * rel).round() as u64,
+                                ((high.saturating_sub(low)) as f32 * rel).round() as u64
                             )
                         }),
                         RadioScopeView::Overview => snapshot.frequency_hz.and_then(|frequency| {
@@ -254,14 +254,14 @@ impl QsonautGuiApp {
         let is_sstv = self.workspace_mode == WorkspaceMode::Sstv;
         let bw_hz = filter_bw_hz;
         let rx_cursor_hz = if is_sstv {
-            1_100
+            (1_100_i32 + self.sstv_tuning_offset_hz).max(0) as u32
         } else if is_cw {
             u32::from(self.cw_tone_hz)
         } else {
             self.rx_tone_hz
         };
         let tx_cursor_hz = if is_sstv {
-            1_100
+            rx_cursor_hz
         } else if is_cw {
             u32::from(self.cw_tone_hz)
         } else {
@@ -317,11 +317,8 @@ impl QsonautGuiApp {
             self.audio_waterfall_texture_theme = self.waterfall_theme;
         }
         if let Some(tex) = &self.audio_waterfall_texture {
-            let image_widget = egui::Image::new((tex.id(), display_size)).sense(if is_sstv {
-                egui::Sense::hover()
-            } else {
-                egui::Sense::click()
-            });
+            let image_widget =
+                egui::Image::new((tex.id(), display_size)).sense(egui::Sense::click());
             let response = ui.add(image_widget);
 
             if let Some(pos) = response.interact_pointer_pos() {
@@ -329,22 +326,37 @@ impl QsonautGuiApp {
                 let capped_bw = bw_hz.clamp(100, AUDIO_MAX_FREQ_HZ);
                 let pick_hz = ((rel * capped_bw as f32).round() as u32).clamp(100, capped_bw);
 
-                if response.clicked() && !is_sstv {
-                    let selected_hz = if is_cw {
-                        pick_hz.clamp(200, 3_000)
+                if response.clicked() {
+                    if is_sstv {
+                        let minimum_center_hz = 700_i32;
+                        let maximum_center_hz = (capped_bw as i32 - 600).max(minimum_center_hz);
+                        let selected_center_hz =
+                            (pick_hz as i32).clamp(minimum_center_hz, maximum_center_hz);
+                        self.sstv_tuning_offset_hz = selected_center_hz - 1_700;
+                        self.profile_io_status = format!(
+                            "SSTV decoder aligned: {}–{} Hz ({:+} Hz)",
+                            1_100_i32 + self.sstv_tuning_offset_hz,
+                            2_300_i32 + self.sstv_tuning_offset_hz,
+                            self.sstv_tuning_offset_hz,
+                        );
                     } else {
-                        pick_hz.saturating_sub(channel_hz / 2)
-                    };
-                    if is_cw {
-                        self.cw_tone_hz = selected_hz as u16;
+                        let selected_hz = if is_cw {
+                            pick_hz.clamp(200, 3_000)
+                        } else {
+                            pick_hz.saturating_sub(channel_hz / 2)
+                        };
+                        if is_cw {
+                            self.cw_tone_hz = selected_hz as u16;
+                        }
+                        self.rx_tone_hz = selected_hz;
+                        if is_cw || !self.ft8_hold_tx_freq {
+                            self.tx_tone_hz = selected_hz;
+                        }
+                        self.profile_dirty = true;
+                        self.persist_profile("Auto-saved");
+                        self.profile_io_status =
+                            format!("RX audio cursor set: {} Hz", self.rx_tone_hz);
                     }
-                    self.rx_tone_hz = selected_hz;
-                    if is_cw || !self.ft8_hold_tx_freq {
-                        self.tx_tone_hz = selected_hz;
-                    }
-                    self.profile_dirty = true;
-                    self.persist_profile("Auto-saved");
-                    self.profile_io_status = format!("RX audio cursor set: {} Hz", self.rx_tone_hz);
                 }
                 if response.secondary_clicked() && !is_sstv {
                     let selected_hz = if is_cw {
@@ -442,7 +454,11 @@ impl QsonautGuiApp {
                 egui::pos2(response.rect.left() + 6.0, response.rect.top() + 4.0),
                 egui::Align2::LEFT_TOP,
                 if is_sstv {
-                    "SSTV FIXED 1100–2300 Hz".to_string()
+                    format!(
+                        "SSTV RX {}–{} Hz · click signal center to align",
+                        rx_cursor_hz,
+                        rx_cursor_hz + channel_hz
+                    )
                 } else {
                     format!(
                         "{} RX {} Hz",
@@ -457,7 +473,13 @@ impl QsonautGuiApp {
                 egui::pos2(response.rect.left() + 6.0, response.rect.top() + 20.0),
                 egui::Align2::LEFT_TOP,
                 if is_sstv {
-                    "Sync 1200 · pixels 1500–2300 Hz".to_string()
+                    format!(
+                        "Sync {} · pixels {}–{} Hz · offset {:+} Hz",
+                        1_200_i32 + self.sstv_tuning_offset_hz,
+                        1_500_i32 + self.sstv_tuning_offset_hz,
+                        2_300_i32 + self.sstv_tuning_offset_hz,
+                        self.sstv_tuning_offset_hz,
+                    )
                 } else {
                     format!("TX {} Hz", self.tx_tone_hz)
                 },
@@ -467,9 +489,11 @@ impl QsonautGuiApp {
         }
         if is_sstv {
             ui.label(format!(
-                "Audio: {}  |  radio passband 0–{} Hz · SSTV decode fixed at 1100–2300 Hz · tune the radio, not an audio cursor ({} {})",
+                "Audio: {}  |  radio passband 0–{} Hz · SSTV decoder {}–{} Hz · click its signal center to align ({} {})",
                 snapshot.audio_spectrum_status,
                 bw_hz.min(AUDIO_MAX_FREQ_HZ),
+                rx_cursor_hz,
+                rx_cursor_hz + channel_hz,
                 snapshot.mode,
                 snapshot
                     .filter

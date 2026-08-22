@@ -10,6 +10,14 @@ This project is intentionally moving toward **integration-first** modem strategy
   - QSONaut wires mode-specific receive adapters for each of those families.
   - FT8, FT4, FST4-60, JT9, JT65, and Q65-30A also have scheduled transmit
     synthesis. WSPR and MSK144 are receive-only in the current UI.
+- [`komitoto-sstv`](https://github.com/IRendy/komitoto/tree/c98945f7c89f714b3182457a86b15a0c43cb6de6/crates/komitoto-sstv)
+  (MIT, pinned Git revision)
+  - Complete-frame codecs and timing definitions for 13 Martin, Scottie,
+    Robot, and PD modes.
+  - Wrapped by `qsonaut-sstv`; QSONaut keeps the live streaming receiver,
+    audio-window alignment, VIS/AFC diagnostics, and TX safety boundary.
+  - The current UI/live receiver remains Martin M1 while the multi-mode adapter
+    is validated against off-air recordings.
 
 ## Next targets
 

@@ -6,10 +6,15 @@
 
 use std::f32::consts::TAU;
 
+use image::{DynamicImage, ImageBuffer, Rgb};
+
+pub use komitoto_sstv::SstvMode;
+
 pub const SAMPLE_RATE_HZ: u32 = 12_000;
 pub const WIDTH: usize = 320;
 pub const HEIGHT: usize = 256;
 pub const VIS_CODE_MARTIN_M1: u8 = 0x2c;
+pub const MULTIMODE_SAMPLE_RATE_HZ: u32 = 48_000;
 
 const LEADER_MS: f64 = 300.0;
 const VIS_BREAK_MS: f64 = 10.0;
@@ -29,6 +34,10 @@ pub enum SstvError {
     IncompleteAudio,
     #[error("VIS header is not Martin M1")]
     UnsupportedVis,
+    #[error("SSTV image dimensions do not match its RGB buffer")]
+    InvalidDimensions,
+    #[error("SSTV codec failed: {0}")]
+    Codec(String),
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +45,74 @@ pub struct DecodedImage {
     pub width: usize,
     pub height: usize,
     pub rgb: Vec<u8>,
+}
+
+/// Modes supplied by the pinned multi-mode codec backend.
+pub fn supported_modes() -> &'static [SstvMode] {
+    SstvMode::all()
+}
+
+/// Map QSONaut's parity-stripped VIS value to a codec mode.
+pub fn mode_from_vis(vis: u8) -> Option<SstvMode> {
+    match vis {
+        0x2c => Some(SstvMode::MartinM1),
+        0x28 => Some(SstvMode::MartinM2),
+        0x3c => Some(SstvMode::ScottieS1),
+        0x38 => Some(SstvMode::ScottieS2),
+        0x08 => Some(SstvMode::Robot36),
+        0x0c => Some(SstvMode::Robot72),
+        0x5d => Some(SstvMode::Pd50),
+        0x63 => Some(SstvMode::Pd90),
+        0x5f => Some(SstvMode::Pd120),
+        0x62 => Some(SstvMode::Pd160),
+        0x60 => Some(SstvMode::Pd180),
+        0x61 => Some(SstvMode::Pd240),
+        0x5e => Some(SstvMode::Pd290),
+        _ => None,
+    }
+}
+
+/// Encode arbitrary RGB pixels with the pinned multi-mode codec.
+///
+/// The input is resized to the selected mode's native dimensions. Returned
+/// PCM is normalized to signed 16-bit samples at 48 kHz.
+pub fn encode_rgb_mode(
+    mode: SstvMode,
+    width: u32,
+    height: u32,
+    rgb: &[u8],
+) -> Result<Vec<i16>, SstvError> {
+    let source = ImageBuffer::<Rgb<u8>, _>::from_raw(width, height, rgb.to_vec())
+        .ok_or(SstvError::InvalidDimensions)?;
+    let (target_width, target_height) = mode.resolution();
+    let prepared = komitoto_sstv::image_proc::prepare_image(
+        &DynamicImage::ImageRgb8(source),
+        target_width,
+        target_height,
+        komitoto_sstv::image_proc::ResizeStrategy::Crop,
+    );
+    komitoto_sstv::SstvEncoder::new(mode)
+        .encode(&prepared)
+        .map(|samples| {
+            samples
+                .into_iter()
+                .map(|sample| (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16)
+                .collect()
+        })
+        .map_err(|error| SstvError::Codec(error.to_string()))
+}
+
+/// Decode a complete, already mode-selected 48 kHz SSTV recording.
+pub fn decode_mode(mode: SstvMode, audio: &[f32]) -> Result<DecodedImage, SstvError> {
+    let image = komitoto_sstv::SstvDecoder::new(mode)
+        .decode(audio)
+        .map_err(|error| SstvError::Codec(error.to_string()))?
+        .to_rgb8();
+    Ok(DecodedImage {
+        width: image.width() as usize,
+        height: image.height() as usize,
+        rgb: image.into_raw(),
+    })
 }
 
 /// Streaming receiver with VIS detection and bounded buffering.
@@ -46,6 +123,7 @@ pub struct MartinM1Receiver {
     search_from: usize,
     last_vis: Option<u8>,
     frequency_offset_hz: Option<f32>,
+    tuning_offset_hz: f32,
 }
 
 impl MartinM1Receiver {
@@ -73,6 +151,15 @@ impl MartinM1Receiver {
     /// Frequency correction inferred from the 1900 Hz VIS leader.
     pub fn frequency_offset_hz(&self) -> Option<f32> {
         self.frequency_offset_hz
+    }
+
+    /// Move the expected SSTV tone plan within the captured audio channel.
+    pub fn set_tuning_offset_hz(&mut self, offset_hz: f32) {
+        let offset_hz = offset_hz.clamp(-1_000.0, 1_000.0);
+        if (self.tuning_offset_hz - offset_hz).abs() >= 1.0 {
+            self.reset();
+            self.tuning_offset_hz = offset_hz;
+        }
     }
 
     pub fn push(&mut self, samples: &[f32]) -> Option<DecodedImage> {
@@ -105,9 +192,10 @@ impl MartinM1Receiver {
         let header = ms_samples(HEADER_MS);
         let step = ms_samples(10.0);
         while self.search_from + header <= self.buffer.len() {
-            if let Some((vis, frequency_offset_hz)) =
-                decode_vis_header(&self.buffer[self.search_from..self.search_from + header])
-            {
+            if let Some((vis, frequency_offset_hz)) = decode_vis_header(
+                &self.buffer[self.search_from..self.search_from + header],
+                self.tuning_offset_hz,
+            ) {
                 self.last_vis = Some(vis);
                 self.frequency_offset_hz = Some(frequency_offset_hz);
                 if vis == VIS_CODE_MARTIN_M1 {
@@ -176,7 +264,7 @@ pub fn decode_martin_m1(audio: &[f32]) -> Result<DecodedImage, SstvError> {
     if audio.len() < header + ms_samples(IMAGE_MS) {
         return Err(SstvError::IncompleteAudio);
     }
-    let Some((vis, frequency_offset_hz)) = decode_vis_header(&audio[..header]) else {
+    let Some((vis, frequency_offset_hz)) = decode_vis_header(&audio[..header], 0.0) else {
         return Err(SstvError::UnsupportedVis);
     };
     if vis != VIS_CODE_MARTIN_M1 {
@@ -231,14 +319,20 @@ pub fn vis_mode_name(vis: u8) -> &'static str {
     }
 }
 
-fn decode_vis_header(audio: &[f32]) -> Option<(u8, f32)> {
+fn decode_vis_header(audio: &[f32], tuning_offset_hz: f32) -> Option<(u8, f32)> {
     let leader1_audio = slice_ms(audio, 40.0, 260.0);
-    if dominant_frequency(leader1_audio, 0.0) != 1900.0 {
+    if dominant_frequency(leader1_audio, tuning_offset_hz) != 1900.0 {
         return None;
     }
-    let actual_leader_hz = peak_frequency(leader1_audio, 1_700, 2_100, 10);
+    let search_center_hz = (1_900.0 + tuning_offset_hz).round() as i32;
+    let actual_leader_hz = peak_frequency(
+        leader1_audio,
+        (search_center_hz - 150).max(100) as u32,
+        (search_center_hz + 150).max(100) as u32,
+        10,
+    );
     let frequency_offset_hz = actual_leader_hz - 1900.0;
-    if frequency_offset_hz.abs() > 150.0 {
+    if (frequency_offset_hz - tuning_offset_hz).abs() > 150.0 {
         return None;
     }
     let classify = |start_ms, end_ms| {
@@ -448,5 +542,53 @@ mod tests {
             .sum::<u64>() as f64
             / decoded.rgb.len() as f64;
         assert!((mean - 127.0).abs() < 35.0, "decoded mean was {mean}");
+    }
+
+    #[test]
+    fn streaming_receiver_manual_tuning_accepts_a_shift_beyond_afc() {
+        let source = vec![96_u8; WIDTH * HEIGHT * 3];
+        let pcm = encode_martin_m1_with_offset(&source, 420.0).unwrap();
+        let audio: Vec<f32> = pcm
+            .iter()
+            .map(|sample| *sample as f32 / i16::MAX as f32)
+            .collect();
+        let mut receiver = MartinM1Receiver::default();
+        receiver.set_tuning_offset_hz(400.0);
+        let mut result = None;
+        for chunk in audio.chunks(4096) {
+            result = receiver.push(chunk).or(result);
+        }
+        assert!(result.is_some());
+        assert_eq!(receiver.tuning_offset_hz, 400.0);
+    }
+
+    #[test]
+    fn multimode_backend_vis_mapping_covers_every_supported_mode() {
+        assert_eq!(supported_modes().len(), 13);
+        for &mode in supported_modes() {
+            let vis = komitoto_sstv::spec::from_mode(mode).vis_code() & 0x7f;
+            assert_eq!(mode_from_vis(vis), Some(mode), "missing {}", mode.name());
+        }
+    }
+
+    #[test]
+    fn multimode_adapter_round_trips_martin_m2() {
+        let source = vec![112_u8; WIDTH * HEIGHT * 3];
+        let pcm = encode_rgb_mode(SstvMode::MartinM2, WIDTH as u32, HEIGHT as u32, &source)
+            .expect("Martin M2 encode should succeed");
+        let audio: Vec<f32> = pcm
+            .iter()
+            .map(|sample| *sample as f32 / i16::MAX as f32)
+            .collect();
+        let decoded =
+            decode_mode(SstvMode::MartinM2, &audio).expect("Martin M2 decode should succeed");
+        assert_eq!((decoded.width, decoded.height), (WIDTH, HEIGHT));
+        let mean = decoded
+            .rgb
+            .iter()
+            .map(|value| u64::from(*value))
+            .sum::<u64>() as f64
+            / decoded.rgb.len() as f64;
+        assert!((mean - 112.0).abs() < 25.0, "decoded mean was {mean}");
     }
 }

@@ -818,6 +818,7 @@ struct GuiState {
     sstv_progress: Option<f32>,
     sstv_rgb: Vec<u8>,
     sstv_revision: u64,
+    sstv_tuning_offset_hz: i32,
     ft4_last_decode_period: Option<u64>,
     digital_tx_period: Option<(WorkspaceMode, u64)>,
     selected_audio_hz: u32,
@@ -875,6 +876,7 @@ impl Default for GuiState {
             sstv_progress: None,
             sstv_rgb: Vec::new(),
             sstv_revision: 0,
+            sstv_tuning_offset_hz: 0,
             ft4_last_decode_period: None,
             digital_tx_period: None,
             selected_audio_hz: default_rx_tone_hz(),
@@ -1325,6 +1327,7 @@ struct QsonautGuiApp {
     sstv_texture: Option<TextureHandle>,
     sstv_texture_revision: u64,
     sstv_tx_armed: bool,
+    sstv_tuning_offset_hz: i32,
     sstv_image_path: String,
     sstv_ai_prompt: String,
     local_image_settings: LocalImageSettings,
@@ -1934,6 +1937,7 @@ impl QsonautGuiApp {
             sstv_texture: None,
             sstv_texture_revision: 0,
             sstv_tx_armed: false,
+            sstv_tuning_offset_hz: 0,
             sstv_image_path: String::new(),
             sstv_ai_prompt: String::new(),
             local_image_settings: LocalImageSettings::load(),
@@ -3199,6 +3203,7 @@ impl eframe::App for QsonautGuiApp {
             } else {
                 self.rx_tone_hz
             };
+            s.sstv_tuning_offset_hz = self.sstv_tuning_offset_hz;
             s.cw_wpm = self.cw_wpm;
             s.compute_backend = self.acceleration_report.active;
             s.radio_spectrum_desired = self.civ_spectrum_on;

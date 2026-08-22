@@ -35,7 +35,7 @@ console. This is an honest capability snapshot, not a compatibility promise:
 | Area | Current maturity |
 | --- | --- |
 | Digital modes | FT8 and FT4 provide native decode, activity, conversation, TX history, sequencing, logging, and explicit global TX disarm. FST4-60, JT9, JT65, and Q65-30A have experimental receive/scheduled-TX paths; WSPR and MSK144 are receive-only integrations. |
-| SSTV and local images | Martin M1 has native 320×256 receive/transmit with VIS detection and explicit one-shot TX arming. Ollama and Lemonade Server can generate activity artwork locally with model selection; non-loopback AI endpoints are rejected. |
+| SSTV and local images | Martin M1 has live 320×256 receive/transmit with movable audio-window alignment, VIS/AFC diagnostics, existing-image loading, and explicit one-shot TX arming. A pinned `komitoto-sstv` adapter provides 13-mode codec coverage for staged validation. Ollama and Lemonade Server can generate activity artwork locally with model selection; non-loopback AI endpoints are rejected. |
 | CW | Software audio CW through [cw-dit](https://github.com/nicksbar/cw-dit), with selected-channel streaming decode, adaptive timing, noise-floor slicing, and generated subband TX. Paddle/keyed-carrier input, prosigns, punctuation, and auto-sequencing are not implemented yet. |
 | Radio control | Rigwright profiles cover Icom CI-V, modern and classic Yaesu CAT, and Kenwood PC control, with generic and model-specific profiles. IC-7300 is hardware-validated; other serial drivers remain experimental. |
 | Spectrum and audio | Radio waterfalls, audio waterfalls, narrow/wide views, VBW controls, audio-device selection, decoder-channel monitoring, and RX monitor volume. |

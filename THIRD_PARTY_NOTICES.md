@@ -49,3 +49,19 @@ under the MIT OR Apache-2.0 license. The full upstream source and license are av
 <https://github.com/nicksbar/cw-dit>
 
 QSONaut uses only the reusable crates, not the cw-dit CLI, server, or web UI.
+
+## komitoto-sstv
+
+- Project: [`IRendy/komitoto`](https://github.com/IRendy/komitoto)
+- Component used: `komitoto-sstv`
+- License: `MIT`
+- Pinned revision: `c98945f7c89f714b3182457a86b15a0c43cb6de6`
+
+QSONaut uses the reusable multi-mode SSTV encoder/decoder as a codec beneath
+its own radio-facing adapter. The upstream component supplies Martin, Scottie,
+Robot, and PD mode definitions and complete-frame codecs. QSONaut retains its
+streaming capture, VIS handling, tuning/AFC, UI, and transmit safety layers.
+
+The full upstream source and license are available at:
+
+<https://github.com/IRendy/komitoto/tree/c98945f7c89f714b3182457a86b15a0c43cb6de6/crates/komitoto-sstv>

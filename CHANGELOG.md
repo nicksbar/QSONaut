@@ -16,6 +16,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   prompts, local image persistence, and hard loopback-only URL enforcement.
 - Added the reusable `qsonaut-sstv` modem crate with encode/decode and streaming
   receiver tests.
+- Added a revision-pinned `komitoto-sstv` adapter for 13 Martin, Scottie, Robot,
+  and PD codecs, with VIS mapping and cross-backend Martin M2 round-trip tests.
 
 ### Changed
 - Extended the prominent global TX safety control to cover armed, queued, and
@@ -25,8 +27,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   validation.
 
 ### Fixed
-- Replaced the misleading movable narrow-channel markers in SSTV mode with the
-  fixed 1100–2300 Hz SSTV passband and disabled waterfall selection there.
+- Made the 1200 Hz-wide SSTV decoder window movable on the audio waterfall;
+  clicking a received signal now shifts VIS detection, pixel decoding, and the
+  displayed tone plan together while residual AFC handles fine alignment.
+- Restored the SSTV decode/model layout after the image-path row could overflow
+  its column, and made existing PNG/JPEG loading a prominent full-width block.
 - Added explicit SSTV RX diagnostics for audio without a complete header,
   unsupported parity-valid VIS modes, configured sample-rate incompatibility,
   and the requirement to begin capture before the VIS header.
