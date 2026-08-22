@@ -22,6 +22,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   SSTV header, plus a 13-mode TX selector with native resolution and duration.
 - Connected automatic VIS selection and the manual RX-mode filter to live image
   reconstruction for all 13 pinned Martin, Scottie, Robot, and PD codecs.
+- Added single-channel SSTV auto-target acquisition across shifted audio-baseband
+  VIS headers, with visible scan/lock/manual states and waterfall click override.
+- Added a bounded SSTV RX activity history plus structured application-log events
+  for acquisition, no-header audio, progress, completion, and decode failure.
 
 ### Changed
 - Extended the prominent global TX safety control to cover armed, queued, and

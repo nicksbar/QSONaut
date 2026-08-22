@@ -12,6 +12,13 @@ Live image reception supports 13 Martin, Scottie, Robot, and PD modes. In
 duration automatically. An operator can instead choose a receive mode; that
 acts as a filter and visibly ignores a different mode's VIS header.
 
+**Auto Target** is separate from Auto (VIS). It scans for the complete shifted
+VIS signature from -900 through +700 Hz, keeping the full 1100–2300 Hz tone
+plan inside the normal approximately 0–3000 Hz radio passband. It locks the first
+valid signal, and shows `AUTO SCAN` or `AUTO LOCK` on the audio waterfall.
+Clicking a signal center immediately switches to a manual target; re-enable
+Auto Target to resume scanning. This is deliberately single-channel reception.
+
 Experimental transmit codecs are selectable for 13 modes: Martin M1/M2,
 Scottie S1/S2, Robot 36/72, and PD 50/90/120/160/180/240/290. The selector
 shows each mode's native dimensions and approximate duration.
@@ -37,6 +44,12 @@ pixel tones, and residual AFC move with it. Tune or align so the received sync
 tone falls on the displayed sync marker.
 Reception must begin before the roughly 0.9-second VIS header; joining an image
 mid-transmission cannot recover its mode or missing lines.
+
+The SSTV workspace keeps the newest 80 acquisition events and displays the
+newest eight. The local application log also records target offset, VIS/mode,
+input level, RF frequency, 25/50/75-percent progress, completion dimensions and
+elapsed time, no-header audio diagnostics, and failures. Repeated no-header
+audio diagnostics are rate-limited to one every ten seconds.
 
 The implementation is software-tested with encode/decode round trips and
 streaming acquisition. It is **not yet on-air validated**. Slant correction,

@@ -18,6 +18,9 @@ This project is intentionally moving toward **integration-first** modem strategy
     audio-window alignment, VIS/AFC diagnostics, and TX safety boundary.
   - The UI exposes all 13 modes for experimental TX and receive. RX can select
     the codec automatically from VIS or filter for an explicitly selected mode.
+  - A QSONaut-owned single-channel acquisition layer scans shifted VIS headers
+    across the audio baseband, retains waterfall click override, and publishes
+    bounded activity plus structured local diagnostics.
 
 ## Next targets
 

@@ -253,8 +253,15 @@ impl QsonautGuiApp {
         let is_cw = self.workspace_mode == WorkspaceMode::Cw;
         let is_sstv = self.workspace_mode == WorkspaceMode::Sstv;
         let bw_hz = filter_bw_hz;
+        let sstv_display_offset_hz = if snapshot.sstv_auto_target {
+            snapshot
+                .sstv_locked_offset_hz
+                .unwrap_or(self.sstv_tuning_offset_hz)
+        } else {
+            self.sstv_tuning_offset_hz
+        };
         let rx_cursor_hz = if is_sstv {
-            (1_100_i32 + self.sstv_tuning_offset_hz).max(0) as u32
+            (1_100_i32 + sstv_display_offset_hz).max(0) as u32
         } else if is_cw {
             u32::from(self.cw_tone_hz)
         } else {
@@ -333,11 +340,29 @@ impl QsonautGuiApp {
                         let selected_center_hz =
                             (pick_hz as i32).clamp(minimum_center_hz, maximum_center_hz);
                         self.sstv_tuning_offset_hz = selected_center_hz - 1_700;
+                        self.sstv_auto_target = false;
                         self.profile_io_status = format!(
-                            "SSTV decoder aligned: {}–{} Hz ({:+} Hz)",
+                            "SSTV manual target: {}–{} Hz ({:+} Hz)",
                             1_100_i32 + self.sstv_tuning_offset_hz,
                             2_300_i32 + self.sstv_tuning_offset_hz,
                             self.sstv_tuning_offset_hz,
+                        );
+                        let mut shared = self.state.lock().expect("ui state lock poisoned");
+                        shared.sstv_auto_target = false;
+                        shared.sstv_tuning_offset_hz = self.sstv_tuning_offset_hz;
+                        shared.sstv_locked_offset_hz = None;
+                        shared.sstv_progress = None;
+                        shared.record_sstv_rx_event(format!(
+                            "MANUAL TARGET clicked at {:+} Hz · window {}–{} Hz",
+                            self.sstv_tuning_offset_hz,
+                            1_100_i32 + self.sstv_tuning_offset_hz,
+                            2_300_i32 + self.sstv_tuning_offset_hz,
+                        ));
+                        tracing::info!(
+                            offset_hz = self.sstv_tuning_offset_hz,
+                            window_low_hz = 1_100_i32 + self.sstv_tuning_offset_hz,
+                            window_high_hz = 2_300_i32 + self.sstv_tuning_offset_hz,
+                            "SSTV manual target selected from audio waterfall"
                         );
                     } else {
                         let selected_hz = if is_cw {
@@ -455,9 +480,18 @@ impl QsonautGuiApp {
                 egui::Align2::LEFT_TOP,
                 if is_sstv {
                     format!(
-                        "SSTV RX {}–{} Hz · click signal center to align",
+                        "SSTV RX {}–{} Hz · {}",
                         rx_cursor_hz,
-                        rx_cursor_hz + channel_hz
+                        rx_cursor_hz + channel_hz,
+                        if snapshot.sstv_auto_target {
+                            if snapshot.sstv_locked_offset_hz.is_some() {
+                                "AUTO LOCK"
+                            } else {
+                                "AUTO SCAN"
+                            }
+                        } else {
+                            "MANUAL"
+                        }
                     )
                 } else {
                     format!(
@@ -475,10 +509,10 @@ impl QsonautGuiApp {
                 if is_sstv {
                     format!(
                         "Sync {} · pixels {}–{} Hz · offset {:+} Hz",
-                        1_200_i32 + self.sstv_tuning_offset_hz,
-                        1_500_i32 + self.sstv_tuning_offset_hz,
-                        2_300_i32 + self.sstv_tuning_offset_hz,
-                        self.sstv_tuning_offset_hz,
+                        1_200_i32 + sstv_display_offset_hz,
+                        1_500_i32 + sstv_display_offset_hz,
+                        2_300_i32 + sstv_display_offset_hz,
+                        sstv_display_offset_hz,
                     )
                 } else {
                     format!("TX {} Hz", self.tx_tone_hz)
@@ -489,11 +523,20 @@ impl QsonautGuiApp {
         }
         if is_sstv {
             ui.label(format!(
-                "Audio: {}  |  radio passband 0–{} Hz · SSTV decoder {}–{} Hz · click its signal center to align ({} {})",
+                "Audio: {}  |  radio passband 0–{} Hz · SSTV decoder {}–{} Hz · {} ({} {})",
                 snapshot.audio_spectrum_status,
                 bw_hz.min(AUDIO_MAX_FREQ_HZ),
                 rx_cursor_hz,
                 rx_cursor_hz + channel_hz,
+                if snapshot.sstv_auto_target {
+                    if snapshot.sstv_locked_offset_hz.is_some() {
+                        "auto-target locked; click to override"
+                    } else {
+                        "auto-target scanning; click to override"
+                    }
+                } else {
+                    "manual target; enable Auto Target to scan"
+                },
                 snapshot.mode,
                 snapshot
                     .filter

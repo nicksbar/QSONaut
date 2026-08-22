@@ -122,6 +122,7 @@ const MAX_RADIO_WF_BINS: usize = 1_024;
 const AUDIO_BINS: usize = 512;
 const AUDIO_WF_HEIGHT: usize = 120;
 const AUDIO_MAX_FREQ_HZ: u32 = 4_000;
+const SSTV_RX_EVENT_LIMIT: usize = 80;
 // 8192 samples @ 48 kHz = 170 ms window, ~5.9 Hz/bin, ~683 useful bins for 0-4 kHz.
 const FFT_SIZE: usize = 8192;
 const GUI_SCALE_PROFILE_VERSION: u32 = 8;
@@ -821,8 +822,11 @@ struct GuiState {
     sstv_height: usize,
     sstv_revision: u64,
     sstv_tuning_offset_hz: i32,
+    sstv_auto_target: bool,
+    sstv_locked_offset_hz: Option<i32>,
     sstv_rx_mode: Option<qsonaut_sstv::SstvMode>,
     sstv_detected_mode: Option<qsonaut_sstv::SstvMode>,
+    sstv_rx_events: VecDeque<String>,
     ft4_last_decode_period: Option<u64>,
     digital_tx_period: Option<(WorkspaceMode, u64)>,
     selected_audio_hz: u32,
@@ -883,8 +887,11 @@ impl Default for GuiState {
             sstv_height: qsonaut_sstv::HEIGHT,
             sstv_revision: 0,
             sstv_tuning_offset_hz: 0,
+            sstv_auto_target: true,
+            sstv_locked_offset_hz: None,
             sstv_rx_mode: None,
             sstv_detected_mode: None,
+            sstv_rx_events: VecDeque::with_capacity(SSTV_RX_EVENT_LIMIT),
             ft4_last_decode_period: None,
             digital_tx_period: None,
             selected_audio_hz: default_rx_tone_hz(),
@@ -895,6 +902,23 @@ impl Default for GuiState {
             psk_report_sender: None,
             last_error: None,
             last_update: None,
+        }
+    }
+}
+
+impl GuiState {
+    fn record_sstv_rx_event(&mut self, detail: impl Into<String>) {
+        let epoch_s = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64())
+            .unwrap_or_default();
+        self.sstv_rx_events.push_back(format!(
+            "{}Z  {}",
+            utc_hhmmss_millis(epoch_s),
+            detail.into()
+        ));
+        while self.sstv_rx_events.len() > SSTV_RX_EVENT_LIMIT {
+            self.sstv_rx_events.pop_front();
         }
     }
 }
@@ -1336,6 +1360,7 @@ struct QsonautGuiApp {
     sstv_texture_revision: u64,
     sstv_tx_armed: bool,
     sstv_tuning_offset_hz: i32,
+    sstv_auto_target: bool,
     sstv_tx_mode: qsonaut_sstv::SstvMode,
     sstv_file_dialog: egui_file_dialog::FileDialog,
     sstv_image_path: String,
@@ -1948,6 +1973,7 @@ impl QsonautGuiApp {
             sstv_texture_revision: 0,
             sstv_tx_armed: false,
             sstv_tuning_offset_hz: 0,
+            sstv_auto_target: true,
             sstv_tx_mode: qsonaut_sstv::SstvMode::MartinM1,
             sstv_file_dialog: egui_file_dialog::FileDialog::new(),
             sstv_image_path: String::new(),
@@ -3219,6 +3245,7 @@ impl eframe::App for QsonautGuiApp {
                 self.rx_tone_hz
             };
             s.sstv_tuning_offset_hz = self.sstv_tuning_offset_hz;
+            s.sstv_auto_target = self.sstv_auto_target;
             s.cw_wpm = self.cw_wpm;
             s.compute_backend = self.acceleration_report.active;
             s.radio_spectrum_desired = self.civ_spectrum_on;
@@ -4679,5 +4706,20 @@ mod tests {
             workspace_frequency_for_current_band(WorkspaceMode::Sstv, Some(14_074_000)),
             Some(14_230_000)
         );
+    }
+
+    #[test]
+    fn sstv_receive_activity_history_is_bounded() {
+        let mut state = GuiState::default();
+        for index in 0..(SSTV_RX_EVENT_LIMIT + 5) {
+            state.record_sstv_rx_event(format!("event {index}"));
+        }
+        assert_eq!(state.sstv_rx_events.len(), SSTV_RX_EVENT_LIMIT);
+        assert!(state.sstv_rx_events.front().unwrap().ends_with("event 5"));
+        assert!(state
+            .sstv_rx_events
+            .back()
+            .unwrap()
+            .ends_with(&format!("event {}", SSTV_RX_EVENT_LIMIT + 4)));
     }
 }

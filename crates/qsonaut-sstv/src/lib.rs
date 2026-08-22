@@ -14,6 +14,8 @@ pub const WIDTH: usize = 320;
 pub const HEIGHT: usize = 256;
 pub const VIS_CODE_MARTIN_M1: u8 = 0x2c;
 pub const MULTIMODE_SAMPLE_RATE_HZ: u32 = 48_000;
+pub const AUTO_TARGET_MIN_OFFSET_HZ: i32 = -900;
+pub const AUTO_TARGET_MAX_OFFSET_HZ: i32 = 700;
 
 const LEADER_MS: f64 = 300.0;
 const VIS_BREAK_MS: f64 = 10.0;
@@ -24,6 +26,7 @@ const CHANNEL_MS: f64 = 146.432;
 const LINE_MS: f64 = SYNC_MS + 4.0 * GAP_MS + 3.0 * CHANNEL_MS;
 const HEADER_MS: f64 = LEADER_MS * 2.0 + VIS_BREAK_MS + VIS_BIT_MS * 10.0;
 const IMAGE_MS: f64 = LINE_MS * HEIGHT as f64;
+const STREAM_DECODE_GUARD_MS: f64 = 20.0;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SstvError {
@@ -178,6 +181,8 @@ pub struct MultiModeReceiver {
     transmission_start: Option<usize>,
     active_mode: Option<SstvMode>,
     selected_mode: Option<SstvMode>,
+    auto_target: bool,
+    locked_offset_hz: Option<f32>,
     search_from: usize,
     last_vis: Option<u8>,
     frequency_offset_hz: Option<f32>,
@@ -194,6 +199,7 @@ impl MultiModeReceiver {
         self.search_from = 0;
         self.last_vis = None;
         self.frequency_offset_hz = None;
+        self.locked_offset_hz = None;
         self.last_decode_error = None;
         self.last_completed_mode = None;
     }
@@ -203,6 +209,21 @@ impl MultiModeReceiver {
             self.reset();
             self.selected_mode = mode;
         }
+    }
+
+    pub fn set_auto_target(&mut self, enabled: bool) {
+        if self.auto_target != enabled {
+            self.reset();
+            self.auto_target = enabled;
+        }
+    }
+
+    pub fn auto_target(&self) -> bool {
+        self.auto_target
+    }
+
+    pub fn locked_offset_hz(&self) -> Option<f32> {
+        self.locked_offset_hz
     }
 
     pub fn selected_mode(&self) -> Option<SstvMode> {
@@ -252,7 +273,7 @@ impl MultiModeReceiver {
             self.find_header();
         }
         if let (Some(start), Some(mode)) = (self.transmission_start, self.active_mode) {
-            let needed = start + mode_sample_count_12k(mode);
+            let needed = start + mode_sample_count_12k(mode) + ms_samples(STREAM_DECODE_GUARD_MS);
             if self.buffer.len() >= needed {
                 let result = decode_mode_12k(
                     mode,
@@ -284,14 +305,20 @@ impl MultiModeReceiver {
 
     fn find_header(&mut self) {
         let header = ms_samples(HEADER_MS);
-        let step = ms_samples(10.0);
+        // Five milliseconds keeps the narrow VIS break/start windows aligned
+        // even when a transmission begins between audio callback boundaries.
+        let step = ms_samples(5.0);
         while self.search_from + header <= self.buffer.len() {
-            if let Some((vis, frequency_offset_hz)) = decode_vis_header(
-                &self.buffer[self.search_from..self.search_from + header],
-                self.tuning_offset_hz,
-            ) {
+            let header_audio = &self.buffer[self.search_from..self.search_from + header];
+            let detection = if self.auto_target {
+                decode_vis_header_auto(header_audio)
+            } else {
+                decode_vis_header(header_audio, self.tuning_offset_hz)
+            };
+            if let Some((vis, frequency_offset_hz)) = detection {
                 self.last_vis = Some(vis);
                 self.frequency_offset_hz = Some(frequency_offset_hz);
+                self.locked_offset_hz = Some(frequency_offset_hz);
                 if let Some(detected_mode) = mode_from_vis(vis) {
                     if self.selected_mode.is_none() || self.selected_mode == Some(detected_mode) {
                         self.transmission_start = Some(self.search_from);
@@ -561,6 +588,17 @@ fn decode_vis_header(audio: &[f32], tuning_offset_hz: f32) -> Option<(u8, f32)> 
     (parity_ok && stop == 1200.0).then_some((vis, frequency_offset_hz))
 }
 
+fn decode_vis_header_auto(audio: &[f32]) -> Option<(u8, f32)> {
+    let leader = slice_ms(audio, 40.0, 260.0);
+    let peak_hz = peak_frequency(
+        leader,
+        (1_900 + AUTO_TARGET_MIN_OFFSET_HZ) as u32,
+        (1_900 + AUTO_TARGET_MAX_OFFSET_HZ) as u32,
+        25,
+    );
+    decode_vis_header(audio, peak_hz - 1_900.0)
+}
+
 fn append_vis_header<F>(vis_code: u8, tone: &mut F, out: &mut Vec<i16>)
 where
     F: FnMut(f64, f64, &mut Vec<i16>),
@@ -790,10 +828,11 @@ mod tests {
         for &mode in supported_modes() {
             let pcm = encode_rgb_mode_12k(mode, WIDTH as u32, HEIGHT as u32, &source)
                 .unwrap_or_else(|error| panic!("{} encode failed: {error}", mode.name()));
-            let audio: Vec<f32> = pcm
+            let mut audio: Vec<f32> = pcm
                 .iter()
                 .map(|sample| *sample as f32 / i16::MAX as f32)
                 .collect();
+            audio.resize(audio.len() + ms_samples(STREAM_DECODE_GUARD_MS), 0.0);
             let mut receiver = MultiModeReceiver::default();
             let mut result = None;
             for chunk in audio.chunks(4096) {
@@ -809,6 +848,35 @@ mod tests {
             );
             assert_eq!(receiver.take_completed_mode(), Some(mode));
         }
+    }
+
+    #[test]
+    fn auto_target_acquires_a_shifted_unaligned_transmission() {
+        let source = vec![96_u8; WIDTH * HEIGHT * 3];
+        let pcm = encode_martin_m1_with_offset(&source, 420.0).unwrap();
+        let mut audio = vec![0.0_f32; ms_samples(7.0)];
+        audio.extend(pcm.iter().map(|sample| *sample as f32 / i16::MAX as f32));
+        audio.resize(audio.len() + ms_samples(STREAM_DECODE_GUARD_MS), 0.0);
+        let mut receiver = MultiModeReceiver::default();
+        receiver.set_auto_target(true);
+        let mut result = None;
+        for chunk in audio.chunks(4096) {
+            result = receiver.push(chunk).or(result);
+        }
+        assert!(result.is_some(), "shifted auto-target image should decode");
+        assert_eq!(receiver.take_completed_mode(), Some(SstvMode::MartinM1));
+    }
+
+    #[test]
+    fn auto_target_rejects_silence_and_keeps_its_buffer_bounded() {
+        let audio = vec![0.0_f32; SAMPLE_RATE_HZ as usize * 2];
+        let mut receiver = MultiModeReceiver::default();
+        receiver.set_auto_target(true);
+        for chunk in audio.chunks(2048) {
+            assert!(receiver.push(chunk).is_none());
+        }
+        assert!(receiver.detected_vis().is_none());
+        assert!(receiver.buffer.len() <= ms_samples(HEADER_MS + 400.0));
     }
 
     #[test]
