@@ -31,7 +31,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   clicking a received signal now shifts VIS detection, pixel decoding, and the
   displayed tone plan together while residual AFC handles fine alignment.
 - Restored the SSTV decode/model layout after the image-path row could overflow
-  its column, and made existing PNG/JPEG loading a prominent full-width block.
+  its column, and made existing PNG/JPEG loading a prominent full-width block
+  with an in-app cross-platform file browser.
 - Added explicit SSTV RX diagnostics for audio without a complete header,
   unsupported parity-valid VIS modes, configured sample-rate incompatibility,
   and the requirement to begin capture before the VIS header.

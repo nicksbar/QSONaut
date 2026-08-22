@@ -23,6 +23,7 @@ hound = "3.5"
 tempfile = "3"
 base64.workspace = true
 image.workspace = true
+egui-file-dialog = { version = "=0.12.0", default-features = false }
 
 qsonaut-audio = { path = "../qsonaut-audio" }
 qsonaut-accelerate = { path = "../qsonaut-accelerate" }

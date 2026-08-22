@@ -17,6 +17,14 @@ impl QsonautGuiApp {
         _snapshot: &GuiState,
     ) {
         self.poll_local_image_events();
+        self.sstv_file_dialog.update(ctx);
+        if let Some(path) = self.sstv_file_dialog.take_picked() {
+            self.sstv_image_path = path.display().to_string();
+            match std::fs::read(&path) {
+                Ok(bytes) => self.install_sstv_image(&bytes, "Loaded image"),
+                Err(error) => self.local_image_status = format!("Image load failed: {error}"),
+            }
+        }
         let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
         if snapshot.sstv_revision != self.sstv_texture_revision
             && snapshot.sstv_rgb.len() == qsonaut_sstv::WIDTH * qsonaut_sstv::HEIGHT * 3
@@ -94,7 +102,10 @@ impl QsonautGuiApp {
                         .desired_width(ui.available_width()),
                 );
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button("📂 LOAD PNG / JPEG").clicked() {
+                    if ui.button("📂 BROWSE…").clicked() {
+                        self.sstv_file_dialog.pick_file();
+                    }
+                    if ui.button("📥 LOAD PATH").clicked() {
                         match std::fs::read(self.sstv_image_path.trim()) {
                             Ok(bytes) => self.install_sstv_image(&bytes, "Loaded image"),
                             Err(error) => {
