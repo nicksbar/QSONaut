@@ -521,6 +521,25 @@ mod tests {
     }
 
     #[test]
+    fn native_radio_exposes_protocol_only_profiles() {
+        for (model, label) in [
+            ("CI-V (generic)", "Icom CI-V (generic) — experimental"),
+            ("CAT (generic)", "Yaesu CAT (generic) — experimental"),
+            (
+                "classic CAT (generic)",
+                "Yaesu classic CAT (generic) — experimental",
+            ),
+            (
+                "PC control (generic)",
+                "Kenwood PC control (generic) — experimental",
+            ),
+        ] {
+            assert_eq!(selected_radio_label(model), label);
+            assert!(radio_capability_summary(*find_model(model).unwrap()).contains("frequency"));
+        }
+    }
+
+    #[test]
     fn backend_labels_are_ui_owned_connection_labels() {
         assert_eq!(radio_backend_label("native"), "Native Rigwright");
         assert_eq!(radio_backend_label("RIGCTLD"), "Hamlib rigctld");

@@ -880,7 +880,7 @@ impl QsonautGuiApp {
             "Match span to selected FIL",
         );
         let vbw_changed = ui
-            .checkbox(&mut self.radio_scope_vbw_wide, "Wide video bandwidth")
+            .checkbox(&mut self.radio_scope_vbw_wide, "Wide VBW")
             .on_hover_text(
                 "Wide VBW smooths the radio scope display by averaging more video bandwidth. "
                     .to_string()
