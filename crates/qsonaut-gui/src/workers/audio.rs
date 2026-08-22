@@ -369,6 +369,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 let mut shared = state.lock().expect("ui state lock poisoned");
                                 shared.sstv_status = "SSTV TX active; RX reset".to_string();
                                 shared.sstv_progress = None;
+                                shared.sstv_detected_mode = None;
                             } else {
                                 let requested_offset_hz = state
                                     .lock()
@@ -402,6 +403,11 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 }
                                 let mut shared = state.lock().expect("ui state lock poisoned");
                                 shared.sstv_progress = progress;
+                                if let Some(mode) =
+                                    detected_vis.and_then(qsonaut_sstv::mode_from_vis)
+                                {
+                                    shared.sstv_detected_mode = Some(mode);
+                                }
                                 shared.sstv_status = if let Some(value) = progress {
                                     format!(
                                         "RECEIVING MARTIN M1 · {:.0}% · decoder {sstv_tuning_offset_hz:+} Hz · AFC residual {afc_residual_hz:+.0} Hz",

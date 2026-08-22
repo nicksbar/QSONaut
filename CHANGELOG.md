@@ -18,6 +18,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   receiver tests.
 - Added a revision-pinned `komitoto-sstv` adapter for 13 Martin, Scottie, Robot,
   and PD codecs, with VIS mapping and cross-backend Martin M2 round-trip tests.
+- Added an explicit RX `Auto (VIS)` state with the detected mode shown in the
+  SSTV header, plus a 13-mode TX selector with native resolution and duration.
 
 ### Changed
 - Extended the prominent global TX safety control to cover armed, queued, and
@@ -33,6 +35,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Restored the SSTV decode/model layout after the image-path row could overflow
   its column, and made existing PNG/JPEG loading a prominent full-width block
   with an in-app cross-platform file browser.
+- Fitted the SSTV frame and local-model panels to the available central
+  viewport like FT8/FT4; image loading stays at the top while the model lab
+  scrolls within its own column.
 - Added explicit SSTV RX diagnostics for audio without a complete header,
   unsupported parity-valid VIS modes, configured sample-rate incompatibility,
   and the requirement to begin capture before the VIS header.

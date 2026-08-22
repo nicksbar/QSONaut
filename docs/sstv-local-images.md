@@ -1,13 +1,21 @@
 # SSTV and local image generation
 
-QSONaut 0.3.7 adds a native Martin M1 SSTV workspace and local image generation
-for activity artwork. These are deliberately connected: an operator can receive
-an SSTV frame, load an existing image, or generate a new image locally, inspect
-the exact 320×256 transmit frame, arm TX, and send it as Martin M1.
+QSONaut 0.3.7 adds an SSTV workspace and local image generation for activity
+artwork. An operator can receive a frame, browse for an existing image, or
+generate one locally, inspect the transmit preview, select a TX mode, arm TX,
+and send it through the shared safety path.
 
 ## Current SSTV scope
 
-The native modem currently supports **Martin M1 only**:
+Live image reception currently supports **Martin M1**. RX mode is visibly
+**Auto (VIS)**; the detected Martin, Scottie, Robot, or PD mode is shown in the
+workspace even when its live image decoder is not yet enabled.
+
+Experimental transmit codecs are selectable for 13 modes: Martin M1/M2,
+Scottie S1/S2, Robot 36/72, and PD 50/90/120/160/180/240/290. The selector
+shows each mode's native dimensions and approximate duration.
+
+Martin M1 live RX uses:
 
 - VIS code 44 (`0x2c`)
 - 320×256 RGB, green/blue/red channel order
@@ -21,18 +29,19 @@ progress, and publishes a completed image to the workspace. The transmitter
 generates phase-continuous audio and uses QSONaut's existing PTT acknowledgement,
 abort, tail, and unconditional PTT-release handling.
 
-SSTV does not use a movable narrow audio channel. QSONaut decodes the fixed
-1100–2300 Hz SSTV tone range inside the radio's approximately 3 kHz USB
-passband. In SSTV mode, the audio waterfall shows that fixed range and disables
-RX/TX cursor selection. Tune the radio so the received sync tone is at 1200 Hz.
+SSTV uses a 1200 Hz-wide tone plan inside the radio's approximately 3 kHz USB
+passband. The decoder starts at 1100–2300 Hz. Clicking the received signal's
+center in the audio waterfall moves the complete decoder window; VIS detection,
+pixel tones, and residual AFC move with it. Tune or align so the received sync
+tone falls on the displayed sync marker.
 Reception must begin before the roughly 0.9-second VIS header; joining an image
 mid-transmission cannot recover its mode or missing lines.
 
 The implementation is software-tested with encode/decode round trips and
 streaming acquisition. It is **not yet on-air validated**. Slant correction,
-automatic clock calibration, Scottie, Robot, PD modes, and FSK ID are not part
-of this release. A parity-valid unsupported VIS header is shown by code and
-mode name so an audible SSTV signal does not look like decoder silence.
+automatic clock calibration, broad-mode live reconstruction, and FSK ID are not
+part of this release. A parity-valid VIS header is shown by code and mode name
+so an audible SSTV signal does not look like decoder silence.
 
 ## Frequency presets
 
@@ -94,9 +103,10 @@ QSONaut enforces all of the following:
 - responses larger than 96 MiB are rejected;
 - prompts and images are never sent to QSONaut Server.
 
-Generated and loaded transmit frames are resized/cropped to Martin M1's 320×256
-canvas and saved as PNG files under the platform QSONaut configuration directory
-in `sstv-images/`. Local server settings are stored in `local-image.json` there.
+Generated and loaded source frames are kept as a 320×256 preview, then the
+selected codec resizes/crops them to its native transmit dimensions. Preview
+PNGs are saved under the platform QSONaut configuration directory in
+`sstv-images/`. Local server settings are stored in `local-image.json` there.
 
 ## TX safety workflow
 
@@ -104,7 +114,7 @@ Image generation never keys the radio. Transmission requires both controls in
 the SSTV workspace:
 
 1. **ARM SSTV TX**
-2. **TRANSMIT MARTIN M1**
+2. **TRANSMIT &lt;SELECTED MODE&gt;**
 
 The global **STOP + DISARM ALL TX** control includes SSTV arming, active audio,
 abort state, and PTT release. **STOP SSTV TX** aborts the current audio and drops

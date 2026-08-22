@@ -52,6 +52,10 @@ pub fn supported_modes() -> &'static [SstvMode] {
     SstvMode::all()
 }
 
+pub fn mode_duration_seconds(mode: SstvMode) -> f32 {
+    komitoto_sstv::spec::from_mode(mode).total_samples() as f32 / MULTIMODE_SAMPLE_RATE_HZ as f32
+}
+
 /// Map QSONaut's parity-stripped VIS value to a codec mode.
 pub fn mode_from_vis(vis: u8) -> Option<SstvMode> {
     match vis {
@@ -100,6 +104,19 @@ pub fn encode_rgb_mode(
                 .collect()
         })
         .map_err(|error| SstvError::Codec(error.to_string()))
+}
+
+/// Encode a selected mode for QSONaut's native 12 kHz transmit path.
+pub fn encode_rgb_mode_12k(
+    mode: SstvMode,
+    width: u32,
+    height: u32,
+    rgb: &[u8],
+) -> Result<Vec<i16>, SstvError> {
+    Ok(encode_rgb_mode(mode, width, height, rgb)?
+        .into_iter()
+        .step_by((MULTIMODE_SAMPLE_RATE_HZ / SAMPLE_RATE_HZ) as usize)
+        .collect())
 }
 
 /// Decode a complete, already mode-selected 48 kHz SSTV recording.

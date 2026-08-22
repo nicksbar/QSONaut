@@ -35,7 +35,7 @@ console. This is an honest capability snapshot, not a compatibility promise:
 | Area | Current maturity |
 | --- | --- |
 | Digital modes | FT8 and FT4 provide native decode, activity, conversation, TX history, sequencing, logging, and explicit global TX disarm. FST4-60, JT9, JT65, and Q65-30A have experimental receive/scheduled-TX paths; WSPR and MSK144 are receive-only integrations. |
-| SSTV and local images | Martin M1 has live 320×256 receive/transmit with movable audio-window alignment, VIS/AFC diagnostics, existing-image loading, and explicit one-shot TX arming. A pinned `komitoto-sstv` adapter provides 13-mode codec coverage for staged validation. Ollama and Lemonade Server can generate activity artwork locally with model selection; non-loopback AI endpoints are rejected. |
+| SSTV and local images | Martin M1 has live receive with movable audio-window alignment and automatic VIS mode reporting. A pinned `komitoto-sstv` adapter provides selectable experimental TX for 13 Martin/Scottie/Robot/PD modes; broad live RX remains under validation. Existing images can be browsed or generated through local Ollama/Lemonade models, and TX remains explicitly armed. |
 | CW | Software audio CW through [cw-dit](https://github.com/nicksbar/cw-dit), with selected-channel streaming decode, adaptive timing, noise-floor slicing, and generated subband TX. Paddle/keyed-carrier input, prosigns, punctuation, and auto-sequencing are not implemented yet. |
 | Radio control | Rigwright profiles cover Icom CI-V, modern and classic Yaesu CAT, and Kenwood PC control, with generic and model-specific profiles. IC-7300 is hardware-validated; other serial drivers remain experimental. |
 | Spectrum and audio | Radio waterfalls, audio waterfalls, narrow/wide views, VBW controls, audio-device selection, decoder-channel monitoring, and RX monitor volume. |
@@ -169,7 +169,7 @@ to `.cargo/config.toml`; the local file is ignored by Git and overrides the
 Git dependency with `../rigwright` without changing committed manifests. Run
 `cargo update -p rigwright` when you intentionally want the latest GitHub head.
 - `crates/qsonaut-audio` — real-time audio and high-quality 48→12 kHz decimation
-- `crates/qsonaut-sstv` — reusable Martin M1 VIS, audio encoder, and streaming receiver
+- `crates/qsonaut-sstv` — streaming VIS/AFC adapter plus pinned multi-mode SSTV codecs
 - `mfsk-core` — WSJT-family modem encoding and decoding
 - [`cw-dit`](https://github.com/nicksbar/cw-dit) — reusable Rust CW DSP and streaming Morse components (`cwdit-dsp`, `cwdit-morse`), MIT OR Apache-2.0
 - `crates/qsonaut-log`, `qsonaut-pskreporter` — local logging and opt-in reporting

@@ -819,6 +819,7 @@ struct GuiState {
     sstv_rgb: Vec<u8>,
     sstv_revision: u64,
     sstv_tuning_offset_hz: i32,
+    sstv_detected_mode: Option<qsonaut_sstv::SstvMode>,
     ft4_last_decode_period: Option<u64>,
     digital_tx_period: Option<(WorkspaceMode, u64)>,
     selected_audio_hz: u32,
@@ -877,6 +878,7 @@ impl Default for GuiState {
             sstv_rgb: Vec::new(),
             sstv_revision: 0,
             sstv_tuning_offset_hz: 0,
+            sstv_detected_mode: None,
             ft4_last_decode_period: None,
             digital_tx_period: None,
             selected_audio_hz: default_rx_tone_hz(),
@@ -1328,6 +1330,7 @@ struct QsonautGuiApp {
     sstv_texture_revision: u64,
     sstv_tx_armed: bool,
     sstv_tuning_offset_hz: i32,
+    sstv_tx_mode: qsonaut_sstv::SstvMode,
     sstv_file_dialog: egui_file_dialog::FileDialog,
     sstv_image_path: String,
     sstv_ai_prompt: String,
@@ -1939,6 +1942,7 @@ impl QsonautGuiApp {
             sstv_texture_revision: 0,
             sstv_tx_armed: false,
             sstv_tuning_offset_hz: 0,
+            sstv_tx_mode: qsonaut_sstv::SstvMode::MartinM1,
             sstv_file_dialog: egui_file_dialog::FileDialog::new(),
             sstv_image_path: String::new(),
             sstv_ai_prompt: String::new(),
@@ -2868,7 +2872,10 @@ impl QsonautGuiApp {
         ctx: &egui::Context,
         snapshot: &GuiState,
     ) {
-        if matches!(self.workspace_mode, WorkspaceMode::Ft8 | WorkspaceMode::Ft4) {
+        if matches!(
+            self.workspace_mode,
+            WorkspaceMode::Ft8 | WorkspaceMode::Ft4 | WorkspaceMode::Sstv
+        ) {
             self.draw_workspace(ui, ctx, snapshot);
         } else {
             egui::ScrollArea::both()

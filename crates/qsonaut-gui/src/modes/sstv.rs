@@ -9,6 +9,11 @@ pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
     ("10m", 28_680_000),
 ];
 
+fn fitted_sstv_body_height(available_height: f32) -> f32 {
+    const TX_SAFETY_HEIGHT: f32 = 78.0;
+    (available_height - TX_SAFETY_HEIGHT).max(0.0)
+}
+
 impl QsonautGuiApp {
     pub(crate) fn draw_sstv_workspace(
         &mut self,
@@ -38,11 +43,17 @@ impl QsonautGuiApp {
         }
 
         ui.horizontal_wrapped(|ui| {
-            ui.heading("📺 SSTV · Martin M1");
+            ui.heading(format!("📺 SSTV · {}", self.sstv_tx_mode.name()));
             ui.separator();
-            ui.label(RichText::new("Native 12 kHz modem").color(theme_success(ui)));
+            ui.label(RichText::new("RX AUTO (VIS)").color(theme_success(ui)));
             ui.separator();
-            ui.label("320×256 RGB · VIS 44 · ~114 seconds");
+            ui.label(format!(
+                "Detected: {}",
+                snapshot
+                    .sstv_detected_mode
+                    .map(|mode| mode.name())
+                    .unwrap_or("waiting for header")
+            ));
             ui.separator();
             ui.label(format!(
                 "Radio {:.3} MHz · USB FIL1",
@@ -56,22 +67,57 @@ impl QsonautGuiApp {
         );
         ui.label(
             RichText::new(
-                "RX starts at the standard 1100–2300 Hz SSTV audio window. Click the signal center in the audio waterfall to align the decoder when received tones are shifted. Start listening before the VIS header. This release decodes Martin M1 (VIS 44) only and reports other recognized VIS modes by name.",
+                "RX auto-detects the VIS header and names Martin, Scottie, Robot, and PD modes. Live image reconstruction is currently Martin M1; other modes are identified while the multi-mode streaming adapter is validated. Click the signal center in the audio waterfall to align the decoder.",
             )
             .small()
             .color(theme_accent(ui)),
         );
         ui.add_space(4.0);
 
+        // Reserve the safety strip and make the two work areas own only the
+        // remaining viewport. Each column then manages its own overflow rather
+        // than making the entire SSTV workspace taller than the central panel.
+        let body_height = fitted_sstv_body_height(ui.available_height());
         ui.columns(2, |columns| {
             let (left, right) = columns.split_at_mut(1);
             let left = &mut left[0];
             let right = &mut right[0];
 
-            egui::Frame::dark_canvas(left.style()).show(left, |ui| {
+            left.allocate_ui_with_layout(
+                egui::vec2(left.available_width(), body_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
                 ui.label(RichText::new("SSTV FRAME").strong());
-                let available = ui.available_width().max(200.0);
-                let size = egui::vec2(available, available * 0.8);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("📂 OPEN IMAGE…").clicked() {
+                        self.sstv_file_dialog.pick_file();
+                    }
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.sstv_image_path)
+                            .hint_text("PNG/JPEG path")
+                            .desired_width((ui.available_width() - 92.0).max(80.0)),
+                    );
+                    if ui.small_button("LOAD PATH").clicked() {
+                        match std::fs::read(self.sstv_image_path.trim()) {
+                            Ok(bytes) => self.install_sstv_image(&bytes, "Loaded image"),
+                            Err(error) => {
+                                self.local_image_status = format!("Image load failed: {error}")
+                            }
+                        }
+                    }
+                });
+                ui.label(RichText::new(&snapshot.sstv_status).monospace());
+                if let Some(progress) = snapshot.sstv_progress {
+                    ui.add(
+                        egui::ProgressBar::new(progress)
+                            .desired_width(ui.available_width())
+                            .text(format!("Receiving {:.0}%", progress * 100.0)),
+                    );
+                }
+                    let available_width = ui.available_width().max(1.0);
+                    let available_height = ui.available_height().max(1.0);
+                let image_width = available_width.min(available_height / 0.8);
+                let size = egui::vec2(image_width, image_width * 0.8);
                 if let Some(texture) = &self.sstv_texture {
                     ui.add(egui::Image::new((texture.id(), size)).corner_radius(5.0));
                 } else {
@@ -86,42 +132,41 @@ impl QsonautGuiApp {
                         },
                     );
                 }
-                ui.label(RichText::new(&snapshot.sstv_status).monospace());
-                if let Some(progress) = snapshot.sstv_progress {
-                    ui.add(
-                        egui::ProgressBar::new(progress)
-                            .desired_width(ui.available_width())
-                            .text(format!("Receiving {:.0}%", progress * 100.0)),
-                    );
-                }
-                ui.separator();
-                ui.label(RichText::new("OPEN AN EXISTING TX IMAGE").strong());
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.sstv_image_path)
-                        .hint_text("Paste the full path to a PNG or JPEG")
-                        .desired_width(ui.available_width()),
-                );
+                }),
+            );
+
+            egui::ScrollArea::vertical()
+                .id_salt("sstv_local_image_lab_scroll")
+                .max_height(body_height)
+                .auto_shrink([false, false])
+                .show(right, |ui| egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button("📂 BROWSE…").clicked() {
-                        self.sstv_file_dialog.pick_file();
-                    }
-                    if ui.button("📥 LOAD PATH").clicked() {
-                        match std::fs::read(self.sstv_image_path.trim()) {
-                            Ok(bytes) => self.install_sstv_image(&bytes, "Loaded image"),
-                            Err(error) => {
-                                self.local_image_status = format!("Image load failed: {error}")
+                    ui.label(RichText::new("TX mode").strong());
+                    egui::ComboBox::from_id_salt("sstv_tx_mode")
+                        .selected_text(self.sstv_tx_mode.name())
+                        .show_ui(ui, |ui| {
+                            for &mode in qsonaut_sstv::supported_modes() {
+                                let (width, height) = mode.resolution();
+                                ui.selectable_value(
+                                    &mut self.sstv_tx_mode,
+                                    mode,
+                                    format!(
+                                        "{} · {}×{} · {:.0}s",
+                                        mode.name(),
+                                        width,
+                                        height,
+                                        qsonaut_sstv::mode_duration_seconds(mode),
+                                    ),
+                                );
                             }
-                        }
-                    }
+                        });
                     ui.label(
-                        RichText::new("Resized for SSTV transmission")
+                        RichText::new("RX: Auto (VIS)")
                             .small()
-                            .color(theme_muted(ui)),
+                            .color(theme_accent(ui)),
                     );
                 });
-            });
-
-            egui::Frame::group(right.style()).show(right, |ui| {
+                ui.separator();
                 ui.label(RichText::new("🧠 LOCAL IMAGE LAB").strong());
                 ui.label(
                     RichText::new("Hard local-only policy: HTTP requests are blocked unless the host is localhost or a loopback IP.")
@@ -212,7 +257,7 @@ impl QsonautGuiApp {
                     }
                 });
                 ui.label(RichText::new(&self.local_image_status).small().color(theme_muted(ui)));
-            });
+                }));
         });
 
         ui.add_space(5.0);
@@ -251,12 +296,16 @@ impl QsonautGuiApp {
                             self.sstv_tx_armed
                                 && has_frame
                                 && !self.digital_tx_active.load(Ordering::Acquire),
-                            egui::Button::new("🔥 TRANSMIT MARTIN M1 · ~114s")
-                                .fill(Color32::from_rgb(145, 42, 34)),
+                            egui::Button::new(format!(
+                                "🔥 TRANSMIT {} · ~{:.0}s",
+                                self.sstv_tx_mode.name(),
+                                qsonaut_sstv::mode_duration_seconds(self.sstv_tx_mode),
+                            ))
+                            .fill(Color32::from_rgb(145, 42, 34)),
                         )
                         .clicked()
                     {
-                        self.start_sstv_tx(&snapshot.sstv_rgb);
+                        self.start_sstv_tx(self.sstv_tx_mode, &snapshot.sstv_rgb);
                     }
                     if ui
                         .add_enabled(
@@ -275,11 +324,12 @@ impl QsonautGuiApp {
 
     fn sstv_activity_prompt(&self, snapshot: &GuiState) -> String {
         format!(
-            "Create bold, high-contrast amateur radio SSTV QSL artwork for callsign {} in {} {}. Current activity: {:.3} MHz SSTV Martin M1. Use a striking radio-space aesthetic, one strong central subject, large readable callsign, no tiny text, and a composition that survives 320 by 256 analog transmission.",
+            "Create bold, high-contrast amateur radio SSTV QSL artwork for callsign {} in {} {}. Current activity: {:.3} MHz SSTV {}. Use a striking radio-space aesthetic, one strong central subject, large readable callsign, no tiny text, and a composition that survives analog SSTV transmission.",
             self.station_callsign_or_default(),
             self.station_qth.trim(),
             self.station_grid_or_default(),
             snapshot.frequency_hz.unwrap_or(14_230_000) as f64 / 1_000_000.0,
+            self.sstv_tx_mode.name(),
         )
     }
 
@@ -374,7 +424,7 @@ impl QsonautGuiApp {
                 let mut shared = self.state.lock().expect("ui state lock poisoned");
                 shared.sstv_rgb = rgb.into_raw();
                 shared.sstv_revision = shared.sstv_revision.wrapping_add(1);
-                shared.sstv_status = format!("{source}: ready for Martin M1 TX");
+                shared.sstv_status = format!("{source}: ready for SSTV TX");
                 self.local_image_status = match saved {
                     Ok(()) => format!("{source}; 320×256 SSTV frame saved locally"),
                     Err(error) => format!("{source}; local save failed: {error}"),
@@ -384,7 +434,7 @@ impl QsonautGuiApp {
         }
     }
 
-    fn start_sstv_tx(&mut self, rgb: &[u8]) {
+    fn start_sstv_tx(&mut self, mode: qsonaut_sstv::SstvMode, rgb: &[u8]) {
         if self.ft8_tx_active.load(Ordering::Acquire)
             || self.digital_tx_active.load(Ordering::Acquire)
         {
@@ -395,7 +445,12 @@ impl QsonautGuiApp {
             self.digital_tx_status = "SSTV TX unavailable: radio control is disabled".to_string();
             return;
         };
-        match qsonaut_sstv::encode_martin_m1(rgb) {
+        match qsonaut_sstv::encode_rgb_mode_12k(
+            mode,
+            qsonaut_sstv::WIDTH as u32,
+            qsonaut_sstv::HEIGHT as u32,
+            rgb,
+        ) {
             Ok(pcm) => {
                 let now_s = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -404,8 +459,9 @@ impl QsonautGuiApp {
                 let audio_start_s = now_s + self.ptt_lead_ms as f64 / 1_000.0 + 0.05;
                 self.digital_tx_abort.store(false, Ordering::Release);
                 self.digital_tx_active.store(true, Ordering::Release);
-                self.digital_queued_tx_message = Some("Martin M1 image".to_string());
-                self.digital_tx_status = "🔥 SSTV queued; keying radio for Martin M1".to_string();
+                self.digital_queued_tx_message = Some(format!("{} image", mode.name()));
+                self.digital_tx_status =
+                    format!("🔥 SSTV queued; keying radio for {}", mode.name());
                 self.sstv_tx_armed = false;
                 let job = DigitalTxJob {
                     mode: WorkspaceMode::Sstv,
@@ -428,5 +484,17 @@ impl QsonautGuiApp {
             }
             Err(error) => self.digital_tx_status = format!("SSTV encode failed: {error}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fitted_sstv_body_height;
+
+    #[test]
+    fn sstv_body_tracks_the_available_viewport() {
+        assert_eq!(fitted_sstv_body_height(500.0), 422.0);
+        assert_eq!(fitted_sstv_body_height(200.0), 122.0);
+        assert_eq!(fitted_sstv_body_height(60.0), 0.0);
     }
 }
