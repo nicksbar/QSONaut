@@ -196,7 +196,7 @@ impl QsonautGuiApp {
         );
         ui.label(
             RichText::new(
-                "RX automatically searches ±120 Hz around the selected tone. The decoder estimates the local noise floor from the quietest 15% of the window; there is no fixed squelch to tune.",
+                "RX uses a 240 Hz audio channel centered on the selected tone. That same filtered channel feeds cw-dit and the RX monitor. The decoder adapts to the local noise floor; there is no fixed squelch to tune.",
             )
             .small()
             .color(theme_muted(ui)),

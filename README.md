@@ -65,11 +65,20 @@ By default, QSONaut tracks `mfsk-core` `main` during active integration.
 
 Use a release build for live decoding. Debug builds are substantially slower.
 
-On Ubuntu/WSL, native build dependencies include:
+On Ubuntu, native build dependencies include:
 
 ```bash
 sudo apt-get install libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
 ```
+
+WSL also needs the ALSA PulseAudio bridge so CPAL can reach WSLg audio:
+
+```bash
+sudo apt-get install libasound2-plugins pulseaudio-utils
+```
+
+See [Audio monitoring](docs/audio-monitoring.md) for native OS setup, WSL
+verification, device selection, and troubleshooting.
 
 For WSL systems where Mesa otherwise selects software rendering, this is the
 known-good launch pattern used during development:
@@ -80,11 +89,11 @@ MESA_D3D12_DEFAULT_ADAPTER_NAME=AMD \
 cargo run --release -p qsonaut -- --gui
 ```
 
-QSONaut also offers hardware discovery and lower-level CI-V commands:
+QSONaut also offers hardware discovery and lower-level radio commands. Audio
+devices are refreshed and selected in **Settings > Devices**:
 
 ```bash
 cargo run -p qsonaut -- --help
-cargo run -p qsonaut -- --list-audio
 cargo run -p qsonaut -- --list-radio
 ```
 

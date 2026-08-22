@@ -6,6 +6,7 @@ use cwdit_morse::{BootstrapDecoder, Decoded, TimingEstimator};
 /// The input is the existing 12 kHz mono stream already produced by QSONaut's
 /// audio worker. One adapter instance represents one selected CW channel.
 pub(super) struct CwDitChannel {
+    audio_filter: CwAudioFilter,
     filter: Goertzel,
     smoother: MovingAverage,
     slicer: ChannelSlicer,
@@ -19,6 +20,48 @@ pub(super) struct CwDitChannel {
 
 enum ChannelSlicer {
     Classic(Threshold),
+}
+
+/// Streaming 240 Hz-wide audio channel used for both CW decoding and monitor
+/// playback. Keeping this ahead of the detector makes the sound in the
+/// operator's headphones match the selected decoder channel.
+struct CwAudioFilter {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    z1: f32,
+    z2: f32,
+}
+
+impl CwAudioFilter {
+    const BANDWIDTH_HZ: f32 = 240.0;
+
+    fn new(sample_rate_hz: u32, tone_hz: u32) -> Self {
+        let sample_rate_hz = sample_rate_hz.max(1) as f32;
+        let tone_hz = (tone_hz as f32).clamp(1.0, sample_rate_hz * 0.49);
+        let q = (tone_hz / Self::BANDWIDTH_HZ).max(0.5);
+        let omega = 2.0 * std::f32::consts::PI * tone_hz / sample_rate_hz;
+        let alpha = omega.sin() / (2.0 * q);
+        let a0 = 1.0 + alpha;
+        Self {
+            b0: alpha / a0,
+            b1: 0.0,
+            b2: -alpha / a0,
+            a1: (-2.0 * omega.cos()) / a0,
+            a2: (1.0 - alpha) / a0,
+            z1: 0.0,
+            z2: 0.0,
+        }
+    }
+
+    fn push(&mut self, sample: f32) -> f32 {
+        let output = self.b0 * sample + self.z1;
+        self.z1 = self.b1 * sample - self.a1 * output + self.z2;
+        self.z2 = self.b2 * sample - self.a2 * output;
+        output
+    }
 }
 
 impl CwDitChannel {
@@ -43,6 +86,7 @@ impl CwDitChannel {
             .with_adapt(true)
             .with_period_classification(true);
         Self {
+            audio_filter: CwAudioFilter::new(sample_rate_hz, tone_hz),
             filter: Goertzel::new(tone_hz as f32, sample_rate, block_len),
             smoother,
             slicer,
@@ -55,9 +99,12 @@ impl CwDitChannel {
         }
     }
 
-    pub(super) fn push_samples(&mut self, samples: &[f32]) -> Vec<Decoded> {
+    pub(super) fn push_samples_with_audio(&mut self, samples: &[f32]) -> (Vec<Decoded>, Vec<f32>) {
         let mut output = Vec::new();
+        let mut channel_audio = Vec::with_capacity(samples.len());
         for &sample in samples {
+            let sample = self.audio_filter.push(sample);
+            channel_audio.push(sample);
             if let Some(envelope) = self.filter.push(sample) {
                 let mark = match &mut self.slicer {
                     ChannelSlicer::Classic(slicer) => slicer.push(self.smoother.push(envelope)),
@@ -70,7 +117,7 @@ impl CwDitChannel {
                 }
             }
         }
-        output
+        (output, channel_audio)
     }
 
     pub(super) fn text(&self) -> &str {
@@ -140,7 +187,7 @@ mod tests {
         let samples = keyed_tone("CQ DE", 700.0, 20.0);
         let mut channel = CwDitChannel::new(12_000, 700, 20);
         let mut text = String::new();
-        for event in channel.push_samples(&samples) {
+        for event in channel.push_samples_with_audio(&samples).0 {
             if let cwdit_morse::Decoded::Char(character) = event {
                 text.push(character);
             }
@@ -151,6 +198,30 @@ mod tests {
     #[test]
     fn selected_channel_ignores_silence() {
         let mut channel = CwDitChannel::new(12_000, 700, 20);
-        assert!(channel.push_samples(&vec![0.0; 12_000 * 3]).is_empty());
+        assert!(channel
+            .push_samples_with_audio(&vec![0.0; 12_000 * 3])
+            .0
+            .is_empty());
+    }
+
+    #[test]
+    fn monitor_audio_rejects_a_distant_tone() {
+        let filtered_rms = |input_tone_hz: f32| {
+            let mut channel = CwDitChannel::new(12_000, 700, 20);
+            let samples = (0..12_000)
+                .map(|index| {
+                    0.3 * (2.0 * std::f32::consts::PI * input_tone_hz * index as f32 / 12_000.0)
+                        .sin()
+                })
+                .collect::<Vec<_>>();
+            let filtered = channel.push_samples_with_audio(&samples).1;
+            (filtered[2_000..]
+                .iter()
+                .map(|sample| sample * sample)
+                .sum::<f32>()
+                / (filtered.len() - 2_000) as f32)
+                .sqrt()
+        };
+        assert!(filtered_rms(700.0) > filtered_rms(1_400.0) * 3.0);
     }
 }

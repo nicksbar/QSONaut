@@ -1,16 +1,16 @@
 use super::super::*;
 
 impl QsonautGuiApp {
-    fn reconnect_radio(&mut self) {
+    pub(in super::super) fn reconnect_radio(&mut self) {
         if let Some(tx) = &self.command_tx {
             let _ = tx.send(GuiCommand::Quit);
         }
-        self.worker_stop.store(true, Ordering::Relaxed);
+        self.radio_worker_stop.store(true, Ordering::Relaxed);
         if let Some(handle) = self.radio_worker_handle.take() {
             let _ = handle.join();
         }
         self.command_tx = None;
-        self.worker_stop = Arc::new(AtomicBool::new(false));
+        self.radio_worker_stop = Arc::new(AtomicBool::new(false));
 
         if !self.config.radio.enabled {
             self.radio_init_rx = None;
@@ -35,6 +35,38 @@ impl QsonautGuiApp {
         let mut state = self.state.lock().expect("ui state lock poisoned");
         state.radio_waterfall_status = "CONNECTING…".to_string();
         state.last_error = None;
+    }
+
+    pub(in super::super) fn restart_audio(&mut self) {
+        self.audio_worker_stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.audio_worker_handle.take() {
+            let _ = handle.join();
+        }
+        self.audio_worker_stop = Arc::new(AtomicBool::new(false));
+        self.state
+            .lock()
+            .expect("ui state lock poisoned")
+            .monitor_test_tone = false;
+        self.audio_worker_handle = Some(spawn_audio_spectrum_worker(
+            self.state.clone(),
+            self.audio_worker_stop.clone(),
+            self.ft8_tx_active.clone(),
+            self.digital_tx_active.clone(),
+            self.config.audio.enabled,
+            self.config.audio.sample_rate_hz,
+            self.config.audio.channels,
+            self.config.audio.input_device.clone(),
+            self.config.audio.monitor_enabled,
+            self.config
+                .audio
+                .monitor_output_device
+                .clone()
+                .or_else(|| self.config.audio.output_device.clone()),
+            self.monitor_volume.clone(),
+            self.repaint_ctx.clone(),
+            self.display_tuning.clone(),
+        ));
+        self.audio_restart_required = false;
     }
 
     pub(in super::super) fn draw_device_settings(&mut self, ui: &mut egui::Ui) {
@@ -220,7 +252,7 @@ impl QsonautGuiApp {
         ui.add_space(6.0);
         ui.label(RichText::new("RX monitor diagnostics").strong());
         ui.label(
-            RichText::new("The monitor plays captured audio from the selected monitor output. Use the test tone to verify that output device, stream, and system volume are working independently of the radio input.")
+            RichText::new("The monitor plays captured audio from the selected monitor output. The test tone verifies the active monitor stream after audio input has started.")
                 .small()
                 .color(theme_muted(ui)),
         );
@@ -237,7 +269,12 @@ impl QsonautGuiApp {
                 self.profile_dirty = true;
                 self.persist_profile("RX monitor volume saved to");
             }
-            if ui.button("Play test tone").clicked() {
+            let can_test = self.config.audio.monitor_enabled && !self.audio_restart_required;
+            if ui
+                .add_enabled(can_test, egui::Button::new("Play test tone"))
+                .on_disabled_hover_text("Enable and apply the RX monitor first")
+                .clicked()
+            {
                 self.state
                     .lock()
                     .expect("ui state lock poisoned")
@@ -341,16 +378,16 @@ impl QsonautGuiApp {
             .color(theme_muted(ui)),
         );
 
-        if old_input != self.config.audio.input_device
+        let audio_changed = old_input != self.config.audio.input_device
             || old_output != self.config.audio.output_device
-            || old_port != self.config.radio.serial_port
+            || old_monitor != self.config.audio.monitor_enabled
+            || old_monitor_device != self.config.audio.monitor_output_device;
+        let radio_changed = old_port != self.config.radio.serial_port
             || old_backend != self.config.radio.backend
             || old_endpoint != self.config.radio.endpoint
             || old_model != self.config.radio.model
-            || old_baud != self.config.radio.baud_rate
-            || old_monitor != self.config.audio.monitor_enabled
-            || old_monitor_device != self.config.audio.monitor_output_device
-        {
+            || old_baud != self.config.radio.baud_rate;
+        if audio_changed || radio_changed {
             if old_model != self.config.radio.model {
                 if let Some(profile) = find_model(&self.config.radio.model) {
                     self.config.radio.baud_rate = profile.preferred_baud_rate();
@@ -362,9 +399,24 @@ impl QsonautGuiApp {
                     }
                 }
             }
-            self.device_restart_required = true;
+            self.audio_restart_required |= audio_changed;
+            self.device_restart_required |= radio_changed;
             self.profile_dirty = true;
             self.persist_profile("Saved devices to");
+        }
+
+        if self.audio_restart_required {
+            ui.add_space(4.0);
+            if ui.button("Restart audio now").clicked() {
+                self.restart_audio();
+            }
+            ui.label(
+                RichText::new(
+                    "Audio settings are saved. Restart audio now to apply the selected input and monitor output.",
+                )
+                .small()
+                .color(theme_warning(ui)),
+            );
         }
 
         if self.device_restart_required {

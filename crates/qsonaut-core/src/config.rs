@@ -248,10 +248,21 @@ impl AppConfig {
             cfg.audio.enabled = parse_bool(&enabled);
         }
         if let Ok(device) = std::env::var("QSONAUT_AUDIO_INPUT_DEVICE") {
-            cfg.audio.input_device = Some(device);
+            cfg.audio.input_device = nonempty(device);
         }
         if let Ok(device) = std::env::var("QSONAUT_AUDIO_OUTPUT_DEVICE") {
-            cfg.audio.output_device = Some(device);
+            cfg.audio.output_device = nonempty(device);
+        }
+        if let Ok(enabled) = std::env::var("QSONAUT_AUDIO_MONITOR_ENABLED") {
+            cfg.audio.monitor_enabled = parse_bool(&enabled);
+        }
+        if let Ok(device) = std::env::var("QSONAUT_AUDIO_MONITOR_OUTPUT_DEVICE") {
+            cfg.audio.monitor_output_device = nonempty(device);
+        }
+        if let Ok(volume) = std::env::var("QSONAUT_AUDIO_MONITOR_VOLUME") {
+            if let Ok(parsed) = volume.parse::<f32>() {
+                cfg.audio.monitor_volume = parsed.clamp(0.0, 2.0);
+            }
         }
         if let Ok(rate) = std::env::var("QSONAUT_AUDIO_SAMPLE_RATE_HZ") {
             if let Ok(parsed) = rate.parse::<u32>() {
@@ -310,6 +321,11 @@ fn parse_bool(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+fn nonempty(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 fn default_radio_baud_rate() -> u32 {
@@ -416,6 +432,9 @@ backend = "none"
         let cfg: AppConfig = toml::from_str(src).expect("config parse");
         assert_eq!(cfg.contest, ContestProfile::default());
         assert_eq!(cfg.radio.model, "IC-7300");
+        assert!(!cfg.audio.monitor_enabled);
+        assert_eq!(cfg.audio.monitor_output_device, None);
+        assert_eq!(cfg.audio.monitor_volume, 1.0);
     }
 
     #[test]

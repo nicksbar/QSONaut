@@ -123,6 +123,7 @@ const AUDIO_MAX_FREQ_HZ: u32 = 4_000;
 // 8192 samples @ 48 kHz = 170 ms window, ~5.9 Hz/bin, ~683 useful bins for 0-4 kHz.
 const FFT_SIZE: usize = 8192;
 const GUI_SCALE_PROFILE_VERSION: u32 = 8;
+const AUDIO_MONITOR_PROFILE_VERSION: u32 = 12;
 const GUI_SCALE_BASE: f32 = 1.2;
 const GUI_SCALE_MAX: f32 = 2.0;
 const GUI_SCALE_MIN: f32 = 0.9;
@@ -1266,7 +1267,8 @@ struct QsonautGuiApp {
     external_ingress_message: String,
     state: Arc<Mutex<GuiState>>,
     command_tx: Option<mpsc::Sender<GuiCommand>>,
-    worker_stop: Arc<AtomicBool>,
+    radio_worker_stop: Arc<AtomicBool>,
+    audio_worker_stop: Arc<AtomicBool>,
     radio_init_rx: Option<mpsc::Receiver<Option<ConfiguredRadio>>>,
     hamdb_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
     hamdb_profile_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
@@ -1408,6 +1410,7 @@ struct QsonautGuiApp {
     show_signal_panel: bool,
     signal_panel_tab: SignalPanelTab,
     device_restart_required: bool,
+    audio_restart_required: bool,
     gui_scale: f32,
     compute_preference: ComputePreference,
     acceleration_report: AccelerationReport,
@@ -1446,6 +1449,11 @@ impl QsonautGuiApp {
             if profile.profile_version >= 3 {
                 config.audio.input_device = profile.audio_input_device;
                 config.audio.output_device = profile.audio_output_device;
+                if profile.profile_version >= AUDIO_MONITOR_PROFILE_VERSION {
+                    config.audio.monitor_enabled = profile.audio_monitor_enabled;
+                    config.audio.monitor_output_device = profile.audio_monitor_output_device;
+                    config.audio.monitor_volume = profile.audio_monitor_volume.clamp(0.0, 2.0);
+                }
                 config.radio.serial_port = profile.radio_serial_port;
                 config.radio.backend = profile.radio_backend;
                 config.radio.endpoint = profile.radio_endpoint;
@@ -1464,7 +1472,8 @@ impl QsonautGuiApp {
         let automation_event_rx = app_events.subscribe();
         let (automation_host, automation_status, automation_external_transports) =
             bootstrap_automation_host();
-        let worker_stop = Arc::new(AtomicBool::new(false));
+        let radio_worker_stop = Arc::new(AtomicBool::new(false));
+        let audio_worker_stop = Arc::new(AtomicBool::new(false));
         let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
 
         let repaint_ctx: Arc<OnceLock<egui::Context>> = Arc::new(OnceLock::new());
@@ -1504,7 +1513,7 @@ impl QsonautGuiApp {
         let monitor_volume = Arc::new(AtomicU32::new(config.audio.monitor_volume.to_bits()));
         let audio_worker_handle = Some(spawn_audio_spectrum_worker(
             state.clone(),
-            worker_stop.clone(),
+            audio_worker_stop.clone(),
             ft8_tx_active.clone(),
             digital_tx_active.clone(),
             config.audio.enabled,
@@ -1713,6 +1722,9 @@ impl QsonautGuiApp {
                 cw_tone_hz,
                 audio_input_device: config.audio.input_device.clone(),
                 audio_output_device: config.audio.output_device.clone(),
+                audio_monitor_enabled: config.audio.monitor_enabled,
+                audio_monitor_output_device: config.audio.monitor_output_device.clone(),
+                audio_monitor_volume: config.audio.monitor_volume.clamp(0.0, 2.0),
                 radio_serial_port: config.radio.serial_port.clone(),
                 radio_backend: config.radio.backend.clone(),
                 radio_endpoint: config.radio.endpoint.clone(),
@@ -1842,7 +1854,8 @@ impl QsonautGuiApp {
             external_ingress_message: "!rig".to_string(),
             state,
             command_tx,
-            worker_stop,
+            radio_worker_stop,
+            audio_worker_stop,
             radio_init_rx,
             hamdb_lookup_rx: None,
             hamdb_profile_lookup_rx: None,
@@ -1983,6 +1996,7 @@ impl QsonautGuiApp {
             show_signal_panel: true,
             signal_panel_tab: SignalPanelTab::Achievements,
             device_restart_required: false,
+            audio_restart_required: false,
             gui_scale,
             compute_preference,
             acceleration_report,
@@ -2026,6 +2040,19 @@ impl QsonautGuiApp {
     }
 
     fn apply_operator_profile(&mut self, profile: OperatorProfile) {
+        let previous_audio = (
+            self.config.audio.input_device.clone(),
+            self.config.audio.output_device.clone(),
+            self.config.audio.monitor_enabled,
+            self.config.audio.monitor_output_device.clone(),
+        );
+        let previous_radio = (
+            self.config.radio.serial_port.clone(),
+            self.config.radio.backend.clone(),
+            self.config.radio.endpoint.clone(),
+            self.config.radio.model.clone(),
+            self.config.radio.baud_rate,
+        );
         self.station_callsign = profile.callsign;
         self.station_grid = profile.grid;
         self.station_qth = profile.qth;
@@ -2105,6 +2132,15 @@ impl QsonautGuiApp {
         if profile.profile_version >= 3 {
             self.config.audio.input_device = profile.audio_input_device;
             self.config.audio.output_device = profile.audio_output_device;
+            if profile.profile_version >= AUDIO_MONITOR_PROFILE_VERSION {
+                self.config.audio.monitor_enabled = profile.audio_monitor_enabled;
+                self.config.audio.monitor_output_device = profile.audio_monitor_output_device;
+                self.config.audio.monitor_volume = profile.audio_monitor_volume.clamp(0.0, 2.0);
+                self.monitor_volume.store(
+                    self.config.audio.monitor_volume.to_bits(),
+                    Ordering::Relaxed,
+                );
+            }
             self.config.radio.serial_port = profile.radio_serial_port;
             self.config.radio.backend = profile.radio_backend;
             self.config.radio.endpoint = profile.radio_endpoint;
@@ -2130,6 +2166,25 @@ impl QsonautGuiApp {
             dupe_check: self.contest_dupe_check,
         };
         self.restart_psk_reporter();
+        let current_audio = (
+            self.config.audio.input_device.clone(),
+            self.config.audio.output_device.clone(),
+            self.config.audio.monitor_enabled,
+            self.config.audio.monitor_output_device.clone(),
+        );
+        let current_radio = (
+            self.config.radio.serial_port.clone(),
+            self.config.radio.backend.clone(),
+            self.config.radio.endpoint.clone(),
+            self.config.radio.model.clone(),
+            self.config.radio.baud_rate,
+        );
+        if current_audio != previous_audio {
+            self.restart_audio();
+        }
+        if current_radio != previous_radio {
+            self.reconnect_radio();
+        }
         self.profile_dirty = false;
     }
 
@@ -2483,6 +2538,9 @@ impl QsonautGuiApp {
             cw_tone_hz: self.cw_tone_hz.clamp(200, 3_000),
             audio_input_device: self.config.audio.input_device.clone(),
             audio_output_device: self.config.audio.output_device.clone(),
+            audio_monitor_enabled: self.config.audio.monitor_enabled,
+            audio_monitor_output_device: self.config.audio.monitor_output_device.clone(),
+            audio_monitor_volume: self.config.audio.monitor_volume.clamp(0.0, 2.0),
             radio_serial_port: self.config.radio.serial_port.clone(),
             radio_backend: self.config.radio.backend.clone(),
             radio_endpoint: self.config.radio.endpoint.clone(),
@@ -3019,7 +3077,7 @@ impl eframe::App for QsonautGuiApp {
                         let handle = workers::radio::spawn_radio_worker(
                             radio,
                             self.state.clone(),
-                            self.worker_stop.clone(),
+                            self.radio_worker_stop.clone(),
                             self.display_tuning.clone(),
                             rx,
                             self.repaint_ctx.clone(),
@@ -3277,10 +3335,11 @@ impl eframe::App for QsonautGuiApp {
                         .clicked()
                     {
                         self.config.audio.monitor_enabled = !self.config.audio.monitor_enabled;
-                        self.device_restart_required = true;
                         self.profile_dirty = true;
                         self.persist_profile("Audio monitor saved to");
+                        self.restart_audio();
                     }
+                    let old_monitor_output = self.config.audio.monitor_output_device.clone();
                     egui::ComboBox::from_id_salt("top_audio_monitor_output")
                         .selected_text(
                             self.config
@@ -3305,12 +3364,30 @@ impl eframe::App for QsonautGuiApp {
                                 );
                             }
                         });
+                    if old_monitor_output != self.config.audio.monitor_output_device {
+                        self.profile_dirty = true;
+                        self.persist_profile("Audio monitor output saved to");
+                        self.restart_audio();
+                    }
+                    let mut monitor_percent =
+                        (self.config.audio.monitor_volume.clamp(0.0, 2.0) * 100.0).round() as u16;
                     if ui
-                        .small_button("🔊 TX AUDIO")
-                        .on_hover_text("TX audio is sent to the configured Audio output device")
-                        .clicked()
+                        .add(
+                            egui::DragValue::new(&mut monitor_percent)
+                                .range(0..=200)
+                                .speed(1)
+                                .suffix("%"),
+                        )
+                        .on_hover_text("RX monitor volume · applies immediately")
+                        .changed()
                     {
-                        self.device_restart_required = true;
+                        self.config.audio.monitor_volume = f32::from(monitor_percent) / 100.0;
+                        self.monitor_volume.store(
+                            self.config.audio.monitor_volume.to_bits(),
+                            Ordering::Relaxed,
+                        );
+                        self.profile_dirty = true;
+                        self.persist_profile("RX monitor volume saved to");
                     }
                     let armed = self.any_tx_armed(&snapshot);
                     ui.label(
@@ -3524,7 +3601,8 @@ impl Drop for QsonautGuiApp {
         if self.qso_log_dirty {
             self.persist_qso_log("Saved on exit");
         }
-        self.worker_stop.store(true, Ordering::Relaxed);
+        self.radio_worker_stop.store(true, Ordering::Relaxed);
+        self.audio_worker_stop.store(true, Ordering::Relaxed);
         if let Some(tx) = &self.command_tx {
             let _ = tx.send(GuiCommand::Quit);
         }

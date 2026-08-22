@@ -13,7 +13,7 @@ use super::{
 };
 
 pub(super) const OPERATOR_PROFILE_FILE: &str = "profile.toml";
-pub(super) const OPERATOR_PROFILE_VERSION: u32 = 11;
+pub(super) const OPERATOR_PROFILE_VERSION: u32 = 12;
 const LEGACY_OPERATOR_PROFILE_FILE: &str = ".rigforge_profile.toml";
 const DEFAULT_PROFILE_NAME: &str = "Default";
 const OPERATOR_PROFILES_DIR: &str = "profiles";
@@ -83,6 +83,12 @@ pub(super) struct OperatorProfile {
     pub(super) audio_input_device: Option<String>,
     #[serde(default)]
     pub(super) audio_output_device: Option<String>,
+    #[serde(default)]
+    pub(super) audio_monitor_enabled: bool,
+    #[serde(default)]
+    pub(super) audio_monitor_output_device: Option<String>,
+    #[serde(default = "default_audio_monitor_volume")]
+    pub(super) audio_monitor_volume: f32,
     #[serde(default)]
     pub(super) radio_serial_port: Option<String>,
     #[serde(default = "default_radio_backend")]
@@ -204,6 +210,10 @@ pub(super) fn default_cw_wpm() -> u8 {
 
 pub(super) fn default_cw_tone_hz() -> u16 {
     600
+}
+
+fn default_audio_monitor_volume() -> f32 {
+    1.0
 }
 
 pub(super) fn default_contest_serial_start() -> u32 {

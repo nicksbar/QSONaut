@@ -107,6 +107,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         // brackets the operator's currently selected audio tone.
         let mut cw_stream_decoder: Option<CwDitChannel> = None;
         let mut cw_stream_tone_hz = 0_u32;
+        let mut cw_stream_wpm = 0_u8;
         let mut last_cw_diagnostics = Instant::now();
         let mut last_cw_status = Instant::now() - Duration::from_secs(1);
         let mut cw_recording: Option<CwRecording> = None;
@@ -133,6 +134,10 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
             let chunk_bytes = (chunk_samples * 2).max(512);
             match stream.read_chunk(chunk_bytes) {
                 Ok(samples) => {
+                    let monitor_raw_audio = {
+                        let shared = state.lock().expect("ui state lock poisoned");
+                        shared.workspace_mode != WorkspaceMode::Cw || !can_decode
+                    };
                     if let Some(monitor) = &monitor {
                         monitor.set_volume(f32::from_bits(monitor_volume.load(Ordering::Relaxed)));
                         let test_tone = {
@@ -144,7 +149,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                         if test_tone {
                             monitor.push_test_tone(sample_rate_hz, 700.0, 350);
                         }
-                        monitor.push(&samples);
+                        if monitor_raw_audio {
+                            monitor.push(&samples);
+                        }
                         let dropped_chunks = monitor.take_dropped_chunks();
                         if dropped_chunks > 0 {
                             tracing::warn!(
@@ -227,6 +234,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             digital_buf.clear();
                             cw_stream_decoder = None;
                             cw_stream_tone_hz = 0;
+                            cw_stream_wpm = 0;
                             ft8_slot_gate.reset();
                             ft4_slot_gate.reset();
                             digital_slot_gate.reset();
@@ -411,13 +419,23 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     finish_cw_recording(&mut cw_recording, &state);
                                 }
                             }
-                            if selected_tone_hz != cw_stream_tone_hz {
+                            if selected_tone_hz != cw_stream_tone_hz || cw_wpm != cw_stream_wpm {
                                 cw_stream_decoder =
                                     Some(CwDitChannel::new(12_000, selected_tone_hz, cw_wpm));
                                 cw_stream_tone_hz = selected_tone_hz;
+                                cw_stream_wpm = cw_wpm;
                             }
                             if let Some(decoder) = cw_stream_decoder.as_mut() {
-                                let events = decoder.push_samples(&ds);
+                                let (events, channel_audio) = decoder.push_samples_with_audio(&ds);
+                                if let Some(monitor) = &monitor {
+                                    let channel_audio = channel_audio
+                                        .iter()
+                                        .map(|sample| {
+                                            (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
+                                        })
+                                        .collect::<Vec<_>>();
+                                    monitor.push_at_sample_rate(&channel_audio, 12_000);
+                                }
                                 for event in events {
                                     let text = match event {
                                         cwdit_morse::Decoded::Char(character) => {
