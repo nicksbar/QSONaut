@@ -156,6 +156,7 @@ Password resets revoke all device tokens and browser sessions.
    share_radio_details = false
    share_logs = true
    share_diagnostics = false
+   share_debug_logs = false
    share_channel_messages = false
    ```
 
@@ -224,6 +225,11 @@ Runtime logs are written to `qsonaut.log` under the platform app directory:
 - Windows: `%APPDATA%\QSONaut\logs\qsonaut.log`
 - Linux: `$XDG_CONFIG_HOME/qsonaut/logs/qsonaut.log` (or `~/.config/qsonaut/logs/qsonaut.log`)
 - macOS: `~/Library/Application Support/QSONaut/logs/qsonaut.log`
+
+The newest 256 KiB can also be viewed from the in-app **APP LOG** tab with live
+tailing, bottom-follow, text/level filters, highlighting, and copy support.
+Manual server diagnostic snapshots can optionally include a separately enabled,
+redacted 24 KiB tail; logs are never uploaded continuously.
 
 If QSONaut fails to open a window or crashes during startup, attach that log
 file to the issue report.

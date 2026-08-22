@@ -10,6 +10,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 - Added selectable native serial, Hamlib `rigctld`, and DX Lab Suite Commander
   radio backends through Rigwright `v0.1.7`.
+- Kept completed digital transmit history visible in FT4 and FT8 conversation
+  panels after the active QSO target is cleared.
+- Added a live, filterable APP LOG tab with bottom-following, severity
+  highlighting, and copy support.
+- Added an opt-in redacted application-log tail to manual server diagnostics;
+  logs are never uploaded continuously.
 
 ### Fixed
 - Updated the committed Rigwright dependency and lockfile to the published
@@ -17,6 +23,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   radio drivers.
 - Kept CI and release builds aligned with the tagged Rigwright `v0.1.7`
   dependency instead of relying on the ignored local sibling checkout.
+- Preserved FT8 tones when calling CQ instead of resetting the operator's
+  selected RX/TX tones.
+- Persisted the selected radio waterfall scope view across profile reloads.
+- Exposed generic Rigwright radio profiles in the native radio selector.
+- Removed duplicate PTT lead and tail controls from the FT4 and FT8 workspaces;
+  the shared radio timing settings remain authoritative.
+- Removed the obsolete RX test-tone player and its packaging/documentation
+  references.
+- Simplified radio status and tuning controls to reduce duplicate or redundant
+  information in the device panel.
 
 ## [0.3.5] - 2026-08-21
 

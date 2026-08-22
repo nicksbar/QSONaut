@@ -1,5 +1,38 @@
 use super::*;
 
+const DIAGNOSTIC_LOG_BYTES: usize = 24 * 1024;
+
+fn redact_log_value(text: &mut String, value: &str, replacement: &str) {
+    let value = value.trim();
+    if !value.is_empty() {
+        *text = text.replace(value, replacement);
+    }
+}
+
+fn redacted_diagnostic_log(raw: String, config: &AppConfig) -> String {
+    let mut text = raw;
+    redact_log_value(
+        &mut text,
+        &config.server.device_token,
+        "[REDACTED SERVER TOKEN]",
+    );
+    for device in [
+        config.radio.serial_port.as_deref(),
+        config.audio.input_device.as_deref(),
+        config.audio.output_device.as_deref(),
+        config.audio.monitor_output_device.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        redact_log_value(&mut text, device, "[REDACTED DEVICE]");
+    }
+    if let Some(home) = std::env::var_os("HOME").and_then(|value| value.into_string().ok()) {
+        redact_log_value(&mut text, &home, "[HOME]");
+    }
+    text
+}
+
 impl QsonautGuiApp {
     pub(super) fn reconnect_server(&mut self) {
         let enabled = self.config.server.enabled;
@@ -139,6 +172,11 @@ impl QsonautGuiApp {
             return;
         }
         let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
+        let recent_app_log = self.config.server.share_debug_logs.then(|| {
+            read_log_tail(DIAGNOSTIC_LOG_BYTES)
+                .map(|text| redacted_diagnostic_log(text, &self.config))
+                .unwrap_or_else(|_| "Application log unavailable".to_string())
+        });
         let diagnostic = serde_json::json!({
             "instance_id": self.server_instance_id,
             "category": "radio_snapshot",
@@ -183,11 +221,34 @@ impl QsonautGuiApp {
                     "compute_backend": format!("{:?}", snapshot.compute_backend),
                 },
                 "last_error": snapshot.last_error,
+                "recent_app_log": recent_app_log,
             }
         });
         self.profile_io_status = match client.publish_diagnostic(diagnostic) {
             Ok(()) => "Diagnostic snapshot sent; waiting for server acceptance".to_string(),
             Err(error) => format!("Diagnostic snapshot could not be queued: {error}"),
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_log_redacts_tokens_and_configured_devices() {
+        let mut config = AppConfig::default();
+        config.server.device_token = "secret-device-token".to_string();
+        config.radio.serial_port = Some("/dev/ttyUSB9".to_string());
+        config.audio.input_device = Some("Private microphone".to_string());
+        let redacted = redacted_diagnostic_log(
+            "token=secret-device-token port=/dev/ttyUSB9 input=Private microphone".to_string(),
+            &config,
+        );
+        assert!(!redacted.contains("secret-device-token"));
+        assert!(!redacted.contains("/dev/ttyUSB9"));
+        assert!(!redacted.contains("Private microphone"));
+        assert!(redacted.contains("[REDACTED SERVER TOKEN]"));
+        assert!(redacted.contains("[REDACTED DEVICE]"));
     }
 }

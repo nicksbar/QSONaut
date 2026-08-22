@@ -1008,6 +1008,15 @@ impl QsonautGuiApp {
             &mut self.config.server.share_diagnostics,
             "Allow manual radio/debug snapshots",
         );
+        ui.add_enabled_ui(self.config.server.share_diagnostics, |ui| {
+            ui.checkbox(
+                &mut self.config.server.share_debug_logs,
+                "Include recent redacted app logs in manual snapshots",
+            )
+            .on_hover_text(
+                "Adds at most 24 KiB from the end of qsonaut.log. Tokens, configured device names, serial ports, and the home-directory path are redacted.",
+            );
+        });
         if self.config.server != server_settings_before {
             self.profile_dirty = true;
         }
@@ -1019,7 +1028,7 @@ impl QsonautGuiApp {
                 self.config.server.enabled = false;
                 self.reconnect_server();
             }
-            if ui.add_enabled(self.config.server.share_diagnostics, egui::Button::new("Send diagnostic snapshot now")).on_hover_text("Sends radio configuration, live state, audio/decoder health, and the latest error; never sends the server token or audio samples").clicked() {
+            if ui.add_enabled(self.config.server.share_diagnostics, egui::Button::new("Send diagnostic snapshot now")).on_hover_text("Sends radio configuration, live state, audio/decoder health, and the latest error. A bounded redacted log tail is included only when separately enabled; tokens and audio samples are never sent.").clicked() {
                 self.publish_diagnostic_snapshot();
             }
             ui.label(RichText::new("Nothing is shared unless its control is enabled.").small().color(Color32::GRAY));
@@ -1079,7 +1088,7 @@ impl QsonautGuiApp {
             });
             ui.label(
                 RichText::new(format!(
-                    "Presence: {} · radio details: {} · QSO logs: {} · diagnostics: {}",
+                    "Presence: {} · radio details: {} · QSO logs: {} · diagnostics: {} · app logs: {}",
                     if self.config.server.share_presence {
                         "shared"
                     } else {
@@ -1097,6 +1106,13 @@ impl QsonautGuiApp {
                     },
                     if self.config.server.share_diagnostics {
                         "manual"
+                    } else {
+                        "private"
+                    },
+                    if self.config.server.share_diagnostics
+                        && self.config.server.share_debug_logs
+                    {
+                        "manual + redacted"
                     } else {
                         "private"
                     },

@@ -35,8 +35,8 @@ use qsonaut_core::{
     SplitPolicy,
 };
 use qsonaut_log::{
-    app_config_dir, hamdb_cache_path, AdifExportFilter, HamDbCache, HamDbCacheEntry, QsoLog,
-    QsoRecord,
+    app_config_dir, hamdb_cache_path, log_file_path, read_log_tail, AdifExportFilter, HamDbCache,
+    HamDbCacheEntry, QsoLog, QsoRecord,
 };
 use qsonaut_pskreporter::{
     ReceptionReport, ReportSender, Reporter, ReporterConfig, ReporterTuning,
@@ -156,6 +156,29 @@ enum SignalPanelTab {
     Settings,
     Server,
     RadioTuning,
+    AppLog,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum AppLogLevelFilter {
+    #[default]
+    All,
+    Info,
+    Warning,
+    Error,
+}
+
+impl AppLogLevelFilter {
+    const ALL: [Self; 4] = [Self::All, Self::Info, Self::Warning, Self::Error];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::All => "All levels",
+            Self::Info => "Info+",
+            Self::Warning => "Warnings+",
+            Self::Error => "Errors only",
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -1390,6 +1413,12 @@ struct QsonautGuiApp {
     available_profiles: Vec<String>,
     profile_io_status: String,
     profile_dirty: bool,
+    app_log_text: String,
+    app_log_status: String,
+    app_log_filter: String,
+    app_log_level_filter: AppLogLevelFilter,
+    app_log_follow: bool,
+    app_log_last_refresh: Instant,
     audio_input_devices: Vec<String>,
     audio_output_devices: Vec<String>,
     radio_serial_ports: Vec<String>,
@@ -1979,6 +2008,12 @@ impl QsonautGuiApp {
             available_profiles,
             profile_io_status,
             profile_dirty: false,
+            app_log_text: String::new(),
+            app_log_status: String::new(),
+            app_log_filter: String::new(),
+            app_log_level_filter: AppLogLevelFilter::All,
+            app_log_follow: true,
+            app_log_last_refresh: Instant::now() - Duration::from_secs(1),
             audio_input_devices: Vec::new(),
             audio_output_devices: Vec::new(),
             radio_serial_ports: Vec::new(),
@@ -3558,6 +3593,7 @@ impl eframe::App for QsonautGuiApp {
                             (SignalPanelTab::Settings, "SETTINGS"),
                             (SignalPanelTab::Server, "SERVER"),
                             (SignalPanelTab::RadioTuning, "RADIO TUNING"),
+                            (SignalPanelTab::AppLog, "APP LOG"),
                         ] {
                             let selected = self.signal_panel_tab == tab;
                             let text = if selected {
@@ -3573,21 +3609,32 @@ impl eframe::App for QsonautGuiApp {
                         }
                     });
                     ui.separator();
-                    egui::ScrollArea::vertical()
-                        .id_salt("signals_scroll")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| match self.signal_panel_tab {
-                            SignalPanelTab::Achievements => self.draw_hunter_panel(ui, &snapshot),
-                            SignalPanelTab::Profile => self.draw_profile_panel(ui),
-                            SignalPanelTab::Contest => self.draw_contest_panel(ui),
-                            SignalPanelTab::Reporting => self.draw_reporting_panel(ui),
-                            SignalPanelTab::Waterfall => self.draw_waterfall_panel(ui, &snapshot),
-                            SignalPanelTab::Settings => self.draw_settings_panel(ui),
-                            SignalPanelTab::Server => self.draw_server_panel(ui),
-                            SignalPanelTab::RadioTuning => {
-                                self.draw_radio_tuning_panel(ui, &snapshot)
-                            }
-                        });
+                    if self.signal_panel_tab == SignalPanelTab::AppLog {
+                        self.draw_app_log_panel(ui);
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .id_salt("signals_scroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| match self.signal_panel_tab {
+                                SignalPanelTab::Achievements => {
+                                    self.draw_hunter_panel(ui, &snapshot)
+                                }
+                                SignalPanelTab::Profile => self.draw_profile_panel(ui),
+                                SignalPanelTab::Contest => self.draw_contest_panel(ui),
+                                SignalPanelTab::Reporting => self.draw_reporting_panel(ui),
+                                SignalPanelTab::Waterfall => {
+                                    self.draw_waterfall_panel(ui, &snapshot)
+                                }
+                                SignalPanelTab::Settings => self.draw_settings_panel(ui),
+                                SignalPanelTab::Server => self.draw_server_panel(ui),
+                                SignalPanelTab::RadioTuning => {
+                                    self.draw_radio_tuning_panel(ui, &snapshot)
+                                }
+                                SignalPanelTab::AppLog => {
+                                    unreachable!("app log has its own scroll area")
+                                }
+                            });
+                    }
                 });
         }
 

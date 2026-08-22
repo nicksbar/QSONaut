@@ -212,6 +212,8 @@ device_token = ""  # Secret issued by POST /api/v1/auth/device
 share_presence = false
 share_logs = false
 share_radio_details = false
+share_diagnostics = false
+share_debug_logs = false
 ```
 
 ## Recent Changes
