@@ -1,5 +1,27 @@
 use super::super::*;
 
+/// Keep operator transmissions visible after an active QSO target is cleared.
+/// A completed or canceled session should change the automation state, not make
+/// the operator's message history appear to vanish from the conversation pane.
+pub(super) fn tx_message_belongs_to_conversation(
+    raw_message: &str,
+    operator_call: &str,
+    target: Option<&str>,
+) -> bool {
+    let Some(message) = parse_message(raw_message) else {
+        return false;
+    };
+    if let Some(target) = target {
+        super::exchange::callsign_eq(&message.from, target)
+            || message
+                .to
+                .as_deref()
+                .is_some_and(|to| super::exchange::callsign_eq(to, target))
+    } else {
+        super::exchange::callsign_eq(&message.from, operator_call)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_digital_conversation(
     ui: &mut egui::Ui,
@@ -86,4 +108,27 @@ pub(super) fn draw_digital_conversation(
                     }
                 });
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tx_message_belongs_to_conversation;
+
+    #[test]
+    fn keeps_operator_replies_visible_without_an_active_target() {
+        assert!(tx_message_belongs_to_conversation(
+            "K1ABC N0CALL -10",
+            "N0CALL",
+            None,
+        ));
+    }
+
+    #[test]
+    fn filters_unrelated_operator_messages_for_an_active_target() {
+        assert!(!tx_message_belongs_to_conversation(
+            "N0CALL K2XYZ -10",
+            "N0CALL",
+            Some("K1ABC"),
+        ));
+    }
 }

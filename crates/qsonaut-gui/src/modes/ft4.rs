@@ -56,14 +56,11 @@ impl QsonautGuiApp {
             .iter()
             .filter(|entry| entry.mode == WorkspaceMode::Ft4)
         {
-            let belongs = target.as_deref().is_some_and(|target| {
-                parse_message(&entry.message).is_some_and(|message| {
-                    message
-                        .to
-                        .as_deref()
-                        .is_some_and(|to| super::exchange::callsign_eq(to, target))
-                })
-            });
+            let belongs = super::digital_conversation::tx_message_belongs_to_conversation(
+                &entry.message,
+                &operator_call,
+                target.as_deref(),
+            );
             if belongs {
                 lines.push(Ft8ChatLine {
                     period: entry.period,
@@ -90,11 +87,11 @@ impl QsonautGuiApp {
                     ui.label(
                         RichText::new(
                             target
-                                .as_deref()
-                                .map(|call| format!("💬 FT4 CONTACT VIEW · {call}"))
-                                .unwrap_or_else(|| {
-                                    "💬 FT4 CONTACT VIEW · SELECT A CALLSIGN".to_string()
-                                }),
+                        .as_deref()
+                        .map(|call| format!("💬 FT4 CONTACT VIEW · {call}"))
+                        .unwrap_or_else(|| {
+                            "💬 FT4 RECENT ACTIVITY · SELECT A CALLSIGN".to_string()
+                        }),
                         )
                         .strong()
                         .color(Color32::LIGHT_BLUE),
@@ -129,7 +126,7 @@ impl QsonautGuiApp {
                             ui.centered_and_justified(|ui| {
                                 ui.label(
                                     RichText::new(
-                                        "✨ Select an FT4 decode to track that callsign here.",
+                                        "✨ No transmitted messages yet. Select an FT4 decode to track a callsign.",
                                     )
                                     .color(Color32::GRAY),
                                 );

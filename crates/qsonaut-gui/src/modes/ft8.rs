@@ -108,17 +108,11 @@ impl QsonautGuiApp {
             }
         }
         for entry in &self.ft8_tx_chat {
-            let belongs = parse_message(&entry.message).is_some_and(|message| {
-                if let Some(target) = target.as_deref() {
-                    super::exchange::callsign_eq(&message.from, target)
-                        || message
-                            .to
-                            .as_deref()
-                            .is_some_and(|to| super::exchange::callsign_eq(to, target))
-                } else {
-                    message.is_cq && super::exchange::callsign_eq(&message.from, &operator_call)
-                }
-            });
+            let belongs = super::digital_conversation::tx_message_belongs_to_conversation(
+                &entry.message,
+                &operator_call,
+                target.as_deref(),
+            );
             if belongs {
                 lines.push(Ft8ChatLine {
                     period: entry.period,
@@ -143,7 +137,7 @@ impl QsonautGuiApp {
                     let title = target
                         .as_deref()
                         .map(|call| format!("💬 CONTACT VIEW · {call}"))
-                        .unwrap_or_else(|| "💬 CONTACT VIEW · SELECT A CALLSIGN".to_string());
+                        .unwrap_or_else(|| "💬 RECENT ACTIVITY · SELECT A CALLSIGN".to_string());
                     ui.label(RichText::new(title).strong().color(Color32::LIGHT_BLUE));
                     if let Some(session) = &self.ft8_session {
                         ui.label(
@@ -178,7 +172,7 @@ impl QsonautGuiApp {
                                     RichText::new(if target.is_some() {
                                         "📡 Listening for this station’s next move…"
                                     } else {
-                                        "✨ Select a decode to track that callsign here."
+                                        "✨ No transmitted messages yet. Select a decode to track a callsign."
                                     })
                                     .color(Color32::GRAY),
                                 );
