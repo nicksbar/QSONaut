@@ -775,32 +775,6 @@ impl QsonautGuiApp {
                         .color(Color32::GRAY),
                 );
             });
-            ui.horizontal(|ui| {
-                ui.label("PTT lead");
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut self.ptt_lead_ms)
-                            .range(0..=500)
-                            .suffix(" ms"),
-                    )
-                    .changed()
-                {
-                    self.profile_dirty = true;
-                    self.persist_profile("Auto-saved");
-                }
-                ui.label("tail");
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut self.ptt_tail_ms)
-                            .range(0..=500)
-                            .suffix(" ms"),
-                    )
-                    .changed()
-                {
-                    self.profile_dirty = true;
-                    self.persist_profile("Auto-saved");
-                }
-            });
         });
     }
 }
