@@ -69,6 +69,10 @@ pub struct ServerConfig {
     pub share_logs: bool,
     #[serde(default)]
     pub share_diagnostics: bool,
+    /// Include a bounded, redacted recent application-log excerpt in manual
+    /// diagnostic snapshots. This never enables automatic uploads.
+    #[serde(default)]
+    pub share_debug_logs: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -206,6 +210,12 @@ impl AppConfig {
         }
         if let Ok(enabled) = std::env::var("QSONAUT_SERVER_SHARE_LOGS") {
             cfg.server.share_logs = parse_bool(&enabled);
+        }
+        if let Ok(enabled) = std::env::var("QSONAUT_SERVER_SHARE_DIAGNOSTICS") {
+            cfg.server.share_diagnostics = parse_bool(&enabled);
+        }
+        if let Ok(enabled) = std::env::var("QSONAUT_SERVER_SHARE_DEBUG_LOGS") {
+            cfg.server.share_debug_logs = parse_bool(&enabled);
         }
         if let Ok(mode) = std::env::var("QSONAUT_CONTEST_OPERATING_MODE") {
             if let Some(parsed) = parse_contest_operating_mode(&mode) {

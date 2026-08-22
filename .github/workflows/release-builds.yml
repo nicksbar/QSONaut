@@ -39,28 +39,13 @@ jobs:
             os: windows
 
     steps:
-      # The application consumes modem libraries as sibling workspaces.
+      # cw-dit and mfsk-core are resolved from pinned upstream Git dependencies.
       - name: Check out QSONaut
         uses: actions/checkout@v6
         with:
           path: QSONaut
 
-      - name: Check out mfsk-core
-        uses: actions/checkout@v6
-        with:
-          repository: jl1nie/mfsk-core
-          # Build releases from the exact upstream commit validated by CI.
-          ref: bfcac2c93bf3add38f1214a809705e9838cac9c3
-          path: mfsk-core
-
-      - name: Check out cw-dit
-        uses: actions/checkout@v6
-        with:
-          repository: nicksbar/cw-dit
-          ref: main
-          path: cw-dit
-
-      # Rigwright is resolved from the v0.1.6 Git tag declared by the Cargo
+      # Rigwright is resolved from the v0.1.7 Git tag declared by the Cargo
       # manifests; no sibling checkout or local path override is used here.
 
       - name: Install Linux native libraries
@@ -82,7 +67,6 @@ jobs:
           mkdir -p "dist/${{ matrix.artifact }}"
           cp "target/${{ matrix.target }}/release/qsonaut" "dist/${{ matrix.artifact }}/"
           cp README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md qsonaut.toml.example "dist/${{ matrix.artifact }}/"
-          cp ../mfsk-core/LICENSE "dist/${{ matrix.artifact }}/MFSK-CORE-LICENSE.txt"
           tar -C dist -czf "dist/${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"
 
       - name: Package Windows distribution
@@ -93,7 +77,6 @@ jobs:
           New-Item -ItemType Directory -Force "dist/${{ matrix.artifact }}" | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/qsonaut.exe" "dist/${{ matrix.artifact }}/"
           Copy-Item README.md,CHANGELOG.md,LICENSE,THIRD_PARTY_NOTICES.md,qsonaut.toml.example "dist/${{ matrix.artifact }}/"
-          Copy-Item ../mfsk-core/LICENSE "dist/${{ matrix.artifact }}/MFSK-CORE-LICENSE.txt"
           Compress-Archive -Path "dist/${{ matrix.artifact }}/*" -DestinationPath "dist/${{ matrix.artifact }}.zip"
 
       - name: Upload distribution

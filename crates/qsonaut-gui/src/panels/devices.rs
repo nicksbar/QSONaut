@@ -43,10 +43,6 @@ impl QsonautGuiApp {
             let _ = handle.join();
         }
         self.audio_worker_stop = Arc::new(AtomicBool::new(false));
-        self.state
-            .lock()
-            .expect("ui state lock poisoned")
-            .monitor_test_tone = false;
         self.audio_worker_handle = Some(spawn_audio_spectrum_worker(
             self.state.clone(),
             self.audio_worker_stop.clone(),
@@ -252,7 +248,7 @@ impl QsonautGuiApp {
         ui.add_space(6.0);
         ui.label(RichText::new("RX monitor diagnostics").strong());
         ui.label(
-            RichText::new("The monitor plays captured audio from the selected monitor output. The test tone verifies the active monitor stream after audio input has started.")
+            RichText::new("The monitor plays captured audio from the selected monitor output.")
                 .small()
                 .color(theme_muted(ui)),
         );
@@ -269,23 +265,7 @@ impl QsonautGuiApp {
                 self.profile_dirty = true;
                 self.persist_profile("RX monitor volume saved to");
             }
-            let can_test = self.config.audio.monitor_enabled && !self.audio_restart_required;
-            if ui
-                .add_enabled(can_test, egui::Button::new("Play test tone"))
-                .on_disabled_hover_text("Enable and apply the RX monitor first")
-                .clicked()
-            {
-                self.state
-                    .lock()
-                    .expect("ui state lock poisoned")
-                    .monitor_test_tone = true;
-            }
         });
-        ui.label(
-            RichText::new("Test tone: 700 Hz for 350 ms · increase the control only as needed; system output volume still applies.")
-                .small()
-                .color(theme_muted(ui)),
-        );
 
         ui.add_space(6.0);
         if matches!(
@@ -328,14 +308,28 @@ impl QsonautGuiApp {
                     theme_warning(ui)
                 }),
             );
-            ui.label(
-                RichText::new(format!(
-                    "Rigwright controls: {}",
-                    radio_capability_summary(*profile)
-                ))
-                .small()
-                .color(theme_muted(ui)),
-            );
+            egui::CollapsingHeader::new("Radio capability details")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "Rigwright controls: {}",
+                            radio_capability_summary(*profile)
+                        ))
+                        .small()
+                        .color(theme_muted(ui)),
+                    );
+                    if !self.radio_detected_models.is_empty() {
+                        ui.label(
+                            RichText::new(format!(
+                                "Detected radios: {}",
+                                self.radio_detected_models.join(", ")
+                            ))
+                            .small()
+                            .color(theme_success(ui)),
+                        );
+                    }
+                });
         } else {
             ui.label(
                 RichText::new(format!(
@@ -346,33 +340,28 @@ impl QsonautGuiApp {
                 .color(theme_warning(ui)),
             );
         }
-        if self.radio_detected_models.is_empty() {
-            ui.label(
-                RichText::new("Detected radios: none recognized yet (serial bridge only or unsupported model)")
-                    .small()
-                    .color(theme_warning(ui)),
-            );
+        let backend = self.config.radio.backend.to_ascii_lowercase();
+        let backend_details = if matches!(backend.as_str(), "native" | "null" | "mock") {
+            format!(
+                "Backend: {}",
+                radio_backend_label(&self.config.radio.backend)
+            )
         } else {
-            ui.label(
-                RichText::new(format!(
-                    "Detected radios: {}",
-                    self.radio_detected_models.join(", ")
-                ))
-                .small()
-                .color(theme_success(ui)),
-            );
-        }
-
+            format!(
+                "Backend: {} · {}",
+                radio_backend_label(&self.config.radio.backend),
+                self.config.radio.endpoint
+            )
+        };
         ui.label(
             RichText::new(format!(
-                "Active backend: {} · endpoint: {} · serial: {}",
-                self.config.radio.backend,
-                self.config.radio.endpoint,
+                "{} · serial: {}",
+                backend_details,
                 self.config
                     .radio
                     .serial_port
                     .as_deref()
-                    .unwrap_or("auto-detect"),
+                    .unwrap_or("auto-detect")
             ))
             .small()
             .color(theme_muted(ui)),
@@ -518,6 +507,25 @@ mod tests {
         assert!(
             radio_capability_summary(*find_model("TS-890S").unwrap()).contains("write-only PTT")
         );
+    }
+
+    #[test]
+    fn native_radio_exposes_protocol_only_profiles() {
+        for (model, label) in [
+            ("CI-V (generic)", "Icom CI-V (generic) — experimental"),
+            ("CAT (generic)", "Yaesu CAT (generic) — experimental"),
+            (
+                "classic CAT (generic)",
+                "Yaesu classic CAT (generic) — experimental",
+            ),
+            (
+                "PC control (generic)",
+                "Kenwood PC control (generic) — experimental",
+            ),
+        ] {
+            assert_eq!(selected_radio_label(model), label);
+            assert!(radio_capability_summary(*find_model(model).unwrap()).contains("frequency"));
+        }
     }
 
     #[test]

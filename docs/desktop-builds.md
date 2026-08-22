@@ -51,7 +51,10 @@ the first rendered frame.
 UI scale presets use a rebased baseline where the previous physical 75% size
 is now represented as 100%.
 
-`mfsk-core` remains a sibling source dependency during active modem development.
-The workflow checks out the current `main` branch alongside QSONaut and
-packages its GPL-3.0-or-later license plus QSONaut's third-party notice with
-every binary archive.
+`mfsk-core` is resolved from its upstream Git dependency during builds; no
+local checkout is required. The release archive includes QSONaut's
+`THIRD_PARTY_NOTICES.md`, which identifies the upstream GPL-3.0-or-later
+license and source location.
+
+`cw-dit` is likewise resolved from its pinned upstream Git dependency; no
+local checkout is required for CW builds.

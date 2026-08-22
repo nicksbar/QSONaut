@@ -639,10 +639,29 @@ impl QsonautGuiApp {
         ui.heading("Radio Tuning Profiles");
         ui.separator();
         ui.label(
-            RichText::new("Save reusable IC-7300 settings, edit every stored option, apply them to the radio, and assign defaults per QSONaut mode.")
+            RichText::new("Save reusable radio settings, edit stored controls, apply them to the selected radio, and assign defaults per QSONaut mode.")
                 .small()
                 .color(Color32::GRAY),
         );
+        let native_profile =
+            native_radio_profile(&self.config.radio.backend, &self.config.radio.model);
+        if let Some(profile) = native_profile {
+            ui.label(
+                RichText::new(format!(
+                    "Target: {} {} · {}",
+                    profile.manufacturer.label(),
+                    profile.model,
+                    profile.protocol.label()
+                ))
+                .strong(),
+            );
+        } else {
+            ui.label(
+                RichText::new("Target: external or unselected radio")
+                    .strong()
+                    .color(Color32::GRAY),
+            );
+        }
 
         let mut selected_name = self
             .radio_profiles
@@ -712,7 +731,7 @@ impl QsonautGuiApp {
             .find(|profile| profile.name == selected_name);
         if let Some(profile) = profile {
             ui.separator();
-            ui.label(RichText::new("Stored options").strong());
+            ui.label(RichText::new("Shared radio controls").strong());
             ui.horizontal_wrapped(|ui| {
                 ui.label("Mode");
                 ui.text_edit_singleline(profile.mode.get_or_insert_with(String::new));
@@ -731,15 +750,27 @@ impl QsonautGuiApp {
                     edit_optional_u8(ui, value, 0, 255);
                 }
             });
-            ui.horizontal_wrapped(|ui| {
-                ui.checkbox(profile.preamp.get_or_insert(false), "Preamp");
-                ui.checkbox(profile.attenuator.get_or_insert(false), "Attenuator");
-                ui.checkbox(profile.noise_blank.get_or_insert(false), "Noise blanker");
-                ui.checkbox(
-                    profile.noise_reduction.get_or_insert(false),
-                    "Noise reduction",
+            if native_profile.is_some_and(|profile| profile.manufacturer == Manufacturer::Icom) {
+                ui.add_space(4.0);
+                ui.label(RichText::new("Icom CI-V controls").strong());
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(profile.preamp.get_or_insert(false), "Preamp");
+                    ui.checkbox(profile.attenuator.get_or_insert(false), "Attenuator");
+                    ui.checkbox(profile.noise_blank.get_or_insert(false), "Noise blanker");
+                    ui.checkbox(
+                        profile.noise_reduction.get_or_insert(false),
+                        "Noise reduction",
+                    );
+                });
+            } else {
+                ui.label(
+                    RichText::new(
+                        "No vendor-specific controls are currently defined for this target.",
+                    )
+                    .small()
+                    .color(Color32::GRAY),
                 );
-            });
+            }
             if ui.button("Save edits").clicked() {
                 self.profile_dirty = true;
                 self.persist_profile("Radio profile edits saved to");
@@ -794,18 +825,6 @@ impl QsonautGuiApp {
             self.profile_dirty = true;
             self.persist_profile("Auto-saved");
         }
-        ui.label(
-            RichText::new(&snapshot.radio_waterfall_status)
-                .small()
-                .color(if snapshot.radio_spectrum_enabled {
-                    Color32::LIGHT_GREEN
-                } else if self.civ_spectrum_on {
-                    theme_warning(ui)
-                } else {
-                    Color32::GRAY
-                }),
-        );
-
         ui.add_space(6.0);
         ui.label(RichText::new("Shared display").strong());
         ui.label(
@@ -858,18 +877,27 @@ impl QsonautGuiApp {
 
         ui.add_space(6.0);
         ui.label(RichText::new("Radio scope only").strong());
+        let mut scope_view_changed = false;
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(
-                &mut self.radio_scope_view,
-                RadioScopeView::Narrow,
-                "Narrow passband",
-            );
-            ui.selectable_value(
-                &mut self.radio_scope_view,
-                RadioScopeView::Overview,
-                "Active band overview",
-            );
+            scope_view_changed |= ui
+                .selectable_value(
+                    &mut self.radio_scope_view,
+                    RadioScopeView::Narrow,
+                    "Narrow passband",
+                )
+                .changed();
+            scope_view_changed |= ui
+                .selectable_value(
+                    &mut self.radio_scope_view,
+                    RadioScopeView::Overview,
+                    "Active band overview",
+                )
+                .changed();
         });
+        if scope_view_changed {
+            self.profile_dirty = true;
+            self.persist_profile("Auto-saved");
+        }
         ui.add(
             egui::Slider::new(&mut self.radio_scope_contrast, 0.7..=3.0)
                 .text("Intensity")
@@ -880,7 +908,7 @@ impl QsonautGuiApp {
             "Match span to selected FIL",
         );
         let vbw_changed = ui
-            .checkbox(&mut self.radio_scope_vbw_wide, "Wide video bandwidth")
+            .checkbox(&mut self.radio_scope_vbw_wide, "Wide VBW")
             .on_hover_text(
                 "Wide VBW smooths the radio scope display by averaging more video bandwidth. "
                     .to_string()
@@ -980,6 +1008,15 @@ impl QsonautGuiApp {
             &mut self.config.server.share_diagnostics,
             "Allow manual radio/debug snapshots",
         );
+        ui.add_enabled_ui(self.config.server.share_diagnostics, |ui| {
+            ui.checkbox(
+                &mut self.config.server.share_debug_logs,
+                "Include recent redacted app logs in manual snapshots",
+            )
+            .on_hover_text(
+                "Adds at most 24 KiB from the end of qsonaut.log. Tokens, configured device names, serial ports, and the home-directory path are redacted.",
+            );
+        });
         if self.config.server != server_settings_before {
             self.profile_dirty = true;
         }
@@ -991,7 +1028,7 @@ impl QsonautGuiApp {
                 self.config.server.enabled = false;
                 self.reconnect_server();
             }
-            if ui.add_enabled(self.config.server.share_diagnostics, egui::Button::new("Send diagnostic snapshot now")).on_hover_text("Sends radio configuration, live state, audio/decoder health, and the latest error; never sends the server token or audio samples").clicked() {
+            if ui.add_enabled(self.config.server.share_diagnostics, egui::Button::new("Send diagnostic snapshot now")).on_hover_text("Sends radio configuration, live state, audio/decoder health, and the latest error. A bounded redacted log tail is included only when separately enabled; tokens and audio samples are never sent.").clicked() {
                 self.publish_diagnostic_snapshot();
             }
             ui.label(RichText::new("Nothing is shared unless its control is enabled.").small().color(Color32::GRAY));
@@ -1051,7 +1088,7 @@ impl QsonautGuiApp {
             });
             ui.label(
                 RichText::new(format!(
-                    "Presence: {} · radio details: {} · QSO logs: {} · diagnostics: {}",
+                    "Presence: {} · radio details: {} · QSO logs: {} · diagnostics: {} · app logs: {}",
                     if self.config.server.share_presence {
                         "shared"
                     } else {
@@ -1069,6 +1106,13 @@ impl QsonautGuiApp {
                     },
                     if self.config.server.share_diagnostics {
                         "manual"
+                    } else {
+                        "private"
+                    },
+                    if self.config.server.share_diagnostics
+                        && self.config.server.share_debug_logs
+                    {
+                        "manual + redacted"
                     } else {
                         "private"
                     },

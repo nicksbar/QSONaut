@@ -28,6 +28,8 @@ device_token = "paste-token-here"
 share_presence = true
 share_radio_details = false
 share_logs = false
+share_diagnostics = false
+share_debug_logs = false
 ```
 
 The switches are independent:
@@ -36,6 +38,10 @@ The switches are independent:
 - `share_radio_details` additionally publishes radio model, frequency, band,
   mode, and grid metadata. It has no effect unless presence sharing is enabled.
 - `share_logs` publishes locally saved contacts with stable idempotency IDs.
+- `share_diagnostics` allows the operator to send a manual runtime snapshot.
+- `share_debug_logs` adds a bounded, redacted recent application-log tail to
+  that manual snapshot. It has no effect unless diagnostics are enabled and
+  never causes continuous log upload.
 
 All are false by default. QSONaut shows connection state and the
 active-event/catalog counts in Operator Profile.

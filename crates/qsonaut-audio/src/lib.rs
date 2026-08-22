@@ -170,22 +170,6 @@ impl AudioMonitor {
             .store(volume.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
     }
 
-    pub fn push_test_tone(&self, sample_rate_hz: u32, frequency_hz: f32, duration_ms: u32) {
-        let count = (sample_rate_hz as u64 * duration_ms as u64 / 1_000) as usize;
-        let amplitude = 0.18_f32;
-        let samples = (0..count)
-            .map(|index| {
-                (2.0 * std::f32::consts::PI * frequency_hz * index as f32
-                    / sample_rate_hz.max(1) as f32)
-                    .sin()
-                    * amplitude
-                    * i16::MAX as f32
-            })
-            .map(|sample| sample.round() as i16)
-            .collect::<Vec<_>>();
-        self.push_at_sample_rate(&samples, sample_rate_hz);
-    }
-
     pub fn push(&self, samples: &[i16]) {
         self.push_at_sample_rate(samples, self.input_sample_rate_hz);
     }

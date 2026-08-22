@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -50,6 +51,49 @@ pub fn log_dir() -> PathBuf {
 
 pub fn log_file_path() -> PathBuf {
     log_dir().join(LOG_FILE)
+}
+
+/// Read at most the newest `max_bytes` from the application log.
+///
+/// When reading from the middle of a file, the partial first line is omitted
+/// so callers always receive complete log records.
+pub fn read_log_tail(max_bytes: usize) -> Result<String> {
+    read_file_tail(&log_file_path(), max_bytes)
+}
+
+fn read_file_tail(path: &Path, max_bytes: usize) -> Result<String> {
+    if max_bytes == 0 {
+        return Ok(String::new());
+    }
+    let mut file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let len = file
+        .metadata()
+        .with_context(|| format!("inspect {}", path.display()))?
+        .len();
+    let start = len.saturating_sub(max_bytes as u64);
+    let starts_on_line_boundary = if start == 0 {
+        true
+    } else {
+        file.seek(SeekFrom::Start(start - 1))
+            .with_context(|| format!("seek {}", path.display()))?;
+        let mut previous = [0_u8; 1];
+        file.read_exact(&mut previous)
+            .with_context(|| format!("read {}", path.display()))?;
+        previous[0] == b'\n'
+    };
+    file.seek(SeekFrom::Start(start))
+        .with_context(|| format!("seek {}", path.display()))?;
+    let mut bytes = Vec::with_capacity((len - start) as usize);
+    file.read_to_end(&mut bytes)
+        .with_context(|| format!("read {}", path.display()))?;
+    if !starts_on_line_boundary {
+        if let Some(line_end) = bytes.iter().position(|byte| *byte == b'\n') {
+            bytes.drain(..=line_end);
+        } else {
+            bytes.clear();
+        }
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 pub fn hamdb_cache_path() -> PathBuf {
@@ -842,6 +886,23 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_tail_is_bounded_and_starts_on_a_complete_line() {
+        let thread_name = std::thread::current()
+            .name()
+            .unwrap_or("test")
+            .replace(|character: char| !character.is_ascii_alphanumeric(), "_");
+        let path = std::env::temp_dir().join(format!(
+            "qsonaut-log-tail-{}-{}.log",
+            std::process::id(),
+            thread_name
+        ));
+        fs::write(&path, "first record\nsecond record\nthird record\n").unwrap();
+        let tail = read_file_tail(&path, 27).unwrap();
+        let _ = fs::remove_file(path);
+        assert_eq!(tail, "second record\nthird record\n");
+    }
 
     #[test]
     fn creates_utc_record_fields() {

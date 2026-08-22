@@ -23,8 +23,8 @@ Both repositories use Rust and share versioning conventions but maintain separat
 
 | Crate | Purpose | Version | Notes |
 |-------|---------|---------|-------|
-| mfsk-core | DSP/decoding | 0.10.0 (unreleased) | Path dependency from sibling repo; pinned upstream commit |
-| cw-dit | Morse/CW DSP and streaming decoding (`cwdit-dsp`, `cwdit-morse`) | 0.1.0 | Path dependency from sibling fork; MIT OR Apache-2.0 |
+| mfsk-core | DSP/decoding | 0.10.0 (unreleased) | Pinned upstream Git dependency |
+| cw-dit | Morse/CW DSP and streaming decoding (`cwdit-dsp`, `cwdit-morse`) | 0.1.0 | Pinned upstream Git dependency; MIT OR Apache-2.0 |
 | rigwright | CI-V radio HAL | 0.1.2 | Git dependency (https://github.com/nicksbar/rigwright) |
 | eframe 0.33 | GUI framework | 0.33 | With wgpu, wayland, vulkan |
 | tokio 1 | Async runtime | 1 | Multi-threaded |
@@ -178,7 +178,7 @@ Management UI (Svelte)
 - Both repos use workspace versioning (v0.2.3 vs v0.1.0)
 - Client pins rigwright to GitHub tag v0.1.2
 - Server has no dependency on client code
-- Client uses path dependency on mfsk-core from sibling repo
+- Client uses a pinned Git dependency on mfsk-core; no sibling checkout is required
 
 ---
 

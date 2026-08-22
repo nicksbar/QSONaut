@@ -5,11 +5,53 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.5] - 2026-08-21
+## [0.3.6] - Unreleased
 
 ### Added
 - Added selectable native serial, Hamlib `rigctld`, and DX Lab Suite Commander
-  radio backends through Rigwright `v0.1.6`.
+  radio backends through Rigwright `v0.1.7`.
+- Kept completed digital transmit history visible in FT4 and FT8 conversation
+  panels after the active QSO target is cleared.
+- Added a live, filterable APP LOG tab with bottom-following, severity
+  highlighting, and copy support.
+- Added an opt-in redacted application-log tail to manual server diagnostics;
+  logs are never uploaded continuously.
+- Resolved the cw-dit DSP and Morse crates from a pinned upstream Git revision
+  so builds no longer depend on a local sibling checkout.
+
+### Changed
+- Refocused the README on current station, digital-mode, CW, radio-control,
+  audio, waterfall, logging, and server-integration capabilities while keeping
+  alpha maturity and AI-assisted development disclosures clear and concise.
+- Replaced the project screenshot with a fresh source image and blurred only
+  callsign fields before publication.
+- Kept QSONaut Server documentation at the client integration and privacy
+  boundary; server deployment and account setup remain in the independent
+  QSONaut-Server project.
+
+### Fixed
+- Updated the committed Rigwright dependency and lockfile to the published
+  `v0.1.7` release, including the new model catalog and profile-driven native
+  radio drivers.
+- Kept CI and release builds aligned with the tagged Rigwright `v0.1.7`
+  dependency instead of relying on the ignored local sibling checkout.
+- Preserved FT8 tones when calling CQ instead of resetting the operator's
+  selected RX/TX tones.
+- Persisted the selected radio waterfall scope view across profile reloads.
+- Exposed generic Rigwright radio profiles in the native radio selector.
+- Removed duplicate PTT lead and tail controls from the FT4 and FT8 workspaces;
+  the shared radio timing settings remain authoritative.
+- Removed the obsolete RX test-tone player and its packaging/documentation
+  references.
+- Simplified radio status and tuning controls to reduce duplicate or redundant
+  information in the device panel.
+- Resolved `mfsk-core` from a pinned upstream Git revision instead of requiring
+  a local sibling checkout; aligned Cargo metadata, CI, release packaging, and
+  desktop-build documentation with that source model.
+
+## [0.3.5] - 2026-08-21
+
+### Added
 - Added endpoint configuration and in-app radio reconnect support.
 - Added dedicated native-mode workspaces for FST4, JT9, JT65, and Q65, with
   per-mode layouts and shared digital conversation handling.
@@ -27,11 +69,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   bandwidth indicators and mode-specific cursor placement.
 
 ### Fixed
-- Updated the committed Rigwright dependency and lockfile to the published
-  `v0.1.6` release, including the new model catalog and profile-driven native
-  radio drivers.
-- Kept CI and release builds aligned with the tagged Rigwright `v0.1.6`
-  dependency instead of relying on the ignored local sibling checkout.
 - Fixed audio monitor and added a volume control
 - Removed TX audio monitor, unsupported idea
 - Persisted radio backend and endpoint selections in operator profiles.

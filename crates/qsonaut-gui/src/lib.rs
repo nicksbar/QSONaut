@@ -35,8 +35,8 @@ use qsonaut_core::{
     SplitPolicy,
 };
 use qsonaut_log::{
-    app_config_dir, hamdb_cache_path, AdifExportFilter, HamDbCache, HamDbCacheEntry, QsoLog,
-    QsoRecord,
+    app_config_dir, hamdb_cache_path, log_file_path, read_log_tail, AdifExportFilter, HamDbCache,
+    HamDbCacheEntry, QsoLog, QsoRecord,
 };
 use qsonaut_pskreporter::{
     ReceptionReport, ReportSender, Reporter, ReporterConfig, ReporterTuning,
@@ -156,6 +156,29 @@ enum SignalPanelTab {
     Settings,
     Server,
     RadioTuning,
+    AppLog,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum AppLogLevelFilter {
+    #[default]
+    All,
+    Info,
+    Warning,
+    Error,
+}
+
+impl AppLogLevelFilter {
+    const ALL: [Self; 4] = [Self::All, Self::Info, Self::Warning, Self::Error];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::All => "All levels",
+            Self::Info => "Info+",
+            Self::Warning => "Warnings+",
+            Self::Error => "Errors only",
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -647,8 +670,9 @@ enum WaterfallSpeed {
     Fast,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 enum RadioScopeView {
+    #[default]
     Narrow,
     Overview,
 }
@@ -772,7 +796,6 @@ struct GuiState {
     audio_waterfall_revision: u64,
     audio_level_dbfs: Option<f32>,
     audio_clip_percent: f32,
-    monitor_test_tone: bool,
     ft8_decode_status: String,
     ft8_clock_offset_s: Option<f32>,
     ft4_clock_offset_s: Option<f32>,
@@ -826,7 +849,6 @@ impl Default for GuiState {
             audio_waterfall_revision: 0,
             audio_level_dbfs: None,
             audio_clip_percent: 0.0,
-            monitor_test_tone: false,
             ft8_decode_status: "STARTING".to_string(),
             ft8_clock_offset_s: None,
             ft4_clock_offset_s: None,
@@ -1391,6 +1413,12 @@ struct QsonautGuiApp {
     available_profiles: Vec<String>,
     profile_io_status: String,
     profile_dirty: bool,
+    app_log_text: String,
+    app_log_status: String,
+    app_log_filter: String,
+    app_log_level_filter: AppLogLevelFilter,
+    app_log_follow: bool,
+    app_log_last_refresh: Instant,
     audio_input_devices: Vec<String>,
     audio_output_devices: Vec<String>,
     radio_serial_ports: Vec<String>,
@@ -1560,6 +1588,7 @@ impl QsonautGuiApp {
         let mut ft8_cq_only_view = false;
         let mut civ_spectrum_on = false;
         let mut radio_scope_vbw_wide = false;
+        let mut radio_scope_view = RadioScopeView::Narrow;
         let mut waterfall_theme = WaterfallTheme::default();
         let mut waterfall_deck_height = default_waterfall_deck_height();
         let ft8_stop_policy = AutoTxStopPolicy::Continuous;
@@ -1621,6 +1650,7 @@ impl QsonautGuiApp {
             ft8_cq_only_view = p.cq_only_view;
             civ_spectrum_on = p.civ_spectrum_on;
             radio_scope_vbw_wide = p.radio_scope_vbw_wide;
+            radio_scope_view = p.radio_scope_view;
             waterfall_theme = p.waterfall_theme;
             waterfall_deck_height = p.waterfall_deck_height.clamp(170.0, 560.0);
             ft8_max_attempts = p.ft8_max_attempts.clamp(1, 20);
@@ -1709,6 +1739,7 @@ impl QsonautGuiApp {
                 cq_only_view: ft8_cq_only_view,
                 civ_spectrum_on,
                 radio_scope_vbw_wide,
+                radio_scope_view,
                 waterfall_theme,
                 waterfall_deck_height,
                 halt_after_tx: false,
@@ -1977,6 +2008,12 @@ impl QsonautGuiApp {
             available_profiles,
             profile_io_status,
             profile_dirty: false,
+            app_log_text: String::new(),
+            app_log_status: String::new(),
+            app_log_filter: String::new(),
+            app_log_level_filter: AppLogLevelFilter::All,
+            app_log_follow: true,
+            app_log_last_refresh: Instant::now() - Duration::from_secs(1),
             audio_input_devices: Vec::new(),
             audio_output_devices: Vec::new(),
             radio_serial_ports: Vec::new(),
@@ -1988,7 +2025,7 @@ impl QsonautGuiApp {
             radio_scope_vbw_wide,
             radio_scope_hold: false,
             radio_scope_reference_tenths_db: 0,
-            radio_scope_view: RadioScopeView::Narrow,
+            radio_scope_view,
             radio_scope_lock_if_to_filter: true,
             waterfall_theme,
             waterfall_deck_height,
@@ -2077,6 +2114,7 @@ impl QsonautGuiApp {
         self.ft8_cq_only_view = profile.cq_only_view;
         self.civ_spectrum_on = profile.civ_spectrum_on;
         self.radio_scope_vbw_wide = profile.radio_scope_vbw_wide;
+        self.radio_scope_view = profile.radio_scope_view;
         self.waterfall_theme = profile.waterfall_theme;
         self.waterfall_deck_height = profile.waterfall_deck_height.clamp(170.0, 560.0);
         self.ft8_stop_policy = AutoTxStopPolicy::Continuous;
@@ -2524,6 +2562,7 @@ impl QsonautGuiApp {
             cq_only_view: self.ft8_cq_only_view,
             civ_spectrum_on: self.civ_spectrum_on,
             radio_scope_vbw_wide: self.radio_scope_vbw_wide,
+            radio_scope_view: self.radio_scope_view,
             waterfall_theme: self.waterfall_theme,
             waterfall_deck_height: self.waterfall_deck_height,
             // This control is deliberately one-shot and is not restored on launch.
@@ -3554,6 +3593,7 @@ impl eframe::App for QsonautGuiApp {
                             (SignalPanelTab::Settings, "SETTINGS"),
                             (SignalPanelTab::Server, "SERVER"),
                             (SignalPanelTab::RadioTuning, "RADIO TUNING"),
+                            (SignalPanelTab::AppLog, "APP LOG"),
                         ] {
                             let selected = self.signal_panel_tab == tab;
                             let text = if selected {
@@ -3569,21 +3609,32 @@ impl eframe::App for QsonautGuiApp {
                         }
                     });
                     ui.separator();
-                    egui::ScrollArea::vertical()
-                        .id_salt("signals_scroll")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| match self.signal_panel_tab {
-                            SignalPanelTab::Achievements => self.draw_hunter_panel(ui, &snapshot),
-                            SignalPanelTab::Profile => self.draw_profile_panel(ui),
-                            SignalPanelTab::Contest => self.draw_contest_panel(ui),
-                            SignalPanelTab::Reporting => self.draw_reporting_panel(ui),
-                            SignalPanelTab::Waterfall => self.draw_waterfall_panel(ui, &snapshot),
-                            SignalPanelTab::Settings => self.draw_settings_panel(ui),
-                            SignalPanelTab::Server => self.draw_server_panel(ui),
-                            SignalPanelTab::RadioTuning => {
-                                self.draw_radio_tuning_panel(ui, &snapshot)
-                            }
-                        });
+                    if self.signal_panel_tab == SignalPanelTab::AppLog {
+                        self.draw_app_log_panel(ui);
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .id_salt("signals_scroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| match self.signal_panel_tab {
+                                SignalPanelTab::Achievements => {
+                                    self.draw_hunter_panel(ui, &snapshot)
+                                }
+                                SignalPanelTab::Profile => self.draw_profile_panel(ui),
+                                SignalPanelTab::Contest => self.draw_contest_panel(ui),
+                                SignalPanelTab::Reporting => self.draw_reporting_panel(ui),
+                                SignalPanelTab::Waterfall => {
+                                    self.draw_waterfall_panel(ui, &snapshot)
+                                }
+                                SignalPanelTab::Settings => self.draw_settings_panel(ui),
+                                SignalPanelTab::Server => self.draw_server_panel(ui),
+                                SignalPanelTab::RadioTuning => {
+                                    self.draw_radio_tuning_panel(ui, &snapshot)
+                                }
+                                SignalPanelTab::AppLog => {
+                                    unreachable!("app log has its own scroll area")
+                                }
+                            });
+                    }
                 });
         }
 
