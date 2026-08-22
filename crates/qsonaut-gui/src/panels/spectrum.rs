@@ -98,7 +98,9 @@ impl QsonautGuiApp {
         }
 
         if let Some(tex) = &self.radio_waterfall_texture {
-            let response = ui.image((tex.id(), display_size));
+            let response = ui
+                .add(egui::Image::new((tex.id(), display_size)).sense(egui::Sense::click()))
+                .on_hover_text("Click a signal to tune the radio VFO to that point");
             let dial_fraction = match self.radio_scope_view {
                 RadioScopeView::Narrow => snapshot.frequency_hz.map(|frequency| {
                     let half_span = scope_span_hz(self.radio_scope_span_code);
@@ -146,6 +148,46 @@ impl QsonautGuiApp {
                     egui::TextStyle::Small.resolve(ui.style()),
                     Color32::from_rgb(245, 190, 70),
                 );
+            }
+            if response.clicked() {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let rel = ((pos.x - response.rect.left()) / response.rect.width())
+                        .clamp(0.0, 1.0);
+                    let target = match self.radio_scope_view {
+                        RadioScopeView::Narrow => snapshot.frequency_hz.map(|frequency| {
+                            let half_span = scope_span_hz(self.radio_scope_span_code);
+                            let (low, high) = match sideband_projection {
+                                ScopeProjection::Full => (
+                                    frequency.saturating_sub(half_span),
+                                    frequency.saturating_add(half_span),
+                                ),
+                                ScopeProjection::LowerSideband => {
+                                    (frequency.saturating_sub(half_span), frequency)
+                                }
+                                ScopeProjection::UpperSideband => {
+                                    (frequency, frequency.saturating_add(half_span))
+                                }
+                            };
+                            low.saturating_add(
+                                ((high.saturating_sub(low)) as f32 * rel).round() as u64,
+                            )
+                        }),
+                        RadioScopeView::Overview => snapshot.frequency_hz.and_then(|frequency| {
+                            band_edges_for_frequency(Some(frequency)).map(|(low, high, _)| {
+                                low.saturating_add(
+                                    ((high.saturating_sub(low)) as f32 * rel).round() as u64,
+                                )
+                            })
+                        }),
+                    };
+                    if let Some(target) = target {
+                        self.send_command(GuiCommand::TuneTo(target));
+                        self.profile_io_status = format!(
+                            "Scope tune requested: {:.6} MHz",
+                            target as f64 / 1_000_000.0
+                        );
+                    }
+                }
             }
             let frequency_labels = match self.radio_scope_view {
                 RadioScopeView::Narrow => snapshot.frequency_hz.map(|frequency| {

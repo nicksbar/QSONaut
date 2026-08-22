@@ -892,6 +892,7 @@ impl Default for GuiState {
 #[derive(Debug, Clone)]
 enum GuiCommand {
     TuneDelta(i64),
+    TuneTo(u64),
     CycleMode,
     AfGainDelta(i16),
     ApplyWorkspace {

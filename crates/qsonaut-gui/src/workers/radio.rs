@@ -308,6 +308,13 @@ pub(crate) fn spawn_radio_worker(
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
+                    GuiCommand::TuneTo(target) => {
+                        if let Err(err) = rt.block_on(radio.set_frequency_hz(target)) {
+                            state.lock().expect("ui state lock poisoned").last_error =
+                                Some(err.to_string());
+                        }
+                        poll_radio_core_state(&rt, &radio, &state, true);
+                    }
                     GuiCommand::CycleMode => {
                         let current = rt.block_on(radio.get_mode()).unwrap_or(Mode::Usb);
                         let next = match current {

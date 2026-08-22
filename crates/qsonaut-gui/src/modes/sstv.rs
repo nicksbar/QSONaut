@@ -86,13 +86,14 @@ impl QsonautGuiApp {
                             .text(format!("Receiving {:.0}%", progress * 100.0)),
                     );
                 }
+                ui.label(RichText::new("TX image").strong());
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.sstv_image_path)
-                            .hint_text("/path/to/image.png")
+                            .hint_text("Path to PNG or JPEG")
                             .desired_width((ui.available_width() - 95.0).max(100.0)),
                     );
-                    if ui.button("Load image").clicked() {
+                    if ui.button("Open existing image").clicked() {
                         match std::fs::read(self.sstv_image_path.trim()) {
                             Ok(bytes) => self.install_sstv_image(&bytes, "Loaded image"),
                             Err(error) => {
