@@ -639,10 +639,29 @@ impl QsonautGuiApp {
         ui.heading("Radio Tuning Profiles");
         ui.separator();
         ui.label(
-            RichText::new("Save reusable IC-7300 settings, edit every stored option, apply them to the radio, and assign defaults per QSONaut mode.")
+            RichText::new("Save reusable radio settings, edit stored controls, apply them to the selected radio, and assign defaults per QSONaut mode.")
                 .small()
                 .color(Color32::GRAY),
         );
+        let native_profile =
+            native_radio_profile(&self.config.radio.backend, &self.config.radio.model);
+        if let Some(profile) = native_profile {
+            ui.label(
+                RichText::new(format!(
+                    "Target: {} {} · {}",
+                    profile.manufacturer.label(),
+                    profile.model,
+                    profile.protocol.label()
+                ))
+                .strong(),
+            );
+        } else {
+            ui.label(
+                RichText::new("Target: external or unselected radio")
+                    .strong()
+                    .color(Color32::GRAY),
+            );
+        }
 
         let mut selected_name = self
             .radio_profiles
@@ -712,7 +731,7 @@ impl QsonautGuiApp {
             .find(|profile| profile.name == selected_name);
         if let Some(profile) = profile {
             ui.separator();
-            ui.label(RichText::new("Stored options").strong());
+            ui.label(RichText::new("Shared radio controls").strong());
             ui.horizontal_wrapped(|ui| {
                 ui.label("Mode");
                 ui.text_edit_singleline(profile.mode.get_or_insert_with(String::new));
@@ -731,15 +750,27 @@ impl QsonautGuiApp {
                     edit_optional_u8(ui, value, 0, 255);
                 }
             });
-            ui.horizontal_wrapped(|ui| {
-                ui.checkbox(profile.preamp.get_or_insert(false), "Preamp");
-                ui.checkbox(profile.attenuator.get_or_insert(false), "Attenuator");
-                ui.checkbox(profile.noise_blank.get_or_insert(false), "Noise blanker");
-                ui.checkbox(
-                    profile.noise_reduction.get_or_insert(false),
-                    "Noise reduction",
+            if native_profile.is_some_and(|profile| profile.manufacturer == Manufacturer::Icom) {
+                ui.add_space(4.0);
+                ui.label(RichText::new("Icom CI-V controls").strong());
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(profile.preamp.get_or_insert(false), "Preamp");
+                    ui.checkbox(profile.attenuator.get_or_insert(false), "Attenuator");
+                    ui.checkbox(profile.noise_blank.get_or_insert(false), "Noise blanker");
+                    ui.checkbox(
+                        profile.noise_reduction.get_or_insert(false),
+                        "Noise reduction",
+                    );
+                });
+            } else {
+                ui.label(
+                    RichText::new(
+                        "No vendor-specific controls are currently defined for this target.",
+                    )
+                    .small()
+                    .color(Color32::GRAY),
                 );
-            });
+            }
             if ui.button("Save edits").clicked() {
                 self.profile_dirty = true;
                 self.persist_profile("Radio profile edits saved to");
@@ -794,18 +825,6 @@ impl QsonautGuiApp {
             self.profile_dirty = true;
             self.persist_profile("Auto-saved");
         }
-        ui.label(
-            RichText::new(&snapshot.radio_waterfall_status)
-                .small()
-                .color(if snapshot.radio_spectrum_enabled {
-                    Color32::LIGHT_GREEN
-                } else if self.civ_spectrum_on {
-                    theme_warning(ui)
-                } else {
-                    Color32::GRAY
-                }),
-        );
-
         ui.add_space(6.0);
         ui.label(RichText::new("Shared display").strong());
         ui.label(
