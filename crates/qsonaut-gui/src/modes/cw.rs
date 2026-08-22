@@ -23,9 +23,9 @@ impl QsonautGuiApp {
             ui.heading("CW · Software Audio");
             ui.separator();
             ui.label(
-                RichText::new("Backend: DitDah")
+                RichText::new("Backend: cw-dit")
                     .strong()
-                    .color(Color32::LIGHT_GREEN),
+                    .color(theme_success(ui)),
             );
             ui.separator();
             ui.label("Timing: Continuous");
@@ -44,12 +44,33 @@ impl QsonautGuiApp {
             ui.label(
                 RichText::new(&snapshot.digital_decode_status)
                     .monospace()
-                    .color(Color32::LIGHT_GREEN),
+                    .color(theme_success(ui)),
             );
             if let Some(level) = snapshot.audio_level_dbfs {
                 ui.separator();
                 ui.label(format!("Input {level:.0} dBFS"));
             }
+        });
+        ui.horizontal_wrapped(|ui| {
+            let mut record_rx = self
+                .state
+                .lock()
+                .expect("ui state lock poisoned")
+                .cw_record_rx;
+            if ui.checkbox(&mut record_rx, "Record RX stream").changed() {
+                let mut state = self.state.lock().expect("ui state lock poisoned");
+                state.cw_record_rx = record_rx;
+                state.cw_recording_status = if record_rx {
+                    "Recording will start on next audio block".to_string()
+                } else {
+                    "Recording stopping".to_string()
+                };
+            }
+            ui.label(
+                RichText::new(&snapshot.cw_recording_status)
+                    .small()
+                    .color(theme_muted(ui)),
+            );
         });
         ui.separator();
 
@@ -61,7 +82,7 @@ impl QsonautGuiApp {
                     RichText::new("LIVE DECODE")
                         .small()
                         .strong()
-                        .color(Color32::LIGHT_GREEN),
+                        .color(theme_success(ui)),
                 );
                 ui.label(
                     RichText::new(if snapshot.cw_live_text.is_empty() {
@@ -89,7 +110,6 @@ impl QsonautGuiApp {
                         .digital_decodes
                         .retain(|entry| entry.mode != WorkspaceMode::Cw);
                     state.cw_live_text.clear();
-                    state.cw_last_window_text.clear();
                 }
             });
         });
@@ -112,7 +132,7 @@ impl QsonautGuiApp {
                 if shown == 0 {
                     ui.label(
                         RichText::new("Listening for the first stable CW characters…")
-                            .color(Color32::GRAY),
+                            .color(theme_muted(ui)),
                     );
                 }
             });
@@ -130,7 +150,7 @@ impl QsonautGuiApp {
             ui.separator();
             ui.label("RX/TX CW tone");
             if ui
-                .add(egui::Slider::new(&mut self.cw_tone_hz, 200..=1_200).suffix(" Hz"))
+                .add(egui::Slider::new(&mut self.cw_tone_hz, 200..=3_000).suffix(" Hz"))
                 .changed()
             {
                 self.profile_dirty = true;
@@ -166,13 +186,27 @@ impl QsonautGuiApp {
                 self.stop_native_digital_tx();
             }
         });
-        ui.label(RichText::new(&self.digital_tx_status).color(Color32::GRAY));
+        ui.label(RichText::new(&self.digital_tx_status).color(theme_muted(ui)));
         ui.label(
             RichText::new(
-                "Software CW uses USB-D. The selected CW tone centers a narrow RX decoder gate and sets the TX audio pitch; broadband noise and steady carriers are rejected before DitDah. DitDah supports A-Z, 0-9, and spaces; prosigns, punctuation, paddle/keyed-carrier CW, and automatic QSO sequencing are not yet available.",
+                "Software CW uses USB-D and cw-dit. The selected tone feeds an adaptive Goertzel, noise-floor slicer, debouncer, and streaming Morse decoder. A-Z, 0-9, and spaces are supported; prosigns, punctuation, paddle/keyed-carrier CW, and automatic QSO sequencing are not yet available.",
             )
             .small()
-            .color(Color32::YELLOW),
+            .color(theme_warning(ui)),
+        );
+        ui.label(
+            RichText::new(
+                "RX uses a 240 Hz audio channel centered on the selected tone. That same filtered channel feeds cw-dit and the RX monitor. The decoder adapts to the local noise floor; there is no fixed squelch to tune.",
+            )
+            .small()
+            .color(theme_muted(ui)),
+        );
+        ui.label(
+            RichText::new(
+                "CW is channel-based, not a whole-waterfall decoder: QSONaut feeds the selected audio tone continuously into cw-dit. Align the green CW CENTER marker with the audible carrier; the waterfall is for choosing the channel, not decoding every signal at once.",
+            )
+            .small()
+            .color(theme_accent(ui)),
         );
 
         let cw_tx: Vec<_> = self

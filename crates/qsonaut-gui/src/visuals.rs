@@ -43,24 +43,6 @@ pub(super) fn audio_cursor_level(rows: &VecDeque<Vec<u8>>, frequency_hz: u32) ->
     row[start..=end].iter().copied().max().unwrap_or(0)
 }
 
-pub(super) fn crop_audio_rows(
-    rows: &VecDeque<Vec<u8>>,
-    visible_bandwidth_hz: u32,
-) -> VecDeque<Vec<u8>> {
-    let fraction = (visible_bandwidth_hz.min(AUDIO_MAX_FREQ_HZ) as f32 / AUDIO_MAX_FREQ_HZ as f32)
-        .clamp(0.0, 1.0);
-    rows.iter()
-        .map(|row| {
-            if row.is_empty() {
-                return Vec::new();
-            }
-            let end =
-                (((row.len() - 1) as f32 * fraction).round() as usize).clamp(1, row.len() - 1);
-            row[..=end].to_vec()
-        })
-        .collect()
-}
-
 pub(super) fn fft_buffer_to_display_bins(
     buffer: &[Complex<f32>],
     bins: usize,
@@ -113,6 +95,34 @@ pub(super) fn build_waterfall_image_with_theme(
     ColorImage::new([width, height], pixels)
 }
 
+pub(super) fn build_audio_waterfall_image_with_theme(
+    rows: &VecDeque<Vec<u8>>,
+    visible_bandwidth_hz: u32,
+    width: usize,
+    height: usize,
+    theme: WaterfallTheme,
+) -> ColorImage {
+    let fraction = (visible_bandwidth_hz.min(AUDIO_MAX_FREQ_HZ) as f32 / AUDIO_MAX_FREQ_HZ as f32)
+        .clamp(0.0, 1.0);
+    let pixels = (0..height)
+        .flat_map(|y| {
+            let missing = height.saturating_sub(rows.len());
+            let row = rows.get(y.saturating_sub(missing));
+            let end = row.filter(|row| !row.is_empty()).map(|row| {
+                (((row.len() - 1) as f32 * fraction).round() as usize).clamp(1, row.len() - 1)
+            });
+            (0..width).map(move |x| {
+                let value = match (row, end) {
+                    (Some(row), Some(end)) => sample_row_linear(row, end, x, width),
+                    _ => 0,
+                };
+                waterfall_color(value, theme)
+            })
+        })
+        .collect();
+    ColorImage::new([width, height], pixels)
+}
+
 pub(super) fn build_scope_waterfall_image(
     rows: &VecDeque<Vec<u8>>,
     width: usize,
@@ -152,6 +162,21 @@ fn resample_row_linear(row: &[u8], width: usize) -> Vec<u8> {
             }
         })
         .collect()
+}
+
+fn sample_row_linear(row: &[u8], source_last: usize, x: usize, width: usize) -> u8 {
+    if width <= 1 || source_last == 0 {
+        return row[0];
+    }
+    let position = x as f32 / (width - 1) as f32 * source_last as f32;
+    let lower = position.floor() as usize;
+    let upper = position.ceil() as usize;
+    if lower == upper {
+        row[lower]
+    } else {
+        let fraction = position - lower as f32;
+        (row[lower] as f32 + (row[upper] as f32 - row[lower] as f32) * fraction).round() as u8
+    }
 }
 
 fn waterfall_color(value: u8, theme: WaterfallTheme) -> Color32 {

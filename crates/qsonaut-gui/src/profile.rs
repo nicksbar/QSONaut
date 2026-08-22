@@ -13,7 +13,7 @@ use super::{
 };
 
 pub(super) const OPERATOR_PROFILE_FILE: &str = "profile.toml";
-pub(super) const OPERATOR_PROFILE_VERSION: u32 = 10;
+pub(super) const OPERATOR_PROFILE_VERSION: u32 = 12;
 const LEGACY_OPERATOR_PROFILE_FILE: &str = ".rigforge_profile.toml";
 const DEFAULT_PROFILE_NAME: &str = "Default";
 const OPERATOR_PROFILES_DIR: &str = "profiles";
@@ -56,6 +56,8 @@ pub(super) struct OperatorProfile {
     #[serde(default)]
     pub(super) civ_spectrum_on: bool,
     #[serde(default)]
+    pub(super) radio_scope_vbw_wide: bool,
+    #[serde(default)]
     pub(super) waterfall_theme: WaterfallTheme,
     #[serde(default = "default_waterfall_deck_height")]
     pub(super) waterfall_deck_height: f32,
@@ -82,7 +84,17 @@ pub(super) struct OperatorProfile {
     #[serde(default)]
     pub(super) audio_output_device: Option<String>,
     #[serde(default)]
+    pub(super) audio_monitor_enabled: bool,
+    #[serde(default)]
+    pub(super) audio_monitor_output_device: Option<String>,
+    #[serde(default = "default_audio_monitor_volume")]
+    pub(super) audio_monitor_volume: f32,
+    #[serde(default)]
     pub(super) radio_serial_port: Option<String>,
+    #[serde(default = "default_radio_backend")]
+    pub(super) radio_backend: String,
+    #[serde(default = "default_radio_endpoint")]
+    pub(super) radio_endpoint: String,
     #[serde(default = "default_radio_model")]
     pub(super) radio_model: String,
     #[serde(default = "default_radio_baud_rate")]
@@ -200,6 +212,10 @@ pub(super) fn default_cw_tone_hz() -> u16 {
     600
 }
 
+fn default_audio_monitor_volume() -> f32 {
+    1.0
+}
+
 pub(super) fn default_contest_serial_start() -> u32 {
     1
 }
@@ -230,6 +246,14 @@ fn default_radio_model() -> String {
 
 fn default_radio_baud_rate() -> u32 {
     115_200
+}
+
+fn default_radio_backend() -> String {
+    "native".to_string()
+}
+
+fn default_radio_endpoint() -> String {
+    "127.0.0.1:4532".to_string()
 }
 
 pub(super) fn default_psk_batch_interval_secs() -> u64 {

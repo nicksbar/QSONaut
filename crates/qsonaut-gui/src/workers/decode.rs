@@ -69,8 +69,10 @@ pub(in super::super) fn prepare_early_digital_slot(
     slot
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in super::super) fn run_native_digital_decode(
     mode: WorkspaceMode,
+    fst4_submode: crate::modes::fst4::Submode,
     samples: Vec<f32>,
     period: u64,
     utc: String,
@@ -120,13 +122,25 @@ pub(in super::super) fn run_native_digital_decode(
                     }
                 }
             } else {
-                let outcome =
-                    DecodeRequest::<mfsk_core::fst4::Fst4s60>::new(&audio, 100.0, 3_000.0, 0.8, 50)
-                        .decode();
-                for result in outcome.results {
-                    if let Some(message) = unpack77(result.message77()) {
-                        push(result.snr_db, result.dt_sec, result.freq_hz, message);
-                    }
+                macro_rules! decode_fst4 {
+                    ($submode:ty) => {
+                        for result in
+                            DecodeRequest::<$submode>::new(&audio, 100.0, 3_000.0, 0.8, 50)
+                                .decode()
+                                .results
+                        {
+                            if let Some(message) = unpack77(result.message77()) {
+                                push(result.snr_db, result.dt_sec, result.freq_hz, message);
+                            }
+                        }
+                    };
+                }
+                match fst4_submode {
+                    crate::modes::fst4::Submode::S15 => decode_fst4!(mfsk_core::fst4::Fst4s15),
+                    crate::modes::fst4::Submode::S30 => decode_fst4!(mfsk_core::fst4::Fst4s30),
+                    crate::modes::fst4::Submode::S60 => decode_fst4!(mfsk_core::fst4::Fst4s60),
+                    crate::modes::fst4::Submode::S120 => decode_fst4!(mfsk_core::fst4::Fst4s120),
+                    crate::modes::fst4::Submode::S300 => decode_fst4!(mfsk_core::fst4::Fst4s300),
                 }
             }
         }
@@ -136,7 +150,7 @@ pub(in super::super) fn run_native_digital_decode(
                     result.snr_db,
                     result.dt_sec,
                     result.freq_hz,
-                    result.message.to_string(),
+                    format!("{} · drift {:+.2} Hz", result.message, result.drift_hz),
                 );
             }
         }

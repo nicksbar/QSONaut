@@ -1,66 +1,6 @@
 use super::super::*;
+use super::digital_conversation::draw_digital_conversation;
 
-pub(crate) const FST4_BAND_PLAN: &[(&str, u64)] = &[
-    ("160m", 1_840_000),
-    ("80m", 3_573_000),
-    ("60m", 5_357_000),
-    ("40m", 7_074_000),
-    ("30m", 10_136_000),
-    ("20m", 14_074_000),
-    ("17m", 18_100_000),
-    ("15m", 21_074_000),
-    ("12m", 24_924_000),
-    ("10m", 28_074_000),
-    ("6m", 50_313_000),
-    ("2m", 144_174_000),
-    ("70cm", 432_074_000),
-];
-pub(crate) const WSPR_BAND_PLAN: &[(&str, u64)] = &[
-    ("160m", 1_836_600),
-    ("80m", 3_592_600),
-    ("60m", 5_208_600),
-    ("40m", 7_038_600),
-    ("30m", 10_138_700),
-    ("20m", 14_095_600),
-    ("17m", 18_104_600),
-    ("15m", 21_094_600),
-    ("12m", 24_924_600),
-    ("10m", 28_124_600),
-    ("6m", 50_293_000),
-    ("2m", 144_489_000),
-    ("70cm", 432_300_000),
-];
-pub(crate) const JT9_BAND_PLAN: &[(&str, u64)] = &[
-    ("160m", 1_836_000),
-    ("80m", 3_579_000),
-    ("60m", 5_357_000),
-    ("40m", 7_078_000),
-    ("30m", 10_136_000),
-    ("20m", 14_078_000),
-    ("17m", 18_100_000),
-    ("15m", 21_078_000),
-    ("12m", 24_928_000),
-    ("10m", 28_078_000),
-    ("6m", 50_313_000),
-    ("2m", 144_174_000),
-    ("70cm", 432_074_000),
-];
-pub(crate) const JT65_BAND_PLAN: &[(&str, u64)] = &[
-    ("160m", 1_838_000),
-    ("80m", 3_573_000),
-    ("60m", 5_357_000),
-    ("40m", 7_076_000),
-    ("30m", 10_136_000),
-    ("20m", 14_076_000),
-    ("17m", 18_100_000),
-    ("15m", 21_076_000),
-    ("12m", 24_924_000),
-    ("10m", 28_076_000),
-    ("6m", 50_323_000),
-    ("2m", 144_174_000),
-    ("70cm", 432_074_000),
-];
-pub(crate) const Q65_BAND_PLAN: &[(&str, u64)] = JT65_BAND_PLAN;
 pub(crate) const MSK144_BAND_PLAN: &[(&str, u64)] = &[
     ("160m", 1_840_000),
     ("80m", 3_579_000),
@@ -76,10 +16,82 @@ pub(crate) const MSK144_BAND_PLAN: &[(&str, u64)] = &[
     ("2m", 144_138_000),
     ("70cm", 432_075_000),
 ];
-pub(crate) const FLDIGI_BAND_PLAN: &[(&str, u64)] = FST4_BAND_PLAN;
+pub(crate) const FLDIGI_BAND_PLAN: &[(&str, u64)] = &[
+    ("160m", 1_840_000),
+    ("80m", 3_573_000),
+    ("60m", 5_357_000),
+    ("40m", 7_074_000),
+    ("30m", 10_136_000),
+    ("20m", 14_074_000),
+    ("17m", 18_100_000),
+    ("15m", 21_074_000),
+    ("12m", 24_924_000),
+    ("10m", 28_074_000),
+    ("6m", 50_313_000),
+];
 
 impl QsonautGuiApp {
     pub(crate) fn draw_mfsk_mode_workspace(
+        &mut self,
+        ui: &mut egui::Ui,
+        snapshot: &GuiState,
+        mode: WorkspaceMode,
+    ) {
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_min_height(360.0);
+            let deck_rect = ui.available_rect_before_wrap();
+            ui.allocate_rect(deck_rect, egui::Sense::hover());
+            let mut deck_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt(("native-mode-deck", mode.label()))
+                    .max_rect(deck_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            deck_ui.set_clip_rect(deck_rect);
+            deck_ui.columns(2, |columns| {
+                let (left_columns, right_columns) = columns.split_at_mut(1);
+                let left = &mut left_columns[0];
+                let right = &mut right_columns[0];
+                left.set_min_width(0.0);
+                right.set_min_width(0.0);
+                egui::Frame::dark_canvas(left.style()).show(left, |ui| {
+                    self.draw_mfsk_mode_details(ui, snapshot, mode);
+                });
+                egui::Frame::group(right.style()).show(right, |ui| {
+                    let lines = self
+                        .digital_tx_chat
+                        .iter()
+                        .filter(|entry| entry.mode == mode)
+                        .map(|entry| Ft8ChatLine {
+                            period: entry.period,
+                            utc: entry.utc.clone(),
+                            message: entry.message.clone(),
+                            detail: "TX".to_string(),
+                            direction: Ft8ChatDirection::Tx,
+                        })
+                        .collect();
+                    draw_digital_conversation(
+                        ui,
+                        ui.available_height(),
+                        "native-conversation",
+                        format!("💬 {} CONVERSATION", mode.label()),
+                        self.native_sessions
+                            .get(&mode)
+                            .map(|session| qso_stage_label(session.stage)),
+                        "Select a decode to track that callsign here.",
+                        self.station_callsign_or_default(),
+                        self.rx_tone_hz,
+                        self.tx_tone_hz,
+                        audio_cursor_level(&snapshot.audio_waterfall_rows, self.rx_tone_hz),
+                        audio_cursor_level(&snapshot.audio_waterfall_rows, self.tx_tone_hz),
+                        lines,
+                    );
+                });
+            });
+        });
+    }
+
+    fn draw_mfsk_mode_details(
         &mut self,
         ui: &mut egui::Ui,
         snapshot: &GuiState,
@@ -96,7 +108,7 @@ impl QsonautGuiApp {
             (BaseMode::Rtty | BaseMode::RttyR, false) => "RTTY",
             _ => "DIGITAL",
         };
-        let slot_s = mode.core_slot_seconds().map_or_else(
+        let slot_s = mode.slot_seconds(self.fst4_submode).map_or_else(
             || "Continuous".to_string(),
             |seconds| {
                 if seconds.fract() == 0.0 {
@@ -125,7 +137,7 @@ impl QsonautGuiApp {
                     .color(if mode.has_native_decoder() {
                         Color32::LIGHT_GREEN
                     } else {
-                        Color32::YELLOW
+                        theme_warning(ui)
                     }),
             );
             ui.separator();
@@ -139,9 +151,66 @@ impl QsonautGuiApp {
                 snapshot.mode
             ));
         });
-
         ui.add_space(8.0);
-        if let Some(slot_seconds) = mode.core_slot_seconds() {
+        let mode_guidance = match mode {
+            WorkspaceMode::Wspr => {
+                "WSPR is a 120-second propagation beacon. TX format: CALL GRID POWER_DBM; use one-shot transmissions only."
+            }
+            WorkspaceMode::Fst4 => {
+                "FST4-60 is currently selected by the decoder. TX is one timed frame; verify the slot countdown before sending."
+            }
+            WorkspaceMode::Jt9 => {
+                "JT9 uses 60-second slots. The native panel provides manual one-shot TX; sequencing is not enabled yet."
+            }
+            WorkspaceMode::Jt65 => {
+                "JT65 uses 60-second slots. The native panel provides manual one-shot TX; sequencing is not enabled yet."
+            }
+            WorkspaceMode::Q65 => {
+                "Q65-A30 is currently selected by the decoder. The native panel provides manual one-shot TX."
+            }
+            _ => "Native digital TX is one-shot and slot-timed; use STOP TX to disarm a queued frame.",
+        };
+        ui.label(RichText::new(mode_guidance).small().color(Color32::GRAY));
+        if matches!(
+            mode,
+            WorkspaceMode::Fst4 | WorkspaceMode::Jt9 | WorkspaceMode::Jt65 | WorkspaceMode::Q65
+        ) {
+            ui.horizontal_wrapped(|ui| {
+                let mut armed = self.native_autoseq_mode == Some(mode);
+                if ui.checkbox(&mut armed, "Automatic exchange").changed() {
+                    self.native_autoseq_mode = armed.then_some(mode);
+                    if !armed {
+                        self.native_stop_policy = AutoTxStopPolicy::Continuous;
+                    }
+                }
+                ui.label("Reply priority");
+                egui::ComboBox::from_id_salt(("native_reply_policy", mode.label()))
+                    .selected_text(self.native_auto_reply_policy.label())
+                    .show_ui(ui, |ui| {
+                        for policy in AutoReplyPolicy::ALL {
+                            ui.selectable_value(
+                                &mut self.native_auto_reply_policy,
+                                policy,
+                                policy.label(),
+                            );
+                        }
+                    });
+                ui.label("Stop");
+                egui::ComboBox::from_id_salt(("native_stop_policy", mode.label()))
+                    .selected_text(self.native_stop_policy.label())
+                    .show_ui(ui, |ui| {
+                        for policy in AutoTxStopPolicy::ALL {
+                            ui.selectable_value(
+                                &mut self.native_stop_policy,
+                                policy,
+                                policy.label(),
+                            );
+                        }
+                    });
+            });
+        }
+        ui.add_space(4.0);
+        if let Some(slot_seconds) = mode.slot_seconds(self.fst4_submode) {
             let now_s = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|duration| duration.as_secs_f64())
@@ -159,7 +228,6 @@ impl QsonautGuiApp {
                         .text(format!("{:.1}s", slot_seconds * (1.0 - progress))),
                 );
             });
-
             ui.separator();
             ui.horizontal(|ui| {
                 ui.label(
@@ -220,14 +288,30 @@ impl QsonautGuiApp {
             );
             ui.horizontal(|ui| {
                 ui.label(RichText::new("TX").strong());
+                let hint = if mode == WorkspaceMode::Wspr {
+                    "CALL GRID POWER_DBM (for example N0CALL FN20 37)"
+                } else {
+                    "CQ W1AW FN20"
+                };
                 ui.add_enabled(
                     can_transmit && !self.digital_tx_active.load(Ordering::Acquire),
                     egui::TextEdit::singleline(&mut self.digital_compose)
                         .desired_width((ui.available_width() - 250.0).max(180.0))
-                        .hint_text("CQ W1AW FN20")
+                        .hint_text(hint)
                         .font(egui::TextStyle::Monospace),
                 );
-                if ui
+                if mode == WorkspaceMode::Wspr {
+                    if ui
+                        .add_enabled(can_transmit, egui::Button::new("FILL BEACON"))
+                        .clicked()
+                    {
+                        self.digital_compose = format!(
+                            "{} {} 37",
+                            self.station_callsign_or_default(),
+                            self.station_grid_or_default()
+                        );
+                    }
+                } else if ui
                     .add_enabled(can_transmit, egui::Button::new("CQ"))
                     .clicked()
                 {
@@ -269,7 +353,7 @@ impl QsonautGuiApp {
                 .color(if can_transmit {
                     Color32::GRAY
                 } else {
-                    Color32::YELLOW
+                    theme_warning(ui)
                 }),
             );
         } else {
@@ -278,7 +362,7 @@ impl QsonautGuiApp {
                 RichText::new(
                     "FLDIGI is currently a radio preset and waterfall view. No XML-RPC modem connection is active yet.",
                 )
-                .color(Color32::YELLOW),
+                .color(theme_warning(ui)),
             );
         }
     }

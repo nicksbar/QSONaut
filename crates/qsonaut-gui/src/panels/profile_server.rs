@@ -182,7 +182,7 @@ impl QsonautGuiApp {
             RichText::new(&self.profile_io_status)
                 .small()
                 .color(if self.profile_dirty {
-                    Color32::YELLOW
+                    theme_warning(ui)
                 } else {
                     Color32::GRAY
                 }),
@@ -428,7 +428,7 @@ impl QsonautGuiApp {
                 ui.label(
                     RichText::new("Set a real callsign and grid before reporting")
                         .small()
-                        .color(Color32::YELLOW),
+                        .color(theme_warning(ui)),
                 );
             }
         } else {
@@ -781,8 +781,9 @@ impl QsonautGuiApp {
     ) {
         ui.heading("Waterfall");
         ui.separator();
-        let supports_radio_scope = find_model(&self.config.radio.model)
-            .is_some_and(|profile| profile.capabilities.spectrum);
+        let supports_radio_scope =
+            native_radio_profile(&self.config.radio.backend, &self.config.radio.model)
+                .is_some_and(|profile| profile.capabilities.spectrum);
         if ui
             .add_enabled(
                 supports_radio_scope,
@@ -799,7 +800,7 @@ impl QsonautGuiApp {
                 .color(if snapshot.radio_spectrum_enabled {
                     Color32::LIGHT_GREEN
                 } else if self.civ_spectrum_on {
-                    Color32::YELLOW
+                    theme_warning(ui)
                 } else {
                     Color32::GRAY
                 }),
@@ -878,7 +879,18 @@ impl QsonautGuiApp {
             &mut self.radio_scope_lock_if_to_filter,
             "Match span to selected FIL",
         );
-        ui.checkbox(&mut self.radio_scope_vbw_wide, "Wide video bandwidth");
+        let vbw_changed = ui
+            .checkbox(&mut self.radio_scope_vbw_wide, "Wide video bandwidth")
+            .on_hover_text(
+                "Wide VBW smooths the radio scope display by averaging more video bandwidth. "
+                    .to_string()
+                    + "Leave it off for a sharper waterfall and faster response.",
+            )
+            .changed();
+        if vbw_changed {
+            self.profile_dirty = true;
+            self.persist_profile("Auto-saved");
+        }
         if self.radio_scope_lock_if_to_filter {
             self.radio_scope_span_code = scope_span_for_filter(&snapshot.mode, snapshot.filter);
             ui.small(format!(
@@ -992,7 +1004,7 @@ impl QsonautGuiApp {
             } else if self.profile_io_status.contains("rejected")
                 || self.profile_io_status.contains("could not")
             {
-                Color32::YELLOW
+                theme_warning(ui)
             } else {
                 Color32::LIGHT_BLUE
             };
@@ -1012,8 +1024,8 @@ impl QsonautGuiApp {
                     let status = client.status();
                     let (label, color) = match status.state {
                         ServerConnectionState::Connected => ("CONNECTED", Color32::LIGHT_GREEN),
-                        ServerConnectionState::Connecting => ("CONNECTING", Color32::YELLOW),
-                        ServerConnectionState::Reconnecting => ("RECONNECTING", Color32::YELLOW),
+                        ServerConnectionState::Connecting => ("CONNECTING", theme_warning(ui)),
+                        ServerConnectionState::Reconnecting => ("RECONNECTING", theme_warning(ui)),
                         ServerConnectionState::Disabled | ServerConnectionState::Stopped => {
                             ("OFFLINE", Color32::GRAY)
                         }
@@ -1031,7 +1043,7 @@ impl QsonautGuiApp {
                         .color(Color32::GRAY),
                     );
                     if let Some(error) = status.last_error {
-                        ui.label(RichText::new(error).small().color(Color32::YELLOW));
+                        ui.label(RichText::new(error).small().color(theme_warning(ui)));
                     }
                 } else {
                     ui.label(RichText::new("DISABLED").monospace().color(Color32::GRAY));

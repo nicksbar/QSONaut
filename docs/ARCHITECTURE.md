@@ -32,7 +32,7 @@ graph TB
     
     subgraph External["External Services"]
         Q[mfsk-core 0.10.0 unreleased<br/>DSP/Decoding]
-        U[DitDah v0.2.0<br/>Morse/CW]
+        U[cw-dit v0.1.0<br/>Morse/CW DSP]
         R[rigwright v0.1.2<br/>CI-V Radio]
         S[PSK Reporter<br/>UDP]
         T[Discord/IRC<br/>Automation]
@@ -99,7 +99,7 @@ graph LR
     server-client[qsonaut-server-client]
     accelerate[qsonaut-accelerate]
     mfsk[mfsk-core]
-    ditdah[DitDah<br/>v0.2.0]
+    cwdit[cw-dit<br/>cwdit-dsp + cwdit-morse]
     rigwright[rigwright<br/>v0.1.2]
     
     qsonaut -->|path| gui
@@ -113,7 +113,7 @@ graph LR
     qsonaut -->|git| rigwright
     
     gui -->|path| mfsk
-    gui -->|path| ditdah
+    gui -->|path| cwdit
     gui -->|path| audio
     gui -->|path| acceleration
     gui -->|path| automation

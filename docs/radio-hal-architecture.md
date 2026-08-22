@@ -16,12 +16,11 @@
 3. **Protocol Drivers**
    - Rigwright CI-V, modern Yaesu CAT, legacy Yaesu CAT, and Kenwood CAT drivers.
 4. **Transport Layer**
-   - Serial (USB/TTY), TCP (future), mock transport for tests.
+   - Serial (USB/TTY), TCP service backends, and mock transport for tests.
 
 ## HAL surface
 
-- `Radio` (minimal common trait)
-- `RadioHal` (extensible typed trait)
+- `Radio` (async common trait with typed controls and raw protocol access)
 - `RadioCapabilities`
 - `ControlId` and `ControlValue`
 
@@ -67,8 +66,12 @@ This supports many commands without hardcoding every one into the trait.
 - Deterministic CI-V frequency decode implemented (BCD little-endian bytes).
 - The live probe reports frequency and mode from compatible Icom radios.
 - HAL primitives live in the independent `rigwright` crate to support multi-radio growth.
-- `IcomCiVRadio` now implements both `Radio` and `RadioHal` for live operations.
+- `IcomCiVRadio` implements the Rigwright `Radio` trait for live operations.
 - QSONaut can select Rigwright profiles for popular Icom, Yaesu, and Kenwood radios.
+- Rigwright is the source of truth for native model names, manufacturer groups,
+  protocol labels, support maturity, preferred baud rates, and implemented controls.
+- QSONaut keeps only app-owned connection settings and presents Rigwright metadata;
+  external rigctld and DX Lab backends negotiate their own radio capabilities.
 - Common frequency, mode, and PTT operations route through the selected protocol driver.
 - Native window geometry and expanded/collapsed section state persist between launches.
 - IC-7300 scope data is accepted only as complete ordered 475-bin USB sweeps; narrow center and active-band fixed views apply documented CI-V settings with acknowledgement.

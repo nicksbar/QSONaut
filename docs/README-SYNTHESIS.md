@@ -24,7 +24,7 @@ Both repositories use Rust and share versioning conventions but maintain separat
 | Crate | Purpose | Version | Notes |
 |-------|---------|---------|-------|
 | mfsk-core | DSP/decoding | 0.10.0 (unreleased) | Path dependency from sibling repo; pinned upstream commit |
-| DitDah | Morse/CW decoding and generation | 0.2.0 | Path dependency from sibling repo; MIT |
+| cw-dit | Morse/CW DSP and streaming decoding (`cwdit-dsp`, `cwdit-morse`) | 0.1.0 | Path dependency from sibling fork; MIT OR Apache-2.0 |
 | rigwright | CI-V radio HAL | 0.1.2 | Git dependency (https://github.com/nicksbar/rigwright) |
 | eframe 0.33 | GUI framework | 0.33 | With wgpu, wayland, vulkan |
 | tokio 1 | Async runtime | 1 | Multi-threaded |
@@ -48,7 +48,7 @@ apps/qsonaut (main CLI entry)
 - ✅ Optional server integration via WebSocket
 - ✅ Multi-radio selection with model-aware profiles
 - ✅ Persistent UI state (window geometry, radio selection)
-- ✅ CI-V scope controls (IC-7300, FTdx101, FT-857D)
+- ✅ CI-V scope controls (hardware-validated on IC-7300)
 - ✅ Contest workflow with Fox/Hound roles
 - ✅ ADIF import/export
 - ✅ Achievement Hunter persistence

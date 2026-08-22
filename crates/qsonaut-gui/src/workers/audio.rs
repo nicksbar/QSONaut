@@ -1,12 +1,18 @@
 use super::super::*;
-use super::cw::{
-    run_cw_decode, CW_DECODE_HOP_SAMPLES, CW_DECODE_MIN_SAMPLES, CW_DECODE_WINDOW_SAMPLES,
-};
+use super::cwdit_adapter::CwDitChannel;
 use super::decode::{
     prepare_early_digital_slot, prepare_early_ft8_slot, run_ft8_decode_worker,
     run_native_digital_decode, warm_ft8_decoder,
 };
+use hound::{SampleFormat, WavSpec, WavWriter};
 use qsonaut_audio::resample::Decimator;
+use serde_json::json;
+use std::fs::File;
+use std::io::BufWriter;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU32;
+
+type CwRecording = (WavWriter<BufWriter<File>>, BufWriter<File>, PathBuf, u64);
 
 #[allow(clippy::too_many_arguments)]
 pub(in super::super) fn spawn_audio_spectrum_worker(
@@ -20,6 +26,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
     preferred_device: Option<String>,
     monitor_enabled: bool,
     monitor_output_device: Option<String>,
+    monitor_volume: Arc<AtomicU32>,
     repaint_ctx: Arc<OnceLock<egui::Context>>,
     display_tuning: Arc<Mutex<DisplayTuning>>,
 ) -> std::thread::JoinHandle<()> {
@@ -54,6 +61,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         } else {
             (None, String::new())
         };
+        if let Some(monitor) = &monitor {
+            monitor.set_volume(f32::from_bits(monitor_volume.load(Ordering::Relaxed)));
+        }
 
         let mut fft_planner = FftPlanner::<f32>::new();
         let audio_fft = fft_planner.plan_fft_forward(FFT_SIZE);
@@ -93,8 +103,14 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut ft8_buf: Vec<f32> = Vec::with_capacity(12_000 * 18);
         let mut ft8_slot_gate = Ft8SlotGate::default();
         let mut digital_buf: Vec<f32> = Vec::with_capacity(12_000 * 120);
-        let mut cw_buf: Vec<f32> = Vec::with_capacity(CW_DECODE_WINDOW_SAMPLES);
-        let mut cw_samples_since_decode = 0usize;
+        // Built lazily on the first CW chunk so the search window always
+        // brackets the operator's currently selected audio tone.
+        let mut cw_stream_decoder: Option<CwDitChannel> = None;
+        let mut cw_stream_tone_hz = 0_u32;
+        let mut cw_stream_wpm = 0_u8;
+        let mut last_cw_diagnostics = Instant::now();
+        let mut last_cw_status = Instant::now() - Duration::from_secs(1);
+        let mut cw_recording: Option<CwRecording> = None;
         let mut digital_slot_gate = DigitalSlotGate::default();
         let mut ft4_slot_gate = Ft8SlotGate::default();
         let mut decode_workspace_last: Option<WorkspaceMode> = None;
@@ -118,8 +134,24 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
             let chunk_bytes = (chunk_samples * 2).max(512);
             match stream.read_chunk(chunk_bytes) {
                 Ok(samples) => {
+                    let monitor_raw_audio = {
+                        let shared = state.lock().expect("ui state lock poisoned");
+                        shared.workspace_mode != WorkspaceMode::Cw || !can_decode
+                    };
                     if let Some(monitor) = &monitor {
-                        monitor.push(&samples);
+                        monitor.set_volume(f32::from_bits(monitor_volume.load(Ordering::Relaxed)));
+                        let test_tone = {
+                            let mut shared = state.lock().expect("ui state lock poisoned");
+                            let requested = shared.monitor_test_tone;
+                            shared.monitor_test_tone = false;
+                            requested
+                        };
+                        if test_tone {
+                            monitor.push_test_tone(sample_rate_hz, 700.0, 350);
+                        }
+                        if monitor_raw_audio {
+                            monitor.push(&samples);
+                        }
                         let dropped_chunks = monitor.take_dropped_chunks();
                         if dropped_chunks > 0 {
                             tracing::warn!(
@@ -200,8 +232,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             decode_workspace_last = Some(active_workspace_mode);
                             ft8_buf.clear();
                             digital_buf.clear();
-                            cw_buf.clear();
-                            cw_samples_since_decode = 0;
+                            cw_stream_decoder = None;
+                            cw_stream_tone_hz = 0;
+                            cw_stream_wpm = 0;
                             ft8_slot_gate.reset();
                             ft4_slot_gate.reset();
                             digital_slot_gate.reset();
@@ -214,7 +247,6 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 s.digital_decode_status =
                                     "READY: live CW decode starts after 3 seconds".to_string();
                                 s.cw_live_text.clear();
-                                s.cw_last_window_text.clear();
                             } else if active_workspace_mode.has_native_decoder() {
                                 s.digital_decode_status = format!(
                                     "READY: collecting a fresh {} slot",
@@ -333,67 +365,138 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             if tx_active.load(Ordering::Acquire)
                                 || digital_tx_active.load(Ordering::Acquire)
                             {
-                                cw_buf.clear();
-                                cw_samples_since_decode = 0;
                                 let mut shared = state.lock().expect("ui state lock poisoned");
-                                shared.cw_last_window_text.clear();
                                 shared.cw_live_text.clear();
                                 shared.digital_decode_status =
                                     "CW TX active; receive window reset".to_string();
                                 continue;
                             }
-                            cw_buf.extend_from_slice(&ds);
-                            cw_samples_since_decode =
-                                cw_samples_since_decode.saturating_add(ds.len());
-                            if cw_buf.len() > CW_DECODE_WINDOW_SAMPLES {
-                                cw_buf.drain(..cw_buf.len() - CW_DECODE_WINDOW_SAMPLES);
-                            }
-                            if cw_buf.len() >= CW_DECODE_MIN_SAMPLES
-                                && cw_samples_since_decode >= CW_DECODE_HOP_SAMPLES
-                            {
-                                let in_progress = digital_decode_in_progress.clone();
-                                if in_progress
-                                    .compare_exchange(
-                                        false,
-                                        true,
-                                        Ordering::AcqRel,
-                                        Ordering::Relaxed,
-                                    )
-                                    .is_ok()
-                                {
-                                    cw_samples_since_decode = 0;
-                                    let samples = cw_buf.clone();
-                                    let now_s = SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .map(|duration| duration.as_secs_f64())
-                                        .unwrap_or_default();
-                                    let window_id = now_s.floor() as u64;
-                                    let utc = utc_hhmmss_millis(now_s);
-                                    let tone_hz = state
-                                        .lock()
-                                        .expect("ui state lock poisoned")
-                                        .selected_audio_hz;
-                                    let state_d = state.clone();
-                                    thread::spawn(move || {
-                                        run_cw_decode(samples, window_id, utc, tone_hz, state_d);
-                                        in_progress.store(false, Ordering::Release);
-                                    });
-                                } else {
+                            let selected_tone_hz = state
+                                .lock()
+                                .expect("ui state lock poisoned")
+                                .selected_audio_hz;
+                            let cw_wpm = {
+                                let shared = state.lock().expect("ui state lock poisoned");
+                                shared.cw_wpm
+                            };
+                            let record_rx =
+                                state.lock().expect("ui state lock poisoned").cw_record_rx;
+                            if record_rx && cw_recording.is_none() {
+                                if let Ok((writer, metadata, wav_path)) = open_cw_recording(
+                                    selected_tone_hz,
+                                    snapshot_recording_frequency(&state),
+                                ) {
+                                    cw_recording = Some((writer, metadata, wav_path.clone(), 0));
                                     state
                                         .lock()
                                         .expect("ui state lock poisoned")
-                                        .digital_decode_status =
-                                        "LIVE CW · decoder busy; retaining rolling audio"
-                                            .to_string();
+                                        .cw_recording_status =
+                                        format!("Recording {}", wav_path.display());
                                 }
-                            } else if cw_buf.len() < CW_DECODE_MIN_SAMPLES {
-                                state
-                                    .lock()
-                                    .expect("ui state lock poisoned")
-                                    .digital_decode_status = format!(
-                                    "LIVE CW · listening {:.1}/3.0 s",
-                                    cw_buf.len() as f32 / 12_000.0
+                            } else if !record_rx {
+                                finish_cw_recording(&mut cw_recording, &state);
+                            }
+                            if let Some((writer, metadata, _, recorded_samples)) =
+                                cw_recording.as_mut()
+                            {
+                                for sample in &ds {
+                                    let value = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                                    let _ = writer.write_sample(value);
+                                }
+                                *recorded_samples =
+                                    recorded_samples.saturating_add(ds.len() as u64);
+                                let _ = serde_json::to_writer(
+                                    &mut *metadata,
+                                    &json!({
+                                        "type": "audio_block",
+                                        "samples": ds.len(),
+                                        "selected_tone_hz": selected_tone_hz,
+                                    }),
                                 );
+                                use std::io::Write;
+                                let _ = metadata.write_all(b"\n");
+                                if *recorded_samples >= 12_000 * 600 {
+                                    finish_cw_recording(&mut cw_recording, &state);
+                                }
+                            }
+                            if selected_tone_hz != cw_stream_tone_hz || cw_wpm != cw_stream_wpm {
+                                cw_stream_decoder =
+                                    Some(CwDitChannel::new(12_000, selected_tone_hz, cw_wpm));
+                                cw_stream_tone_hz = selected_tone_hz;
+                                cw_stream_wpm = cw_wpm;
+                            }
+                            if let Some(decoder) = cw_stream_decoder.as_mut() {
+                                let (events, channel_audio) = decoder.push_samples_with_audio(&ds);
+                                if let Some(monitor) = &monitor {
+                                    let channel_audio = channel_audio
+                                        .iter()
+                                        .map(|sample| {
+                                            (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
+                                        })
+                                        .collect::<Vec<_>>();
+                                    monitor.push_at_sample_rate(&channel_audio, 12_000);
+                                }
+                                for event in events {
+                                    let text = match event {
+                                        cwdit_morse::Decoded::Char(character) => {
+                                            character.to_string()
+                                        }
+                                        cwdit_morse::Decoded::WordBreak => " ".to_string(),
+                                        cwdit_morse::Decoded::Unknown => continue,
+                                    };
+                                    let mut shared = state.lock().expect("ui state lock poisoned");
+                                    shared.cw_live_text.push_str(&text);
+                                    shared.digital_decode_status =
+                                        format!("LIVE CW · cw-dit · +{}", text);
+                                    shared.digital_decodes.push_back(DigitalDecodeEntry {
+                                        mode: WorkspaceMode::Cw,
+                                        period: SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .map(|d| d.as_secs())
+                                            .unwrap_or_default(),
+                                        utc: utc_hhmmss_millis(
+                                            SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .map(|d| d.as_secs_f64())
+                                                .unwrap_or_default(),
+                                        ),
+                                        snr_db: 0.0,
+                                        dt_s: 0.0,
+                                        freq_hz: selected_tone_hz,
+                                        message: text,
+                                    });
+                                }
+                                if last_cw_status.elapsed() >= Duration::from_secs(1) {
+                                    let status = format!(
+                                        "LIVE CW · cw-dit · {} chars · {:.1} env/s",
+                                        decoder.text().len(),
+                                        decoder.envelope_rate(),
+                                    );
+                                    state
+                                        .lock()
+                                        .expect("ui state lock poisoned")
+                                        .digital_decode_status = status;
+                                    last_cw_status = Instant::now();
+                                }
+                                if last_cw_diagnostics.elapsed() >= Duration::from_secs(10) {
+                                    let selected_level = {
+                                        let shared = state.lock().expect("ui state lock poisoned");
+                                        audio_cursor_level(
+                                            &shared.audio_waterfall_rows,
+                                            selected_tone_hz,
+                                        )
+                                    };
+                                    tracing::info!(
+                                        tone_hz = selected_tone_hz,
+                                        selected_level,
+                                        input_rms_dbfs = 20.0 * rms.max(1e-9).log10(),
+                                        text_len = decoder.text().len(),
+                                        envelope_rate = decoder.envelope_rate(),
+                                        block_len = decoder.block_len(),
+                                        "CW stream diagnostics"
+                                    );
+                                    last_cw_diagnostics = Instant::now();
+                                }
                             }
                         } else if active_workspace_mode == WorkspaceMode::Ft4 {
                             digital_buf.extend_from_slice(&ds);
@@ -498,6 +601,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     thread::spawn(move || {
                                         run_native_digital_decode(
                                             WorkspaceMode::Ft4,
+                                            crate::modes::fst4::Submode::default(),
                                             samples,
                                             decoded_period,
                                             utc,
@@ -516,8 +620,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                             .to_string();
                                 }
                             }
-                        } else if let Some(slot_seconds) = active_workspace_mode.core_slot_seconds()
-                        {
+                        } else if let Some(slot_seconds) = active_workspace_mode.slot_seconds(
+                            state.lock().expect("ui state lock poisoned").fst4_submode,
+                        ) {
                             digital_buf.extend_from_slice(&ds);
                             let slot_samples = (slot_seconds * 12_000.0).round() as usize;
                             if digital_buf.len() > slot_samples {
@@ -576,9 +681,12 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         utc,
                                         "digital decode triggered"
                                     );
+                                    let fst4_submode =
+                                        state.lock().expect("ui state lock poisoned").fst4_submode;
                                     thread::spawn(move || {
                                         run_native_digital_decode(
                                             active_workspace_mode,
+                                            fst4_submode,
                                             samples,
                                             decoded_period,
                                             utc,
@@ -621,4 +729,64 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
             }
         }
     })
+}
+
+fn snapshot_recording_frequency(state: &Arc<Mutex<GuiState>>) -> Option<u64> {
+    state.lock().expect("ui state lock poisoned").frequency_hz
+}
+
+fn open_cw_recording(
+    tone_hz: u32,
+    frequency_hz: Option<u64>,
+) -> anyhow::Result<(WavWriter<BufWriter<File>>, BufWriter<File>, PathBuf)> {
+    let directory = qsonaut_log::app_config_dir().join("cw-recordings");
+    std::fs::create_dir_all(&directory)?;
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+    let wav_path = directory.join(format!("cw-{stamp}-{tone_hz}hz.wav"));
+    let metadata_path = wav_path.with_extension("jsonl");
+    let spec = WavSpec {
+        channels: 1,
+        sample_rate: 12_000,
+        bits_per_sample: 16,
+        sample_format: SampleFormat::Int,
+    };
+    let writer = WavWriter::create(&wav_path, spec)?;
+    let mut metadata = BufWriter::new(File::create(&metadata_path)?);
+    use std::io::Write;
+    writeln!(
+        metadata,
+        "{}",
+        serde_json::to_string(&json!({
+            "type": "session",
+            "sample_rate_hz": 12_000,
+            "tone_hz": tone_hz,
+            "frequency_hz": frequency_hz,
+        }))?
+    )?;
+    Ok((writer, metadata, wav_path))
+}
+
+fn finish_cw_recording(recording: &mut Option<CwRecording>, state: &Arc<Mutex<GuiState>>) {
+    if let Some((writer, mut metadata, path, samples)) = recording.take() {
+        let _ = writer.finalize();
+        use std::io::Write;
+        let _ = writeln!(
+            metadata,
+            "{}",
+            serde_json::json!({
+                "type": "end",
+                "samples": samples,
+                "duration_s": samples as f64 / 12_000.0,
+            })
+        );
+        let _ = metadata.flush();
+        state
+            .lock()
+            .expect("ui state lock poisoned")
+            .cw_recording_status = format!(
+            "Saved {} ({:.1}s)",
+            path.display(),
+            samples as f64 / 12_000.0
+        );
+    }
 }

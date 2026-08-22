@@ -11,7 +11,8 @@ channels = 1
 
 [radio]
 enabled = true
-backend = "none"
+backend = "native"
+endpoint = "127.0.0.1:4532" # Used by rigctld and DX Lab Commander backends
 model = "IC-7300"
 serial_port = "/dev/ttyUSB0"
 baud_rate = 115200

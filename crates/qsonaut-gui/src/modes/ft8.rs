@@ -355,7 +355,7 @@ impl QsonautGuiApp {
                     "DECODE: FAST"
                 };
                 let deep_color = if self.ft8_deep_decode {
-                    Color32::YELLOW
+                    theme_warning(ui)
                 } else {
                     Color32::LIGHT_GREEN
                 };
@@ -459,7 +459,7 @@ impl QsonautGuiApp {
             );
             if let Some(level) = snapshot.audio_level_dbfs {
                 let color = if snapshot.audio_clip_percent > 0.1 || level < -45.0 {
-                    Color32::YELLOW
+                    theme_warning(ui)
                 } else {
                     Color32::LIGHT_GREEN
                 };
@@ -474,7 +474,7 @@ impl QsonautGuiApp {
             }
             if let Some(offset) = snapshot.ft8_clock_offset_s {
                 let color = if offset.abs() > 1.0 {
-                    Color32::YELLOW
+                    theme_warning(ui)
                 } else {
                     Color32::LIGHT_GREEN
                 };
@@ -492,337 +492,327 @@ impl QsonautGuiApp {
 
         let operator_call = self.station_callsign_or_default().to_string();
         let active_band = snapshot.frequency_hz.map(band_for_frequency).unwrap_or("");
-        egui::TopBottomPanel::top("ft8_decode_deck")
-            .resizable(true)
-            .show_separator_line(true)
-            .default_height(360.0)
-            .height_range(220.0..=700.0)
-            .show_inside(ui, |ui| {
-                let deck_rect = ui.available_rect_before_wrap();
-                ui.allocate_rect(deck_rect, egui::Sense::hover());
-                let mut deck_ui = ui.new_child(
-                    egui::UiBuilder::new()
-                        .id_salt("ft8_decode_deck_contents")
-                        .max_rect(deck_rect)
-                        .layout(egui::Layout::top_down(egui::Align::Min)),
-                );
-                deck_ui.set_clip_rect(deck_rect);
-                let panel_h = deck_ui.available_height();
-                let conversation_h = panel_h;
-                let decode_h = panel_h;
-                deck_ui.columns(2, |columns| {
-                    let left = &mut columns[0];
-                    left.set_min_width(0.0);
-                    // ── Global decode log ───────────────────────────────────────
-                    egui::Frame::dark_canvas(left.style()).show(left, |ui| {
-                        ui.set_min_height(decode_h);
-                        ui.set_max_height(decode_h);
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new("📡 LIVE DECODES")
-                                    .strong()
-                                    .color(Color32::LIGHT_BLUE),
-                            );
-                            ui.separator();
-                            if ui.checkbox(&mut self.ft8_cq_only_view, "CQ only").changed() {
-                                self.profile_dirty = true;
-                                self.persist_profile("Auto-saved");
-                            }
-                            if ui.checkbox(&mut self.ft8_follow_log, "Follow").changed() {
-                                self.profile_dirty = true;
-                                self.persist_profile("Auto-saved");
-                            }
-                            ui.label("Keep");
-                            if ui
-                                .add(
-                                    egui::DragValue::new(&mut self.ft8_max_log_entries)
-                                        .range(80..=1000)
-                                        .speed(5),
-                                )
-                                .changed()
-                            {
-                                self.profile_dirty = true;
-                                self.persist_profile("Auto-saved");
-                            }
-                            ui.label("rows");
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui.small_button("Clear").clicked() {
-                                        self.ft8_log.clear();
-                                        self.ft8_tx_chat.clear();
-                                        self.ft8_selected = None;
-                                    }
-                                    ui.label(format!("{} msgs", self.ft8_log.len()));
-                                },
-                            );
-                        });
+        let (decode_h, tx_h) = Self::split_decode_workspace_height(ui.available_height());
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_min_height(decode_h);
+            ui.set_max_height(decode_h);
+            let available_rect = ui.available_rect_before_wrap();
+            let deck_rect = egui::Rect::from_min_size(
+                available_rect.min,
+                egui::vec2(available_rect.width(), decode_h),
+            );
+            ui.allocate_rect(deck_rect, egui::Sense::hover());
+            let mut deck_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("ft8_decode_deck_contents")
+                    .max_rect(deck_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            deck_ui.set_clip_rect(deck_rect);
+            let panel_h = deck_ui.available_height();
+            let conversation_h = panel_h;
+            let decode_h = panel_h;
+            deck_ui.columns(2, |columns| {
+                let left = &mut columns[0];
+                left.set_min_width(0.0);
+                // ── Global decode log ───────────────────────────────────────
+                egui::Frame::dark_canvas(left.style()).show(left, |ui| {
+                    ui.set_min_height(decode_h);
+                    ui.set_max_height(decode_h);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("📡 LIVE DECODES")
+                                .strong()
+                                .color(Color32::LIGHT_BLUE),
+                        );
                         ui.separator();
-
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("UTC").monospace().strong());
-                            ui.add_space(8.0);
-                            ui.label(RichText::new("SNR").monospace().strong());
-                            ui.add_space(8.0);
-                            ui.label(RichText::new("dT").monospace().strong());
-                            ui.add_space(8.0);
-                            ui.label(RichText::new("Hz").monospace().strong());
-                            ui.add_space(8.0);
-                            ui.label(RichText::new("Message").monospace().strong());
+                        if ui.checkbox(&mut self.ft8_cq_only_view, "CQ only").changed() {
+                            self.profile_dirty = true;
+                            self.persist_profile("Auto-saved");
+                        }
+                        if ui.checkbox(&mut self.ft8_follow_log, "Follow").changed() {
+                            self.profile_dirty = true;
+                            self.persist_profile("Auto-saved");
+                        }
+                        ui.label("Keep");
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut self.ft8_max_log_entries)
+                                    .range(80..=1000)
+                                    .speed(5),
+                            )
+                            .changed()
+                        {
+                            self.profile_dirty = true;
+                            self.persist_profile("Auto-saved");
+                        }
+                        ui.label("rows");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("Clear").clicked() {
+                                self.ft8_log.clear();
+                                self.ft8_tx_chat.clear();
+                                self.ft8_selected = None;
+                            }
+                            ui.label(format!("{} msgs", self.ft8_log.len()));
                         });
-                        ui.separator();
+                    });
+                    ui.separator();
 
-                        egui::ScrollArea::vertical()
-                            .id_salt("ft8_log")
-                            .stick_to_bottom(self.ft8_follow_log)
-                            .show(ui, |ui| {
-                                if self.ft8_log.is_empty() {
-                                    ui.add_space(10.0);
-                                    ui.centered_and_justified(|ui| {
-                                        ui.label(
-                                            RichText::new(
-                                                "🌌 Listening… the band is quiet for the moment.",
-                                            )
-                                            .color(Color32::from_gray(100)),
-                                        );
-                                    });
-                                    return;
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("UTC").monospace().strong());
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("SNR").monospace().strong());
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("dT").monospace().strong());
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Hz").monospace().strong());
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Message").monospace().strong());
+                    });
+                    ui.separator();
+
+                    egui::ScrollArea::vertical()
+                        .id_salt("ft8_log")
+                        .stick_to_bottom(self.ft8_follow_log)
+                        .show(ui, |ui| {
+                            if self.ft8_log.is_empty() {
+                                ui.add_space(10.0);
+                                ui.centered_and_justified(|ui| {
+                                    ui.label(
+                                        RichText::new(
+                                            "🌌 Listening… the band is quiet for the moment.",
+                                        )
+                                        .color(Color32::from_gray(100)),
+                                    );
+                                });
+                                return;
+                            }
+
+                            let selected = self.ft8_selected;
+                            let mut new_sel = selected;
+                            let mut prev_utc: Option<&str> = None;
+                            let mut reply_target_from_double_click: Option<String> = None;
+                            let mut compose_from_double_click: Option<String> = None;
+                            let mut picked_freq_from_double_click: Option<u32> = None;
+                            let mut picked_period_from_double_click: Option<u64> = None;
+                            let mut move_tx_from_double_click: Option<bool> = None;
+                            let mut session_from_double_click: Option<QsoSession> = None;
+                            for (i, entry) in self.ft8_log.iter().enumerate() {
+                                let directed_to_me =
+                                    operator_call_hit(&entry.message, &operator_call)
+                                        == Some(OperatorCallHit::DirectedToMe);
+                                if self.ft8_cq_only_view && !entry.is_cq && !directed_to_me {
+                                    continue;
                                 }
-
-                                let selected = self.ft8_selected;
-                                let mut new_sel = selected;
-                                let mut prev_utc: Option<&str> = None;
-                                let mut reply_target_from_double_click: Option<String> = None;
-                                let mut compose_from_double_click: Option<String> = None;
-                                let mut picked_freq_from_double_click: Option<u32> = None;
-                                let mut picked_period_from_double_click: Option<u64> = None;
-                                let mut move_tx_from_double_click: Option<bool> = None;
-                                let mut session_from_double_click: Option<QsoSession> = None;
-                                for (i, entry) in self.ft8_log.iter().enumerate() {
-                                    let directed_to_me =
-                                        operator_call_hit(&entry.message, &operator_call)
-                                            == Some(OperatorCallHit::DirectedToMe);
-                                    if self.ft8_cq_only_view && !entry.is_cq && !directed_to_me {
-                                        continue;
+                                if let Some(prev) = prev_utc {
+                                    if prev != entry.utc {
+                                        ui.separator();
                                     }
-                                    if let Some(prev) = prev_utc {
-                                        if prev != entry.utc {
-                                            ui.separator();
-                                        }
-                                    }
-                                    prev_utc = Some(&entry.utc);
+                                }
+                                prev_utc = Some(&entry.utc);
 
-                                    let is_sel = selected == Some(i);
-                                    let call_hit =
-                                        operator_call_hit(&entry.message, &operator_call);
-                                    let worked_call =
-                                        parse_message(&entry.message).map(|parsed| parsed.from);
-                                    let is_worked = worked_call.as_ref().is_some_and(|call| {
-                                        !call.is_empty()
-                                            && !active_band.is_empty()
-                                            && self.has_logged_contact_with(
-                                                call,
-                                                "FT8",
-                                                active_band,
-                                            )
-                                    });
-                                    let text_color = if let Some(hit) = call_hit {
-                                        call_hit_badge(hit).1
-                                    } else if entry.is_cq {
-                                        Color32::from_rgb(100, 220, 100)
-                                    } else if entry.snr_db >= -5 {
-                                        Color32::from_rgb(220, 220, 140)
+                                let is_sel = selected == Some(i);
+                                let call_hit = operator_call_hit(&entry.message, &operator_call);
+                                let worked_call =
+                                    parse_message(&entry.message).map(|parsed| parsed.from);
+                                let is_worked = worked_call.as_ref().is_some_and(|call| {
+                                    !call.is_empty()
+                                        && !active_band.is_empty()
+                                        && self.has_logged_contact_with(call, "FT8", active_band)
+                                });
+                                let text_color = if let Some(hit) = call_hit {
+                                    call_hit_badge(hit).1
+                                } else if entry.is_cq {
+                                    Color32::from_rgb(100, 220, 100)
+                                } else if entry.snr_db >= -5 {
+                                    Color32::from_rgb(220, 220, 140)
+                                } else {
+                                    Color32::LIGHT_GRAY
+                                };
+                                let park_marker =
+                                    if entry.message.to_ascii_uppercase().contains("POTA") {
+                                        "🌲 "
                                     } else {
-                                        Color32::LIGHT_GRAY
+                                        ""
                                     };
-                                    let park_marker =
-                                        if entry.message.to_ascii_uppercase().contains("POTA") {
-                                            "🌲 "
-                                        } else {
-                                            ""
-                                        };
-                                    let pota_detail = if park_marker.is_empty() {
-                                        None
-                                    } else {
-                                        parse_message(&entry.message).and_then(|message| {
-                                            self.pota_spots
-                                                .iter()
-                                                .filter(|spot| {
-                                                    spot.activator
-                                                        .eq_ignore_ascii_case(&message.from)
-                                                        && spot.mode == "FT8"
-                                                })
-                                                .min_by_key(|spot| {
-                                                    spot.frequency_hz.abs_diff(
-                                                        snapshot.frequency_hz.unwrap_or_default()
-                                                            + u64::from(entry.freq_hz),
-                                                    )
-                                                })
-                                                .map(|spot| {
-                                                    format!(" · {} {}", spot.reference, spot.name)
-                                                })
+                                let pota_detail = if park_marker.is_empty() {
+                                    None
+                                } else {
+                                    parse_message(&entry.message).and_then(|message| {
+                                        self.pota_spots
+                                            .iter()
+                                            .filter(|spot| {
+                                                spot.activator.eq_ignore_ascii_case(&message.from)
+                                                    && spot.mode == "FT8"
+                                            })
+                                            .min_by_key(|spot| {
+                                                spot.frequency_hz.abs_diff(
+                                                    snapshot.frequency_hz.unwrap_or_default()
+                                                        + u64::from(entry.freq_hz),
+                                                )
+                                            })
+                                            .map(|spot| {
+                                                format!(" · {} {}", spot.reference, spot.name)
+                                            })
+                                    })
+                                };
+                                let pota_detail = pota_detail.unwrap_or_default();
+                                let row = RichText::new(format!(
+                                    "{:12}  {:+3}  {:5.1}  {:>5}  {park_marker}{}{}",
+                                    entry.utc,
+                                    entry.snr_db,
+                                    entry.dt_s,
+                                    entry.freq_hz,
+                                    entry.message,
+                                    pota_detail
+                                ))
+                                .monospace()
+                                .color(text_color);
+
+                                let resp = if let Some(hit) = call_hit {
+                                    let (badge, accent, fill) = call_hit_badge(hit);
+                                    egui::Frame::group(ui.style())
+                                        .fill(fill)
+                                        .stroke(egui::Stroke::new(1.5_f32, accent))
+                                        .show(ui, |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    RichText::new(badge).strong().color(accent),
+                                                );
+                                                ui.selectable_label(is_sel, row)
+                                            })
+                                            .inner
                                         })
-                                    };
-                                    let pota_detail = pota_detail.unwrap_or_default();
-                                    let row = RichText::new(format!(
-                                        "{:12}  {:+3}  {:5.1}  {:>5}  {park_marker}{}{}",
-                                        entry.utc,
-                                        entry.snr_db,
-                                        entry.dt_s,
-                                        entry.freq_hz,
-                                        entry.message,
-                                        pota_detail
-                                    ))
-                                    .monospace()
-                                    .color(text_color);
-
-                                    let resp = if let Some(hit) = call_hit {
-                                        let (badge, accent, fill) = call_hit_badge(hit);
-                                        egui::Frame::group(ui.style())
-                                            .fill(fill)
-                                            .stroke(egui::Stroke::new(1.5_f32, accent))
-                                            .show(ui, |ui| {
-                                                ui.horizontal(|ui| {
-                                                    ui.label(
-                                                        RichText::new(badge).strong().color(accent),
-                                                    );
-                                                    ui.selectable_label(is_sel, row)
-                                                })
-                                                .inner
+                                        .inner
+                                } else if is_worked {
+                                    egui::Frame::group(ui.style())
+                                        .fill(Color32::from_rgb(20, 58, 30))
+                                        .stroke(egui::Stroke::new(
+                                            1.2_f32,
+                                            Color32::from_rgb(120, 220, 145),
+                                        ))
+                                        .show(ui, |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    RichText::new("✅ WORKED")
+                                                        .strong()
+                                                        .color(Color32::from_rgb(120, 220, 145)),
+                                                );
+                                                ui.selectable_label(is_sel, row)
                                             })
                                             .inner
-                                    } else if is_worked {
-                                        egui::Frame::group(ui.style())
-                                            .fill(Color32::from_rgb(20, 58, 30))
-                                            .stroke(egui::Stroke::new(
-                                                1.2_f32,
-                                                Color32::from_rgb(120, 220, 145),
-                                            ))
-                                            .show(ui, |ui| {
-                                                ui.horizontal(|ui| {
-                                                    ui.label(
-                                                        RichText::new("✅ WORKED").strong().color(
-                                                            Color32::from_rgb(120, 220, 145),
-                                                        ),
-                                                    );
-                                                    ui.selectable_label(is_sel, row)
-                                                })
-                                                .inner
-                                            })
-                                            .inner
-                                    } else {
-                                        ui.selectable_label(is_sel, row)
-                                    };
-                                    if resp.clicked() {
-                                        let now = Instant::now();
-                                        let synthetic_double = self
-                                            .ft8_last_click
-                                            .map(|(idx, t)| {
-                                                idx == i
-                                                    && now.duration_since(t)
-                                                        <= Duration::from_millis(500)
-                                            })
-                                            .unwrap_or(false);
-                                        self.ft8_last_click = Some((i, now));
+                                        })
+                                        .inner
+                                } else {
+                                    ui.selectable_label(is_sel, row)
+                                };
+                                if resp.clicked() {
+                                    let now = Instant::now();
+                                    let synthetic_double = self
+                                        .ft8_last_click
+                                        .map(|(idx, t)| {
+                                            idx == i
+                                                && now.duration_since(t)
+                                                    <= Duration::from_millis(500)
+                                        })
+                                        .unwrap_or(false);
+                                    self.ft8_last_click = Some((i, now));
 
-                                        new_sel = if is_sel { None } else { Some(i) };
+                                    new_sel = if is_sel { None } else { Some(i) };
 
-                                        if synthetic_double || resp.double_clicked() {
-                                            // Pre-fill compose with a reply to this call.
-                                            if let Some(parsed) = parse_message(&entry.message) {
-                                                let call = parsed.from.clone();
-                                                let my = self.station_callsign_or_default();
-                                                let grid = self.station_grid_for_ft8();
-                                                let mut session =
-                                                    QsoSession::start(call.clone(), entry.period);
-                                                if let Some(response) = session.response_to(
-                                                    &parsed,
-                                                    my,
-                                                    &grid,
-                                                    entry.snr_db,
-                                                    entry.period,
-                                                ) {
-                                                    compose_from_double_click = Some(response);
-                                                    reply_target_from_double_click = Some(call);
-                                                    session_from_double_click = Some(session);
-                                                    picked_period_from_double_click =
-                                                        Some(entry.period);
-                                                    picked_freq_from_double_click =
-                                                        Some(entry.freq_hz);
-                                                    // Only answering a CQ deliberately moves TX. A caller
-                                                    // answering our CQ is received on their offset while we
-                                                    // keep transmitting where we called.
-                                                    move_tx_from_double_click = Some(
-                                                        should_move_tx_to_decode(&parsed, false),
-                                                    );
-                                                }
+                                    if synthetic_double || resp.double_clicked() {
+                                        // Pre-fill compose with a reply to this call.
+                                        if let Some(parsed) = parse_message(&entry.message) {
+                                            let call = parsed.from.clone();
+                                            let my = self.station_callsign_or_default();
+                                            let grid = self.station_grid_for_ft8();
+                                            let mut session =
+                                                QsoSession::start(call.clone(), entry.period);
+                                            if let Some(response) = session.response_to(
+                                                &parsed,
+                                                my,
+                                                &grid,
+                                                entry.snr_db,
+                                                entry.period,
+                                            ) {
+                                                compose_from_double_click = Some(response);
+                                                reply_target_from_double_click = Some(call);
+                                                session_from_double_click = Some(session);
+                                                picked_period_from_double_click =
+                                                    Some(entry.period);
+                                                picked_freq_from_double_click = Some(entry.freq_hz);
+                                                // Only answering a CQ deliberately moves TX. A caller
+                                                // answering our CQ is received on their offset while we
+                                                // keep transmitting where we called.
+                                                move_tx_from_double_click =
+                                                    Some(should_move_tx_to_decode(&parsed, false));
                                             }
                                         }
                                     }
                                 }
-                                self.ft8_selected = new_sel;
-                                if let (
-                                    Some(compose),
-                                    Some(target),
-                                    Some(session),
-                                    Some(freq_hz),
-                                    Some(period),
-                                    Some(move_tx_to_remote),
-                                ) = (
-                                    compose_from_double_click,
-                                    reply_target_from_double_click,
-                                    session_from_double_click,
-                                    picked_freq_from_double_click,
-                                    picked_period_from_double_click,
-                                    move_tx_from_double_click,
-                                ) {
-                                    let reply = PendingManualFt8Reply {
-                                        compose,
-                                        target: target.clone(),
-                                        session,
-                                        freq_hz,
-                                        source_period: period,
-                                        move_tx_to_remote,
-                                    };
-                                    let tx_scheduled = self.ft8_tx_active.load(Ordering::Acquire)
-                                        || self.ft8_tx_queued_period.is_some();
-                                    let same_target =
-                                        self.ft8_seq_target.as_deref().is_some_and(|current| {
-                                            super::exchange::callsign_eq(current, &target)
-                                        });
-                                    if tx_scheduled && same_target {
-                                        self.ft8_seq_status =
-                                            format!("Reply to {target} is already queued");
-                                    } else if tx_scheduled
-                                        && (snapshot.ptt_on || self.ft8_tx_started_period.is_some())
-                                    {
-                                        self.ft8_seq_status =
-                                            "Current TX is already on air; target was not changed"
-                                                .to_string();
-                                    } else if tx_scheduled {
-                                        self.cancel_ft8_sequence(format!(
-                                            "Canceling prior reply; switching to {target}"
-                                        ));
-                                        self.ft8_pending_manual_reply = Some(reply);
-                                    } else {
-                                        self.arm_manual_ft8_reply(reply);
-                                    }
+                            }
+                            self.ft8_selected = new_sel;
+                            if let (
+                                Some(compose),
+                                Some(target),
+                                Some(session),
+                                Some(freq_hz),
+                                Some(period),
+                                Some(move_tx_to_remote),
+                            ) = (
+                                compose_from_double_click,
+                                reply_target_from_double_click,
+                                session_from_double_click,
+                                picked_freq_from_double_click,
+                                picked_period_from_double_click,
+                                move_tx_from_double_click,
+                            ) {
+                                let reply = PendingManualFt8Reply {
+                                    compose,
+                                    target: target.clone(),
+                                    session,
+                                    freq_hz,
+                                    source_period: period,
+                                    move_tx_to_remote,
+                                };
+                                let tx_scheduled = self.ft8_tx_active.load(Ordering::Acquire)
+                                    || self.ft8_tx_queued_period.is_some();
+                                let same_target =
+                                    self.ft8_seq_target.as_deref().is_some_and(|current| {
+                                        super::exchange::callsign_eq(current, &target)
+                                    });
+                                if tx_scheduled && same_target {
+                                    self.ft8_seq_status =
+                                        format!("Reply to {target} is already queued");
+                                } else if tx_scheduled
+                                    && (snapshot.ptt_on || self.ft8_tx_started_period.is_some())
+                                {
+                                    self.ft8_seq_status =
+                                        "Current TX is already on air; target was not changed"
+                                            .to_string();
+                                } else if tx_scheduled {
+                                    self.cancel_ft8_sequence(format!(
+                                        "Canceling prior reply; switching to {target}"
+                                    ));
+                                    self.ft8_pending_manual_reply = Some(reply);
+                                } else {
+                                    self.arm_manual_ft8_reply(reply);
                                 }
-                            });
-                    });
-                    let right = &mut columns[1];
-                    right.set_min_width(0.0);
-                    // ── Active channel / selected callsign ──────────────────────
-                    self.draw_ft8_conversation(right, snapshot, conversation_h);
+                            }
+                        });
                 });
+                let right = &mut columns[1];
+                right.set_min_width(0.0);
+                // ── Active channel / selected callsign ──────────────────────
+                self.draw_ft8_conversation(right, snapshot, conversation_h);
             });
+        });
         ui.add_space(4.0);
-
-        let tx_h = (ui.available_height() * 0.22).clamp(88.0, 180.0);
 
         // ── TX compose ───────────────────────────────────────────────────────
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_min_height(tx_h);
+            ui.set_max_height(tx_h);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("📣 TX DECK").strong());
                 ui.separator();

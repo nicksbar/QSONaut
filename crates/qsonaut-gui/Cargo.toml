@@ -17,7 +17,8 @@ reqwest.workspace = true
 rusqlite.workspace = true
 toml.workspace = true
 mfsk-core = { path = "../../../mfsk-core/mfsk-core", default-features = false, features = ["full"] }
-ditdah = { path = "../../../ditdah" }
+cwdit-dsp = { path = "../../../cw-dit/cwdit-dsp" }
+cwdit-morse = { path = "../../../cw-dit/cwdit-morse" }
 hound = "3.5"
 tempfile = "3"
 
@@ -26,6 +27,6 @@ qsonaut-accelerate = { path = "../qsonaut-accelerate" }
 qsonaut-core = { path = "../qsonaut-core" }
 qsonaut-automation = { path = "../qsonaut-automation" }
 qsonaut-log = { path = "../qsonaut-log" }
-qsonaut-radio = { package = "rigwright", git = "https://github.com/nicksbar/rigwright", tag = "v0.1.3" }
+qsonaut-radio = { package = "rigwright", git = "https://github.com/nicksbar/rigwright", tag = "v0.1.6" }
 qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }
 qsonaut-server-client = { path = "../qsonaut-server-client" }

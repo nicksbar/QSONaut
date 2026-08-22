@@ -41,6 +41,8 @@ pub struct AudioMonitor {
     errors_rx: Receiver<String>,
     dropped_chunks: Arc<std::sync::atomic::AtomicU64>,
     resampler: std::sync::Mutex<MonitorResampler>,
+    volume: Arc<std::sync::atomic::AtomicU32>,
+    input_sample_rate_hz: u32,
     _stream: Stream,
 }
 
@@ -86,6 +88,14 @@ impl MonitorResampler {
             self.source_position -= consumed as f64;
         }
         output
+    }
+
+    fn set_input_sample_rate(&mut self, input_sample_rate_hz: u32) {
+        if self.input_sample_rate_hz != input_sample_rate_hz {
+            self.input_sample_rate_hz = input_sample_rate_hz;
+            self.source_position = 0.0;
+            self.source.clear();
+        }
     }
 }
 
@@ -149,16 +159,50 @@ impl AudioMonitor {
                 sample_rate_hz,
                 output_sample_rate_hz,
             )),
+            volume: Arc::new(std::sync::atomic::AtomicU32::new(1.0_f32.to_bits())),
+            input_sample_rate_hz: sample_rate_hz,
             _stream: stream,
         })
     }
 
+    pub fn set_volume(&self, volume: f32) {
+        self.volume
+            .store(volume.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn push_test_tone(&self, sample_rate_hz: u32, frequency_hz: f32, duration_ms: u32) {
+        let count = (sample_rate_hz as u64 * duration_ms as u64 / 1_000) as usize;
+        let amplitude = 0.18_f32;
+        let samples = (0..count)
+            .map(|index| {
+                (2.0 * std::f32::consts::PI * frequency_hz * index as f32
+                    / sample_rate_hz.max(1) as f32)
+                    .sin()
+                    * amplitude
+                    * i16::MAX as f32
+            })
+            .map(|sample| sample.round() as i16)
+            .collect::<Vec<_>>();
+        self.push_at_sample_rate(&samples, sample_rate_hz);
+    }
+
     pub fn push(&self, samples: &[i16]) {
-        let samples = self
-            .resampler
-            .lock()
-            .map(|mut resampler| resampler.process(samples))
-            .unwrap_or_default();
+        self.push_at_sample_rate(samples, self.input_sample_rate_hz);
+    }
+
+    pub fn push_at_sample_rate(&self, samples: &[i16], sample_rate_hz: u32) {
+        let volume = f32::from_bits(self.volume.load(Ordering::Relaxed));
+        let samples = samples
+            .iter()
+            .map(|sample| (*sample as f32 * volume).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+            .collect::<Vec<_>>();
+        let samples = self.resampler.lock().map_or_else(
+            |_| Vec::new(),
+            |mut resampler| {
+                resampler.set_input_sample_rate(sample_rate_hz);
+                resampler.process(&samples)
+            },
+        );
         if self.samples_tx.try_send(samples).is_err() {
             self.dropped_chunks.fetch_add(1, Ordering::Relaxed);
         }
@@ -199,8 +243,8 @@ impl AudioService {
         if !self.enabled {
             bail!("audio capture is disabled in settings");
         }
-        if channels == 0 {
-            bail!("audio channel count must be positive");
+        if channels != 1 {
+            bail!("audio capture exposes one downmixed channel; requested {channels} channels");
         }
 
         let host = cpal::default_host();
@@ -259,7 +303,7 @@ impl AudioService {
             samples_rx,
             errors_rx,
             pending: VecDeque::new(),
-            requested_channels: channels as usize,
+            requested_channels: 1,
         })
     }
 }
@@ -416,11 +460,43 @@ fn select_device(
         );
     }
 
+    // WSLg publishes its microphone and speaker through PulseAudio. CPAL 0.15
+    // uses ALSA on Linux, so prefer the ALSA Pulse bridge when it is present
+    // instead of ALSA's often-unusable `default` device inside WSL.
+    if wslg_pulse_available() {
+        let devices = match kind {
+            AudioDeviceKind::Input => host.input_devices()?.collect::<Vec<_>>(),
+            AudioDeviceKind::Output => host.output_devices()?.collect::<Vec<_>>(),
+        };
+        if let Some(device) = devices.into_iter().find(|device| {
+            device
+                .name()
+                .is_ok_and(|name| name.eq_ignore_ascii_case("pulse"))
+        }) {
+            return Ok(device);
+        }
+        bail!(
+            "WSLg audio is available, but the ALSA PulseAudio bridge is missing; install the libasound2-plugins package"
+        );
+    }
+
     match kind {
         AudioDeviceKind::Input => host.default_input_device(),
         AudioDeviceKind::Output => host.default_output_device(),
     }
     .ok_or_else(|| anyhow!("no default {} audio device is available", kind_label(kind)))
+}
+
+#[cfg(target_os = "linux")]
+fn wslg_pulse_available() -> bool {
+    std::env::var_os("PULSE_SERVER").is_some()
+        && std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .is_ok_and(|release| release.to_ascii_lowercase().contains("microsoft"))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wslg_pulse_available() -> bool {
+    false
 }
 
 fn select_config(
@@ -557,5 +633,12 @@ mod tests {
             sample_format_preference(SampleFormat::I16)
                 < sample_format_preference(SampleFormat::U8)
         );
+    }
+
+    #[test]
+    fn rejects_non_mono_capture_contract_before_opening_a_device() {
+        let service = AudioService::new(None, true);
+        let error = service.open_stream(48_000, 2).err().unwrap();
+        assert!(error.to_string().contains("one downmixed channel"));
     }
 }

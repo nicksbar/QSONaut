@@ -845,11 +845,10 @@ impl QsonautGuiApp {
                 Err(_) => format!("Rejected radio command: invalid tune delta '{value}'"),
             },
             "set_filter"
-                if !find_model(&self.config.radio.model).is_some_and(|profile| {
-                    matches!(profile.protocol, Protocol::IcomCiV { .. })
-                }) =>
+                if !native_radio_profile(&self.config.radio.backend, &self.config.radio.model)
+                    .is_some_and(|profile| profile.supports_control(ControlId::Filter)) =>
             {
-                "Rejected radio command: selected profile has no CI-V filter control".to_string()
+                "Rejected radio command: selected profile has no filter control".to_string()
             }
             "set_filter" => match value.trim().parse::<u8>() {
                 Ok(filter @ 1..=3) => {

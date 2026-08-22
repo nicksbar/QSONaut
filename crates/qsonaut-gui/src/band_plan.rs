@@ -1,8 +1,8 @@
 use qsonaut_radio::BaseMode;
 
-use crate::modes::{cw, ft4, ft8, native};
+use crate::modes::{cw, fst4, ft4, ft8, jt65, jt9, native, q65, wspr};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum WorkspaceMode {
     Ft8,
     Ft4,
@@ -45,8 +45,20 @@ impl WorkspaceMode {
         }
     }
 
+    pub(super) fn slot_seconds(self, fst4_submode: crate::modes::fst4::Submode) -> Option<f64> {
+        if self == Self::Fst4 {
+            Some(fst4_submode.seconds())
+        } else {
+            self.core_slot_seconds()
+        }
+    }
+
     pub(super) fn has_native_decoder(self) -> bool {
         !matches!(self, Self::Cw | Self::Fldigi)
+    }
+
+    pub(super) fn is_uhf(self) -> bool {
+        matches!(self, Self::Msk144)
     }
 }
 
@@ -62,6 +74,20 @@ pub(super) const WORKSPACE_MODES: [WorkspaceMode; 10] = [
     WorkspaceMode::Cw,
     WorkspaceMode::Fldigi,
 ];
+
+pub(super) const HF_WORKSPACE_MODES: [WorkspaceMode; 8] = [
+    WorkspaceMode::Ft8,
+    WorkspaceMode::Ft4,
+    WorkspaceMode::Fst4,
+    WorkspaceMode::Wspr,
+    WorkspaceMode::Jt9,
+    WorkspaceMode::Jt65,
+    WorkspaceMode::Q65,
+    WorkspaceMode::Cw,
+];
+
+pub(super) const OTHER_WORKSPACE_MODES: [WorkspaceMode; 2] =
+    [WorkspaceMode::Msk144, WorkspaceMode::Fldigi];
 
 pub(super) fn band_for_frequency(frequency_hz: u64) -> &'static str {
     match frequency_hz {
@@ -86,11 +112,11 @@ pub(super) fn workspace_band_plan(mode: WorkspaceMode) -> &'static [(&'static st
     match mode {
         WorkspaceMode::Ft8 => ft8::BAND_PLAN,
         WorkspaceMode::Ft4 => ft4::BAND_PLAN,
-        WorkspaceMode::Fst4 => native::FST4_BAND_PLAN,
-        WorkspaceMode::Wspr => native::WSPR_BAND_PLAN,
-        WorkspaceMode::Jt9 => native::JT9_BAND_PLAN,
-        WorkspaceMode::Jt65 => native::JT65_BAND_PLAN,
-        WorkspaceMode::Q65 => native::Q65_BAND_PLAN,
+        WorkspaceMode::Fst4 => fst4::BAND_PLAN,
+        WorkspaceMode::Wspr => wspr::BAND_PLAN,
+        WorkspaceMode::Jt9 => jt9::BAND_PLAN,
+        WorkspaceMode::Jt65 => jt65::BAND_PLAN,
+        WorkspaceMode::Q65 => q65::BAND_PLAN,
         WorkspaceMode::Msk144 => native::MSK144_BAND_PLAN,
         WorkspaceMode::Cw => cw::BAND_PLAN,
         WorkspaceMode::Fldigi => native::FLDIGI_BAND_PLAN,

@@ -6,6 +6,7 @@ const FT8_TX_MONITOR_FFT_SIZE: usize = 2_048;
 const FT8_TX_MONITOR_HOP_SAMPLES: usize = 500;
 pub(super) const FT8_TX_AUDIO_START_S: f64 = modes::exchange::AUDIO_START_SECONDS;
 const FT8_MAX_AUDIO_LATE_S: f64 = 1.75;
+const DIGITAL_MAX_AUDIO_LATE_S: f64 = 1.0;
 
 pub(super) fn build_ft8_tx_pcm(compose: &str, tx_tone_hz: u32) -> Result<Vec<i16>> {
     let tokens: Vec<&str> = compose.split_whitespace().collect();
@@ -31,6 +32,7 @@ pub(super) fn build_native_digital_tx_pcm(
     mode: WorkspaceMode,
     compose: &str,
     tx_tone_hz: u32,
+    fst4_submode: crate::modes::fst4::Submode,
     cw_wpm: u8,
     cw_tone_hz: u16,
 ) -> Result<(Vec<i16>, f64)> {
@@ -57,9 +59,54 @@ pub(super) fn build_native_digital_tx_pcm(
                 ))
             } else {
                 let tones = mfsk_core::fst4::encode::message_to_tones(&bits);
+                let pcm = match fst4_submode {
+                    crate::modes::fst4::Submode::S15 => {
+                        mfsk_core::fst4::encode::tones_to_i16_with_gfsk(
+                            &tones,
+                            tone,
+                            FT8_TX_AMPLITUDE_I16,
+                            &mfsk_core::fst4::encode::FST4_15_GFSK,
+                        )
+                    }
+                    crate::modes::fst4::Submode::S30 => {
+                        mfsk_core::fst4::encode::tones_to_i16_with_gfsk(
+                            &tones,
+                            tone,
+                            FT8_TX_AMPLITUDE_I16,
+                            &mfsk_core::fst4::encode::FST4_30_GFSK,
+                        )
+                    }
+                    crate::modes::fst4::Submode::S60 => {
+                        mfsk_core::fst4::encode::tones_to_i16_with_gfsk(
+                            &tones,
+                            tone,
+                            FT8_TX_AMPLITUDE_I16,
+                            &mfsk_core::fst4::encode::FST4_60A_GFSK,
+                        )
+                    }
+                    crate::modes::fst4::Submode::S120 => {
+                        mfsk_core::fst4::encode::tones_to_i16_with_gfsk(
+                            &tones,
+                            tone,
+                            FT8_TX_AMPLITUDE_I16,
+                            &mfsk_core::fst4::encode::FST4_120_GFSK,
+                        )
+                    }
+                    crate::modes::fst4::Submode::S300 => {
+                        mfsk_core::fst4::encode::tones_to_i16_with_gfsk(
+                            &tones,
+                            tone,
+                            FT8_TX_AMPLITUDE_I16,
+                            &mfsk_core::fst4::encode::FST4_300_GFSK,
+                        )
+                    }
+                };
                 Ok((
-                    mfsk_core::fst4::encode::tones_to_i16(&tones, tone, FT8_TX_AMPLITUDE_I16),
-                    1.0,
+                    pcm,
+                    match fst4_submode {
+                        crate::modes::fst4::Submode::S15 => 0.5,
+                        _ => 1.0,
+                    },
                 ))
             }
         }
@@ -78,6 +125,31 @@ pub(super) fn build_native_digital_tx_pcm(
                 .map(|audio| (to_i16(audio), 1.0))
                 .ok_or_else(|| anyhow!("unable to pack Q65 message"))
         }
+        WorkspaceMode::Wspr => {
+            let callsign = tokens
+                .first()
+                .copied()
+                .ok_or_else(|| anyhow!("WSPR TX requires CALL GRID POWER_DBM"))?;
+            let grid = tokens
+                .get(1)
+                .copied()
+                .ok_or_else(|| anyhow!("WSPR TX requires CALL GRID POWER_DBM"))?;
+            let power_dbm = tokens
+                .get(2)
+                .ok_or_else(|| anyhow!("WSPR TX requires CALL GRID POWER_DBM"))?
+                .parse::<i32>()
+                .map_err(|_| anyhow!("WSPR power must be an integer dBm value"))?;
+            let audio = mfsk_core::wspr::synthesize_type1(
+                callsign,
+                grid,
+                power_dbm,
+                FT8_TX_SAMPLE_RATE_HZ,
+                tone,
+                0.8,
+            )
+            .ok_or_else(|| anyhow!("invalid WSPR callsign, locator, or power"))?;
+            Ok((to_i16(audio), 0.0))
+        }
         WorkspaceMode::Cw => {
             let text = compose.trim().to_ascii_uppercase();
             if text.is_empty() {
@@ -91,30 +163,11 @@ pub(super) fn build_native_digital_tx_pcm(
                     "CW TX does not support '{character}'; use A-Z, 0-9, and spaces only"
                 );
             }
-            let generator = ditdah::MorseGenerator::new(
-                FT8_TX_SAMPLE_RATE_HZ,
-                f32::from(cw_tone_hz.clamp(200, 1_200)),
+            let pcm = synthesize_cw_pcm(
+                &text,
+                f32::from(cw_tone_hz.clamp(200, 3_000)),
                 f32::from(cw_wpm.clamp(5, 40)),
-            );
-            let temporary_directory = tempfile::tempdir().context("create CW audio workspace")?;
-            let wav_path = temporary_directory.path().join("cw.wav");
-            generator
-                .generate_wav_file(&text, &wav_path)
-                .context("generate CW audio")?;
-            let mut reader =
-                hound::WavReader::open(&wav_path).context("read generated CW audio")?;
-            let spec = reader.spec();
-            if spec.channels != 1
-                || spec.sample_rate != FT8_TX_SAMPLE_RATE_HZ
-                || spec.sample_format != hound::SampleFormat::Int
-                || spec.bits_per_sample != 16
-            {
-                anyhow::bail!("DitDah generated an unsupported CW WAV format");
-            }
-            let pcm: Vec<i16> = reader
-                .samples::<i16>()
-                .collect::<std::result::Result<_, _>>()
-                .context("read CW PCM samples")?;
+            )?;
             if pcm.is_empty() {
                 anyhow::bail!("CW TX did not produce audio");
             }
@@ -123,6 +176,81 @@ pub(super) fn build_native_digital_tx_pcm(
         }
         _ => anyhow::bail!("{} transmit synthesis is not available", mode.label()),
     }
+}
+
+fn synthesize_cw_pcm(text: &str, tone_hz: f32, wpm: f32) -> Result<Vec<i16>> {
+    let dot_samples = (FT8_TX_SAMPLE_RATE_HZ as f32 * 1.2 / wpm).round() as usize;
+    let mut pcm = Vec::new();
+    for (word_index, word) in text.split_whitespace().enumerate() {
+        for (char_index, character) in word.chars().enumerate() {
+            let pattern = morse_pattern(character)
+                .ok_or_else(|| anyhow!("unsupported CW character '{character}'"))?;
+            for (element_index, element) in pattern.chars().enumerate() {
+                let length = if element == '-' {
+                    dot_samples * 3
+                } else {
+                    dot_samples
+                };
+                for index in 0..length {
+                    let phase = 2.0 * std::f32::consts::PI * tone_hz * index as f32
+                        / FT8_TX_SAMPLE_RATE_HZ as f32;
+                    pcm.push((phase.sin() * FT8_TX_AMPLITUDE_I16 as f32).round() as i16);
+                }
+                if element_index + 1 < pattern.len() {
+                    pcm.extend(std::iter::repeat_n(0, dot_samples));
+                }
+            }
+            if char_index + 1 < word.len() {
+                pcm.extend(std::iter::repeat_n(0, dot_samples * 3));
+            }
+        }
+        if word_index + 1 < text.split_whitespace().count() {
+            pcm.extend(std::iter::repeat_n(0, dot_samples * 7));
+        }
+    }
+    Ok(pcm)
+}
+
+fn morse_pattern(character: char) -> Option<&'static str> {
+    Some(match character {
+        'A' => ".-",
+        'B' => "-...",
+        'C' => "-.-.",
+        'D' => "-..",
+        'E' => ".",
+        'F' => "..-.",
+        'G' => "--.",
+        'H' => "....",
+        'I' => "..",
+        'J' => ".---",
+        'K' => "-.-",
+        'L' => ".-..",
+        'M' => "--",
+        'N' => "-.",
+        'O' => "---",
+        'P' => ".--.",
+        'Q' => "--.-",
+        'R' => ".-.",
+        'S' => "...",
+        'T' => "-",
+        'U' => "..-",
+        'V' => "...-",
+        'W' => ".--",
+        'X' => "-..-",
+        'Y' => "-.--",
+        'Z' => "--..",
+        '0' => "-----",
+        '1' => ".----",
+        '2' => "..---",
+        '3' => "...--",
+        '4' => "....-",
+        '5' => ".....",
+        '6' => "-....",
+        '7' => "--...",
+        '8' => "---..",
+        '9' => "----.",
+        _ => return None,
+    })
 }
 
 fn play_ft8_tx_pcm(pcm: &[i16], abort: Arc<AtomicBool>, output_device: Option<&str>) -> Result<()> {
@@ -324,9 +452,22 @@ pub(super) fn run_digital_tx_job(job: DigitalTxJob) {
         wait_until_epoch(ptt_start_s, &job.abort)?;
         request_ptt(&job.command_tx, true, Duration::from_secs(2))?;
         wait_until_epoch(audio_start_s, &job.abort)?;
+        let now_s = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64())
+            .unwrap_or(audio_start_s);
+        let audio_late_s = now_s - audio_start_s;
+        if job.mode != WorkspaceMode::Cw && audio_late_s > DIGITAL_MAX_AUDIO_LATE_S {
+            anyhow::bail!(
+                "{} audio arrived too late for a valid slot ({:.0} ms)",
+                job.mode.label(),
+                audio_late_s * 1_000.0
+            );
+        }
         info!(
             mode = job.mode.label(),
             period = job.period,
+            audio_late_ms = (audio_late_s.max(0.0) * 1_000.0).round() as u64,
             "digital TX audio starting"
         );
         let _ = job

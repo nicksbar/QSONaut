@@ -14,8 +14,8 @@
 			"name": "mfsk-core"
 		},
 		{
-			"path": "../ditdah",
-			"name": "ditdah"
+			"path": "../cw-dit",
+			"name": "cw-dit"
 		},
 		{
 			"path": "../rigwright",

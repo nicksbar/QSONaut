@@ -30,6 +30,8 @@ pub struct AudioConfig {
     pub monitor_enabled: bool,
     #[serde(default)]
     pub monitor_output_device: Option<String>,
+    #[serde(default = "default_monitor_volume")]
+    pub monitor_volume: f32,
     pub sample_rate_hz: u32,
     pub channels: u8,
 }
@@ -38,6 +40,8 @@ pub struct AudioConfig {
 pub struct RadioConfig {
     pub enabled: bool,
     pub backend: String,
+    #[serde(default = "default_radio_endpoint")]
+    pub endpoint: String,
     #[serde(default = "default_radio_model")]
     pub model: String,
     pub serial_port: Option<String>,
@@ -138,12 +142,14 @@ impl Default for AppConfig {
                 output_device: None,
                 monitor_enabled: false,
                 monitor_output_device: None,
+                monitor_volume: default_monitor_volume(),
                 sample_rate_hz: 48_000,
                 channels: 1,
             },
             radio: RadioConfig {
                 enabled: true,
-                backend: "none".to_string(),
+                backend: "native".to_string(),
+                endpoint: default_radio_endpoint(),
                 model: default_radio_model(),
                 serial_port: None,
                 baud_rate: default_radio_baud_rate(),
@@ -154,6 +160,10 @@ impl Default for AppConfig {
             contest: ContestProfile::default(),
         }
     }
+}
+
+fn default_monitor_volume() -> f32 {
+    1.0
 }
 
 impl AppConfig {
@@ -238,10 +248,21 @@ impl AppConfig {
             cfg.audio.enabled = parse_bool(&enabled);
         }
         if let Ok(device) = std::env::var("QSONAUT_AUDIO_INPUT_DEVICE") {
-            cfg.audio.input_device = Some(device);
+            cfg.audio.input_device = nonempty(device);
         }
         if let Ok(device) = std::env::var("QSONAUT_AUDIO_OUTPUT_DEVICE") {
-            cfg.audio.output_device = Some(device);
+            cfg.audio.output_device = nonempty(device);
+        }
+        if let Ok(enabled) = std::env::var("QSONAUT_AUDIO_MONITOR_ENABLED") {
+            cfg.audio.monitor_enabled = parse_bool(&enabled);
+        }
+        if let Ok(device) = std::env::var("QSONAUT_AUDIO_MONITOR_OUTPUT_DEVICE") {
+            cfg.audio.monitor_output_device = nonempty(device);
+        }
+        if let Ok(volume) = std::env::var("QSONAUT_AUDIO_MONITOR_VOLUME") {
+            if let Ok(parsed) = volume.parse::<f32>() {
+                cfg.audio.monitor_volume = parsed.clamp(0.0, 2.0);
+            }
         }
         if let Ok(rate) = std::env::var("QSONAUT_AUDIO_SAMPLE_RATE_HZ") {
             if let Ok(parsed) = rate.parse::<u32>() {
@@ -259,6 +280,15 @@ impl AppConfig {
         }
         if let Ok(backend) = std::env::var("QSONAUT_RADIO_BACKEND") {
             cfg.radio.backend = backend;
+        }
+        // `none` was an internal placeholder. Radio enablement is controlled
+        // by `radio.enabled`; migrate older configurations to the real
+        // default backend instead of silently disabling radio control.
+        if cfg.radio.backend.trim().eq_ignore_ascii_case("none") {
+            cfg.radio.backend = "native".to_string();
+        }
+        if let Ok(endpoint) = std::env::var("QSONAUT_RADIO_ENDPOINT") {
+            cfg.radio.endpoint = endpoint;
         }
         if let Ok(model) = std::env::var("QSONAUT_RADIO_MODEL") {
             cfg.radio.model = model;
@@ -293,12 +323,21 @@ fn parse_bool(value: &str) -> bool {
     )
 }
 
+fn nonempty(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 fn default_radio_baud_rate() -> u32 {
     115_200
 }
 
 fn default_radio_model() -> String {
     "IC-7300".to_string()
+}
+
+fn default_radio_endpoint() -> String {
+    "127.0.0.1:4532".to_string()
 }
 
 fn default_radio_civ_address() -> u8 {
@@ -393,6 +432,9 @@ backend = "none"
         let cfg: AppConfig = toml::from_str(src).expect("config parse");
         assert_eq!(cfg.contest, ContestProfile::default());
         assert_eq!(cfg.radio.model, "IC-7300");
+        assert!(!cfg.audio.monitor_enabled);
+        assert_eq!(cfg.audio.monitor_output_device, None);
+        assert_eq!(cfg.audio.monitor_volume, 1.0);
     }
 
     #[test]
@@ -402,5 +444,11 @@ backend = "none"
         assert!(body.contains("[contest]"));
         assert!(body.contains("serial_start = 1"));
         assert!(body.contains("dupe_check = true"));
+    }
+
+    #[test]
+    fn native_radio_is_the_default_backend() {
+        assert_eq!(AppConfig::default().radio.backend, "native");
+        assert_eq!(AppConfig::default().radio.endpoint, "127.0.0.1:4532");
     }
 }

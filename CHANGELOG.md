@@ -5,9 +5,64 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-08-21
+
+### Added
+- Added selectable native serial, Hamlib `rigctld`, and DX Lab Suite Commander
+  radio backends through Rigwright `v0.1.6`.
+- Added endpoint configuration and in-app radio reconnect support.
+- Added dedicated native-mode workspaces for FST4, JT9, JT65, and Q65, with
+  per-mode layouts and shared digital conversation handling.
+- Added FST4 submode selection for the slow-mode variants exposed by
+  `mfsk-core`.
+- Added a WSPR Type-1 beacon workflow with callsign, four-character locator,
+  dBm power, timing, and backend-drift status controls.
+- Added per-mode native digital transmit sequencing with shared timing logic,
+  isolated sequencing state, late-slot protection, and complete TX lifecycle
+  handling.
+- Replaced the previous CW implementation with `cw-dit` streaming DSP and
+  Morse components, including signal tracking, selected-channel decoding, and
+  generated audio transmission.
+- Added explicit CW and digital waterfall channel selection behavior, including
+  bandwidth indicators and mode-specific cursor placement.
+
+### Fixed
+- Updated the committed Rigwright dependency and lockfile to the published
+  `v0.1.6` release, including the new model catalog and profile-driven native
+  radio drivers.
+- Kept CI and release builds aligned with the tagged Rigwright `v0.1.6`
+  dependency instead of relying on the ignored local sibling checkout.
+- Fixed audio monitor and added a volume control
+- Removed TX audio monitor, unsupported idea
+- Persisted radio backend and endpoint selections in operator profiles.
+- Made native serial control the default and migrated legacy `none` settings.
+- Added detailed radio initialization diagnostics.
+- Improved native digital TX timing so late or canceled transmissions cannot
+  leave stale automation state that blocks subsequent cycles.
+- Kept native-mode decode decks inside the available layout bounds and matched
+  native-mode sizing with the FT8 workspace.
+- Shared the digital conversation component across native digital workspaces,
+  reducing duplicated UI state and behavior.
+- Improved light-theme text contrast and clarified native digital mode
+  operation in the UI.
+- Smoothed radio waterfall repainting and reduced unnecessary redraw work.
+- Preserved radio scope VBW preferences across sessions.
+- Improved CW waterfall signal tracking and separated CW cursor behavior from
+  digital channel selection.
+
 ## [0.3.4] - 2026-08-18
 
 ### Added
+- Current release state includes dedicated WSPR, FST4, JT9, JT65, and Q65 workspaces;
+  FST4 supports the five submodes exposed by `mfsk-core`, while WSPR remains a Type-1,
+  one-shot 120-second beacon workflow.
+- Added an initial WSPR Type-1 transmit path using callsign, 4-character locator, and dBm
+  power entered as `CALL GRID POWER_DBM`; the waveform uses the native 120-second slot.
+- Added late-slot protection and timing telemetry to native digital TX, preventing FT4/FST4/JT9/
+  JT65/Q65 frames from launching after their valid transmit window.
+- Grouped digital workspace modes into HF/primary and other/experimental sections; MSK144
+  is visibly disabled for stations without a UHF radio while WSPR and the other HF modes
+  remain directly accessible.
 - Added an Operator Profile action to load callsign, grid, and QTH details from the
   callsign's HamDB license record.
 - Added asynchronous POTA activator-spot lookup with a short-lived cache. CQ POTA decodes
@@ -16,6 +71,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   after ten logo clicks within ten seconds, with a brief logo-spin unlock indication.
 
 ### Fixed
+- Restored the parent radio/filter bandwidth as the full CW waterfall display range. Only the
+  selected tone is constrained to cw-dit's supported audio range, so the right side remains
+  visible and clickable instead of being silently discarded.
+- Limited the CW audio waterfall to the cw-dit-supported audio tone range so the full
+  visible view maps to valid decoder tones; CW selection is no longer compressed into the left
+  portion of a wider USB-D filter view.
+- Corrected audio waterfall cursor semantics to use the selected QSONaut workspace mode:
+  CW keeps RX/TX centered and linked, while digital modes show their distinct channel widths
+  and edge-oriented selection behavior.
+- Audio waterfall selection now shows the active channel bandwidth and marks the selected
+  edge for digital modes; CW keeps a centered tone marker because its decoder is tone-centered.
+- Removed an audio-waterfall rendering regression where every repaint copied and cropped the
+  entire rolling row buffer; the selected bandwidth is now sampled directly while building the
+  texture, reducing allocation and UI work.
+- Throttled radio waterfall repaint requests to the same approximately 15 FPS cadence as
+  audio waterfall updates, preventing high-rate scope sweeps from making the display chunky.
+- Added RX monitor diagnostics: a live monitor-volume control and a short 700 Hz test tone
+  make it possible to verify the selected output device independently of radio input audio.
+- Clears stale FT4 session state after a failed or canceled transmission so automation can start
+  a fresh cycle without requiring a manual response or application restart.
 - Reworked the Contact Log into a resizable two-column layout with a scrollable contact
   list, a selected-contact editor, and an explicit Close action for the editor.
 - Removed the misleading resize cursor and inactive resize boundary between the radio
@@ -118,7 +193,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Rolling live CW receive decoding from the same audio stream used by the waterfall, with
   one-second updates over an eight-second context and overlap-aware transcript updates.
 - Selected-tone CW signal gating that rejects broadband noise and steady carriers before
-  invoking DitDah.
+  invoking cw-dit.
 - Explicit QSONaut Server diagnostic delivery feedback for queued, accepted, rejected, and
   unavailable-client states.
 

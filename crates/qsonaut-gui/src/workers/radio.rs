@@ -16,6 +16,15 @@ struct RadioScopeStreamConfig {
     reference_tenths_db: i16,
 }
 
+fn workspace_audio_controls_clear_noise() -> (ControlId, ControlValue, ControlId, ControlValue) {
+    (
+        ControlId::NoiseReduction,
+        ControlValue::Bool(false),
+        ControlId::NoiseBlanker,
+        ControlValue::Bool(false),
+    )
+}
+
 pub(crate) fn spawn_radio_worker(
     radio: ConfiguredRadio,
     state: Arc<Mutex<GuiState>>,
@@ -63,6 +72,8 @@ pub(crate) fn spawn_radio_worker(
             let mut last_scope_divisions = 0_u64;
             let mut last_dropped_sweeps = 0_u64;
             let mut dropped_sweeps_delta = 0_u64;
+            let waterfall_repaint_interval = Duration::from_millis(66);
+            let mut last_waterfall_repaint = Instant::now() - waterfall_repaint_interval;
 
             let Some(stream_radio) = stream_radio else {
                 let mut s = stream_state.lock().expect("ui state lock poisoned");
@@ -240,7 +251,13 @@ pub(crate) fn spawn_radio_worker(
                         );
                         drop(s);
                         if let Some(ctx) = stream_repaint.get() {
-                            ctx.request_repaint();
+                            let elapsed = last_waterfall_repaint.elapsed();
+                            if elapsed >= waterfall_repaint_interval {
+                                last_waterfall_repaint = Instant::now();
+                                ctx.request_repaint();
+                            } else {
+                                ctx.request_repaint_after(waterfall_repaint_interval - elapsed);
+                            }
                         }
                     }
                     Err(err) => {
@@ -298,8 +315,9 @@ pub(crate) fn spawn_radio_worker(
                             Mode::Lsb => Mode::Cw,
                             Mode::Cw => Mode::Data,
                             Mode::Data => Mode::Usb,
+                            _ => Mode::Usb,
                         };
-                        if let Err(err) = rt.block_on(RadioHal::set_mode(&radio, next)) {
+                        if let Err(err) = rt.block_on(Radio::set_mode(&radio, next)) {
                             let mut s = state.lock().expect("ui state lock poisoned");
                             s.last_error = Some(err.to_string());
                         }
@@ -344,13 +362,19 @@ pub(crate) fn spawn_radio_worker(
                         let preset = workspace_radio_preset(workspace_mode);
                         let filter = preset.filter.clamp(1, 3);
                         let frequency_result = rt.block_on(radio.set_frequency_hz(frequency_hz));
+                        let (nr_id, nr_value, nb_id, nb_value) =
+                            workspace_audio_controls_clear_noise();
+                        let noise_result = rt
+                            .block_on(radio.set_control(nr_id, nr_value))
+                            .and_then(|_| rt.block_on(radio.set_control(nb_id, nb_value)));
                         if let Some(icom) = radio.as_icom() {
                             let mode_result = rt.block_on(icom.set_operating_mode_details(
                                 preset.base_mode,
                                 preset.data_mode,
                                 filter,
                             ));
-                            if let Err(error) = frequency_result.and(mode_result) {
+                            if let Err(error) = frequency_result.and(mode_result).and(noise_result)
+                            {
                                 state.lock().expect("ui state lock poisoned").last_error =
                                     Some(error.to_string());
                             }
@@ -364,7 +388,7 @@ pub(crate) fn spawn_radio_worker(
                                     _ => Mode::Usb,
                                 }
                             };
-                            let mode_result = rt.block_on(RadioHal::set_mode(&radio, mode));
+                            let mode_result = rt.block_on(Radio::set_mode(&radio, mode));
                             if let Err(error) = frequency_result.and(mode_result) {
                                 state.lock().expect("ui state lock poisoned").last_error =
                                     Some(error.to_string());
@@ -465,6 +489,12 @@ fn poll_radio_core_state(
                     Mode::Lsb => "LSB",
                     Mode::Cw => "CW",
                     Mode::Data => "DATA",
+                    Mode::Am => "AM",
+                    Mode::Fm => "FM",
+                    Mode::Wfm => "WFM",
+                    Mode::Rtty => "RTTY",
+                    Mode::CwReverse => "CW-R",
+                    Mode::RttyReverse => "RTTY-R",
                 }
                 .to_string();
                 s.data_mode = Some(mode == Mode::Data);
@@ -571,14 +601,18 @@ fn configure_radio_scope(
                 rt.block_on(radio.set_scope_center_fixed_mode(false))?;
                 rt.block_on(radio.set_scope_span_hz(scope_span_hz(config.span_code)))?;
             }
-            rt.block_on(radio.set_scope_vbw_wide(config.vbw_wide))?;
+            rt.block_on(
+                radio.set_scope_vbw_wide(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
+            )?;
         }
         RadioScopeView::Overview => {
             let (low_hz, high_hz) = config.edges.context("active band edges unavailable")?;
             rt.block_on(radio.set_scope_fixed_edge_frequencies(1, low_hz, high_hz))?;
             rt.block_on(radio.set_scope_fixed_edge_number(1))?;
             rt.block_on(radio.set_scope_center_fixed_mode(true))?;
-            rt.block_on(radio.set_scope_vbw_wide(true))?;
+            rt.block_on(
+                radio.set_scope_vbw_wide(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
+            )?;
         }
     }
     if let Some(hold) = hold_update {
@@ -587,7 +621,24 @@ fn configure_radio_scope(
     Ok(())
 }
 
-fn read_u8_control<R: RadioHal + ?Sized>(
+fn scope_vbw_wide_for_view(_view: RadioScopeView, user_vbw_wide: bool) -> bool {
+    user_vbw_wide
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scope_vbw_respects_checkbox_in_narrow_and_overview_views() {
+        for view in [RadioScopeView::Narrow, RadioScopeView::Overview] {
+            assert!(!scope_vbw_wide_for_view(view, false));
+            assert!(scope_vbw_wide_for_view(view, true));
+        }
+    }
+}
+
+fn read_u8_control<R: Radio + ?Sized>(
     rt: &tokio::runtime::Runtime,
     radio: &R,
     id: ControlId,
@@ -595,5 +646,19 @@ fn read_u8_control<R: RadioHal + ?Sized>(
     match rt.block_on(radio.get_control(id)).ok().flatten() {
         Some(ControlValue::U8(v)) => Some(v),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+
+    #[test]
+    fn software_workspace_clears_noise_processing() {
+        let (nr_id, nr_value, nb_id, nb_value) = workspace_audio_controls_clear_noise();
+        assert_eq!(nr_id, ControlId::NoiseReduction);
+        assert_eq!(nr_value, ControlValue::Bool(false));
+        assert_eq!(nb_id, ControlId::NoiseBlanker);
+        assert_eq!(nb_value, ControlValue::Bool(false));
     }
 }
