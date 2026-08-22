@@ -1914,7 +1914,7 @@ dependencies = [
 [[package]]
 name = "mfsk-core"
 version = "0.10.0"
-source = "git+https://github.com/jl1nie/mfsk-core.git?rev=bfcac2c93bf3add38f1214a809705e9838cac9c3#bfcac2c93bf3add38f1214a809705e9838cac9c3"
+source = "git+https://github.com/jl1nie/mfsk-core.git?rev=5334e11176ac78fabda51ba2ec9d5bce359f3e83#5334e11176ac78fabda51ba2ec9d5bce359f3e83"
 dependencies = [
  "crc",
  "num-complex",
