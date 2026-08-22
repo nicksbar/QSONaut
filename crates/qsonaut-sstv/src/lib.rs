@@ -1,8 +1,7 @@
-//! Minimal, reusable analog SSTV modem support.
+//! Reusable analog SSTV streaming, VIS, and codec integration.
 //!
-//! The first supported format is Martin M1 (VIS 44), the common 320 x 256
-//! RGB mode. Audio is mono 12 kHz PCM and follows the conventional
-//! 1500 Hz black / 2300 Hz white mapping.
+//! Live audio is mono 12 kHz PCM. Automatic VIS selection and explicit receive
+//! filtering cover the pinned backend's Martin, Scottie, Robot, and PD modes.
 
 use std::f32::consts::TAU;
 
@@ -130,6 +129,182 @@ pub fn decode_mode(mode: SstvMode, audio: &[f32]) -> Result<DecodedImage, SstvEr
         height: image.height() as usize,
         rgb: image.into_raw(),
     })
+}
+
+fn mode_sample_count_12k(mode: SstvMode) -> usize {
+    komitoto_sstv::spec::from_mode(mode)
+        .total_samples()
+        .div_ceil((MULTIMODE_SAMPLE_RATE_HZ / SAMPLE_RATE_HZ) as usize)
+}
+
+fn decode_mode_12k(
+    mode: SstvMode,
+    audio: &[f32],
+    frequency_offset_hz: f32,
+) -> Result<DecodedImage, SstvError> {
+    let corrected = if frequency_offset_hz.abs() >= 1.0 {
+        let frequencies = komitoto_sstv::dsp::fm_demodulate(audio, SAMPLE_RATE_HZ);
+        let mut phase = 0.0_f64;
+        frequencies
+            .into_iter()
+            .map(|frequency| {
+                phase +=
+                    TAU as f64 * (frequency - frequency_offset_hz as f64) / SAMPLE_RATE_HZ as f64;
+                phase.sin() as f32
+            })
+            .collect::<Vec<_>>()
+    } else {
+        audio.to_vec()
+    };
+    let factor = (MULTIMODE_SAMPLE_RATE_HZ / SAMPLE_RATE_HZ) as usize;
+    let mut upsampled = Vec::with_capacity(corrected.len() * factor);
+    for (index, &sample) in corrected.iter().enumerate() {
+        let next = corrected.get(index + 1).copied().unwrap_or(sample);
+        for step in 0..factor {
+            let fraction = step as f32 / factor as f32;
+            upsampled.push(sample + (next - sample) * fraction);
+        }
+    }
+    decode_mode(mode, &upsampled)
+}
+
+/// Streaming, VIS-aware receiver for every mode supplied by the codec backend.
+///
+/// `None` selects the mode from a valid VIS header. `Some(mode)` accepts only
+/// that mode's VIS header, which provides an explicit receive-mode filter.
+#[derive(Debug, Default)]
+pub struct MultiModeReceiver {
+    buffer: Vec<f32>,
+    transmission_start: Option<usize>,
+    active_mode: Option<SstvMode>,
+    selected_mode: Option<SstvMode>,
+    search_from: usize,
+    last_vis: Option<u8>,
+    frequency_offset_hz: Option<f32>,
+    tuning_offset_hz: f32,
+    last_decode_error: Option<String>,
+    last_completed_mode: Option<SstvMode>,
+}
+
+impl MultiModeReceiver {
+    pub fn reset(&mut self) {
+        self.buffer.clear();
+        self.transmission_start = None;
+        self.active_mode = None;
+        self.search_from = 0;
+        self.last_vis = None;
+        self.frequency_offset_hz = None;
+        self.last_decode_error = None;
+        self.last_completed_mode = None;
+    }
+
+    pub fn set_selected_mode(&mut self, mode: Option<SstvMode>) {
+        if self.selected_mode != mode {
+            self.reset();
+            self.selected_mode = mode;
+        }
+    }
+
+    pub fn selected_mode(&self) -> Option<SstvMode> {
+        self.selected_mode
+    }
+
+    pub fn active_mode(&self) -> Option<SstvMode> {
+        self.active_mode
+    }
+
+    pub fn progress(&self) -> Option<f32> {
+        let start = self.transmission_start?;
+        let mode = self.active_mode?;
+        Some(
+            (self.buffer.len().saturating_sub(start) as f32 / mode_sample_count_12k(mode) as f32)
+                .clamp(0.0, 1.0),
+        )
+    }
+
+    pub fn detected_vis(&self) -> Option<u8> {
+        self.last_vis
+    }
+
+    pub fn frequency_offset_hz(&self) -> Option<f32> {
+        self.frequency_offset_hz
+    }
+
+    pub fn take_decode_error(&mut self) -> Option<String> {
+        self.last_decode_error.take()
+    }
+
+    pub fn take_completed_mode(&mut self) -> Option<SstvMode> {
+        self.last_completed_mode.take()
+    }
+
+    pub fn set_tuning_offset_hz(&mut self, offset_hz: f32) {
+        let offset_hz = offset_hz.clamp(-1_000.0, 1_000.0);
+        if (self.tuning_offset_hz - offset_hz).abs() >= 1.0 {
+            self.reset();
+            self.tuning_offset_hz = offset_hz;
+        }
+    }
+
+    pub fn push(&mut self, samples: &[f32]) -> Option<DecodedImage> {
+        self.buffer.extend_from_slice(samples);
+        if self.transmission_start.is_none() {
+            self.find_header();
+        }
+        if let (Some(start), Some(mode)) = (self.transmission_start, self.active_mode) {
+            let needed = start + mode_sample_count_12k(mode);
+            if self.buffer.len() >= needed {
+                let result = decode_mode_12k(
+                    mode,
+                    &self.buffer[start..needed],
+                    self.frequency_offset_hz.unwrap_or_default(),
+                );
+                self.reset();
+                return match result {
+                    Ok(image) => {
+                        self.last_completed_mode = Some(mode);
+                        Some(image)
+                    }
+                    Err(error) => {
+                        self.last_decode_error = Some(error.to_string());
+                        None
+                    }
+                };
+            }
+        } else {
+            let keep = ms_samples(HEADER_MS + 400.0);
+            if self.buffer.len() > keep {
+                let drain = self.buffer.len() - keep;
+                self.buffer.drain(..drain);
+                self.search_from = self.search_from.saturating_sub(drain);
+            }
+        }
+        None
+    }
+
+    fn find_header(&mut self) {
+        let header = ms_samples(HEADER_MS);
+        let step = ms_samples(10.0);
+        while self.search_from + header <= self.buffer.len() {
+            if let Some((vis, frequency_offset_hz)) = decode_vis_header(
+                &self.buffer[self.search_from..self.search_from + header],
+                self.tuning_offset_hz,
+            ) {
+                self.last_vis = Some(vis);
+                self.frequency_offset_hz = Some(frequency_offset_hz);
+                if let Some(detected_mode) = mode_from_vis(vis) {
+                    if self.selected_mode.is_none() || self.selected_mode == Some(detected_mode) {
+                        self.transmission_start = Some(self.search_from);
+                        self.active_mode = Some(detected_mode);
+                        return;
+                    }
+                }
+                self.search_from += header;
+                continue;
+            }
+            self.search_from += step;
+        }
+    }
 }
 
 /// Streaming receiver with VIS detection and bounded buffering.
@@ -607,5 +782,59 @@ mod tests {
             .sum::<u64>() as f64
             / decoded.rgb.len() as f64;
         assert!((mean - 112.0).abs() < 25.0, "decoded mean was {mean}");
+    }
+
+    #[test]
+    fn streaming_multimode_receiver_auto_decodes_every_mode_at_12k() {
+        let source = vec![112_u8; WIDTH * HEIGHT * 3];
+        for &mode in supported_modes() {
+            let pcm = encode_rgb_mode_12k(mode, WIDTH as u32, HEIGHT as u32, &source)
+                .unwrap_or_else(|error| panic!("{} encode failed: {error}", mode.name()));
+            let audio: Vec<f32> = pcm
+                .iter()
+                .map(|sample| *sample as f32 / i16::MAX as f32)
+                .collect();
+            let mut receiver = MultiModeReceiver::default();
+            let mut result = None;
+            for chunk in audio.chunks(4096) {
+                result = receiver.push(chunk).or(result);
+            }
+            let decoded = result.unwrap_or_else(|| panic!("{} did not decode", mode.name()));
+            let (width, height) = mode.resolution();
+            assert_eq!(
+                (decoded.width, decoded.height),
+                (width as usize, height as usize),
+                "{} dimensions",
+                mode.name()
+            );
+            assert_eq!(receiver.take_completed_mode(), Some(mode));
+        }
+    }
+
+    #[test]
+    fn manual_receive_mode_filters_a_different_vis_header() {
+        let mut pcm = Vec::new();
+        let mut phase = 0.0_f64;
+        let mut remainder = 0.0_f64;
+        let mut tone = |frequency: f64, duration_ms: f64, out: &mut Vec<i16>| {
+            remainder += duration_ms * SAMPLE_RATE_HZ as f64 / 1000.0;
+            let count = remainder.floor() as usize;
+            remainder -= count as f64;
+            let step = std::f64::consts::TAU * frequency / SAMPLE_RATE_HZ as f64;
+            for _ in 0..count {
+                out.push((phase.sin() * 18_000.0).round() as i16);
+                phase = (phase + step) % std::f64::consts::TAU;
+            }
+        };
+        append_vis_header(0x3c, &mut tone, &mut pcm);
+        let audio: Vec<f32> = pcm
+            .iter()
+            .map(|sample| *sample as f32 / i16::MAX as f32)
+            .collect();
+        let mut receiver = MultiModeReceiver::default();
+        receiver.set_selected_mode(Some(SstvMode::MartinM1));
+        assert!(receiver.push(&audio).is_none());
+        assert_eq!(receiver.detected_vis(), Some(0x3c));
+        assert_eq!(receiver.active_mode(), None);
     }
 }

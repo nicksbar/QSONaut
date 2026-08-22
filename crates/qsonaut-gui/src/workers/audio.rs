@@ -111,7 +111,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut last_cw_diagnostics = Instant::now();
         let mut last_cw_status = Instant::now() - Duration::from_secs(1);
         let mut cw_recording: Option<CwRecording> = None;
-        let mut sstv_receiver = qsonaut_sstv::MartinM1Receiver::default();
+        let mut sstv_receiver = qsonaut_sstv::MultiModeReceiver::default();
         let mut sstv_tuning_offset_hz = 0_i32;
         let mut last_sstv_vis: Option<u8> = None;
         let mut digital_slot_gate = DigitalSlotGate::default();
@@ -244,8 +244,12 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     "READY: live CW decode starts after 3 seconds".to_string();
                                 s.cw_live_text.clear();
                             } else if active_workspace_mode == WorkspaceMode::Sstv {
-                                s.sstv_status =
-                                    "READY: listening for a Martin M1 VIS header".to_string();
+                                s.sstv_status = format!(
+                                    "READY: {} · waiting for a complete VIS header",
+                                    s.sstv_rx_mode
+                                        .map(|mode| mode.name())
+                                        .unwrap_or("Auto (VIS)")
+                                );
                                 s.sstv_progress = None;
                             } else if active_workspace_mode.has_native_decoder() {
                                 s.digital_decode_status = format!(
@@ -371,10 +375,11 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 shared.sstv_progress = None;
                                 shared.sstv_detected_mode = None;
                             } else {
-                                let requested_offset_hz = state
-                                    .lock()
-                                    .expect("ui state lock poisoned")
-                                    .sstv_tuning_offset_hz;
+                                let (requested_offset_hz, requested_mode) = {
+                                    let shared = state.lock().expect("ui state lock poisoned");
+                                    (shared.sstv_tuning_offset_hz, shared.sstv_rx_mode)
+                                };
+                                sstv_receiver.set_selected_mode(requested_mode);
                                 if requested_offset_hz != sstv_tuning_offset_hz {
                                     sstv_tuning_offset_hz = requested_offset_hz;
                                     sstv_receiver
@@ -382,7 +387,10 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     last_sstv_vis = None;
                                 }
                                 let decoded = sstv_receiver.push(&ds);
+                                let completed_mode = sstv_receiver.take_completed_mode();
+                                let decode_error = sstv_receiver.take_decode_error();
                                 let progress = sstv_receiver.progress();
+                                let active_mode = sstv_receiver.active_mode();
                                 let detected_vis = sstv_receiver.detected_vis();
                                 let frequency_offset_hz =
                                     sstv_receiver.frequency_offset_hz().unwrap_or_default();
@@ -393,7 +401,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         info!(
                                             vis,
                                             mode = qsonaut_sstv::vis_mode_name(vis),
-                                            supported = vis == qsonaut_sstv::VIS_CODE_MARTIN_M1,
+                                            supported = qsonaut_sstv::mode_from_vis(vis).is_some(),
                                             frequency_offset_hz,
                                             input_rms_dbfs = 20.0 * rms.max(1e-9).log10(),
                                             "SSTV VIS header detected"
@@ -408,16 +416,30 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 {
                                     shared.sstv_detected_mode = Some(mode);
                                 }
-                                shared.sstv_status = if let Some(value) = progress {
+                                shared.sstv_status = if let Some(error) = decode_error {
+                                    format!("SSTV DECODE FAILED: {error}")
+                                } else if let (Some(value), Some(mode)) = (progress, active_mode) {
                                     format!(
-                                        "RECEIVING MARTIN M1 · {:.0}% · decoder {sstv_tuning_offset_hz:+} Hz · AFC residual {afc_residual_hz:+.0} Hz",
+                                        "RECEIVING {} · {:.0}% · decoder {sstv_tuning_offset_hz:+} Hz · AFC residual {afc_residual_hz:+.0} Hz",
+                                        mode.name(),
                                         value * 100.0,
                                     )
                                 } else if let Some(vis) = detected_vis {
-                                    format!(
-                                        "VIS {vis} DETECTED: {} · AFC {frequency_offset_hz:+.0} Hz · unsupported in 0.3.7 (Martin M1 only)",
-                                        qsonaut_sstv::vis_mode_name(vis),
-                                    )
+                                    let detected = qsonaut_sstv::mode_from_vis(vis);
+                                    if requested_mode.is_some() && requested_mode != detected {
+                                        format!(
+                                            "VIS {vis}: {} ignored · RX filter is {}",
+                                            qsonaut_sstv::vis_mode_name(vis),
+                                            requested_mode
+                                                .map(|mode| mode.name())
+                                                .unwrap_or("Auto (VIS)"),
+                                        )
+                                    } else {
+                                        format!(
+                                            "VIS {vis}: {} detected · preparing decoder",
+                                            qsonaut_sstv::vis_mode_name(vis),
+                                        )
+                                    }
                                 } else if rms >= 0.005 {
                                     format!(
                                         "AUDIO PRESENT ({:.0} dBFS) · no complete VIS header; start RX before the image",
@@ -431,11 +453,18 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     )
                                 };
                                 if let Some(image) = decoded {
+                                    shared.sstv_width = image.width;
+                                    shared.sstv_height = image.height;
                                     shared.sstv_rgb = image.rgb;
                                     shared.sstv_revision = shared.sstv_revision.wrapping_add(1);
                                     shared.sstv_progress = None;
-                                    shared.sstv_status =
-                                        "RECEIVED: Martin M1 image complete".to_string();
+                                    shared.sstv_detected_mode = completed_mode;
+                                    shared.sstv_status = format!(
+                                        "RECEIVED: {} image complete · {}×{}",
+                                        completed_mode.map(|mode| mode.name()).unwrap_or("SSTV"),
+                                        shared.sstv_width,
+                                        shared.sstv_height,
+                                    );
                                 }
                             }
                         } else if active_workspace_mode == WorkspaceMode::Cw {

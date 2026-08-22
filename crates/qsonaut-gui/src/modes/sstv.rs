@@ -32,20 +32,31 @@ impl QsonautGuiApp {
         }
         let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
         if snapshot.sstv_revision != self.sstv_texture_revision
-            && snapshot.sstv_rgb.len() == qsonaut_sstv::WIDTH * qsonaut_sstv::HEIGHT * 3
+            && snapshot.sstv_width > 0
+            && snapshot.sstv_height > 0
+            && snapshot.sstv_rgb.len() == snapshot.sstv_width * snapshot.sstv_height * 3
         {
             let image = ColorImage::from_rgb(
-                [qsonaut_sstv::WIDTH, qsonaut_sstv::HEIGHT],
+                [snapshot.sstv_width, snapshot.sstv_height],
                 &snapshot.sstv_rgb,
             );
             self.sstv_texture = Some(ctx.load_texture("sstv-frame", image, TextureOptions::LINEAR));
             self.sstv_texture_revision = snapshot.sstv_revision;
         }
 
+        let mut rx_mode = snapshot.sstv_rx_mode;
         ui.horizontal_wrapped(|ui| {
-            ui.heading(format!("📺 SSTV · {}", self.sstv_tx_mode.name()));
+            ui.heading("📺 SSTV");
             ui.separator();
-            ui.label(RichText::new("RX AUTO (VIS)").color(theme_success(ui)));
+            ui.label(RichText::new("RX mode").strong());
+            egui::ComboBox::from_id_salt("sstv_rx_mode")
+                .selected_text(rx_mode.map(|mode| mode.name()).unwrap_or("Auto (VIS)"))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut rx_mode, None, "Auto (VIS)");
+                    for &mode in qsonaut_sstv::supported_modes() {
+                        ui.selectable_value(&mut rx_mode, Some(mode), mode.name());
+                    }
+                });
             ui.separator();
             ui.label(format!(
                 "Detected: {}",
@@ -60,6 +71,16 @@ impl QsonautGuiApp {
                 snapshot.frequency_hz.unwrap_or_default() as f64 / 1_000_000.0
             ));
         });
+        if rx_mode != snapshot.sstv_rx_mode {
+            let mut shared = self.state.lock().expect("ui state lock poisoned");
+            shared.sstv_rx_mode = rx_mode;
+            shared.sstv_detected_mode = None;
+            shared.sstv_progress = None;
+            shared.sstv_status = format!(
+                "RX MODE: {} · waiting for a complete VIS header",
+                rx_mode.map(|mode| mode.name()).unwrap_or("Auto (VIS)")
+            );
+        }
         ui.label(
             RichText::new("Calling frequencies are voluntary band-plan centers; confirm your license privileges and a clear channel before transmitting.")
                 .small()
@@ -67,7 +88,7 @@ impl QsonautGuiApp {
         );
         ui.label(
             RichText::new(
-                "RX auto-detects the VIS header and names Martin, Scottie, Robot, and PD modes. Live image reconstruction is currently Martin M1; other modes are identified while the multi-mode streaming adapter is validated. Click the signal center in the audio waterfall to align the decoder.",
+                "Auto uses the VIS header to select and decode Martin, Scottie, Robot, or PD. Choose a receive mode to accept only that mode. Start before the VIS header, and click the signal center in the audio waterfall to align the decoder.",
             )
             .small()
             .color(theme_accent(ui)),
@@ -116,8 +137,9 @@ impl QsonautGuiApp {
                 }
                     let available_width = ui.available_width().max(1.0);
                     let available_height = ui.available_height().max(1.0);
-                let image_width = available_width.min(available_height / 0.8);
-                let size = egui::vec2(image_width, image_width * 0.8);
+                let aspect = snapshot.sstv_height as f32 / snapshot.sstv_width.max(1) as f32;
+                let image_width = available_width.min(available_height / aspect.max(0.01));
+                let size = egui::vec2(image_width, image_width * aspect);
                 if let Some(texture) = &self.sstv_texture {
                     ui.add(egui::Image::new((texture.id(), size)).corner_radius(5.0));
                 } else {
@@ -160,11 +182,6 @@ impl QsonautGuiApp {
                                 );
                             }
                         });
-                    ui.label(
-                        RichText::new("RX: Auto (VIS)")
-                            .small()
-                            .color(theme_accent(ui)),
-                    );
                 });
                 ui.separator();
                 ui.label(RichText::new("🧠 LOCAL IMAGE LAB").strong());
@@ -261,7 +278,9 @@ impl QsonautGuiApp {
         });
 
         ui.add_space(5.0);
-        let has_frame = snapshot.sstv_rgb.len() == qsonaut_sstv::WIDTH * qsonaut_sstv::HEIGHT * 3;
+        let has_frame = snapshot.sstv_width > 0
+            && snapshot.sstv_height > 0
+            && snapshot.sstv_rgb.len() == snapshot.sstv_width * snapshot.sstv_height * 3;
         egui::Frame::group(ui.style())
             .fill(if self.sstv_tx_armed {
                 Color32::from_rgb(76, 31, 25)
@@ -305,7 +324,12 @@ impl QsonautGuiApp {
                         )
                         .clicked()
                     {
-                        self.start_sstv_tx(self.sstv_tx_mode, &snapshot.sstv_rgb);
+                        self.start_sstv_tx(
+                            self.sstv_tx_mode,
+                            snapshot.sstv_width,
+                            snapshot.sstv_height,
+                            &snapshot.sstv_rgb,
+                        );
                     }
                     if ui
                         .add_enabled(
@@ -423,6 +447,8 @@ impl QsonautGuiApp {
                 });
                 let mut shared = self.state.lock().expect("ui state lock poisoned");
                 shared.sstv_rgb = rgb.into_raw();
+                shared.sstv_width = qsonaut_sstv::WIDTH;
+                shared.sstv_height = qsonaut_sstv::HEIGHT;
                 shared.sstv_revision = shared.sstv_revision.wrapping_add(1);
                 shared.sstv_status = format!("{source}: ready for SSTV TX");
                 self.local_image_status = match saved {
@@ -434,7 +460,13 @@ impl QsonautGuiApp {
         }
     }
 
-    fn start_sstv_tx(&mut self, mode: qsonaut_sstv::SstvMode, rgb: &[u8]) {
+    fn start_sstv_tx(
+        &mut self,
+        mode: qsonaut_sstv::SstvMode,
+        width: usize,
+        height: usize,
+        rgb: &[u8],
+    ) {
         if self.ft8_tx_active.load(Ordering::Acquire)
             || self.digital_tx_active.load(Ordering::Acquire)
         {
@@ -445,12 +477,7 @@ impl QsonautGuiApp {
             self.digital_tx_status = "SSTV TX unavailable: radio control is disabled".to_string();
             return;
         };
-        match qsonaut_sstv::encode_rgb_mode_12k(
-            mode,
-            qsonaut_sstv::WIDTH as u32,
-            qsonaut_sstv::HEIGHT as u32,
-            rgb,
-        ) {
+        match qsonaut_sstv::encode_rgb_mode_12k(mode, width as u32, height as u32, rgb) {
             Ok(pcm) => {
                 let now_s = SystemTime::now()
                     .duration_since(UNIX_EPOCH)

@@ -20,6 +20,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   and PD codecs, with VIS mapping and cross-backend Martin M2 round-trip tests.
 - Added an explicit RX `Auto (VIS)` state with the detected mode shown in the
   SSTV header, plus a 13-mode TX selector with native resolution and duration.
+- Connected automatic VIS selection and the manual RX-mode filter to live image
+  reconstruction for all 13 pinned Martin, Scottie, Robot, and PD codecs.
 
 ### Changed
 - Extended the prominent global TX safety control to cover armed, queued, and

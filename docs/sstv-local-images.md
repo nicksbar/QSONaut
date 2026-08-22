@@ -7,9 +7,10 @@ and send it through the shared safety path.
 
 ## Current SSTV scope
 
-Live image reception currently supports **Martin M1**. RX mode is visibly
-**Auto (VIS)**; the detected Martin, Scottie, Robot, or PD mode is shown in the
-workspace even when its live image decoder is not yet enabled.
+Live image reception supports 13 Martin, Scottie, Robot, and PD modes. In
+**Auto (VIS)**, a valid header selects the matching decoder and its frame
+duration automatically. An operator can instead choose a receive mode; that
+acts as a filter and visibly ignores a different mode's VIS header.
 
 Experimental transmit codecs are selectable for 13 modes: Martin M1/M2,
 Scottie S1/S2, Robot 36/72, and PD 50/90/120/160/180/240/290. The selector
@@ -39,9 +40,9 @@ mid-transmission cannot recover its mode or missing lines.
 
 The implementation is software-tested with encode/decode round trips and
 streaming acquisition. It is **not yet on-air validated**. Slant correction,
-automatic clock calibration, broad-mode live reconstruction, and FSK ID are not
-part of this release. A parity-valid VIS header is shown by code and mode name
-so an audible SSTV signal does not look like decoder silence.
+automatic clock calibration and FSK ID are not part of this release. A
+parity-valid VIS header is shown by code and mode name so an audible SSTV signal
+does not look like decoder silence.
 
 ## Frequency presets
 

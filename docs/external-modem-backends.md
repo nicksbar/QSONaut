@@ -16,9 +16,8 @@ This project is intentionally moving toward **integration-first** modem strategy
     Robot, and PD modes.
   - Wrapped by `qsonaut-sstv`; QSONaut keeps the live streaming receiver,
     audio-window alignment, VIS/AFC diagnostics, and TX safety boundary.
-  - The UI exposes all 13 modes for experimental TX. RX identifies modes from
-    VIS automatically, but live image reconstruction remains Martin M1 while
-    the multi-mode streaming adapter is validated against off-air recordings.
+  - The UI exposes all 13 modes for experimental TX and receive. RX can select
+    the codec automatically from VIS or filter for an explicitly selected mode.
 
 ## Next targets
 
