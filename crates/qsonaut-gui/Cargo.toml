@@ -29,7 +29,7 @@ qsonaut-accelerate = { path = "../qsonaut-accelerate" }
 qsonaut-core = { path = "../qsonaut-core" }
 qsonaut-automation = { path = "../qsonaut-automation" }
 qsonaut-log = { path = "../qsonaut-log" }
-qsonaut-radio = { package = "rigwright", git = "https://github.com/nicksbar/rigwright", tag = "v0.1.7" }
+qsonaut-radio = { package = "rigwright", version = "0.1.8" }
 qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }
 qsonaut-server-client = { path = "../qsonaut-server-client" }
 qsonaut-sstv = { path = "../qsonaut-sstv" }
