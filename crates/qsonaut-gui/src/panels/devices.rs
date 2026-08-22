@@ -308,14 +308,28 @@ impl QsonautGuiApp {
                     theme_warning(ui)
                 }),
             );
-            ui.label(
-                RichText::new(format!(
-                    "Rigwright controls: {}",
-                    radio_capability_summary(*profile)
-                ))
-                .small()
-                .color(theme_muted(ui)),
-            );
+            egui::CollapsingHeader::new("Radio capability details")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "Rigwright controls: {}",
+                            radio_capability_summary(*profile)
+                        ))
+                        .small()
+                        .color(theme_muted(ui)),
+                    );
+                    if !self.radio_detected_models.is_empty() {
+                        ui.label(
+                            RichText::new(format!(
+                                "Detected radios: {}",
+                                self.radio_detected_models.join(", ")
+                            ))
+                            .small()
+                            .color(theme_success(ui)),
+                        );
+                    }
+                });
         } else {
             ui.label(
                 RichText::new(format!(
@@ -326,33 +340,28 @@ impl QsonautGuiApp {
                 .color(theme_warning(ui)),
             );
         }
-        if self.radio_detected_models.is_empty() {
-            ui.label(
-                RichText::new("Detected radios: none recognized yet (serial bridge only or unsupported model)")
-                    .small()
-                    .color(theme_warning(ui)),
-            );
+        let backend = self.config.radio.backend.to_ascii_lowercase();
+        let backend_details = if matches!(backend.as_str(), "native" | "null" | "mock") {
+            format!(
+                "Backend: {}",
+                radio_backend_label(&self.config.radio.backend)
+            )
         } else {
-            ui.label(
-                RichText::new(format!(
-                    "Detected radios: {}",
-                    self.radio_detected_models.join(", ")
-                ))
-                .small()
-                .color(theme_success(ui)),
-            );
-        }
-
+            format!(
+                "Backend: {} · {}",
+                radio_backend_label(&self.config.radio.backend),
+                self.config.radio.endpoint
+            )
+        };
         ui.label(
             RichText::new(format!(
-                "Active backend: {} · endpoint: {} · serial: {}",
-                self.config.radio.backend,
-                self.config.radio.endpoint,
+                "{} · serial: {}",
+                backend_details,
                 self.config
                     .radio
                     .serial_port
                     .as_deref()
-                    .unwrap_or("auto-detect"),
+                    .unwrap_or("auto-detect")
             ))
             .small()
             .color(theme_muted(ui)),
