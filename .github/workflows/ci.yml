@@ -15,19 +15,12 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      # The application consumes modem libraries as sibling workspaces.
+      # cw-dit remains a sibling checkout; mfsk-core is resolved from Cargo's
+      # upstream Git dependency.
       - name: Check out QSONaut
         uses: actions/checkout@v6
         with:
           path: QSONaut
-
-      - name: Check out mfsk-core
-        uses: actions/checkout@v6
-        with:
-          repository: jl1nie/mfsk-core
-          # Pin the integration dependency to the exact tested upstream commit.
-          ref: bfcac2c93bf3add38f1214a809705e9838cac9c3
-          path: mfsk-core
 
       - name: Check out cw-dit
         uses: actions/checkout@v6

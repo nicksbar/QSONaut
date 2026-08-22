@@ -17,6 +17,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added an opt-in redacted application-log tail to manual server diagnostics;
   logs are never uploaded continuously.
 
+### Changed
+- Refocused the README on current station, digital-mode, CW, radio-control,
+  audio, waterfall, logging, and server-integration capabilities while keeping
+  alpha maturity and AI-assisted development disclosures clear and concise.
+- Replaced the project screenshot with a fresh source image and blurred only
+  callsign fields before publication.
+- Kept QSONaut Server documentation at the client integration and privacy
+  boundary; server deployment and account setup remain in the independent
+  QSONaut-Server project.
+
 ### Fixed
 - Updated the committed Rigwright dependency and lockfile to the published
   `v0.1.7` release, including the new model catalog and profile-driven native
@@ -33,6 +43,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   references.
 - Simplified radio status and tuning controls to reduce duplicate or redundant
   information in the device panel.
+- Resolved `mfsk-core` from a pinned upstream Git revision instead of requiring
+  a local sibling checkout; aligned Cargo metadata, CI, release packaging, and
+  desktop-build documentation with that source model.
 
 ## [0.3.5] - 2026-08-21
 

@@ -1914,6 +1914,7 @@ dependencies = [
 [[package]]
 name = "mfsk-core"
 version = "0.10.0"
+source = "git+https://github.com/jl1nie/mfsk-core.git?rev=bfcac2c93bf3add38f1214a809705e9838cac9c3#bfcac2c93bf3add38f1214a809705e9838cac9c3"
 dependencies = [
  "crc",
  "num-complex",
@@ -2641,7 +2642,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "qsonaut"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -2659,14 +2660,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-accelerate"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "qsonaut-audio"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "anyhow",
  "cpal",
@@ -2675,7 +2676,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-automation"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -2684,7 +2685,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-core"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "anyhow",
  "dotenvy",
@@ -2695,7 +2696,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-gui"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "anyhow",
  "cwdit-dsp",
@@ -2724,7 +2725,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-log"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -2737,11 +2738,11 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-pskreporter"
-version = "0.3.5"
+version = "0.3.6"
 
 [[package]]
 name = "qsonaut-server-client"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "anyhow",
  "futures-util",

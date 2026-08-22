@@ -8,60 +8,63 @@
 [![Release builds](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml/badge.svg)](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml)
 [![Latest release](https://img.shields.io/github/v/release/nicksbar/QSONaut?display_name=tag&sort=semver)](https://github.com/nicksbar/QSONaut/releases)
 
-**A very early, enthusiast-built amateur-radio mission control experiment.**
+**An enthusiast-built amateur-radio mission control console.**
 
 QSONaut combines radio control, live audio and spectrum views, WSJT-family
 digital modes, contact logging, and early operator-assist scaffolding in one native
 Rust desktop app.
 
-> [!CAUTION]
-> QSONaut is pre-alpha, vibe coded, and changing quickly. Much of it was built
-> through iterative human/AI collaboration. It has not had broad radio,
-> platform, or on-air validation. Review your radio settings, power, audio,
-> frequency, band plan, and transmit state yourself. Do not trust it for
-> unattended operation or as a safety interlock.
+> [!IMPORTANT]
+> QSONaut is alpha software and is still evolving. Hardware support and
+> on-air behavior vary by radio, platform, and mode; IC-7300 control is the
+> current hardware-validated path. Review frequency, power, audio, band plan,
+> and transmit state yourself. QSONaut is not an unattended-operation system
+> or a safety interlock.
 
 <p align="center">
-  <img src="assets/branding/qsonaut-screen-redacted.png" alt="QSONaut FT8 mission-control interface with operator identity redacted">
+  <img src="assets/branding/qsonaut-screen-redacted.png" alt="QSONaut radio-console interface with callsigns blurred">
   <br>
-  <em>Early FT8 flight deck on Linux/WSL. Operator identity is intentionally blurred.</em>
+  <em>QSONaut radio console on Linux/WSL. Callsigns are intentionally blurred.</em>
 </p>
 
-## What works today
+## Capabilities
 
-This is an honest snapshot, not a compatibility promise:
+The current application brings the station workflow into one native Rust desktop
+console. This is an honest capability snapshot, not a compatibility promise:
 
 | Area | Current maturity |
 | --- | --- |
-| FT8 | Native RX/TX workflow, sequencing, highlighted callsign hits, logging, and explicit global TX disarm; still needs broader on-air testing |
-| FT4 | Native RX/TX workflow using the same safety model; younger and less exercised than FT8 |
-| FST4-60, JT9, JT65, Q65-30A | Native receive and scheduled transmit paths exist; experimental |
-| WSPR, MSK144 | Receive-only integration |
-| CW | Software audio CW via USB-D: selected-channel streaming decode through [cw-dit](https://github.com/nicksbar/cw-dit), adaptive timing, noise-floor slicing, and generated subband TX; A-Z/0-9/spaces only, with no paddle/keyed-carrier mode, prosigns, punctuation, or auto-sequencing yet |
-| FLDIGI | UI/integration surface only; no XML-RPC modem connection is active yet |
-| Radio control | Selectable Rigwright profiles cover popular Icom, Yaesu (including FTdx101 and FT-857D), and Kenwood radios; IC-7300 is hardware-validated, while the other serial drivers remain experimental |
-| PSK Reporter | Optional, off by default, batched UDP reporting for decoded stations |
-| QSONaut Server | Optional WSS connection for event/catalog sync, presence, radio metadata, idempotent QSO log publication, diagnostic snapshots, and shared channel messages; every outbound data class is off by default |
-| Automation | Permission-gated component model and Discord/IRC configuration contracts; connectors are not live yet |
-| GPU/NPU compute | Hardware detection and validation policy exist; decoders currently use CPU SIMD because GPU kernels are not validated |
+| Digital modes | FT8 and FT4 provide native decode, activity, conversation, TX history, sequencing, logging, and explicit global TX disarm. FST4-60, JT9, JT65, and Q65-30A have experimental receive/scheduled-TX paths; WSPR and MSK144 are receive-only integrations. |
+| CW | Software audio CW through [cw-dit](https://github.com/nicksbar/cw-dit), with selected-channel streaming decode, adaptive timing, noise-floor slicing, and generated subband TX. Paddle/keyed-carrier input, prosigns, punctuation, and auto-sequencing are not implemented yet. |
+| Radio control | Rigwright profiles cover Icom CI-V, modern and classic Yaesu CAT, and Kenwood PC control, with generic and model-specific profiles. IC-7300 is hardware-validated; other serial drivers remain experimental. |
+| Spectrum and audio | Radio waterfalls, audio waterfalls, narrow/wide views, VBW controls, audio-device selection, decoder-channel monitoring, and RX monitor volume. |
+| Station workflow | Contact log with ADIF import/export, operator profiles, QSO history, PSK Reporter (optional and off by default), and a live in-app application log with filtering, highlighting, copy, and bottom-follow. |
+| QSONaut Server | Optional WSS event/catalog sync, station presence, radio metadata, idempotent QSO publication, shared channels, and manual diagnostics. Each outbound data category is independently opt-in. |
+| Automation and compute | Permission-gated automation foundations and compute-backend detection exist; Discord/IRC connectors and GPU/NPU decoder kernels are not validated yet. |
 
 The primary development environment is Linux/WSL with USB audio and Icom CI-V.
 Windows and ARM build jobs exist, but a green build is not the same as hardware
 validation.
 
+QSONaut is developed with AI-assisted tooling alongside human review, tests,
+and hardware validation. That development history is part of the project, but
+the practical maturity boundary is the alpha status and the hardware-specific
+validation above.
+
 ## Build and run
 
-QSONaut currently uses
-[`mfsk-core`](https://github.com/jl1nie/mfsk-core) as a sibling source checkout:
+QSONaut uses the upstream
+[`mfsk-core`](https://github.com/jl1nie/mfsk-core) Git dependency. No local
+`mfsk-core` checkout is required:
 
 ```bash
 git clone https://github.com/nicksbar/QSONaut.git
-git clone https://github.com/jl1nie/mfsk-core.git
 cd QSONaut
 cargo run --release -p qsonaut -- --gui
 ```
 
-By default, QSONaut tracks `mfsk-core` `main` during active integration.
+Cargo resolves a pinned upstream revision and records that source in
+`Cargo.lock` for reproducible builds.
 
 Use a release build for live decoding. Debug builds are substantially slower.
 
@@ -100,116 +103,16 @@ cargo run -p qsonaut -- --list-radio
 ## QSONaut Server Integration
 
 QSONaut Server is the independent coordination service for QSONaut operators,
-clubs, and group events. It provides:
+clubs, and group events. QSONaut can optionally use it for event/catalog
+synchronization, station presence, selected radio metadata, idempotent QSO
+publication, shared channels, and manually requested diagnostics.
 
-- **Event/Catalog Synchronization**: Contest templates, active events, and schedules
-- **Station Presence**: Online status, radio model/frequency, and platform information
-- **QSO Logging**: Idempotent QSO submission with operator identity
-- **Shared Channels**: Group chat for operators in the same event
-- **Diagnostics**: Radio, audio, and decoder status reporting
-
-### Authentication Model
-
-The server uses **device token authentication** with dual models:
-
-1. **90-day bearer tokens** for native clients (SHA-256 hashed on server)
-2. **Browser session tokens** for the management web console (encrypted cookies)
-
-Token scopes are explicitly defined:
-- `events:read` - Access to contest and event catalogs
-- `presence:write` - Publish station presence status
-- `logs:write` - Submit QSO records
-- `diagnostics:write` - Submit diagnostic reports
-- `messages:read/write` - Shared channel communication
-
-Password resets revoke all device tokens and browser sessions.
-
-### Connection Requirements
-
-1. **QSONaut Server** must be running at a WSS/HTTPS endpoint
-2. **Device Token**: Obtained through the Server's management UI → "Station link"
-3. **Configuration**: Set in `qsonaut.toml` under `[server]`
-4. **WebSocket Protocol**: `qsonaut.v1` subprotocol required
-
-### Quick Start
-
-1. **Start QSONaut Server** (from [`QSONaut-Server/`](../QSONaut-Server/)):
-   ```bash
-   cd QSONaut-Server
-   docker compose -f deploy/postgres-dev.compose.yaml up -d
-   export QSONAUT_DATABASE_URL=postgresql://qsonaut:password@127.0.0.1:5432/qsonaut
-   cargo run -p qsonaut-server
-   ```
-
-2. **Obtain Device Token**:
-   - Open QSONaut Server Management UI at `http://127.0.0.1:8080`
-   - Navigate to "Station link"
-   - Create a device name and copy the displayed token
-
-3. **Configure QSONaut** (`qsonaut.toml`):
-   ```toml
-   [server]
-   enabled = true
-   url = "http://127.0.0.1:8080"
-   device_token = "your-device-token-here"
-   share_presence = true
-   share_radio_details = false
-   share_logs = true
-   share_diagnostics = false
-   share_debug_logs = false
-   share_channel_messages = false
-   ```
-
-4. **Enable server publish** (if sharing channel messages):
-   ```bash
-   QSONAUT_AUTOMATION_ENABLE_SERVER_PUBLISH=true cargo run -p qsonaut
-   ```
-
-5. **Launch QSONaut**:
-   ```bash
-   cd QSONaut
-   cargo run --release -p qsonaut -- --gui
-   ```
-
-### WebSocket Message Types
-
-| Client → Server | Server → Client | Description |
-|-----------------|-----------------|-------------|
-| `Hello` | `Welcome` | Initial greeting with user info |
-| `Sync` | `Snapshot` | Request current state (events, contests, channels) |
-| `Presence` | `PresenceAccepted` | Publish station presence |
-| `Log` | `LogAccepted` | Submit QSO record (idempotent) |
-| `Diagnostic` | `DiagnosticAccepted` | Submit diagnostic report |
-| `ChannelMessage` | `ChannelMessageAccepted` | Publish to shared channel |
-| `Ping` | `Pong` | Keep-alive heartbeat |
-
-### Data Flows
-
-| Direction | Data Type | WebSocket Message |
-|-----------|-----------|-------------------|
-| Client → Server | Station presence | `Presence(StationPresenceInput)` |
-| Client → Server | QSO log | `Log(QsoLogInput)` |
-| Client → Server | Diagnostic report | `Diagnostic(DiagnosticReportInput)` |
-| Client → Server | Channel message | `ChannelMessage(ChannelMessageInput)` |
-| Server → Client | Event catalog snapshot | `Snapshot{events, contest_templates, channel_messages}` |
-| Server → Client | Presence acknowledgment | `PresenceAccepted` |
-| Server → Client | QSO acknowledgment | `LogAccepted` |
-| Server → Client | Channel messages | `ChannelMessagePublished` (broadcast) |
-
-### Automation Integration
-
-Automations can observe:
-- `connection` - Server connection state
-- `snapshot` - Fresh event/catalog sync
-- `accepted-message` - Event handling completion
-- `error` - Protocol errors
-- `live channel_message` - Real-time channel traffic
-
-Actions include:
-- `server_sync` - Request fresh server snapshot
-- `server_send_message` - Publish to shared channels (requires `server_publish` capability)
-
-See [`docs/server-integration.md`](docs/server-integration.md) for detailed configuration.
+Server connectivity and each sharing category are independently opt-in. The
+server project owns deployment, accounts, enrollment, device tokens, and its
+management UI; this repository documents only the QSONaut client boundary.
+See [QSONaut-Server](https://github.com/nicksbar/QSONaut-Server) for server
+setup and [`docs/server-integration.md`](docs/server-integration.md) for
+client-side configuration and privacy behavior.
 
 ## Configuration and privacy
 

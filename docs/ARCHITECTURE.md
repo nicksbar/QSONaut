@@ -112,7 +112,7 @@ graph LR
     qsonaut -->|path| accelerate
     qsonaut -->|git| rigwright
     
-    gui -->|path| mfsk
+    gui -->|git| mfsk
     gui -->|path| cwdit
     gui -->|path| audio
     gui -->|path| acceleration
@@ -184,7 +184,7 @@ graph TB
 |-----------|---------|-------|
 | QSONaut Client | 0.2.3 | Main feature branch |
 | QSONaut Server | 0.1.0 | Independent release |
-| mfsk-core | 0.10.0 (unreleased) | Path dependency; pinned upstream commit |
+| mfsk-core | 0.10.0 (unreleased) | Git dependency; pinned upstream commit |
 | rigwright | 0.1.2 | Git tag |
 | eframe | 0.33 | GUI framework |
 | tokio | 1.0 | Async runtime |
