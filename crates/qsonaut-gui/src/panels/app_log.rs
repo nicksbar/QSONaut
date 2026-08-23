@@ -103,7 +103,8 @@ impl QsonautGuiApp {
                     Ok(()) => {
                         self.app_log_text.clear();
                         self.app_log_last_refresh = Instant::now();
-                        self.app_log_status = format!("Log cleared · {}", log_file_path().display());
+                        self.app_log_status =
+                            format!("Log cleared · {}", log_file_path().display());
                     }
                     Err(error) => {
                         self.app_log_status = format!("Could not clear application log: {error}");
@@ -131,8 +132,19 @@ impl QsonautGuiApp {
                 self.app_log_level_filter = AppLogLevelFilter::All;
             }
             for component in [
-                "Radio", "Voice", "FT8", "FT4", "HamDB", "Contest", "Activity", "Audio",
-                "Device", "PSK", "Automation", "Server", "Ingress",
+                "Radio",
+                "Voice",
+                "FT8",
+                "FT4",
+                "HamDB",
+                "Contest",
+                "Activity",
+                "Audio",
+                "Device",
+                "PSK",
+                "Automation",
+                "Server",
+                "Ingress",
             ] {
                 if ui.small_button(component).clicked() {
                     self.app_log_filter = component.to_string();

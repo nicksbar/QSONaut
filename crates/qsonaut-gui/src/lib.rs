@@ -1,5 +1,5 @@
-mod automation_hunter;
 mod activity;
+mod automation_hunter;
 mod band_plan;
 mod contest;
 mod decode_model;
@@ -38,8 +38,7 @@ use qsonaut_core::{
 };
 use qsonaut_log::{
     app_config_dir, clear_log, hamdb_cache_path, log_file_path, read_log_tail, AdifExportFilter,
-    HamDbCache,
-    HamDbCacheEntry, QsoLog, QsoRecord,
+    HamDbCache, HamDbCacheEntry, QsoLog, QsoRecord,
 };
 use qsonaut_pskreporter::{
     ReceptionReport, ReportSender, Reporter, ReporterConfig, ReporterTuning,
@@ -70,14 +69,14 @@ use tracing::{debug, error, info, warn};
 
 const QSONAUT_ICON_PNG: &[u8] = include_bytes!("../../../assets/branding/qsonaut-icon.png");
 
+use activity::{draw_activity_icon, OperatingActivity};
 use automation_hunter::{
     AchievementKind, CustomAchievementRule, ExternalSendRecord, HunterAlert, HunterMetric,
 };
-use activity::{draw_activity_icon, OperatingActivity};
 use band_plan::{
     band_for_frequency, workspace_band_plan, workspace_radio_preset,
-    workspace_radio_preset_for_frequency, WorkspaceMode, HF_WORKSPACE_MODES,
-    OTHER_WORKSPACE_MODES, WORKSPACE_MODES,
+    workspace_radio_preset_for_frequency, WorkspaceMode, HF_WORKSPACE_MODES, OTHER_WORKSPACE_MODES,
+    WORKSPACE_MODES,
 };
 use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
@@ -1288,7 +1287,13 @@ fn spawn_device_scan() -> mpsc::Receiver<DeviceInventory> {
             serial_port_labels,
             detected_models,
         };
-        info!(audio_inputs = inventory.audio_inputs.len(), audio_outputs = inventory.audio_outputs.len(), serial_ports = inventory.serial_ports.len(), detected_models = inventory.detected_models.len(), "Device inventory scan completed");
+        info!(
+            audio_inputs = inventory.audio_inputs.len(),
+            audio_outputs = inventory.audio_outputs.len(),
+            serial_ports = inventory.serial_ports.len(),
+            detected_models = inventory.detected_models.len(),
+            "Device inventory scan completed"
+        );
         let _ = tx.send(inventory);
     });
     rx
@@ -3025,7 +3030,12 @@ impl QsonautGuiApp {
         let channel = self.external_ingress_channel.trim();
         let message = self.external_ingress_message.trim();
         if source.is_empty() || author.is_empty() || message.is_empty() {
-            warn!(source_present = !source.is_empty(), author_present = !author.is_empty(), message_present = !message.is_empty(), "External ingress rejected: required metadata missing");
+            warn!(
+                source_present = !source.is_empty(),
+                author_present = !author.is_empty(),
+                message_present = !message.is_empty(),
+                "External ingress rejected: required metadata missing"
+            );
             self.automation_status =
                 "🤖 External ingress blocked: source, author, and message are required".to_string();
             return;
@@ -3074,7 +3084,13 @@ impl QsonautGuiApp {
     }
 
     fn apply_device_inventory(&mut self, inventory: DeviceInventory) {
-        info!(audio_inputs = inventory.audio_inputs.len(), audio_outputs = inventory.audio_outputs.len(), serial_ports = inventory.serial_ports.len(), detected_models = inventory.detected_models.len(), "Device inventory applied");
+        info!(
+            audio_inputs = inventory.audio_inputs.len(),
+            audio_outputs = inventory.audio_outputs.len(),
+            serial_ports = inventory.serial_ports.len(),
+            detected_models = inventory.detected_models.len(),
+            "Device inventory applied"
+        );
         self.audio_input_devices = inventory.audio_inputs;
         self.audio_output_devices = inventory.audio_outputs;
         self.radio_serial_ports = inventory.serial_ports;
@@ -5041,7 +5057,10 @@ mod tests {
     fn parse_workspace_mode_token_recognizes_supported_labels() {
         assert_eq!(parse_workspace_mode_token("FT8"), Some(WorkspaceMode::Ft8));
         assert_eq!(parse_workspace_mode_token("ft4"), Some(WorkspaceMode::Ft4));
-        assert_eq!(parse_workspace_mode_token("ssb"), Some(WorkspaceMode::Voice));
+        assert_eq!(
+            parse_workspace_mode_token("ssb"),
+            Some(WorkspaceMode::Voice)
+        );
         assert_eq!(
             parse_workspace_mode_token("sstv"),
             Some(WorkspaceMode::Sstv)

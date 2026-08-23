@@ -25,17 +25,25 @@ pub(crate) struct VoiceContestField {
 
 impl VoiceContestField {
     pub(crate) fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), sent: String::new(), received: String::new() }
+        Self {
+            name: name.into(),
+            sent: String::new(),
+            received: String::new(),
+        }
     }
 }
 
 impl QsonautGuiApp {
     pub(crate) fn draw_voice_workspace(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
-        let frequency = snapshot.frequency_hz
+        let frequency = snapshot
+            .frequency_hz
             .map(|hz| format!("{:.6} MHz", hz as f64 / 1_000_000.0))
             .unwrap_or_else(|| "RADIO OFFLINE".to_string());
-        let band = snapshot.frequency_hz.map(band_for_frequency)
-            .filter(|band| !band.is_empty()).unwrap_or("--");
+        let band = snapshot
+            .frequency_hz
+            .map(band_for_frequency)
+            .filter(|band| !band.is_empty())
+            .unwrap_or("--");
         let valid_call = is_probable_callsign(self.voice_callsign.trim());
 
         ui.horizontal(|ui| {
@@ -43,18 +51,32 @@ impl QsonautGuiApp {
             ui.separator();
             ui.label(RichText::new(frequency).monospace().strong());
             ui.label(RichText::new(band).color(Color32::from_rgb(220, 190, 100)));
-            ui.label(RichText::new(radio_mode_label(&snapshot.mode, snapshot.data_mode)).monospace());
+            ui.label(
+                RichText::new(radio_mode_label(&snapshot.mode, snapshot.data_mode)).monospace(),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new("Radio controls are in the top bar").small().color(theme_muted(ui)));
+                ui.label(
+                    RichText::new("Radio controls are in the top bar")
+                        .small()
+                        .color(theme_muted(ui)),
+                );
             });
         });
         ui.separator();
 
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("CURRENT CONTACT").strong().color(theme_success(ui)));
+                ui.label(
+                    RichText::new("CURRENT CONTACT")
+                        .strong()
+                        .color(theme_success(ui)),
+                );
                 if self.voice_qso_started_at.is_some() {
-                    ui.label(RichText::new("IN PROGRESS").small().color(theme_warning(ui)));
+                    ui.label(
+                        RichText::new("IN PROGRESS")
+                            .small()
+                            .color(theme_warning(ui)),
+                    );
                 }
             });
             ui.add_space(4.0);
@@ -91,7 +113,9 @@ impl QsonautGuiApp {
                 ui.label(if valid_call {
                     RichText::new("READY").small().color(theme_success(ui))
                 } else {
-                    RichText::new("CALLSIGN REQUIRED").small().color(theme_muted(ui))
+                    RichText::new("CALLSIGN REQUIRED")
+                        .small()
+                        .color(theme_muted(ui))
                 });
             });
             ui.add_space(8.0);
@@ -99,17 +123,33 @@ impl QsonautGuiApp {
                 ui.label("RST sent");
                 ui.add(egui::TextEdit::singleline(&mut self.voice_rst_sent).desired_width(58.0));
                 ui.label("RST received");
-                ui.add(egui::TextEdit::singleline(&mut self.voice_rst_received).desired_width(58.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.voice_rst_received).desired_width(58.0),
+                );
                 ui.separator();
                 ui.label("Serial sent");
-                ui.add(egui::TextEdit::singleline(&mut self.voice_contest_serial_sent).desired_width(64.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.voice_contest_serial_sent)
+                        .desired_width(64.0),
+                );
                 ui.label("Serial received");
-                ui.add(egui::TextEdit::singleline(&mut self.voice_contest_serial_received).desired_width(64.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.voice_contest_serial_received)
+                        .desired_width(64.0),
+                );
                 ui.separator();
                 ui.label("Grid");
-                ui.add(egui::TextEdit::singleline(&mut self.voice_grid).desired_width(84.0).hint_text("FN31pr"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.voice_grid)
+                        .desired_width(84.0)
+                        .hint_text("FN31pr"),
+                );
                 ui.label("State / province");
-                ui.add(egui::TextEdit::singleline(&mut self.voice_state).desired_width(100.0).hint_text("Optional"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.voice_state)
+                        .desired_width(100.0)
+                        .hint_text("Optional"),
+                );
             });
             if let Some(hamdb) = &self.voice_hamdb {
                 let operator_name = [
@@ -131,11 +171,19 @@ impl QsonautGuiApp {
                         operator_name
                     });
                     if !hamdb.country.trim().is_empty() {
-                        ui.label(RichText::new(format!("{} / {}", hamdb.state, hamdb.country)).small().color(theme_muted(ui)));
+                        ui.label(
+                            RichText::new(format!("{} / {}", hamdb.state, hamdb.country))
+                                .small()
+                                .color(theme_muted(ui)),
+                        );
                     }
                 });
             } else if !self.voice_lookup_status.is_empty() {
-                ui.label(RichText::new(&self.voice_lookup_status).small().color(theme_muted(ui)));
+                ui.label(
+                    RichText::new(&self.voice_lookup_status)
+                        .small()
+                        .color(theme_muted(ui)),
+                );
             }
         });
 
@@ -143,7 +191,11 @@ impl QsonautGuiApp {
         ui.columns(2, |columns| {
             columns[0].vertical(|ui| {
                 ui.heading("Exchange");
-                ui.label(RichText::new("Contest, net, or event exchange fields").small().color(theme_muted(ui)));
+                ui.label(
+                    RichText::new("Contest, net, or event exchange fields")
+                        .small()
+                        .color(theme_muted(ui)),
+                );
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.add_space(92.0);
@@ -157,34 +209,58 @@ impl QsonautGuiApp {
                         ui.add(egui::TextEdit::singleline(&mut field.name).desired_width(90.0));
                         ui.add(egui::TextEdit::singleline(&mut field.sent).desired_width(82.0));
                         ui.add(egui::TextEdit::singleline(&mut field.received).desired_width(92.0));
-                        if ui.small_button("x").on_hover_text("Remove exchange field").clicked() {
+                        if ui
+                            .small_button("x")
+                            .on_hover_text("Remove exchange field")
+                            .clicked()
+                        {
                             remove = Some(index);
                         }
                     });
                 }
-                if let Some(index) = remove { self.voice_contest_fields.remove(index); }
+                if let Some(index) = remove {
+                    self.voice_contest_fields.remove(index);
+                }
                 if ui.small_button("+ Add exchange field").clicked() {
-                    self.voice_contest_fields.push(VoiceContestField::new("Field"));
+                    self.voice_contest_fields
+                        .push(VoiceContestField::new("Field"));
                 }
             });
             columns[1].vertical(|ui| {
                 ui.heading("Notes");
-                ui.add(egui::TextEdit::multiline(&mut self.voice_notes)
-                    .desired_rows(6).desired_width(ui.available_width())
-                    .hint_text("Name, QTH, equipment, event notes..."));
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.voice_notes)
+                        .desired_rows(6)
+                        .desired_width(ui.available_width())
+                        .hint_text("Name, QTH, equipment, event notes..."),
+                );
                 ui.add_space(6.0);
-                ui.label(RichText::new("HamDB details attach when the QSO is logged.").small().color(theme_muted(ui)));
+                ui.label(
+                    RichText::new("HamDB details attach when the QSO is logged.")
+                        .small()
+                        .color(theme_muted(ui)),
+                );
             });
         });
 
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            let log_response = ui.add_enabled(valid_call,
-                egui::Button::new(RichText::new("LOG QSO").strong()).min_size(egui::vec2(150.0, 38.0)));
-            if log_response.clicked() { self.log_voice_qso(snapshot); }
-            ui.label(RichText::new("Records the current frequency, band, mode, reports, exchange, and notes.").small().color(theme_muted(ui)));
+            let log_response = ui.add_enabled(
+                valid_call,
+                egui::Button::new(RichText::new("LOG QSO").strong())
+                    .min_size(egui::vec2(150.0, 38.0)),
+            );
+            if log_response.clicked() {
+                self.log_voice_qso(snapshot);
+            }
+            ui.label(
+                RichText::new(
+                    "Records the current frequency, band, mode, reports, exchange, and notes.",
+                )
+                .small()
+                .color(theme_muted(ui)),
+            );
         });
-
     }
 
     fn lookup_voice_callsign(&mut self) {
@@ -219,9 +295,12 @@ impl QsonautGuiApp {
         let now = unix_now();
         let frequency_hz = snapshot.frequency_hz.unwrap_or_default();
         let mut record = QsoRecord::new(
-            self.voice_callsign.trim().to_ascii_uppercase(), "SSB",
-            band_for_frequency(frequency_hz), frequency_hz,
-            self.voice_qso_started_at.unwrap_or(now), now,
+            self.voice_callsign.trim().to_ascii_uppercase(),
+            "SSB",
+            band_for_frequency(frequency_hz),
+            frequency_hz,
+            self.voice_qso_started_at.unwrap_or(now),
+            now,
         );
         record.operation_mode = self.activity.label().to_string();
         record.grid = self.voice_grid.trim().to_ascii_uppercase();
@@ -230,14 +309,20 @@ impl QsonautGuiApp {
         record.report_received = self.voice_rst_received.trim().to_string();
         record.contest_serial_sent = self.voice_contest_serial_sent.trim().parse().ok();
         record.contest_serial_received = self.voice_contest_serial_received.trim().parse().ok();
-        record.contest_exchange_sent = self.voice_contest_fields.iter()
+        record.contest_exchange_sent = self
+            .voice_contest_fields
+            .iter()
             .filter(|field| !field.sent.trim().is_empty())
             .map(|field| format!("{}={}", field.name.trim(), field.sent.trim()))
-            .collect::<Vec<_>>().join(" ");
-        record.contest_exchange_received = self.voice_contest_fields.iter()
+            .collect::<Vec<_>>()
+            .join(" ");
+        record.contest_exchange_received = self
+            .voice_contest_fields
+            .iter()
             .filter(|field| !field.received.trim().is_empty())
             .map(|field| format!("{}={}", field.name.trim(), field.received.trim()))
-            .collect::<Vec<_>>().join(" ");
+            .collect::<Vec<_>>()
+            .join(" ");
         record.notes = self.voice_notes.trim().to_string();
         info!(
             callsign = %record.callsign,
@@ -258,6 +343,8 @@ impl QsonautGuiApp {
 }
 
 fn unix_now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs()).unwrap_or_default()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
 }

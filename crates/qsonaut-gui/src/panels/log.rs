@@ -159,261 +159,274 @@ impl QsonautGuiApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 if let Some(id) = self.qso_selected {
-            let Some(index) = self
-                .qso_log
-                .contacts
-                .iter()
-                .position(|contact| contact.id == id)
-            else {
-                self.qso_selected = None;
-                return;
-            };
-            let refresh_requested = ui.input(|input| input.key_pressed(egui::Key::F5));
-            if refresh_requested {
-                self.refresh_hamdb_for_contact(index);
-            }
-            let mut refresh_clicked = false;
-            if let Some(contact) = self.qso_log.contacts.get_mut(index) {
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.heading("Selected Contact");
-                    if ui
-                        .small_button("Close Editor")
-                        .on_hover_text("Close the contact editor; the contact list remains open")
-                        .clicked()
-                    {
-                        close_editor = true;
+                    let Some(index) = self
+                        .qso_log
+                        .contacts
+                        .iter()
+                        .position(|contact| contact.id == id)
+                    else {
+                        self.qso_selected = None;
+                        return;
+                    };
+                    let refresh_requested = ui.input(|input| input.key_pressed(egui::Key::F5));
+                    if refresh_requested {
+                        self.refresh_hamdb_for_contact(index);
                     }
-                    if ui
-                        .small_button("Refresh HamDB")
-                        .on_hover_text("Refresh all HamDB fields for this callsign")
-                        .clicked()
-                    {
-                        refresh_clicked = true;
-                    }
-                    if ui
-                        .add(
-                            egui::Button::new("Delete")
-                                .fill(Color32::from_rgb(126, 25, 39))
-                                .stroke(egui::Stroke::new(
-                                    1.0_f32,
-                                    Color32::from_rgb(255, 105, 115),
-                                )),
-                        )
-                        .on_hover_text("Delete this contact from the persistent QSO log")
-                        .clicked()
-                    {
-                        delete_selected = true;
-                    }
-                    if let Some(hamdb) = &contact.hamdb {
-                        let operator_name = [
-                            hamdb.first_name.as_str(),
-                            hamdb.middle_name.as_str(),
-                            hamdb.name.as_str(),
-                            hamdb.suffix.as_str(),
-                        ]
-                        .into_iter()
-                        .map(str::trim)
-                        .filter(|part| !part.is_empty())
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                        ui.label(
-                            RichText::new(if operator_name.is_empty() {
-                                "HamDB: name unavailable"
-                            } else {
-                                "HamDB operator"
-                            })
-                            .small()
-                            .color(theme_accent(ui)),
-                        );
-                        if !operator_name.is_empty() {
-                            ui.label(RichText::new(operator_name).strong().color(Color32::WHITE));
-                        }
-                        ui.label(
-                            RichText::new(format!("{} · {}", hamdb.state, hamdb.country))
-                                .small()
-                                .color(theme_accent(ui)),
-                        );
-                    } else {
-                        ui.label(
-                            RichText::new("HamDB: not loaded")
-                                .small()
-                                .color(theme_muted(ui)),
-                        );
-                    }
-                });
-                if let Some(hamdb) = &contact.hamdb {
-                    ui.horizontal_wrapped(|ui| {
-                        for (label, value) in [
-                            ("Class", &hamdb.class),
-                            ("Status", &hamdb.status),
-                            ("Expires", &hamdb.expires),
-                            ("Name", &hamdb.name),
-                            ("Grid", &hamdb.grid),
-                            ("State", &hamdb.state),
-                            ("ZIP", &hamdb.zip),
-                            ("Lat", &hamdb.latitude),
-                            ("Lon", &hamdb.longitude),
-                            ("Country", &hamdb.country),
-                            ("Addr", &hamdb.address_line_1),
-                            ("Addr 2", &hamdb.address_line_2),
-                        ] {
-                            if !value.trim().is_empty() {
+                    let mut refresh_clicked = false;
+                    if let Some(contact) = self.qso_log.contacts.get_mut(index) {
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.heading("Selected Contact");
+                            if ui
+                                .small_button("Close Editor")
+                                .on_hover_text(
+                                    "Close the contact editor; the contact list remains open",
+                                )
+                                .clicked()
+                            {
+                                close_editor = true;
+                            }
+                            if ui
+                                .small_button("Refresh HamDB")
+                                .on_hover_text("Refresh all HamDB fields for this callsign")
+                                .clicked()
+                            {
+                                refresh_clicked = true;
+                            }
+                            if ui
+                                .add(
+                                    egui::Button::new("Delete")
+                                        .fill(Color32::from_rgb(126, 25, 39))
+                                        .stroke(egui::Stroke::new(
+                                            1.0_f32,
+                                            Color32::from_rgb(255, 105, 115),
+                                        )),
+                                )
+                                .on_hover_text("Delete this contact from the persistent QSO log")
+                                .clicked()
+                            {
+                                delete_selected = true;
+                            }
+                            if let Some(hamdb) = &contact.hamdb {
+                                let operator_name = [
+                                    hamdb.first_name.as_str(),
+                                    hamdb.middle_name.as_str(),
+                                    hamdb.name.as_str(),
+                                    hamdb.suffix.as_str(),
+                                ]
+                                .into_iter()
+                                .map(str::trim)
+                                .filter(|part| !part.is_empty())
+                                .collect::<Vec<_>>()
+                                .join(" ");
                                 ui.label(
-                                    RichText::new(format!("{label}: {value}"))
+                                    RichText::new(if operator_name.is_empty() {
+                                        "HamDB: name unavailable"
+                                    } else {
+                                        "HamDB operator"
+                                    })
+                                    .small()
+                                    .color(theme_accent(ui)),
+                                );
+                                if !operator_name.is_empty() {
+                                    ui.label(
+                                        RichText::new(operator_name).strong().color(Color32::WHITE),
+                                    );
+                                }
+                                ui.label(
+                                    RichText::new(format!("{} · {}", hamdb.state, hamdb.country))
+                                        .small()
+                                        .color(theme_accent(ui)),
+                                );
+                            } else {
+                                ui.label(
+                                    RichText::new("HamDB: not loaded")
                                         .small()
                                         .color(theme_muted(ui)),
                                 );
                             }
+                        });
+                        if let Some(hamdb) = &contact.hamdb {
+                            ui.horizontal_wrapped(|ui| {
+                                for (label, value) in [
+                                    ("Class", &hamdb.class),
+                                    ("Status", &hamdb.status),
+                                    ("Expires", &hamdb.expires),
+                                    ("Name", &hamdb.name),
+                                    ("Grid", &hamdb.grid),
+                                    ("State", &hamdb.state),
+                                    ("ZIP", &hamdb.zip),
+                                    ("Lat", &hamdb.latitude),
+                                    ("Lon", &hamdb.longitude),
+                                    ("Country", &hamdb.country),
+                                    ("Addr", &hamdb.address_line_1),
+                                    ("Addr 2", &hamdb.address_line_2),
+                                ] {
+                                    if !value.trim().is_empty() {
+                                        ui.label(
+                                            RichText::new(format!("{label}: {value}"))
+                                                .small()
+                                                .color(theme_muted(ui)),
+                                        );
+                                    }
+                                }
+                            });
                         }
-                    });
-                }
-                ui.horizontal(|ui| {
-                    ui.label("Call");
-                    changed |= ui
-                        .add(
-                            egui::TextEdit::singleline(&mut contact.callsign)
-                                .desired_width(95.0)
-                                .font(egui::TextStyle::Monospace),
-                        )
-                        .changed();
-                    ui.label("Grid");
-                    changed |= ui
-                        .add(
-                            egui::TextEdit::singleline(&mut contact.grid)
-                                .desired_width(72.0)
-                                .font(egui::TextStyle::Monospace),
-                        )
-                        .changed();
-                    ui.label("State");
-                    changed |= ui
-                        .add(
-                            egui::TextEdit::singleline(&mut contact.state)
-                                .desired_width(42.0)
-                                .font(egui::TextStyle::Monospace),
-                        )
-                        .changed();
-                    ui.label("Mode");
-                    changed |= ui
-                        .add(egui::TextEdit::singleline(&mut contact.mode).desired_width(62.0))
-                        .changed();
-                    ui.label("Band");
-                    changed |= ui
-                        .add(egui::TextEdit::singleline(&mut contact.band).desired_width(48.0))
-                        .changed();
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Date");
-                    changed |= ui
-                        .add(
-                            egui::TextEdit::singleline(&mut contact.qso_date)
-                                .desired_width(74.0)
-                                .font(egui::TextStyle::Monospace),
-                        )
-                        .changed();
-                    ui.label("On");
-                    changed |= ui
-                        .add(
-                            egui::TextEdit::singleline(&mut contact.time_on)
-                                .desired_width(58.0)
-                                .font(egui::TextStyle::Monospace),
-                        )
-                        .changed();
-                    ui.label("Off");
-                    changed |= ui
-                        .add(
-                            egui::TextEdit::singleline(&mut contact.time_off)
-                                .desired_width(58.0)
-                                .font(egui::TextStyle::Monospace),
-                        )
-                        .changed();
-                    let mut frequency_mhz = contact.frequency_hz as f64 / 1_000_000.0;
-                    ui.label("MHz");
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut frequency_mhz)
-                                .range(0.0..=10_000.0)
-                                .speed(0.001)
-                                .max_decimals(6),
-                        )
-                        .changed()
-                    {
-                        contact.frequency_hz = (frequency_mhz * 1_000_000.0).round() as u64;
-                        changed = true;
+                        ui.horizontal(|ui| {
+                            ui.label("Call");
+                            changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut contact.callsign)
+                                        .desired_width(95.0)
+                                        .font(egui::TextStyle::Monospace),
+                                )
+                                .changed();
+                            ui.label("Grid");
+                            changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut contact.grid)
+                                        .desired_width(72.0)
+                                        .font(egui::TextStyle::Monospace),
+                                )
+                                .changed();
+                            ui.label("State");
+                            changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut contact.state)
+                                        .desired_width(42.0)
+                                        .font(egui::TextStyle::Monospace),
+                                )
+                                .changed();
+                            ui.label("Mode");
+                            changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut contact.mode)
+                                        .desired_width(62.0),
+                                )
+                                .changed();
+                            ui.label("Band");
+                            changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut contact.band)
+                                        .desired_width(48.0),
+                                )
+                                .changed();
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Date");
+                            changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut contact.qso_date)
+                                        .desired_width(74.0)
+                                        .font(egui::TextStyle::Monospace),
+                                )
+                                .changed();
+                            ui.label("On");
+                            changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut contact.time_on)
+                                        .desired_width(58.0)
+                                        .font(egui::TextStyle::Monospace),
+                                )
+                                .changed();
+                            ui.label("Off");
+                            changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut contact.time_off)
+                                        .desired_width(58.0)
+                                        .font(egui::TextStyle::Monospace),
+                                )
+                                .changed();
+                            let mut frequency_mhz = contact.frequency_hz as f64 / 1_000_000.0;
+                            ui.label("MHz");
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut frequency_mhz)
+                                        .range(0.0..=10_000.0)
+                                        .speed(0.001)
+                                        .max_decimals(6),
+                                )
+                                .changed()
+                            {
+                                contact.frequency_hz = (frequency_mhz * 1_000_000.0).round() as u64;
+                                changed = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Sent");
+                            changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut contact.report_sent)
+                                        .desired_width(48.0)
+                                        .font(egui::TextStyle::Monospace),
+                                )
+                                .changed();
+                            ui.label("Rcvd");
+                            changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut contact.report_received)
+                                        .desired_width(48.0)
+                                        .font(egui::TextStyle::Monospace),
+                                )
+                                .changed();
+                            ui.label("Contest sent");
+                            changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut contact.contest_exchange_sent)
+                                        .desired_width(82.0)
+                                        .font(egui::TextStyle::Monospace),
+                                )
+                                .changed();
+                            ui.label("Contest rcvd");
+                            changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(
+                                        &mut contact.contest_exchange_received,
+                                    )
+                                    .desired_width(82.0)
+                                    .font(egui::TextStyle::Monospace),
+                                )
+                                .changed();
+                            ui.label("STX");
+                            let mut stx = contact.contest_serial_sent.unwrap_or_default() as i64;
+                            if ui
+                                .add(egui::DragValue::new(&mut stx).range(0..=999_999).speed(1.0))
+                                .changed()
+                            {
+                                contact.contest_serial_sent = (stx > 0).then_some(stx as u32);
+                                changed = true;
+                            }
+                            ui.label("SRX");
+                            let mut srx =
+                                contact.contest_serial_received.unwrap_or_default() as i64;
+                            if ui
+                                .add(egui::DragValue::new(&mut srx).range(0..=999_999).speed(1.0))
+                                .changed()
+                            {
+                                contact.contest_serial_received = (srx > 0).then_some(srx as u32);
+                                changed = true;
+                            }
+                            ui.label("Notes");
+                            changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut contact.notes)
+                                        .desired_width(ui.available_width().max(80.0)),
+                                )
+                                .changed();
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(&self.qso_log_status).small().color(
+                                if self.qso_log_dirty {
+                                    theme_warning(ui)
+                                } else {
+                                    theme_muted(ui)
+                                },
+                            ));
+                        });
                     }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Sent");
-                    changed |= ui
-                        .add(
-                            egui::TextEdit::singleline(&mut contact.report_sent)
-                                .desired_width(48.0)
-                                .font(egui::TextStyle::Monospace),
-                        )
-                        .changed();
-                    ui.label("Rcvd");
-                    changed |= ui
-                        .add(
-                            egui::TextEdit::singleline(&mut contact.report_received)
-                                .desired_width(48.0)
-                                .font(egui::TextStyle::Monospace),
-                        )
-                        .changed();
-                    ui.label("Contest sent");
-                    changed |= ui
-                        .add(
-                            egui::TextEdit::singleline(&mut contact.contest_exchange_sent)
-                                .desired_width(82.0)
-                                .font(egui::TextStyle::Monospace),
-                        )
-                        .changed();
-                    ui.label("Contest rcvd");
-                    changed |= ui
-                        .add(
-                            egui::TextEdit::singleline(&mut contact.contest_exchange_received)
-                                .desired_width(82.0)
-                                .font(egui::TextStyle::Monospace),
-                        )
-                        .changed();
-                    ui.label("STX");
-                    let mut stx = contact.contest_serial_sent.unwrap_or_default() as i64;
-                    if ui
-                        .add(egui::DragValue::new(&mut stx).range(0..=999_999).speed(1.0))
-                        .changed()
-                    {
-                        contact.contest_serial_sent = (stx > 0).then_some(stx as u32);
-                        changed = true;
+                    if refresh_clicked {
+                        self.refresh_hamdb_for_contact(index);
                     }
-                    ui.label("SRX");
-                    let mut srx = contact.contest_serial_received.unwrap_or_default() as i64;
-                    if ui
-                        .add(egui::DragValue::new(&mut srx).range(0..=999_999).speed(1.0))
-                        .changed()
-                    {
-                        contact.contest_serial_received = (srx > 0).then_some(srx as u32);
-                        changed = true;
-                    }
-                    ui.label("Notes");
-                    changed |= ui
-                        .add(
-                            egui::TextEdit::singleline(&mut contact.notes)
-                                .desired_width(ui.available_width().max(80.0)),
-                        )
-                        .changed();
-                });
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(&self.qso_log_status).small().color(
-                        if self.qso_log_dirty {
-                            theme_warning(ui)
-                        } else {
-                            theme_muted(ui)
-                        },
-                    ));
-                });
-            }
-            if refresh_clicked {
-                self.refresh_hamdb_for_contact(index);
-            }
                 } else {
                     ui.label(
                         RichText::new(&self.qso_log_status)

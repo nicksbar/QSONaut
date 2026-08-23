@@ -113,7 +113,10 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 return;
             }
         };
-        info!(sample_rate_hz, channels, monitor_enabled, "Audio input worker started");
+        info!(
+            sample_rate_hz,
+            channels, monitor_enabled, "Audio input worker started"
+        );
         let (monitor, monitor_status) = if monitor_enabled {
             match qsonaut_audio::AudioMonitor::open(
                 sample_rate_hz,
@@ -490,7 +493,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     sstv_debug_samples.clear();
                                     let mut shared = state.lock().expect("ui state lock poisoned");
                                     shared.sstv_debug_capture_requested = false;
-                                    shared.sstv_debug_status = "Debug capture armed; waiting for SSTV completion".to_string();
+                                    shared.sstv_debug_status =
+                                        "Debug capture armed; waiting for SSTV completion"
+                                            .to_string();
                                     info!("SSTV debug capture started");
                                 }
                                 if sstv_debug_recording {
@@ -499,19 +504,31 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 if sstv_tail_samples_remaining > 0 {
                                     if let Some(decoder) = sstv_tail_decoder.as_mut() {
                                         let (events, _) = decoder.push_samples_with_audio(&ds);
-                                        let mut shared = state.lock().expect("ui state lock poisoned");
+                                        let mut shared =
+                                            state.lock().expect("ui state lock poisoned");
                                         for event in events {
                                             let text = match event {
-                                                cwdit_morse::Decoded::Char(character) => character.to_string(),
+                                                cwdit_morse::Decoded::Char(character) => {
+                                                    character.to_string()
+                                                }
                                                 cwdit_morse::Decoded::WordBreak => " ".to_string(),
                                                 cwdit_morse::Decoded::Unknown => continue,
                                             };
                                             shared.cw_live_text.push_str(&text);
-                                            shared.digital_decode_status = format!("SSTV TAIL CW · cw-dit · +{text}");
+                                            shared.digital_decode_status =
+                                                format!("SSTV TAIL CW · cw-dit · +{text}");
                                             shared.digital_decodes.push_back(DigitalDecodeEntry {
                                                 mode: WorkspaceMode::Cw,
-                                                period: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default(),
-                                                utc: utc_hhmmss_millis(SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default()),
+                                                period: SystemTime::now()
+                                                    .duration_since(UNIX_EPOCH)
+                                                    .map(|d| d.as_secs())
+                                                    .unwrap_or_default(),
+                                                utc: utc_hhmmss_millis(
+                                                    SystemTime::now()
+                                                        .duration_since(UNIX_EPOCH)
+                                                        .map(|d| d.as_secs_f64())
+                                                        .unwrap_or_default(),
+                                                ),
                                                 snr_db: 0.0,
                                                 dt_s: 0.0,
                                                 freq_hz: selected_tone_hz,
@@ -519,7 +536,8 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                             });
                                         }
                                     }
-                                    sstv_tail_samples_remaining = sstv_tail_samples_remaining.saturating_sub(ds.len());
+                                    sstv_tail_samples_remaining =
+                                        sstv_tail_samples_remaining.saturating_sub(ds.len());
                                     if sstv_tail_samples_remaining == 0 {
                                         sstv_tail_decoder = None;
                                         info!("SSTV tail CW decode window ended");
@@ -837,7 +855,8 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         leader_prominence_db = scan_prominence_db,
                                         "SSTV image receive complete"
                                     );
-                                    sstv_tail_decoder = Some(CwDitChannel::new(12_000, selected_tone_hz, cw_wpm));
+                                    sstv_tail_decoder =
+                                        Some(CwDitChannel::new(12_000, selected_tone_hz, cw_wpm));
                                     sstv_tail_samples_remaining = 12_000 * 12;
                                     if sstv_debug_recording {
                                         match save_sstv_debug_capture(
@@ -850,15 +869,23 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                             received_unix_ms,
                                         ) {
                                             Ok((wav_path, metadata_path)) => {
-                                                if let Some(saved) = shared.sstv_received_images.front_mut() {
-                                                    saved.debug_audio_path = Some(wav_path.display().to_string());
-                                                    saved.debug_metadata_path = Some(metadata_path.display().to_string());
+                                                if let Some(saved) =
+                                                    shared.sstv_received_images.front_mut()
+                                                {
+                                                    saved.debug_audio_path =
+                                                        Some(wav_path.display().to_string());
+                                                    saved.debug_metadata_path =
+                                                        Some(metadata_path.display().to_string());
                                                 }
-                                                shared.sstv_debug_status = format!("Saved debug capture {}", wav_path.display());
+                                                shared.sstv_debug_status = format!(
+                                                    "Saved debug capture {}",
+                                                    wav_path.display()
+                                                );
                                                 info!(path = %wav_path.display(), metadata = %metadata_path.display(), "SSTV debug capture saved");
                                             }
                                             Err(error) => {
-                                                shared.sstv_debug_status = format!("Debug capture save failed: {error}");
+                                                shared.sstv_debug_status =
+                                                    format!("Debug capture save failed: {error}");
                                                 tracing::warn!(error = %error, "failed to save SSTV debug capture");
                                             }
                                         }

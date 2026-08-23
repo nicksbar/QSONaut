@@ -246,18 +246,15 @@ mod tests {
     #[test]
     fn voice_uses_band_conventional_sidebands() {
         assert_eq!(
-            workspace_radio_preset_for_frequency(WorkspaceMode::Voice, Some(7_200_000))
-                .base_mode,
+            workspace_radio_preset_for_frequency(WorkspaceMode::Voice, Some(7_200_000)).base_mode,
             BaseMode::Lsb
         );
         assert_eq!(
-            workspace_radio_preset_for_frequency(WorkspaceMode::Voice, Some(14_300_000))
-                .base_mode,
+            workspace_radio_preset_for_frequency(WorkspaceMode::Voice, Some(14_300_000)).base_mode,
             BaseMode::Usb
         );
         assert_eq!(
-            workspace_radio_preset_for_frequency(WorkspaceMode::Voice, Some(146_520_000))
-                .base_mode,
+            workspace_radio_preset_for_frequency(WorkspaceMode::Voice, Some(146_520_000)).base_mode,
             BaseMode::Fm
         );
     }

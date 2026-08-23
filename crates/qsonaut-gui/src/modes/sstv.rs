@@ -1,8 +1,8 @@
 use super::super::*;
+use ab_glyph::PxScale;
 use image::imageops::FilterType;
 use imageproc::drawing::draw_text_mut;
 use imageproc::pixelops::weighted_sum;
-use ab_glyph::PxScale;
 use std::io::Cursor;
 
 pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
@@ -47,7 +47,8 @@ impl QsonautGuiApp {
             return;
         }
         let Some(font) = load_overlay_font() else {
-            self.local_image_status = "SSTV overlay font unavailable; install DejaVu Sans or Arial".to_string();
+            self.local_image_status =
+                "SSTV overlay font unavailable; install DejaVu Sans or Arial".to_string();
             return;
         };
         let base_image = match image::RgbImage::from_raw(
@@ -112,29 +113,29 @@ impl QsonautGuiApp {
                 }
             }
             .clamp(0, self.sstv_tx_height as i32 - 1);
-                let text_widths = lines
-                    .iter()
-                    .map(|line| line.len() as i32 * (scale.x as i32 / 2).max(1))
-                    .max()
-                    .unwrap_or(0);
-                let box_width = (text_widths + padding * 2).clamp(1, self.sstv_tx_width as i32);
-                let box_x = match self.sstv_overlay_corner {
+            let text_widths = lines
+                .iter()
+                .map(|line| line.len() as i32 * (scale.x as i32 / 2).max(1))
+                .max()
+                .unwrap_or(0);
+            let box_width = (text_widths + padding * 2).clamp(1, self.sstv_tx_width as i32);
+            let box_x = match self.sstv_overlay_corner {
                 SstvOverlayCorner::TopLeft | SstvOverlayCorner::BottomLeft => padding,
                 SstvOverlayCorner::TopRight | SstvOverlayCorner::BottomRight => {
-                        self.sstv_tx_width as i32 - box_width - padding
+                    self.sstv_tx_width as i32 - box_width - padding
                 }
             }
             .clamp(0, self.sstv_tx_width as i32 - 1);
-                let overlay_color = image::Rgb([
-                    self.sstv_overlay_background.r(),
-                    self.sstv_overlay_background.g(),
-                    self.sstv_overlay_background.b(),
-                ]);
-                let opacity = self.sstv_overlay_background_opacity.clamp(0.0, 1.0);
-                for y in box_y..(box_y + box_height).min(self.sstv_tx_height as i32) {
-                    for x in box_x..(box_x + box_width).min(self.sstv_tx_width as i32) {
+            let overlay_color = image::Rgb([
+                self.sstv_overlay_background.r(),
+                self.sstv_overlay_background.g(),
+                self.sstv_overlay_background.b(),
+            ]);
+            let opacity = self.sstv_overlay_background_opacity.clamp(0.0, 1.0);
+            for y in box_y..(box_y + box_height).min(self.sstv_tx_height as i32) {
+                for x in box_x..(box_x + box_width).min(self.sstv_tx_width as i32) {
                     let pixel = image.get_pixel_mut(x as u32, y as u32);
-                        *pixel = weighted_sum(*pixel, overlay_color, 1.0 - opacity, opacity);
+                    *pixel = weighted_sum(*pixel, overlay_color, 1.0 - opacity, opacity);
                 }
             }
             for (index, line) in lines.iter().enumerate() {
@@ -142,7 +143,7 @@ impl QsonautGuiApp {
                 let text_x = match self.sstv_overlay_corner {
                     SstvOverlayCorner::TopLeft | SstvOverlayCorner::BottomLeft => box_x,
                     SstvOverlayCorner::TopRight | SstvOverlayCorner::BottomRight => {
-                            (box_x + box_width - text_width - padding).max(box_x)
+                        (box_x + box_width - text_width - padding).max(box_x)
                     }
                 };
                 draw_text_mut(
@@ -220,7 +221,11 @@ impl QsonautGuiApp {
         if added > 0 {
             shared.sstv_received_revision = shared.sstv_received_revision.wrapping_add(1);
         }
-        tracing::info!(added, total = shared.sstv_received_images.len(), "prior SSTV images loaded");
+        tracing::info!(
+            added,
+            total = shared.sstv_received_images.len(),
+            "prior SSTV images loaded"
+        );
     }
 
     fn selected_received_sstv_image<'a>(
@@ -1251,12 +1256,8 @@ impl QsonautGuiApp {
                     ] {
                         let selected = self.selected_model_id_for_role(role).to_string();
                         if !selected.trim().is_empty()
-                            && local_ai::model_for_role(
-                                &self.local_image_models,
-                                &selected,
-                                role,
-                            )
-                            .is_err()
+                            && local_ai::model_for_role(&self.local_image_models, &selected, role)
+                                .is_err()
                         {
                             match role {
                                 LocalModelRole::Vision => {
