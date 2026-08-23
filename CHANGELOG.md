@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2026-08-23
+
+### Added
+- Added a capability-gated upper-right radio power button. Native modern
+  Icom CI-V, Yaesu CAT, and Kenwood PC-control drivers now expose documented
+  radio on/off commands; unsupported backends remain disabled.
+- Added capability-gated radio controls for normalized AF/RF gain, squelch,
+  RF power, preamp/attenuator, noise blanker, noise reduction, IP+, notch, and
+  AGC where the selected Rigwright profile supports them.
+- Added normalized SWR presentation and an experimental stepped active-band
+  SWR sweep with low-power carrier control, tuner safety, stop/disarm handling,
+  charting, and application-log diagnostics.
+
+### Changed
+- Updated the native radio integration to the published Rigwright `0.1.9`
+  release, including capability discovery, normalized meters, tuner controls,
+  Icom scope support, and tolerant CI-V echo-back handling.
+- Redesigned the combined radio/audio waterfall deck: both waterfalls share
+  equal vertical space, scope details live in the upper banner, and redundant
+  waterfall captions and resize text are removed.
+
+### Fixed
+- Added lifecycle diagnostics for radio scope configuration and stream
+  enable/disable transitions, plus deduplicated audio input failure and
+  recovery logging.
+
 ## [0.3.7] - 2026-08-22
 
 ### Added

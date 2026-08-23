@@ -32,17 +32,6 @@ impl QsonautGuiApp {
                 render_bins,
             )
         } else {
-            if let Some((low, high, label)) = band_edges_for_frequency(snapshot.frequency_hz) {
-                ui.label(
-                    RichText::new(format!(
-                        "Active band edges: {label} {:.3}–{:.3} MHz",
-                        low as f64 / 1_000_000.0,
-                        high as f64 / 1_000_000.0,
-                    ))
-                    .small()
-                    .color(Color32::LIGHT_BLUE),
-                );
-            }
             let source_bins = snapshot
                 .radio_waterfall_rows
                 .back()
@@ -259,9 +248,6 @@ impl QsonautGuiApp {
         ctx: &egui::Context,
         snapshot: &GuiState,
     ) {
-        ui.heading("Audio Waterfall (RX Input / TX Output)");
-        ui.separator();
-
         let filter_bw_hz = filter_bandwidth_hz(&snapshot.mode, snapshot.filter);
         let is_cw = self.workspace_mode == WorkspaceMode::Cw;
         let is_sstv = self.workspace_mode == WorkspaceMode::Sstv;
@@ -317,7 +303,7 @@ impl QsonautGuiApp {
         // Capture layout geometry before texture ops — available_width() can change mid-frame.
         let display_size = egui::vec2(
             ui.available_width().max(1.0),
-            (ui.available_height() - 18.0).max(56.0),
+            (ui.available_height() - 4.0).max(56.0),
         );
 
         if self.audio_waterfall_texture.is_none()
@@ -586,47 +572,6 @@ impl QsonautGuiApp {
                 egui::TextStyle::Small.resolve(ui.style()),
                 Color32::from_rgb(220, 160, 80),
             );
-        }
-        if is_sstv {
-            ui.label(format!(
-                "Audio: {}  |  radio passband 0–{} Hz · SSTV decoder {}–{} Hz · {} ({} {})",
-                snapshot.audio_spectrum_status,
-                bw_hz.min(AUDIO_MAX_FREQ_HZ),
-                rx_cursor_hz,
-                rx_cursor_hz + channel_hz,
-                if snapshot.sstv_auto_target {
-                    if snapshot.sstv_locked_offset_hz.is_some() {
-                        "auto-target locked; click to override"
-                    } else {
-                        "auto-target scanning; click to override"
-                    }
-                } else {
-                    "manual target; enable Auto Target to scan"
-                },
-                snapshot.mode,
-                snapshot
-                    .filter
-                    .map(|f| format!("FIL{f}"))
-                    .unwrap_or_default(),
-            ));
-        } else {
-            ui.label(format!(
-                "Audio: {}  |  0\u{2013}{} Hz · channel {} Hz · selected level {}/255 · {} ({} {})  |  L-click RX / R-click TX",
-                snapshot.audio_spectrum_status,
-                bw_hz.min(AUDIO_MAX_FREQ_HZ),
-                channel_hz,
-                audio_cursor_level(&snapshot.audio_waterfall_rows, rx_cursor_hz),
-                if is_cw {
-                    "CW tone search ±120 Hz"
-                } else {
-                    "digital channel edge"
-                },
-                snapshot.mode,
-                snapshot
-                    .filter
-                    .map(|f| format!("FIL{f}"))
-                    .unwrap_or_default(),
-            ));
         }
     }
 }

@@ -3177,7 +3177,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -3195,14 +3195,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-accelerate"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "qsonaut-audio"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "anyhow",
  "cpal",
@@ -3211,7 +3211,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-automation"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -3220,7 +3220,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-core"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "anyhow",
  "dotenvy",
@@ -3231,7 +3231,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-gui"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3266,7 +3266,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-log"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -3279,14 +3279,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-pskreporter"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "qsonaut-server-client"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -3302,7 +3302,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-sstv"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "image",
  "komitoto-sstv",
@@ -3724,9 +3724,9 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rigwright"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0323f2a36bbeb669b86b7ef7a73053735e6021f311cef2a19b4dbe15b6437276"
+checksum = "59ff2218db9a87f4557fb1bf063dfea905aef4027a622b84ebfa6db31d55ab12"
 dependencies = [
  "anyhow",
  "async-trait",

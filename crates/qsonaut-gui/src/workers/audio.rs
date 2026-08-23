@@ -205,6 +205,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let repaint_interval = Duration::from_millis(66);
         let mut last_repaint = Instant::now() - repaint_interval;
         let mut monitor_runtime_error: Option<String> = None;
+        let mut last_audio_read_error: Option<String> = None;
 
         while !stop.load(Ordering::Relaxed) {
             let chunk_samples = {
@@ -219,6 +220,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
             let chunk_bytes = (chunk_samples * 2).max(512);
             match stream.read_chunk(chunk_bytes) {
                 Ok(samples) => {
+                    if last_audio_read_error.take().is_some() {
+                        info!("Audio input stream recovered");
+                    }
                     let monitor_raw_audio = {
                         let shared = state.lock().expect("ui state lock poisoned");
                         shared.workspace_mode != WorkspaceMode::Cw || !can_decode
@@ -1254,10 +1258,15 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                     }
                 }
                 Err(err) => {
+                    let message = err.to_string();
+                    if last_audio_read_error.as_deref() != Some(message.as_str()) {
+                        warn!(error = %message, "Audio input stream read failed; retrying");
+                        last_audio_read_error = Some(message.clone());
+                    }
                     state
                         .lock()
                         .expect("ui state lock poisoned")
-                        .audio_spectrum_status = format!("NO INPUT ({err})");
+                        .audio_spectrum_status = format!("NO INPUT ({message})");
                     thread::sleep(Duration::from_millis(100));
                 }
             }

@@ -37,11 +37,17 @@ console. This is an honest capability snapshot, not a compatibility promise:
 | Digital modes | FT8 and FT4 provide native decode, activity, conversation, TX history, sequencing, logging, and explicit global TX disarm. FST4-60, JT9, JT65, and Q65-30A have experimental receive/scheduled-TX paths; WSPR and MSK144 are receive-only integrations. |
 | SSTV and local images | Single-channel auto-targeting finds shifted VIS headers across the audio baseband, and Auto VIS receive or manual receive filtering decodes 13 Martin/Scottie/Robot/PD modes. Waterfall clicking overrides targeting; acquisition, ranked-candidate, progress, and failure diagnostics use the filterable Application Log. The pinned adapter also provides selectable experimental TX. Existing images can be browsed or generated through local Ollama/Lemonade models, and TX remains explicitly armed. |
 | CW | Software audio CW through [cw-dit](https://github.com/nicksbar/cw-dit), with selected-channel streaming decode, adaptive timing, noise-floor slicing, and generated subband TX. Paddle/keyed-carrier input, prosigns, punctuation, and auto-sequencing are not implemented yet. |
-| Radio control | Rigwright profiles cover Icom CI-V, modern and classic Yaesu CAT, and Kenwood PC control, with generic and model-specific profiles. IC-7300 is hardware-validated; other serial drivers remain experimental. |
-| Spectrum and audio | Radio waterfalls, audio waterfalls, narrow/wide views, VBW controls, audio-device selection, decoder-channel monitoring, and RX monitor volume. |
+| Radio control | Rigwright profiles cover Icom CI-V, modern and classic Yaesu CAT, and Kenwood PC control, with generic and model-specific profiles. Capability-gated power, AF/RF gain, squelch, RF power, preamp/attenuator, NB, NR, IP+, notch, AGC, tuner, normalized meters, and SWR controls are exposed where supported. IC-7300 is hardware-validated; other serial drivers remain experimental. |
+| Spectrum and audio | Equal-height radio/audio waterfalls, narrow/active-band views, VBW controls, click-to-tune audio/radio scopes, upper-banner scope details, audio-device selection, decoder-channel monitoring, and RX monitor volume. Radio scope and vendor controls remain capability-gated. |
+| SWR and tuner | Normalized live SWR display plus an experimental stepped active-band sweep with configurable range/step/interval, low-power carrier pipeline, tuner safety, stop/disarm handling, charting, and application-log diagnostics. |
 | Station workflow | Contact log with ADIF import/export, operator profiles, QSO history, PSK Reporter (optional and off by default), and a live in-app application log with filtering, highlighting, copy, and bottom-follow. |
 | QSONaut Server | Optional WSS event/catalog sync, station presence, radio metadata, idempotent QSO publication, shared channels, and manual diagnostics. Each outbound data category is independently opt-in. |
 | Automation and compute | Permission-gated automation foundations and compute-backend detection exist; Discord/IRC connectors and GPU/NPU decoder kernels are not validated yet. |
+
+See the detailed [QSONaut feature matrix](docs/feature-matrix.md) for the
+implementation-level status of radio controls, normalized meters, SWR/tuner
+workflows, digital modes, SSTV, station tools, server integration, automation,
+and deliberate gaps.
 
 The primary development environment is Linux/WSL with USB audio and Icom CI-V.
 Windows and ARM build jobs exist, but a green build is not the same as hardware
@@ -162,12 +168,13 @@ device enrollment and proxy-friendly WSS configuration.
 - `crates/qsonaut-gui` — operator console and timed mode workflows
 - [`rigwright`](https://github.com/nicksbar/rigwright) — sibling radio HAL and native Icom CI-V implementation
 
-QSONaut normally resolves `rigwright` from its GitHub repository. `Cargo.lock`
-pins the exact source revision for reproducible builds. For
-local development against a sibling checkout, copy `.cargo/config.toml.example`
-to `.cargo/config.toml`; the local file is ignored by Git and overrides the
-Git dependency with `../rigwright` without changing committed manifests. Run
-`cargo update -p rigwright` when you intentionally want the latest GitHub head.
+QSONaut resolves the published `rigwright` crate from crates.io, and
+`Cargo.lock` pins the exact release for reproducible CI and release builds.
+For local development against the paired sibling checkout, copy
+`.cargo/config.toml.example` to `.cargo/config.toml`; the ignored local file
+overrides the published dependency with `../rigwright` without changing
+committed manifests. CI does not use this override and does not need a
+Rigwright checkout.
 - `crates/qsonaut-audio` — real-time audio and high-quality 48→12 kHz decimation
 - `crates/qsonaut-sstv` — streaming VIS/AFC adapter plus pinned multi-mode SSTV codecs
 - `mfsk-core` — WSJT-family modem encoding and decoding
@@ -194,8 +201,7 @@ At minimum:
 1. Confirm the selected audio input/output and CI-V serial device.
 2. Verify dial frequency, mode, filter, data mode, RF power, and TX audio level.
 3. Start into a dummy load or minimum safe power where practical.
-4. Confirm **TX SAFE** really means PTT is released on your own hardware.
-5. Keep the global **STOP + DISARM ALL TX** control visible and tested.
+4. Keep the global **STOP + DISARM ALL TX** control visible and tested.
 
 You are responsible for lawful operation and for every transmission made with
 this software.

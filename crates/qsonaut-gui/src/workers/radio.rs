@@ -5,6 +5,42 @@ const RADIO_LEVEL_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const RADIO_COMMAND_WAKE_INTERVAL: Duration = Duration::from_millis(50);
 const RADIO_SCOPE_READ_SLICE: Duration = Duration::from_millis(50);
 
+const RADIO_CONTROL_IDS: &[ControlId] = &[
+    ControlId::AfGain,
+    ControlId::RfGain,
+    ControlId::Squelch,
+    ControlId::RfPower,
+    ControlId::Preamp,
+    ControlId::ExternalPreamp,
+    ControlId::Attenuator,
+    ControlId::NoiseBlanker,
+    ControlId::NoiseReduction,
+    ControlId::NoiseReductionLevel,
+    ControlId::IpPlus,
+    ControlId::Notch,
+    ControlId::ManualNotch,
+    ControlId::DataMode,
+    ControlId::Filter,
+    ControlId::Agc,
+    ControlId::Rit,
+    ControlId::Xit,
+    ControlId::Split,
+    ControlId::Tuner,
+    ControlId::Vfo,
+    ControlId::MainSub,
+];
+
+const RADIO_METER_IDS: &[MeterId] = &[
+    MeterId::Signal,
+    MeterId::Power,
+    MeterId::Swr,
+    MeterId::Alc,
+    MeterId::Compression,
+    MeterId::Current,
+    MeterId::Voltage,
+    MeterId::Temperature,
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RadioScopeStreamConfig {
     view: RadioScopeView,
@@ -29,11 +65,26 @@ pub(crate) fn spawn_radio_worker(
     radio: ConfiguredRadio,
     state: Arc<Mutex<GuiState>>,
     stop: Arc<AtomicBool>,
+    swr_sweep_abort: Arc<AtomicBool>,
     display_tuning: Arc<Mutex<DisplayTuning>>,
     rx: mpsc::Receiver<GuiCommand>,
     repaint_ctx: Arc<OnceLock<egui::Context>>,
 ) -> std::thread::JoinHandle<()> {
     thread::spawn(move || {
+        {
+            let mut s = state.lock().expect("ui state lock poisoned");
+            s.radio_power_supported = radio.capabilities().can_set_power;
+            s.supported_controls = RADIO_CONTROL_IDS
+                .iter()
+                .copied()
+                .filter(|id| radio.supports_control(*id))
+                .collect();
+            s.supported_meters = RADIO_METER_IDS
+                .iter()
+                .copied()
+                .filter(|id| radio.supports_meter(*id))
+                .collect();
+        }
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -87,6 +138,9 @@ pub(crate) fn spawn_radio_worker(
                 let (
                     spectrum_desired,
                     spectrum_enabled,
+                    power_on,
+                    power_settling,
+                    power_command_pending,
                     scope_view,
                     frequency_hz,
                     span_code,
@@ -100,6 +154,9 @@ pub(crate) fn spawn_radio_worker(
                     (
                         s.radio_spectrum_desired,
                         s.radio_spectrum_enabled,
+                        s.radio_power_on,
+                        s.radio_power_settling,
+                        s.radio_power_command_pending,
                         s.radio_scope_view,
                         s.frequency_hz,
                         s.radio_scope_span_code,
@@ -110,6 +167,25 @@ pub(crate) fn spawn_radio_worker(
                         s.radio_scope_reference_tenths_db,
                     )
                 };
+
+                // Do not send scope traffic while the radio state is unknown,
+                // powered off, or still waking. The initial state can be
+                // unknown briefly while the core worker performs its first
+                // probe, and sending CI-V scope commands during that window
+                // can delay a cold power-on.
+                if power_on != Some(true) || power_settling || power_command_pending {
+                    let mut s = stream_state.lock().expect("ui state lock poisoned");
+                    s.radio_spectrum_enabled = false;
+                    s.radio_waterfall_status = if power_on == Some(false) {
+                        "OFF (radio off)".to_string()
+                    } else {
+                        "WAITING FOR RADIO".to_string()
+                    };
+                    drop(s);
+                    last_scope_config = None;
+                    thread::sleep(Duration::from_millis(250));
+                    continue;
+                }
 
                 if spectrum_desired {
                     let scope_edges = match (scope_view, workspace_mode) {
@@ -164,6 +240,14 @@ pub(crate) fn spawn_radio_worker(
                         ) {
                             Ok(()) => {
                                 last_scope_config = Some(config);
+                                info!(
+                                    view = ?config.view,
+                                    span_code = config.span_code,
+                                    vbw_wide = config.vbw_wide,
+                                    hold = config.hold,
+                                    reference_tenths_db = config.reference_tenths_db,
+                                    "Radio scope configured"
+                                );
                                 let mut s = stream_state.lock().expect("ui state lock poisoned");
                                 if geometry_changed {
                                     s.radio_waterfall_rows.clear();
@@ -191,7 +275,10 @@ pub(crate) fn spawn_radio_worker(
                         let mut s = stream_state.lock().expect("ui state lock poisoned");
                         s.radio_spectrum_enabled = false;
                         match disable_result {
-                            Ok(()) => s.radio_waterfall_status = "OFF".to_string(),
+                            Ok(()) => {
+                                s.radio_waterfall_status = "OFF".to_string();
+                                info!("Radio spectrum stream disabled");
+                            }
                             Err(err) => {
                                 s.radio_waterfall_status = "DISABLE ERROR".to_string();
                                 s.last_error = Some(err.to_string());
@@ -214,6 +301,7 @@ pub(crate) fn spawn_radio_worker(
                             s.radio_waterfall_status = "READY · 475 bins".to_string();
                             s.last_error = None;
                             drop(s);
+                            info!(bins = bins.len(), "Radio spectrum stream enabled");
                             if let Some(ctx) = stream_repaint.get() {
                                 ctx.request_repaint();
                             }
@@ -290,6 +378,7 @@ pub(crate) fn spawn_radio_worker(
         poll_radio_core_state(&rt, &radio, &state, true);
         let mut next_core_poll = Instant::now() + RADIO_CORE_POLL_INTERVAL;
         let mut next_level_poll = Instant::now() + RADIO_LEVEL_POLL_INTERVAL;
+        let mut radio_power_settle_until = Instant::now();
 
         while !stop.load(Ordering::Relaxed) {
             let wait = next_core_poll
@@ -302,6 +391,22 @@ pub(crate) fn spawn_radio_worker(
             };
 
             if let Some(cmd) = cmd {
+                let radio_unavailable = {
+                    let s = state.lock().expect("ui state lock poisoned");
+                    s.radio_power_on == Some(false)
+                        || s.radio_power_command_pending
+                        || s.radio_power_settling
+                };
+                if radio_unavailable && !matches!(&cmd, GuiCommand::Quit | GuiCommand::SetPower(_))
+                {
+                    warn!(command = ?cmd, "Radio command skipped while radio is unavailable");
+                    let mut s = state.lock().expect("ui state lock poisoned");
+                    s.last_error = Some("radio command skipped: radio is unavailable".to_string());
+                    if let GuiCommand::SetPttWithAck(_, ack_tx) = &cmd {
+                        let _ = ack_tx.send(Err("radio is powered off".to_string()));
+                    }
+                    continue;
+                }
                 match cmd {
                     GuiCommand::Quit => return,
                     GuiCommand::TuneDelta(delta) => {
@@ -415,10 +520,40 @@ pub(crate) fn spawn_radio_worker(
                         let _ = ack_tx.send(result);
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
+                    GuiCommand::SetPower(target) => {
+                        info!(power_on = target, "Radio power command requested");
+                        match rt.block_on(radio.set_power(target)) {
+                            Ok(()) => {
+                                info!(power_on = target, "Radio power command accepted");
+                                let mut s = state.lock().expect("ui state lock poisoned");
+                                // A successful write only means the command was
+                                // accepted. Do not show ON until a status probe
+                                // confirms that the radio has actually woken.
+                                s.radio_power_on = if target { None } else { Some(false) };
+                                s.radio_power_command_pending = target;
+                                s.radio_power_settling = target;
+                                s.radio_power_wake_deadline =
+                                    target.then_some(Instant::now() + Duration::from_secs(12));
+                                s.last_error = None;
+                            }
+                            Err(error) => {
+                                error!(power_on = target, error = %error, "Radio power command failed");
+                                let mut s = state.lock().expect("ui state lock poisoned");
+                                s.last_error = Some(error.to_string());
+                                s.radio_power_command_pending = false;
+                                s.radio_power_settling = false;
+                                s.radio_power_wake_deadline = None;
+                            }
+                        }
+                        if target {
+                            radio_power_settle_until = Instant::now() + Duration::from_secs(2);
+                        }
+                    }
                     GuiCommand::ApplyWorkspace {
                         mode: workspace_mode,
                         frequency_hz,
                     } => {
+                        swr_sweep_abort.store(false, Ordering::Relaxed);
                         info!(
                             workspace = %workspace_mode.label(),
                             frequency_hz,
@@ -542,6 +677,278 @@ pub(crate) fn spawn_radio_worker(
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
+                    GuiCommand::StartTuner => {
+                        info!("Radio antenna tuner start requested");
+                        match rt.block_on(radio.start_tuner()) {
+                            Ok(()) => info!("Radio antenna tuner start accepted"),
+                            Err(error) => {
+                                error!(error = %error, "Radio antenna tuner start failed");
+                                state.lock().expect("ui state lock poisoned").last_error =
+                                    Some(error.to_string());
+                            }
+                        }
+                        poll_radio_core_state(&rt, &radio, &state, true);
+                    }
+                    GuiCommand::StartSwrSweep {
+                        start_hz,
+                        stop_hz,
+                        step_hz,
+                        interval_ms,
+                    } => {
+                        info!(
+                            start_hz,
+                            stop_hz,
+                            step_hz,
+                            interval_ms,
+                            expected_points = stop_hz
+                                .saturating_sub(start_hz)
+                                .checked_div(step_hz.max(1))
+                                .unwrap_or(0)
+                                .saturating_add(1)
+                                .min(200),
+                            "SWR sweep requested"
+                        );
+                        if step_hz == 0 || stop_hz < start_hz {
+                            state.lock().expect("ui state lock poisoned").last_error = Some(
+                                "SWR sweep requires a positive step and stop >= start".to_string(),
+                            );
+                            continue;
+                        }
+                        {
+                            let mut s = state.lock().expect("ui state lock poisoned");
+                            s.swr_sweep_active = true;
+                            s.swr_sweep_points.clear();
+                            s.swr_sweep_status = "Saving radio state".to_string();
+                        }
+                        let original_frequency = rt.block_on(radio.get_frequency_hz()).ok();
+                        let original_mode = rt.block_on(radio.get_mode()).ok();
+                        let original_power = rt
+                            .block_on(radio.get_control(ControlId::RfPower))
+                            .ok()
+                            .flatten();
+                        let original_tuner = rt.block_on(radio.get_tuner_status()).ok().flatten();
+                        info!(
+                            original_frequency_hz = original_frequency,
+                            original_mode = ?original_mode,
+                            original_power = ?original_power,
+                            original_tuner = ?original_tuner,
+                            "SWR sweep saved radio state"
+                        );
+                        if original_tuner.is_some_and(|status| status.tuning) {
+                            let mut s = state.lock().expect("ui state lock poisoned");
+                            s.swr_sweep_active = false;
+                            s.swr_sweep_status = "Tuner is already tuning".to_string();
+                            s.last_error = Some(
+                                "SWR sweep cannot start while the antenna tuner is tuning"
+                                    .to_string(),
+                            );
+                            continue;
+                        }
+                        if original_tuner.is_some_and(|status| status.enabled) {
+                            if let Err(error) = rt.block_on(
+                                radio.set_control(ControlId::Tuner, ControlValue::Bool(false)),
+                            ) {
+                                error!(error = %error, "SWR sweep could not disable antenna tuner");
+                                let mut s = state.lock().expect("ui state lock poisoned");
+                                s.swr_sweep_active = false;
+                                s.swr_sweep_status = "Tuner disable failed".to_string();
+                                s.last_error = Some(format!(
+                                    "SWR sweep could not disable the antenna tuner: {error}"
+                                ));
+                                continue;
+                            }
+                            info!("SWR sweep disabled antenna tuner");
+                        }
+                        if let Err(error) = rt.block_on(radio.set_mode(Mode::Rtty)) {
+                            error!(error = %error, "SWR sweep could not select RTTY carrier mode");
+                            if original_tuner.is_some_and(|status| status.enabled) {
+                                let _ = rt.block_on(
+                                    radio.set_control(ControlId::Tuner, ControlValue::Bool(true)),
+                                );
+                            }
+                            let mut s = state.lock().expect("ui state lock poisoned");
+                            s.swr_sweep_active = false;
+                            s.swr_sweep_status = "Carrier mode setup failed".to_string();
+                            s.last_error =
+                                Some(format!("SWR sweep could not select RTTY mode: {error}"));
+                            continue;
+                        }
+                        const SWR_TEST_POWER_PERCENT: u8 = 5;
+                        let test_power = ((u16::from(SWR_TEST_POWER_PERCENT) * 255) / 100) as u8;
+                        if let Err(error) = rt.block_on(
+                            radio.set_control(ControlId::RfPower, ControlValue::U8(test_power)),
+                        ) {
+                            error!(error = %error, "SWR sweep could not set low test power");
+                            if let Some(mode) = original_mode {
+                                let _ = rt.block_on(radio.set_mode(mode));
+                            }
+                            if original_tuner.is_some_and(|status| status.enabled) {
+                                let _ = rt.block_on(
+                                    radio.set_control(ControlId::Tuner, ControlValue::Bool(true)),
+                                );
+                            }
+                            let mut s = state.lock().expect("ui state lock poisoned");
+                            s.swr_sweep_active = false;
+                            s.swr_sweep_status = "Low-power setup failed".to_string();
+                            s.last_error =
+                                Some(format!("SWR sweep could not set test power: {error}"));
+                            continue;
+                        }
+                        info!(
+                            mode = "RTTY",
+                            test_power_percent = SWR_TEST_POWER_PERCENT,
+                            "SWR sweep configured carrier pipeline"
+                        );
+                        let mut frequency = start_hz;
+                        let mut points = 0_u16;
+                        let mut read_failures = 0_u16;
+                        let mut tx_keyed = false;
+                        while frequency <= stop_hz && points < 200 && !stop.load(Ordering::Relaxed)
+                        {
+                            // Icom's documented plot measurement keys the transmitter only
+                            // for the sample, then returns to receive before retuning.
+                            if let Err(error) = rt.block_on(radio.set_frequency_hz(frequency)) {
+                                error!(frequency_hz = frequency, error = %error, "SWR sweep frequency change failed");
+                                break;
+                            }
+                            if let Err(error) = rt.block_on(radio.set_ptt(true)) {
+                                error!(frequency_hz = frequency, error = %error, "SWR sweep failed to key TX");
+                                read_failures += 1;
+                                break;
+                            }
+                            tx_keyed = true;
+                            {
+                                let mut s = state.lock().expect("ui state lock poisoned");
+                                s.ptt_on = true;
+                                s.swr_sweep_status =
+                                    format!("TX keyed at {frequency} Hz; measuring");
+                            }
+                            info!(frequency_hz = frequency, "SWR sweep TX keyed");
+                            let wait_until = Instant::now()
+                                + Duration::from_millis(interval_ms.clamp(100, 10_000));
+                            while Instant::now() < wait_until
+                                && !swr_sweep_abort.load(Ordering::Relaxed)
+                            {
+                                let remaining =
+                                    wait_until.saturating_duration_since(Instant::now());
+                                thread::sleep(remaining.min(Duration::from_millis(50)));
+                            }
+                            if swr_sweep_abort.load(Ordering::Relaxed) {
+                                info!(frequency_hz = frequency, "SWR sweep stop requested");
+                                break;
+                            }
+                            match rt.block_on(radio.get_meter(MeterId::Swr)) {
+                                Ok(Some(value)) => {
+                                    info!(
+                                        point = points + 1,
+                                        frequency_hz = frequency,
+                                        swr_level = value,
+                                        "SWR sweep sample"
+                                    );
+                                    let mut s = state.lock().expect("ui state lock poisoned");
+                                    s.swr = Some(value);
+                                    s.swr_sweep_points.push((frequency, value));
+                                }
+                                Ok(None) => {
+                                    read_failures += 1;
+                                    warn!(frequency_hz = frequency, "SWR sweep meter unavailable");
+                                }
+                                Err(error) => {
+                                    read_failures += 1;
+                                    warn!(frequency_hz = frequency, error = %error, "SWR sweep meter read failed");
+                                }
+                            }
+                            if let Err(error) = rt.block_on(radio.set_ptt(false)) {
+                                error!(frequency_hz = frequency, error = %error, "SWR sweep failed to unkey TX");
+                                state.lock().expect("ui state lock poisoned").last_error =
+                                    Some(format!("SWR sweep could not unkey TX: {error}"));
+                                break;
+                            }
+                            tx_keyed = false;
+                            state.lock().expect("ui state lock poisoned").ptt_on = false;
+                            info!(frequency_hz = frequency, "SWR sweep TX unkeyed");
+                            frequency = frequency.saturating_add(step_hz);
+                            points += 1;
+                            if frequency == u64::MAX {
+                                break;
+                            }
+                        }
+                        if tx_keyed {
+                            if let Err(error) = rt.block_on(radio.set_ptt(false)) {
+                                error!(error = %error, "SWR sweep failed to disarm TX");
+                                state.lock().expect("ui state lock poisoned").last_error =
+                                    Some(format!("SWR sweep could not disarm TX: {error}"));
+                            } else {
+                                info!("SWR sweep TX disarmed");
+                            }
+                        }
+                        {
+                            let mut s = state.lock().expect("ui state lock poisoned");
+                            s.ptt_on = false;
+                        }
+                        if let Some(power) = original_power {
+                            if let Err(error) =
+                                rt.block_on(radio.set_control(ControlId::RfPower, power))
+                            {
+                                error!(error = %error, "SWR sweep failed to restore RF power");
+                            } else {
+                                info!("SWR sweep restored RF power");
+                            }
+                        }
+                        if original_tuner.is_some_and(|status| status.enabled) {
+                            if let Err(error) = rt.block_on(
+                                radio.set_control(ControlId::Tuner, ControlValue::Bool(true)),
+                            ) {
+                                error!(error = %error, "SWR sweep failed to restore antenna tuner");
+                            } else {
+                                info!("SWR sweep restored antenna tuner");
+                            }
+                        }
+                        if let Some(mode) = original_mode {
+                            if let Err(error) = rt.block_on(radio.set_mode(mode)) {
+                                error!(error = %error, "SWR sweep failed to restore operating mode");
+                            } else {
+                                info!(mode = ?mode, "SWR sweep restored operating mode");
+                            }
+                        }
+                        if let Some(original_frequency) = original_frequency {
+                            if let Err(error) =
+                                rt.block_on(radio.set_frequency_hz(original_frequency))
+                            {
+                                error!(frequency_hz = original_frequency, error = %error, "SWR sweep failed to restore frequency");
+                            } else {
+                                info!(
+                                    frequency_hz = original_frequency,
+                                    "SWR sweep restored frequency"
+                                );
+                            }
+                        }
+                        let mut s = state.lock().expect("ui state lock poisoned");
+                        s.swr_sweep_active = false;
+                        s.swr_sweep_status = format!(
+                            "{} points{}{}",
+                            s.swr_sweep_points.len(),
+                            if read_failures > 0 {
+                                format!(" · {read_failures} read failures")
+                            } else {
+                                String::new()
+                            },
+                            if swr_sweep_abort.load(Ordering::Relaxed) {
+                                " · stopped"
+                            } else {
+                                ""
+                            }
+                        );
+                        info!(
+                            points = s.swr_sweep_points.len(),
+                            read_failures,
+                            restored_frequency_hz = original_frequency,
+                            "SWR sweep completed"
+                        );
+                        drop(s);
+                        swr_sweep_abort.store(false, Ordering::Relaxed);
+                        poll_radio_core_state(&rt, &radio, &state, true);
+                    }
                     GuiCommand::AfGainDelta(delta) => {
                         let current = match rt
                             .block_on(radio.get_control(ControlId::AfGain))
@@ -581,7 +988,28 @@ pub(crate) fn spawn_radio_worker(
             }
 
             let now = Instant::now();
-            if now >= next_core_poll {
+            if now >= radio_power_settle_until {
+                let mut s = state.lock().expect("ui state lock poisoned");
+                s.radio_power_settling = false;
+            }
+            {
+                let mut s = state.lock().expect("ui state lock poisoned");
+                if s.radio_power_command_pending
+                    && s.radio_power_wake_deadline
+                        .is_some_and(|deadline| now >= deadline)
+                {
+                    warn!("Radio did not respond after power-on wake window");
+                    s.radio_power_on = Some(false);
+                    s.radio_power_command_pending = false;
+                    s.radio_power_settling = false;
+                    s.radio_power_wake_deadline = None;
+                    s.last_error = Some("radio did not respond after power-on command".to_string());
+                }
+            }
+            let power_off =
+                state.lock().expect("ui state lock poisoned").radio_power_on == Some(false);
+            let power_settling = now < radio_power_settle_until;
+            if now >= next_core_poll && !power_off && !power_settling {
                 let poll_levels = now >= next_level_poll;
                 poll_radio_core_state(&rt, &radio, &state, poll_levels);
                 next_core_poll = Instant::now() + RADIO_CORE_POLL_INTERVAL;
@@ -623,10 +1051,22 @@ fn poll_radio_core_state(
                 }
                 .to_string();
                 s.data_mode = Some(mode == Mode::Data);
+                s.radio_power_on = Some(true);
+                s.radio_power_command_pending = false;
+                s.radio_power_settling = false;
+                s.radio_power_wake_deadline = None;
                 s.last_update = Some(Instant::now());
                 s.last_error = None;
             }
             (frequency, mode) => {
+                let wake_pending = s.radio_power_command_pending
+                    && s.radio_power_wake_deadline
+                        .is_some_and(|deadline| Instant::now() < deadline);
+                if !wake_pending {
+                    s.radio_power_on = Some(false);
+                    s.radio_power_command_pending = false;
+                    s.radio_power_wake_deadline = None;
+                }
                 s.last_error = Some(
                     frequency
                         .err()
@@ -635,6 +1075,9 @@ fn poll_radio_core_state(
                         .to_string(),
                 );
             }
+        }
+        if poll_levels {
+            poll_radio_level_state(rt, radio, state);
         }
         return;
     }
@@ -649,6 +1092,19 @@ fn poll_radio_core_state(
     } else {
         radio.probe()
     };
+    if let Err(error) = &status_result {
+        let mut s = state.lock().expect("ui state lock poisoned");
+        let wake_pending = s.radio_power_command_pending
+            && s.radio_power_wake_deadline
+                .is_some_and(|deadline| Instant::now() < deadline);
+        if !wake_pending {
+            s.radio_power_on = Some(false);
+            s.radio_power_command_pending = false;
+            s.radio_power_wake_deadline = None;
+            s.last_error = Some(error.to_string());
+        }
+        return;
+    }
     // IC-7300 mode status can report a misleading data byte through the
     // generic 0x04 response. Query the model-specific DataMode control for the
     // flag used by the UI label.
@@ -669,11 +1125,52 @@ fn poll_radio_core_state(
     } else {
         (None, None, None)
     };
+    let (
+        squelch,
+        preamp,
+        attenuator,
+        noise_blank,
+        noise_reduction,
+        noise_reduction_level,
+        ip_plus,
+        notch_auto,
+        notch_manual,
+        agc,
+        swr,
+        tuner_status,
+    ) = if poll_levels {
+        (
+            read_u8_control(rt, radio, ControlId::Squelch),
+            read_u8_control(rt, radio, ControlId::Preamp),
+            read_u8_control(rt, radio, ControlId::Attenuator),
+            read_bool_control(rt, radio, ControlId::NoiseBlanker),
+            read_bool_control(rt, radio, ControlId::NoiseReduction),
+            read_u8_control(rt, radio, ControlId::NoiseReductionLevel),
+            read_bool_control(rt, radio, ControlId::IpPlus),
+            read_bool_control(rt, radio, ControlId::Notch),
+            read_bool_control(rt, radio, ControlId::ManualNotch),
+            read_u8_control(rt, radio, ControlId::Agc),
+            if radio.supports_meter(MeterId::Swr) {
+                rt.block_on(radio.get_meter(MeterId::Swr)).ok().flatten()
+            } else {
+                None
+            },
+            rt.block_on(radio.get_tuner_status()).ok().flatten(),
+        )
+    } else {
+        (
+            None, None, None, None, None, None, None, None, None, None, None, None,
+        )
+    };
     // The IC-7300's regular mode response does not consistently include the
     // active FIL number, so filter state needs its own fast query.
     let filt = read_u8_control(rt, radio, ControlId::Filter);
     let mut s = state.lock().expect("ui state lock poisoned");
     if let Ok(status) = status_result {
+        s.radio_power_on = Some(true);
+        s.radio_power_command_pending = false;
+        s.radio_power_settling = false;
+        s.radio_power_wake_deadline = None;
         if let Some(freq) = status.frequency_hz {
             s.frequency_hz = Some(freq);
         }
@@ -698,8 +1195,152 @@ fn poll_radio_core_state(
     if let Some(v) = pwr {
         s.rf_power = Some(v);
     }
+    if let Some(v) = squelch {
+        s.squelch = Some(v);
+    }
+    if let Some(v) = preamp {
+        s.preamp = Some(v);
+    }
+    if let Some(v) = attenuator {
+        s.attenuator = Some(v);
+    }
+    if let Some(v) = noise_blank {
+        s.noise_blank = Some(v);
+    }
+    if let Some(v) = noise_reduction {
+        s.noise_reduction = Some(v);
+    }
+    if let Some(v) = noise_reduction_level {
+        s.noise_reduction_level = Some(v);
+    }
+    if let Some(v) = ip_plus {
+        s.ip_plus = Some(v);
+    }
+    if let Some(v) = notch_auto {
+        s.notch_auto = Some(v);
+    }
+    if let Some(v) = notch_manual {
+        s.notch_manual = Some(v);
+    }
+    if let Some(v) = agc {
+        s.agc = Some(v);
+    }
+    if let Some(v) = swr {
+        s.swr = Some(v);
+    }
+    if tuner_status.is_some() {
+        s.tuner_status = tuner_status;
+    }
     if let Some(v) = filt {
         s.filter = Some(v);
+    }
+}
+
+fn poll_radio_level_state(
+    rt: &tokio::runtime::Runtime,
+    radio: &ConfiguredRadio,
+    state: &Arc<Mutex<GuiState>>,
+) {
+    let read_meter = |id| {
+        radio
+            .supports_meter(id)
+            .then(|| rt.block_on(radio.get_meter(id)).ok().flatten())
+            .flatten()
+    };
+    let values = [
+        (
+            ControlId::AfGain,
+            read_u8_control(rt, radio, ControlId::AfGain),
+        ),
+        (
+            ControlId::RfGain,
+            read_u8_control(rt, radio, ControlId::RfGain),
+        ),
+        (
+            ControlId::Squelch,
+            read_u8_control(rt, radio, ControlId::Squelch),
+        ),
+        (
+            ControlId::RfPower,
+            read_u8_control(rt, radio, ControlId::RfPower),
+        ),
+        (
+            ControlId::Preamp,
+            read_u8_control(rt, radio, ControlId::Preamp),
+        ),
+        (
+            ControlId::Attenuator,
+            read_u8_control(rt, radio, ControlId::Attenuator),
+        ),
+        (ControlId::Agc, read_u8_control(rt, radio, ControlId::Agc)),
+        (
+            ControlId::NoiseReductionLevel,
+            read_u8_control(rt, radio, ControlId::NoiseReductionLevel),
+        ),
+    ];
+    let noise_blank = read_bool_control(rt, radio, ControlId::NoiseBlanker);
+    let noise_reduction = read_bool_control(rt, radio, ControlId::NoiseReduction);
+    let ip_plus = read_bool_control(rt, radio, ControlId::IpPlus);
+    let notch_auto = read_bool_control(rt, radio, ControlId::Notch);
+    let notch_manual = read_bool_control(rt, radio, ControlId::ManualNotch);
+    let tuner_status = rt.block_on(radio.get_tuner_status()).ok().flatten();
+    let meters = [
+        (MeterId::Signal, read_meter(MeterId::Signal)),
+        (MeterId::Power, read_meter(MeterId::Power)),
+        (MeterId::Swr, read_meter(MeterId::Swr)),
+        (MeterId::Alc, read_meter(MeterId::Alc)),
+        (MeterId::Compression, read_meter(MeterId::Compression)),
+        (MeterId::Current, read_meter(MeterId::Current)),
+        (MeterId::Voltage, read_meter(MeterId::Voltage)),
+        (MeterId::Temperature, read_meter(MeterId::Temperature)),
+    ];
+    let mut s = state.lock().expect("ui state lock poisoned");
+    for (id, value) in values {
+        if let Some(value) = value {
+            match id {
+                ControlId::AfGain => s.af_gain = Some(value),
+                ControlId::RfGain => s.rf_gain = Some(value),
+                ControlId::Squelch => s.squelch = Some(value),
+                ControlId::RfPower => s.rf_power = Some(value),
+                ControlId::Preamp => s.preamp = Some(value),
+                ControlId::Attenuator => s.attenuator = Some(value),
+                ControlId::Agc => s.agc = Some(value),
+                ControlId::NoiseReductionLevel => s.noise_reduction_level = Some(value),
+                _ => {}
+            }
+        }
+    }
+    for (id, value) in meters {
+        if let Some(value) = value {
+            match id {
+                MeterId::Signal => s.signal_meter = Some(value),
+                MeterId::Power => s.power_meter = Some(value),
+                MeterId::Swr => s.swr = Some(value),
+                MeterId::Alc => s.alc_meter = Some(value),
+                MeterId::Compression => s.compression_meter = Some(value),
+                MeterId::Current => s.current_meter = Some(value),
+                MeterId::Voltage => s.voltage_meter = Some(value),
+                MeterId::Temperature => s.temperature_meter = Some(value),
+            }
+        }
+    }
+    if let Some(value) = noise_blank {
+        s.noise_blank = Some(value);
+    }
+    if let Some(value) = noise_reduction {
+        s.noise_reduction = Some(value);
+    }
+    if let Some(value) = ip_plus {
+        s.ip_plus = Some(value);
+    }
+    if let Some(value) = notch_auto {
+        s.notch_auto = Some(value);
+    }
+    if let Some(value) = notch_manual {
+        s.notch_manual = Some(value);
+    }
+    if tuner_status.is_some() {
+        s.tuner_status = tuner_status;
     }
 }
 
@@ -784,6 +1425,17 @@ fn read_u8_control<R: Radio + ?Sized>(
 ) -> Option<u8> {
     match rt.block_on(radio.get_control(id)).ok().flatten() {
         Some(ControlValue::U8(v)) => Some(v),
+        _ => None,
+    }
+}
+
+fn read_bool_control<R: Radio + ?Sized>(
+    rt: &tokio::runtime::Runtime,
+    radio: &R,
+    id: ControlId,
+) -> Option<bool> {
+    match rt.block_on(radio.get_control(id)).ok().flatten() {
+        Some(ControlValue::Bool(v)) => Some(v),
         _ => None,
     }
 }
