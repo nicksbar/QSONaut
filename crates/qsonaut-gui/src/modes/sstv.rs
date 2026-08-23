@@ -168,20 +168,17 @@ impl QsonautGuiApp {
             let deck_width = (ui.available_width() - gap).max(2.0);
             let left_width = deck_width * self.sstv_rx_width_percent as f32 / 100.0;
             let right_width = (deck_width - left_width).max(1.0);
-            let (left_rect, _) = ui.allocate_exact_size(
-                egui::vec2(left_width, body_height),
-                egui::Sense::hover(),
-            );
-            let (divider_rect, divider_response) = ui.allocate_exact_size(
-                egui::vec2(gap, body_height),
-                egui::Sense::drag(),
-            );
-            let divider_response = divider_response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+            let (left_rect, _) =
+                ui.allocate_exact_size(egui::vec2(left_width, body_height), egui::Sense::hover());
+            let (divider_rect, divider_response) =
+                ui.allocate_exact_size(egui::vec2(gap, body_height), egui::Sense::drag());
+            let divider_response =
+                divider_response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
             if divider_response.dragged() {
                 let delta_percent = ctx.input(|input| input.pointer.delta().x) / deck_width * 100.0;
-                self.sstv_rx_width_percent =
-                    ((self.sstv_rx_width_percent as f32 + delta_percent).round() as i32)
-                        .clamp(36, 72) as u8;
+                self.sstv_rx_width_percent = ((self.sstv_rx_width_percent as f32 + delta_percent)
+                    .round() as i32)
+                    .clamp(36, 72) as u8;
                 ctx.request_repaint();
             }
             ui.painter().rect_filled(
@@ -193,10 +190,8 @@ impl QsonautGuiApp {
                     ui.visuals().widgets.inactive.bg_stroke.color
                 },
             );
-            let (right_rect, _) = ui.allocate_exact_size(
-                egui::vec2(right_width, body_height),
-                egui::Sense::hover(),
-            );
+            let (right_rect, _) =
+                ui.allocate_exact_size(egui::vec2(right_width, body_height), egui::Sense::hover());
             let mut left = ui.new_child(
                 egui::UiBuilder::new()
                     .id_salt("sstv_rx_deck")
@@ -222,7 +217,11 @@ impl QsonautGuiApp {
                     );
                 }
                 if let Some(path) = &snapshot.sstv_saved_path {
-                    ui.label(RichText::new(format!("Saved: {path}")).small().color(theme_muted(ui)));
+                    ui.label(
+                        RichText::new(format!("Saved: {path}"))
+                            .small()
+                            .color(theme_muted(ui)),
+                    );
                 }
                 ui.add_space(3.0);
                 egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
@@ -237,7 +236,12 @@ impl QsonautGuiApp {
                         ui.allocate_ui_with_layout(
                             size,
                             egui::Layout::centered_and_justified(egui::Direction::TopDown),
-                            |ui| ui.label(RichText::new("Listening for an SSTV frame").color(theme_muted(ui))),
+                            |ui| {
+                                ui.label(
+                                    RichText::new("Listening for an SSTV frame")
+                                        .color(theme_muted(ui)),
+                                )
+                            },
                         );
                     }
                 });
@@ -247,146 +251,116 @@ impl QsonautGuiApp {
                 .id_salt("sstv_local_image_lab_scroll")
                 .max_height(body_height)
                 .auto_shrink([false, false])
-                .show(&mut right, |ui| egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                ui.label(RichText::new("📤 TX IMAGE").strong().color(theme_accent(ui)));
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("📂 OPEN IMAGE…").clicked() {
-                        self.sstv_file_dialog.pick_file();
-                    }
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.sstv_image_path)
-                            .hint_text("PNG/JPEG path")
-                            .desired_width((ui.available_width() - 62.0).max(120.0)),
-                    );
-                    if ui.small_button("LOAD").clicked() {
-                        match std::fs::read(self.sstv_image_path.trim()) {
-                            Ok(bytes) => self.install_sstv_image(&bytes, "Loaded image"),
-                            Err(error) => self.local_image_status = format!("Image load failed: {error}"),
-                        }
-                    }
-                });
-                if let Some(texture) = &self.sstv_tx_texture {
-                    let aspect = self.sstv_tx_height as f32 / self.sstv_tx_width.max(1) as f32;
-                    let width = ui.available_width().min(230.0 / aspect.max(0.01));
-                    ui.add(egui::Image::new((texture.id(), egui::vec2(width, width * aspect))).corner_radius(4.0));
-                } else {
-                    ui.label(RichText::new("Open or generate an image to prepare TX").small().color(theme_muted(ui)));
-                }
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("TX mode").strong());
-                    egui::ComboBox::from_id_salt("sstv_tx_mode")
-                        .selected_text(self.sstv_tx_mode.name())
-                        .show_ui(ui, |ui| {
-                            for &mode in qsonaut_sstv::supported_modes() {
-                                let (width, height) = mode.resolution();
-                                ui.selectable_value(
-                                    &mut self.sstv_tx_mode,
-                                    mode,
-                                    format!(
-                                        "{} · {}×{} · {:.0}s",
-                                        mode.name(),
-                                        width,
-                                        height,
-                                        qsonaut_sstv::mode_duration_seconds(mode),
-                                    ),
-                                );
+                .show(&mut right, |ui| {
+                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui.label(
+                            RichText::new("📤 TX IMAGE")
+                                .strong()
+                                .color(theme_accent(ui)),
+                        );
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button("📂 OPEN IMAGE…").clicked() {
+                                self.sstv_file_dialog.pick_file();
+                            }
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.sstv_image_path)
+                                    .hint_text("PNG/JPEG path")
+                                    .desired_width((ui.available_width() - 62.0).max(120.0)),
+                            );
+                            if ui.small_button("LOAD").clicked() {
+                                match std::fs::read(self.sstv_image_path.trim()) {
+                                    Ok(bytes) => self.install_sstv_image(&bytes, "Loaded image"),
+                                    Err(error) => {
+                                        self.local_image_status =
+                                            format!("Image load failed: {error}")
+                                    }
+                                }
                             }
                         });
-                });
-                ui.separator();
-                ui.label(RichText::new("🧠 LOCAL IMAGE LAB").strong());
-                ui.label(
-                    RichText::new("Hard local-only policy: HTTP requests are blocked unless the host is localhost or a loopback IP.")
-                        .small()
-                        .color(theme_accent(ui)),
-                );
-                let old_provider = self.local_image_settings.provider;
-                ui.horizontal(|ui| {
-                    ui.label("Server");
-                    egui::ComboBox::from_id_salt("sstv-local-provider")
-                        .selected_text(self.local_image_settings.provider.label())
-                        .show_ui(ui, |ui| {
-                            for provider in LocalImageProvider::ALL {
-                                ui.selectable_value(
-                                    &mut self.local_image_settings.provider,
-                                    provider,
-                                    provider.label(),
-                                );
-                            }
-                        });
-                });
-                if old_provider != self.local_image_settings.provider {
-                    self.local_image_models.clear();
-                    self.local_image_settings.model.clear();
-                }
-                let find_models = ui.horizontal(|ui| {
-                    ui.label("URL");
-                    match self.local_image_settings.provider {
-                        LocalImageProvider::Ollama => {
-                            ui.add(egui::TextEdit::singleline(&mut self.local_image_settings.ollama_url).desired_width((ui.available_width() - 105.0).max(160.0)));
-                        }
-                        LocalImageProvider::Lemonade => {
-                            ui.add(egui::TextEdit::singleline(&mut self.local_image_settings.lemonade_url).desired_width((ui.available_width() - 105.0).max(160.0)));
-                        }
-                    }
-                    ui.button("Find models").clicked()
-                }).inner;
-                if find_models {
-                    self.refresh_local_image_models();
-                }
-                ui.horizontal(|ui| {
-                    ui.label("Model");
-                    egui::ComboBox::from_id_salt("sstv-local-model")
-                        .selected_text(if self.local_image_settings.model.is_empty() {
-                            "Select a local model"
+                        if let Some(texture) = &self.sstv_tx_texture {
+                            let aspect =
+                                self.sstv_tx_height as f32 / self.sstv_tx_width.max(1) as f32;
+                            let width = ui.available_width().min(230.0 / aspect.max(0.01));
+                            ui.add(
+                                egui::Image::new((texture.id(), egui::vec2(width, width * aspect)))
+                                    .corner_radius(4.0),
+                            );
                         } else {
-                            &self.local_image_settings.model
-                        })
-                        .show_ui(ui, |ui| {
-                            for model in &self.local_image_models {
-                                ui.selectable_value(
-                                    &mut self.local_image_settings.model,
-                                    model.clone(),
-                                    model,
-                                );
+                            ui.label(
+                                RichText::new("Open or generate an image to prepare TX")
+                                    .small()
+                                    .color(theme_muted(ui)),
+                            );
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("TX mode").strong());
+                            egui::ComboBox::from_id_salt("sstv_tx_mode")
+                                .selected_text(self.sstv_tx_mode.name())
+                                .show_ui(ui, |ui| {
+                                    for &mode in qsonaut_sstv::supported_modes() {
+                                        let (width, height) = mode.resolution();
+                                        ui.selectable_value(
+                                            &mut self.sstv_tx_mode,
+                                            mode,
+                                            format!(
+                                                "{} · {}×{} · {:.0}s",
+                                                mode.name(),
+                                                width,
+                                                height,
+                                                qsonaut_sstv::mode_duration_seconds(mode),
+                                            ),
+                                        );
+                                    }
+                                });
+                        });
+                        ui.separator();
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("🧠 AI IMAGE").strong());
+                            ui.label(format!(
+                                "{} · {}",
+                                self.local_image_settings.provider.label(),
+                                if self.local_image_settings.model.is_empty() {
+                                    "no model selected"
+                                } else {
+                                    &self.local_image_settings.model
+                                }
+                            ));
+                            if ui.small_button("⚙ CONFIGURE AI").clicked() {
+                                self.signal_panel_tab = SignalPanelTab::Ai;
+                                self.show_signal_panel = true;
                             }
                         });
+                        if self.sstv_ai_prompt.is_empty() {
+                            self.sstv_ai_prompt = self.sstv_activity_prompt(&snapshot);
+                        }
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.sstv_ai_prompt)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(5)
+                                .hint_text("Describe the image to transmit"),
+                        );
+                        ui.horizontal(|ui| {
+                            if ui.button("Use current activity").clicked() {
+                                self.sstv_ai_prompt = self.sstv_activity_prompt(&snapshot);
+                            }
+                            if ui
+                                .add_enabled(
+                                    !self.local_image_settings.model.is_empty(),
+                                    egui::Button::new("✨ GENERATE LOCALLY"),
+                                )
+                                .clicked()
+                            {
+                                self.generate_local_sstv_image();
+                            }
+                        });
+                        ui.label(
+                            RichText::new(&self.local_image_status)
+                                .small()
+                                .color(theme_muted(ui)),
+                        );
+                    })
                 });
-                ui.horizontal(|ui| {
-                    ui.label("Output");
-                    ui.add(egui::DragValue::new(&mut self.local_image_settings.width).range(256..=2048));
-                    ui.label("×");
-                    ui.add(egui::DragValue::new(&mut self.local_image_settings.height).range(256..=2048));
-                    ui.separator();
-                    ui.label("Steps");
-                    ui.add(egui::DragValue::new(&mut self.local_image_settings.steps).range(1..=100));
-                });
-                if self.sstv_ai_prompt.is_empty() {
-                    self.sstv_ai_prompt = self.sstv_activity_prompt(&snapshot);
-                }
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.sstv_ai_prompt)
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(5)
-                        .hint_text("Describe the image to transmit"),
-                );
-                ui.horizontal(|ui| {
-                    if ui.button("Use current activity").clicked() {
-                        self.sstv_ai_prompt = self.sstv_activity_prompt(&snapshot);
-                    }
-                    if ui
-                        .add_enabled(
-                            !self.local_image_settings.model.is_empty(),
-                            egui::Button::new("✨ GENERATE LOCALLY"),
-                        )
-                        .clicked()
-                    {
-                        self.generate_local_sstv_image();
-                    }
-                });
-                ui.label(RichText::new(&self.local_image_status).small().color(theme_muted(ui)));
-                }));
         });
 
         ui.add_space(5.0);
@@ -477,7 +451,7 @@ impl QsonautGuiApp {
         )
     }
 
-    fn refresh_local_image_models(&mut self) {
+    pub(crate) fn refresh_local_image_models(&mut self) {
         if let Err(error) =
             local_ai::validate_loopback_endpoint(self.local_image_settings.endpoint())
         {
@@ -515,7 +489,7 @@ impl QsonautGuiApp {
         });
     }
 
-    fn poll_local_image_events(&mut self) {
+    pub(crate) fn poll_local_image_events(&mut self) {
         while let Ok(event) = self.local_image_event_rx.try_recv() {
             match event {
                 LocalImageEvent::Models(Ok(models)) => {

@@ -27,7 +27,7 @@ impl LocalImageProvider {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(super) struct LocalImageSettings {
     pub(super) provider: LocalImageProvider,
@@ -44,7 +44,7 @@ impl Default for LocalImageSettings {
         Self {
             provider: LocalImageProvider::Ollama,
             ollama_url: "http://127.0.0.1:11434".to_string(),
-            lemonade_url: "http://127.0.0.1:13305".to_string(),
+            lemonade_url: "http://localhost:13305/api/v1".to_string(),
             model: String::new(),
             width: 512,
             height: 512,
@@ -66,10 +66,14 @@ impl LocalImageSettings {
     }
 
     pub(super) fn load() -> Self {
-        std::fs::read_to_string(Self::path())
+        let mut settings: Self = std::fs::read_to_string(Self::path())
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if settings.lemonade_url == "http://127.0.0.1:13305" {
+            settings.lemonade_url = "http://localhost:13305/api/v1".to_string();
+        }
+        settings
     }
 
     pub(super) fn save(&self) -> Result<()> {
@@ -94,7 +98,7 @@ pub(super) fn list_models(settings: &LocalImageSettings) -> Result<Vec<String>> 
     let client = client()?;
     let endpoint = match settings.provider {
         LocalImageProvider::Ollama => base.join("/api/tags")?,
-        LocalImageProvider::Lemonade => base.join("/v1/models")?,
+        LocalImageProvider::Lemonade => openai_endpoint(&base, "models")?,
     };
     let value = read_json(
         client
@@ -160,7 +164,7 @@ pub(super) fn generate(settings: &LocalImageSettings, prompt: &str) -> Result<Ve
             }),
         ),
         LocalImageProvider::Lemonade => (
-            base.join("/v1/images/generations")?,
+            openai_endpoint(&base, "images/generations")?,
             json!({
                 "model": settings.model,
                 "prompt": prompt.trim(),
@@ -195,6 +199,16 @@ pub(super) fn generate(settings: &LocalImageSettings, prompt: &str) -> Result<Ve
     base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .context("local server returned invalid base64 image data")
+}
+
+fn openai_endpoint(base: &Url, path: &str) -> Result<Url> {
+    let mut normalized = base.clone();
+    if !normalized.path().ends_with('/') {
+        normalized.set_path(&format!("{}/", normalized.path()));
+    }
+    normalized
+        .join(path.trim_start_matches('/'))
+        .context("invalid OpenAI-compatible endpoint path")
 }
 
 pub(super) fn validate_loopback_endpoint(raw: &str) -> Result<Url> {
@@ -284,5 +298,14 @@ mod tests {
             parse_json_or_last_ndjson(b"{\"done\":false}\n{\"image\":\"abc\",\"done\":true}\n")
                 .unwrap();
         assert_eq!(value["image"], "abc");
+    }
+
+    #[test]
+    fn appends_openai_paths_to_lemonade_api_base() {
+        let base = Url::parse("http://localhost:13305/api/v1").unwrap();
+        assert_eq!(
+            openai_endpoint(&base, "models").unwrap().as_str(),
+            "http://localhost:13305/api/v1/models"
+        );
     }
 }

@@ -156,6 +156,7 @@ enum SignalPanelTab {
     Reporting,
     Waterfall,
     Settings,
+    Ai,
     Server,
     RadioTuning,
     AppLog,
@@ -3724,6 +3725,7 @@ impl eframe::App for QsonautGuiApp {
                             (SignalPanelTab::Reporting, "REPORTING"),
                             (SignalPanelTab::Waterfall, "WATERFALL"),
                             (SignalPanelTab::Settings, "SETTINGS"),
+                            (SignalPanelTab::Ai, "AI"),
                             (SignalPanelTab::Server, "SERVER"),
                             (SignalPanelTab::RadioTuning, "RADIO TUNING"),
                             (SignalPanelTab::AppLog, "APP LOG"),
@@ -3759,6 +3761,7 @@ impl eframe::App for QsonautGuiApp {
                                     self.draw_waterfall_panel(ui, &snapshot)
                                 }
                                 SignalPanelTab::Settings => self.draw_settings_panel(ui),
+                                SignalPanelTab::Ai => self.draw_ai_panel(ui),
                                 SignalPanelTab::Server => self.draw_server_panel(ui),
                                 SignalPanelTab::RadioTuning => {
                                     self.draw_radio_tuning_panel(ui, &snapshot)

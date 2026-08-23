@@ -565,6 +565,134 @@ impl QsonautGuiApp {
         }
     }
 
+    pub(in super::super) fn draw_ai_panel(&mut self, ui: &mut egui::Ui) {
+        self.poll_local_image_events();
+        ui.heading("🧠 AI Models");
+        ui.label(
+            RichText::new(
+                "Global model configuration for image generation and future AI-assisted activities.",
+            )
+            .small()
+            .color(theme_accent(ui)),
+        );
+        ui.label(
+            RichText::new(
+                "Local-only policy: QSONaut accepts HTTP endpoints only on localhost or a loopback IP.",
+            )
+            .small()
+            .color(Color32::GRAY),
+        );
+        ui.add_space(8.0);
+
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(RichText::new("Provider").strong());
+            let old_provider = self.local_image_settings.provider;
+            egui::ComboBox::from_id_salt("global-ai-provider")
+                .selected_text(self.local_image_settings.provider.label())
+                .show_ui(ui, |ui| {
+                    for provider in LocalImageProvider::ALL {
+                        ui.selectable_value(
+                            &mut self.local_image_settings.provider,
+                            provider,
+                            provider.label(),
+                        );
+                    }
+                });
+            if old_provider != self.local_image_settings.provider {
+                self.local_image_models.clear();
+                self.local_image_settings.model.clear();
+            }
+
+            ui.add_space(6.0);
+            ui.label(RichText::new("API base URL").strong());
+            match self.local_image_settings.provider {
+                LocalImageProvider::Ollama => {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.local_image_settings.ollama_url)
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.label(
+                        RichText::new("Default: http://127.0.0.1:11434")
+                            .small()
+                            .color(Color32::GRAY),
+                    );
+                }
+                LocalImageProvider::Lemonade => {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.local_image_settings.lemonade_url)
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.label(
+                        RichText::new("Default: http://localhost:13305/api/v1")
+                            .small()
+                            .color(Color32::GRAY),
+                    );
+                }
+            }
+
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("🔌 FIND MODELS").clicked() {
+                    let _ = self.local_image_settings.save();
+                    self.refresh_local_image_models();
+                }
+                ui.label(
+                    RichText::new(&self.local_image_status)
+                        .small()
+                        .color(Color32::GRAY),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("Image model");
+                egui::ComboBox::from_id_salt("global-ai-image-model")
+                    .selected_text(if self.local_image_settings.model.is_empty() {
+                        "Select a model"
+                    } else {
+                        &self.local_image_settings.model
+                    })
+                    .show_ui(ui, |ui| {
+                        for model in &self.local_image_models {
+                            ui.selectable_value(
+                                &mut self.local_image_settings.model,
+                                model.clone(),
+                                model,
+                            );
+                        }
+                    });
+            });
+
+            ui.add_space(6.0);
+            ui.label(RichText::new("Image generation defaults").strong());
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Size");
+                ui.add(
+                    egui::DragValue::new(&mut self.local_image_settings.width).range(256..=2048),
+                );
+                ui.label("×");
+                ui.add(
+                    egui::DragValue::new(&mut self.local_image_settings.height).range(256..=2048),
+                );
+                ui.separator();
+                ui.label("Steps");
+                ui.add(egui::DragValue::new(&mut self.local_image_settings.steps).range(1..=100));
+            });
+
+            ui.add_space(8.0);
+            if ui.button("💾 SAVE AI SETTINGS").clicked() {
+                self.local_image_status = match local_ai::validate_loopback_endpoint(
+                    self.local_image_settings.endpoint(),
+                ) {
+                    Ok(_) => match self.local_image_settings.save() {
+                        Ok(()) => "AI settings saved".to_string(),
+                        Err(error) => format!("AI settings save failed: {error}"),
+                    },
+                    Err(error) => error.to_string(),
+                };
+            }
+        });
+    }
+
     pub(in super::super) fn draw_settings_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("Settings");
         ui.separator();
