@@ -240,6 +240,14 @@ pub(crate) fn spawn_radio_worker(
                         ) {
                             Ok(()) => {
                                 last_scope_config = Some(config);
+                                info!(
+                                    view = ?config.view,
+                                    span_code = config.span_code,
+                                    vbw_wide = config.vbw_wide,
+                                    hold = config.hold,
+                                    reference_tenths_db = config.reference_tenths_db,
+                                    "Radio scope configured"
+                                );
                                 let mut s = stream_state.lock().expect("ui state lock poisoned");
                                 if geometry_changed {
                                     s.radio_waterfall_rows.clear();
@@ -267,7 +275,10 @@ pub(crate) fn spawn_radio_worker(
                         let mut s = stream_state.lock().expect("ui state lock poisoned");
                         s.radio_spectrum_enabled = false;
                         match disable_result {
-                            Ok(()) => s.radio_waterfall_status = "OFF".to_string(),
+                            Ok(()) => {
+                                s.radio_waterfall_status = "OFF".to_string();
+                                info!("Radio spectrum stream disabled");
+                            }
                             Err(err) => {
                                 s.radio_waterfall_status = "DISABLE ERROR".to_string();
                                 s.last_error = Some(err.to_string());
@@ -290,6 +301,7 @@ pub(crate) fn spawn_radio_worker(
                             s.radio_waterfall_status = "READY · 475 bins".to_string();
                             s.last_error = None;
                             drop(s);
+                            info!(bins = bins.len(), "Radio spectrum stream enabled");
                             if let Some(ctx) = stream_repaint.get() {
                                 ctx.request_repaint();
                             }
