@@ -469,13 +469,9 @@ impl QsonautGuiApp {
         let mut rx_mode = snapshot.sstv_rx_mode;
         ui.horizontal_wrapped(|ui| {
             ui.heading("📺 SSTV");
-            if ui
-                .small_button("?")
-                .on_hover_text(
-                    "Calling frequencies are voluntary band-plan centers; confirm your license privileges and a clear channel before transmitting.\n\nAuto Target searches the filter for a complete shifted VIS header; Auto (VIS) then selects the image mode. Start before the header. Clicking the signal's 1900 Hz leader/pixel center switches to manual targeting.",
-                )
-                .clicked()
-            {}
+            ui.small_button("?").on_hover_text(
+                "Calling frequencies are voluntary band-plan centers; confirm your license privileges and a clear channel before transmitting.\n\nAuto Target searches the filter for a complete shifted VIS header; Auto (VIS) then selects the image mode. Start before the header. Clicking the signal's 1900 Hz leader/pixel center switches to manual targeting.",
+            );
             let debug_active = snapshot.sstv_debug_capture_requested;
             let debug_label = if debug_active {
                 "🐞 DEBUG ARMED"
