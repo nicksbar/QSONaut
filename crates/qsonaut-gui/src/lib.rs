@@ -1238,6 +1238,27 @@ fn native_radio_profile(
         .flatten()
 }
 
+fn format_swr_display(model: &str, normalized: Option<u8>) -> String {
+    let Some(level) = normalized else {
+        return "unavailable".to_string();
+    };
+    if model.eq_ignore_ascii_case("IC-7300") {
+        // The IC-7300 manual documents these CI-V meter anchors. Interpolate
+        // only between known points; do not invent a ratio above the documented
+        // 3.0:1 anchor.
+        let anchors = [(0_u8, 1.0_f32), (48, 1.5), (80, 2.0), (120, 3.0)];
+        if let Some(window) = anchors.windows(2).find(|window| level <= window[1].0) {
+            let (low_level, low_ratio) = window[0];
+            let (high_level, high_ratio) = window[1];
+            let fraction =
+                f32::from(level.saturating_sub(low_level)) / f32::from(high_level - low_level);
+            return format!("{:.2}:1", low_ratio + fraction * (high_ratio - low_ratio));
+        }
+        return ">3.00:1".to_string();
+    }
+    format!("meter {level}/255")
+}
+
 /// Native window geometry restored by QSONaut instead of eframe. Applying it to
 /// the `ViewportBuilder` means winit configures the window once, while it is
 /// still hidden, instead of showing and re-hiding it for each late change.
@@ -4030,8 +4051,8 @@ impl eframe::App for QsonautGuiApp {
                             }
                             ui.separator();
                             ui.label(format!(
-                                "SWR level: {} / 255 (normalized)",
-                                snapshot.swr.map(|value| value.to_string()).unwrap_or_else(|| "unavailable".to_string())
+                                "SWR: {}",
+                                format_swr_display(&self.config.radio.model, snapshot.swr)
                             ));
                             ui.colored_label(
                                 Color32::YELLOW,
@@ -4306,10 +4327,15 @@ impl eframe::App for QsonautGuiApp {
                                     ui.horizontal(|ui| {
                                         ui.label(label);
                                         let fraction = value.map_or(0.0, |raw| f32::from(raw) / 255.0);
+                                        let text = if id == MeterId::Swr {
+                                            format_swr_display(&self.config.radio.model, value)
+                                        } else {
+                                            value.map_or_else(|| "—".to_string(), |raw| format!("{raw}/255"))
+                                        };
                                         ui.add(
                                             egui::ProgressBar::new(fraction)
                                                 .desired_width(120.0)
-                                                .text(value.map_or_else(|| "—".to_string(), |raw| format!("{raw}/255"))),
+                                                .text(text),
                                         );
                                     });
                                 }
@@ -4956,6 +4982,21 @@ mod tests {
         );
         assert!(native_radio_profile("rigctld", "IC-7300").is_none());
         assert!(native_radio_profile("null", "IC-7300").is_none());
+    }
+
+    #[test]
+    fn swr_display_uses_documented_ic7300_ratio_anchors() {
+        assert_eq!(format_swr_display("IC-7300", Some(0)), "1.00:1");
+        assert_eq!(format_swr_display("IC-7300", Some(48)), "1.50:1");
+        assert_eq!(format_swr_display("IC-7300", Some(80)), "2.00:1");
+        assert_eq!(format_swr_display("IC-7300", Some(120)), "3.00:1");
+        assert_eq!(format_swr_display("IC-7300", Some(121)), ">3.00:1");
+        assert_eq!(format_swr_display("IC-7300", None), "unavailable");
+    }
+
+    #[test]
+    fn swr_display_does_not_claim_unverified_vendor_ratios() {
+        assert_eq!(format_swr_display("FTDX10", Some(128)), "meter 128/255");
     }
 
     fn decode_pcm_samples(bytes: &[u8]) -> Vec<i16> {
