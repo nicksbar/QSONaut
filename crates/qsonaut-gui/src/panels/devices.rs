@@ -209,6 +209,33 @@ impl QsonautGuiApp {
                     });
                 ui.end_row();
 
+                ui.label("RX monitor output");
+                egui::ComboBox::from_id_salt("settings_monitor_output_device")
+                    .selected_text(
+                        self.config
+                            .audio
+                            .monitor_output_device
+                            .as_deref()
+                            .or(self.config.audio.output_device.as_deref())
+                            .unwrap_or("Audio output device"),
+                    )
+                    .width(ui.available_width().max(180.0))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.config.audio.monitor_output_device,
+                            None,
+                            "Use audio output device",
+                        );
+                        for name in &output_devices {
+                            ui.selectable_value(
+                                &mut self.config.audio.monitor_output_device,
+                                Some(name.clone()),
+                                name,
+                            );
+                        }
+                    });
+                ui.end_row();
+
                 ui.label("Radio / USB serial");
                 egui::ComboBox::from_id_salt("radio_serial_port")
                     .selected_text(match self.config.radio.serial_port.as_deref() {
@@ -251,28 +278,8 @@ impl QsonautGuiApp {
             });
 
         ui.add_space(6.0);
-        ui.label(RichText::new("RX monitor diagnostics").strong());
-        ui.label(
-            RichText::new("The monitor plays captured audio from the selected monitor output.")
-                .small()
-                .color(theme_muted(ui)),
-        );
-        ui.horizontal(|ui| {
-            ui.label("Monitor volume");
-            let mut volume = self.config.audio.monitor_volume;
-            if ui
-                .add(egui::Slider::new(&mut volume, 0.0..=2.0).suffix("×"))
-                .changed()
-            {
-                self.config.audio.monitor_volume = volume;
-                self.monitor_volume
-                    .store(volume.to_bits(), Ordering::Relaxed);
-                self.profile_dirty = true;
-                self.persist_profile("RX monitor volume saved to");
-            }
-        });
-
-        ui.add_space(6.0);
+        /* Radio capability details are intentionally kept out of Settings. */
+        /*
         if matches!(
             self.config.radio.backend.to_ascii_lowercase().as_str(),
             "null" | "mock"
@@ -345,6 +352,7 @@ impl QsonautGuiApp {
                 .color(theme_warning(ui)),
             );
         }
+        */
         let backend = self.config.radio.backend.to_ascii_lowercase();
         let backend_details = if matches!(backend.as_str(), "native" | "null" | "mock") {
             format!(
@@ -463,40 +471,6 @@ fn selected_radio_label(model: &str) -> String {
         .unwrap_or_else(|| format!("Unknown profile: {model}"))
 }
 
-fn radio_capability_summary(profile: qsonaut_radio::models::RadioModelProfile) -> String {
-    let capabilities = profile.driver_capabilities();
-    let mut labels = Vec::new();
-    if capabilities.can_get_frequency && capabilities.can_set_frequency {
-        labels.push("frequency");
-    }
-    if capabilities.can_get_mode && capabilities.can_set_mode {
-        labels.push("mode");
-    }
-    if capabilities.can_set_ptt {
-        labels.push(if capabilities.can_get_ptt {
-            "read/write PTT"
-        } else {
-            "write-only PTT"
-        });
-    }
-    if profile.supports_control(ControlId::AfGain) {
-        labels.push("AF gain");
-    }
-    if profile.supports_control(ControlId::RfPower) {
-        labels.push("RF power");
-    }
-    if profile.supports_control(ControlId::Filter) {
-        labels.push("filter");
-    }
-    if profile.supports_control(ControlId::Split) {
-        labels.push("split");
-    }
-    if profile.capabilities.spectrum {
-        labels.push("spectrum");
-    }
-    labels.join(", ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,11 +480,6 @@ mod tests {
         assert_eq!(
             selected_radio_label("FTDX10"),
             "Yaesu FTDX10 — experimental"
-        );
-        assert!(radio_capability_summary(*find_model("FTDX10").unwrap()).contains("split"));
-        assert!(!radio_capability_summary(*find_model("FT-991A").unwrap()).contains("split"));
-        assert!(
-            radio_capability_summary(*find_model("TS-890S").unwrap()).contains("write-only PTT")
         );
     }
 
@@ -529,7 +498,6 @@ mod tests {
             ),
         ] {
             assert_eq!(selected_radio_label(model), label);
-            assert!(radio_capability_summary(*find_model(model).unwrap()).contains("frequency"));
         }
     }
 

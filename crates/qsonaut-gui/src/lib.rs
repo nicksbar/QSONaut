@@ -48,8 +48,9 @@ use qsonaut_radio::{
         open_dxlab, open_model_with_radio_address, open_null, open_rigctld, ConfiguredRadio,
     },
     enumerate_serial_port_descriptors,
-    models::{find_model, Manufacturer, Protocol, SupportLevel, POPULAR_RADIOS},
-    BaseMode, ControlId, ControlValue, IcomCiVRadio, Mode, Radio, SerialPortDescriptor,
+    models::{find_model, Manufacturer, Protocol, POPULAR_RADIOS},
+    BaseMode, ControlId, ControlValue, IcomCiVRadio, MeterId, Mode, Radio, SerialPortDescriptor,
+    TunerStatus,
 };
 use qsonaut_server_client::{
     log_idempotency_key, new_instance_id, ConnectionConfig as ServerConnectionConfig,
@@ -68,6 +69,16 @@ use tokio::sync::broadcast::error::TryRecvError;
 use tracing::{debug, error, info, warn};
 
 const QSONAUT_ICON_PNG: &[u8] = include_bytes!("../../../assets/branding/qsonaut-icon.png");
+
+fn swr_ratio_label(raw: u8) -> &'static str {
+    match raw {
+        0..=31 => "1.0",
+        32..=63 => "1.5",
+        64..=99 => "2.0",
+        100..=139 => "3.0",
+        _ => ">3.0",
+    }
+}
 
 use activity::{draw_activity_icon, OperatingActivity};
 use automation_hunter::{
@@ -872,6 +883,25 @@ struct GuiState {
     af_gain: Option<u8>,
     rf_gain: Option<u8>,
     rf_power: Option<u8>,
+    squelch: Option<u8>,
+    preamp: Option<u8>,
+    attenuator: Option<u8>,
+    noise_blank: Option<bool>,
+    noise_reduction: Option<bool>,
+    ip_plus: Option<bool>,
+    notch_auto: Option<bool>,
+    notch_manual: Option<bool>,
+    agc: Option<u8>,
+    swr: Option<u8>,
+    tuner_status: Option<TunerStatus>,
+    swr_sweep_active: bool,
+    swr_sweep_status: String,
+    swr_sweep_points: Vec<(u64, u8)>,
+    swr_sweep_start_hz: u64,
+    swr_sweep_stop_hz: u64,
+    swr_sweep_step_hz: u64,
+    swr_sweep_interval_ms: u64,
+    swr_sweep_band: Option<String>,
     radio_power_on: Option<bool>,
     radio_power_supported: bool,
     radio_power_command_pending: bool,
@@ -947,6 +977,25 @@ impl Default for GuiState {
             af_gain: None,
             rf_gain: None,
             rf_power: None,
+            squelch: None,
+            preamp: None,
+            attenuator: None,
+            noise_blank: None,
+            noise_reduction: None,
+            ip_plus: None,
+            notch_auto: None,
+            notch_manual: None,
+            agc: None,
+            swr: None,
+            tuner_status: None,
+            swr_sweep_active: false,
+            swr_sweep_status: "Idle".to_string(),
+            swr_sweep_points: Vec::new(),
+            swr_sweep_start_hz: 14_060_000,
+            swr_sweep_stop_hz: 14_080_000,
+            swr_sweep_step_hz: 1_000,
+            swr_sweep_interval_ms: 500,
+            swr_sweep_band: None,
             radio_power_on: None,
             radio_power_supported: false,
             radio_power_command_pending: false,
@@ -1029,6 +1078,13 @@ enum GuiCommand {
     SetPtt(bool),
     SetPttWithAck(bool, mpsc::Sender<std::result::Result<(), String>>),
     SetPower(bool),
+    StartTuner,
+    StartSwrSweep {
+        start_hz: u64,
+        stop_hz: u64,
+        step_hz: u64,
+        interval_ms: u64,
+    },
     Quit,
 }
 
@@ -1438,6 +1494,7 @@ struct QsonautGuiApp {
     state: Arc<Mutex<GuiState>>,
     command_tx: Option<mpsc::Sender<GuiCommand>>,
     radio_worker_stop: Arc<AtomicBool>,
+    swr_sweep_abort: Arc<AtomicBool>,
     audio_worker_stop: Arc<AtomicBool>,
     radio_init_rx: Option<mpsc::Receiver<Option<ConfiguredRadio>>>,
     hamdb_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
@@ -1709,6 +1766,7 @@ impl QsonautGuiApp {
         let (automation_host, automation_status, automation_external_transports) =
             bootstrap_automation_host();
         let radio_worker_stop = Arc::new(AtomicBool::new(false));
+        let swr_sweep_abort = Arc::new(AtomicBool::new(false));
         let audio_worker_stop = Arc::new(AtomicBool::new(false));
         let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
 
@@ -2117,6 +2175,7 @@ impl QsonautGuiApp {
             state,
             command_tx,
             radio_worker_stop,
+            swr_sweep_abort,
             audio_worker_stop,
             radio_init_rx,
             hamdb_lookup_rx: None,
@@ -3490,6 +3549,7 @@ impl eframe::App for QsonautGuiApp {
                             radio,
                             self.state.clone(),
                             self.radio_worker_stop.clone(),
+                            self.swr_sweep_abort.clone(),
                             self.display_tuning.clone(),
                             rx,
                             self.repaint_ctx.clone(),
@@ -3812,32 +3872,459 @@ impl eframe::App for QsonautGuiApp {
                     .on_hover_text(
                         "Enabled radio tuning profile for this QSONaut mode; edit it in RADIO TUNING",
                     );
-                    ui.label(
-                        RichText::new(format!(
-                            "AF {} · RF {} · PWR {}",
-                            snapshot.af_gain.map_or("—".to_string(), |value| value.to_string()),
-                            snapshot.rf_gain.map_or("—".to_string(), |value| value.to_string()),
-                            snapshot.rf_power.map_or("—".to_string(), |value| value.to_string()),
-                        ))
-                        .small()
-                        .monospace()
-                        .color(Color32::GRAY),
-                    )
-                    .on_hover_text("Current values reported by the radio");
-                    ui.separator();
-                    ui.label(
-                        RichText::new(format!(
-                            "RX {} · TX {} Hz",
-                            self.rx_tone_hz, self.tx_tone_hz
-                        ))
-                        .monospace()
-                        .color(Color32::from_rgb(135, 220, 145)),
+                    let native_profile = native_radio_profile(
+                        &self.config.radio.backend,
+                        &self.config.radio.model,
                     );
-                    let monitor_label = if self.config.audio.monitor_enabled {
-                        "🎧 RX MONITOR ON"
-                    } else {
-                        "🎧 RX MONITOR OFF"
+                    let radio_ready = snapshot.radio_power_on == Some(true)
+                        && !snapshot.radio_power_command_pending;
+                    let supports_control = |id| {
+                        native_profile.is_some_and(|profile| profile.supports_control(id))
                     };
+                    let tuning_color = if !radio_ready {
+                        Color32::GRAY
+                    } else if [ControlId::AfGain, ControlId::RfGain, ControlId::RfPower]
+                        .iter()
+                        .all(|id| supports_control(*id))
+                    {
+                        Color32::LIGHT_BLUE
+                    } else {
+                        Color32::from_rgb(180, 180, 190)
+                    };
+                    let tuning_menu = ui.menu_button(
+                        RichText::new("RX/TX").small().monospace().color(tuning_color),
+                        |ui| {
+                            ui.horizontal(|ui| {
+                                for (label, id, value, tooltip) in [
+                                    (
+                                        "AF",
+                                        ControlId::AfGain,
+                                        snapshot.af_gain,
+                                        "Audio receive gain",
+                                    ),
+                                    (
+                                        "RF",
+                                        ControlId::RfGain,
+                                        snapshot.rf_gain,
+                                        "RF receive gain",
+                                    ),
+                                    (
+                                        "SQ",
+                                        ControlId::Squelch,
+                                        snapshot.squelch,
+                                        "Squelch threshold",
+                                    ),
+                                    (
+                                        "TX",
+                                        ControlId::RfPower,
+                                        snapshot.rf_power,
+                                        "RF transmit power",
+                                    ),
+                                ] {
+                                    ui.vertical(|ui| {
+                                        ui.label(label);
+                                        let mut percent = value
+                                            .map(|raw| f32::from(raw) * 100.0 / 255.0)
+                                            .unwrap_or_default();
+                                        let response = ui.add_enabled(
+                                            supports_control(id) && radio_ready,
+                                            egui::Slider::new(&mut percent, 0.0..=100.0)
+                                                .step_by(1.0)
+                                                .vertical()
+                                                .show_value(false),
+                                        );
+                                        ui.label(format!("{percent:.0}%"));
+                                        if response.changed() && response.drag_stopped() {
+                                            let normalized = (percent.clamp(0.0, 100.0) * 255.0
+                                                / 100.0)
+                                                .round()
+                                                as u8;
+                                            self.send_command(GuiCommand::SetControl(
+                                                id,
+                                                ControlValue::U8(normalized),
+                                            ));
+                                        }
+                                        response.on_hover_text(if !supports_control(id) {
+                                            "This control is not supported by the loaded radio profile"
+                                        } else if !radio_ready {
+                                            "Unavailable while the radio is offline or waking"
+                                        } else {
+                                            tooltip
+                                        });
+                                    });
+                                }
+                            });
+                        },
+                    );
+                    tuning_menu.response.on_hover_text(
+                        "Click for receive-gain and transmit-power controls; values are percentages",
+                    );
+                    if supports_control(ControlId::Tuner) {
+                        let tuner_color = if snapshot.tuner_status.is_some_and(|status| status.tuning) {
+                            Color32::YELLOW
+                        } else if snapshot.tuner_status.is_some_and(|status| status.enabled) {
+                            Color32::LIGHT_GREEN
+                        } else {
+                            Color32::GRAY
+                        };
+                        ui.menu_button(RichText::new("TUNE").color(tuner_color), |ui| {
+                            ui.label(if snapshot.tuner_status.is_some_and(|status| status.tuning) {
+                                "Tuning in progress"
+                            } else if snapshot.tuner_status.is_some_and(|status| status.enabled) {
+                                "Tuner enabled"
+                            } else {
+                                "Tuner disabled"
+                            });
+                            ui.horizontal(|ui| {
+                                let enabled = snapshot.tuner_status.is_some_and(|status| status.enabled);
+                                if ui
+                                    .add_enabled(
+                                        radio_ready && !snapshot.swr_sweep_active,
+                                        egui::Button::new(if enabled { "Disable" } else { "Enable" }),
+                                    )
+                                    .clicked()
+                                {
+                                    self.send_command(GuiCommand::SetControl(
+                                        ControlId::Tuner,
+                                        ControlValue::Bool(!enabled),
+                                    ));
+                                    ui.close();
+                                }
+                                if ui
+                                    .add_enabled(radio_ready && !snapshot.swr_sweep_active, egui::Button::new("Tune"))
+                                    .on_hover_text("Start the radio's antenna-tuner cycle; this may transmit")
+                                    .clicked()
+                                {
+                                    self.send_command(GuiCommand::StartTuner);
+                                    ui.close();
+                                }
+                            });
+                        }).response.on_hover_text("Enable the antenna tuner or start tuning");
+                        if let Some((band_start, band_stop, band_name)) =
+                            band_edges_for_frequency(snapshot.frequency_hz)
+                        {
+                            let mut state = self.state.lock().expect("ui state lock poisoned");
+                            if state.swr_sweep_band.as_deref() != Some(band_name) {
+                                let width = band_stop.saturating_sub(band_start);
+                                state.swr_sweep_start_hz = band_start;
+                                state.swr_sweep_stop_hz = band_stop;
+                                state.swr_sweep_step_hz = (width / 100).max(1_000);
+                                state.swr_sweep_band = Some(band_name.to_string());
+                            }
+                        }
+                        let swr_button = ui
+                            .button(RichText::new("SWR").color(Color32::LIGHT_BLUE))
+                            .on_hover_text("Read the SWR meter or scan the active band");
+                        egui::Popup::menu(&swr_button)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            .show(|ui| {
+                            ui.label("SWR meter and sweep");
+                            if let Some((band_start, band_stop, band_name)) =
+                                band_edges_for_frequency(snapshot.frequency_hz)
+                            {
+                                ui.label(format!(
+                                    "Active band: {band_name} ({band_start}–{band_stop} Hz)"
+                                ));
+                            } else {
+                                ui.label("Active band unavailable; enter a manual range");
+                            }
+                            ui.separator();
+                            ui.label(format!(
+                                "Meter: {}",
+                                snapshot.swr.map(|value| format!("raw {value} ({}:1 approx)", swr_ratio_label(value))).unwrap_or_else(|| "unavailable".to_string())
+                            ));
+                            ui.colored_label(
+                                Color32::YELLOW,
+                                "SWR sweep: RTTY carrier at 5% power; TX is restored afterward.",
+                            );
+                            ui.horizontal(|ui| {
+                                ui.label("Start");
+                                ui.add(egui::DragValue::new(&mut self.state.lock().expect("ui state lock poisoned").swr_sweep_start_hz).speed(100.0));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Stop");
+                                ui.add(egui::DragValue::new(&mut self.state.lock().expect("ui state lock poisoned").swr_sweep_stop_hz).speed(100.0));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Step");
+                                ui.add(egui::DragValue::new(&mut self.state.lock().expect("ui state lock poisoned").swr_sweep_step_hz).speed(100.0));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Interval ms");
+                                ui.add(egui::DragValue::new(&mut self.state.lock().expect("ui state lock poisoned").swr_sweep_interval_ms).range(100..=10_000));
+                            });
+                            let sweep_enabled = radio_ready && !snapshot.swr_sweep_active;
+                            if ui.add_enabled(sweep_enabled, egui::Button::new("Start TX SWR sweep")).clicked() {
+                                self.swr_sweep_abort.store(false, Ordering::Relaxed);
+                                let s = self.state.lock().expect("ui state lock poisoned");
+                                self.send_command(GuiCommand::StartSwrSweep {
+                                    start_hz: s.swr_sweep_start_hz,
+                                    stop_hz: s.swr_sweep_stop_hz,
+                                    step_hz: s.swr_sweep_step_hz,
+                                    interval_ms: s.swr_sweep_interval_ms,
+                                });
+                            }
+                            if snapshot.swr_sweep_active {
+                                ui.spinner();
+                                if ui.button("Stop sweep").clicked() {
+                                    self.swr_sweep_abort.store(true, Ordering::Relaxed);
+                                }
+                            }
+                            ui.label(&snapshot.swr_sweep_status);
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(420.0, 180.0), egui::Sense::hover());
+                            let painter = ui.painter_at(rect);
+                            painter.rect_filled(rect, 2.0, Color32::from_gray(24));
+                            let points = &snapshot.swr_sweep_points;
+                            let chart_left = rect.left() + 42.0;
+                            let chart_right = rect.right() - 8.0;
+                            let chart_top = rect.top() + 10.0;
+                            let chart_bottom = rect.bottom() - 22.0;
+                            let chart_rect = egui::Rect::from_min_max(
+                                egui::pos2(chart_left, chart_top),
+                                egui::pos2(chart_right, chart_bottom),
+                            );
+                            for (raw, label) in [(0_u8, "1.0"), (48, "1.5"), (80, "2.0"), (120, "3+")] {
+                                let y = chart_bottom
+                                    - (f32::from(raw) / 120.0) * chart_rect.height();
+                                painter.line_segment(
+                                    [egui::pos2(chart_left, y), egui::pos2(chart_right, y)],
+                                    egui::Stroke::new(1.0_f32, Color32::from_gray(65)),
+                                );
+                                painter.text(
+                                    egui::pos2(rect.left() + 4.0, y - 7.0),
+                                    egui::Align2::LEFT_TOP,
+                                    label,
+                                    egui::FontId::monospace(10.0),
+                                    Color32::GRAY,
+                                );
+                            }
+                            if points.len() > 1 {
+                                let min_hz = points.first().map(|point| point.0).unwrap_or(0) as f32;
+                                let max_hz = points.last().map(|point| point.0).unwrap_or(1).max(points.first().map(|point| point.0).unwrap_or(0) + 1) as f32;
+                                let polyline: Vec<_> = points.iter().map(|(hz, raw)| {
+                                    let x = chart_left + ((*hz as f32 - min_hz) / (max_hz - min_hz)) * chart_rect.width();
+                                    let y = chart_bottom - (f32::from(*raw).min(120.0) / 120.0) * chart_rect.height();
+                                    egui::pos2(x, y)
+                                }).collect();
+                                painter.add(egui::Shape::line(polyline.clone(), egui::Stroke::new(2.0_f32, Color32::LIGHT_GREEN)));
+                                for point in polyline {
+                                    painter.circle_filled(point, 2.5, Color32::WHITE);
+                                }
+                                painter.text(
+                                    egui::pos2(chart_left, chart_bottom + 4.0),
+                                    egui::Align2::LEFT_TOP,
+                                    format!("{}", points.first().map(|point| point.0).unwrap_or(0)),
+                                    egui::FontId::monospace(10.0),
+                                    Color32::GRAY,
+                                );
+                                painter.text(
+                                    egui::pos2(chart_right, chart_bottom + 4.0),
+                                    egui::Align2::RIGHT_TOP,
+                                    format!("{}", points.last().map(|point| point.0).unwrap_or(0)),
+                                    egui::FontId::monospace(10.0),
+                                    Color32::GRAY,
+                                );
+                            } else if points.len() == 1 {
+                                painter.circle_filled(chart_rect.center(), 3.0, Color32::WHITE);
+                            }
+                            });
+                    }
+                    if supports_control(ControlId::NoiseBlanker) {
+                        let color = match snapshot.noise_blank {
+                            Some(true) => Color32::LIGHT_GREEN,
+                            Some(false) => Color32::GRAY,
+                            None => Color32::DARK_GRAY,
+                        };
+                        if ui
+                            .add_enabled(
+                                radio_ready,
+                                egui::Button::new(RichText::new("NB").color(Color32::WHITE))
+                                    .small()
+                                    .fill(color),
+                            )
+                            .on_hover_text("Toggle noise blanker")
+                            .clicked()
+                        {
+                            self.send_command(GuiCommand::SetControl(
+                                ControlId::NoiseBlanker,
+                                ControlValue::Bool(snapshot.noise_blank != Some(true)),
+                            ));
+                        }
+                    }
+                    if supports_control(ControlId::NoiseReduction) {
+                        let color = match snapshot.noise_reduction {
+                            Some(true) => Color32::LIGHT_GREEN,
+                            Some(false) => Color32::GRAY,
+                            None => Color32::DARK_GRAY,
+                        };
+                        if ui
+                            .add_enabled(
+                                radio_ready,
+                                egui::Button::new(RichText::new("NR").color(Color32::WHITE))
+                                    .small()
+                                    .fill(color),
+                            )
+                            .on_hover_text("Toggle noise reduction")
+                            .clicked()
+                        {
+                            self.send_command(GuiCommand::SetControl(
+                                ControlId::NoiseReduction,
+                                ControlValue::Bool(snapshot.noise_reduction != Some(true)),
+                            ));
+                        }
+                    }
+                    if supports_control(ControlId::IpPlus) {
+                        let color = match snapshot.ip_plus {
+                            Some(true) => Color32::LIGHT_GREEN,
+                            Some(false) => Color32::GRAY,
+                            None => Color32::DARK_GRAY,
+                        };
+                        if ui
+                            .add_enabled(
+                                radio_ready,
+                                egui::Button::new(RichText::new("IP+").color(Color32::WHITE))
+                                    .small()
+                                    .fill(color),
+                            )
+                            .on_hover_text("Toggle Icom IP Plus receiver optimization")
+                            .clicked()
+                        {
+                            self.send_command(GuiCommand::SetControl(
+                                ControlId::IpPlus,
+                                ControlValue::Bool(snapshot.ip_plus != Some(true)),
+                            ));
+                        }
+                    }
+                    if supports_control(ControlId::Notch) {
+                        let notch_label = if snapshot.notch_manual == Some(true) {
+                            "MN"
+                        } else if snapshot.notch_auto == Some(true) {
+                            "AN"
+                        } else {
+                            "NT"
+                        };
+                        let notch_color = if snapshot.notch_auto == Some(true)
+                            || snapshot.notch_manual == Some(true)
+                        {
+                            Color32::LIGHT_GREEN
+                        } else {
+                            Color32::GRAY
+                        };
+                        ui.menu_button(
+                            RichText::new(notch_label).color(notch_color),
+                            |ui| {
+                                for (label, auto, manual) in [
+                                    ("Off", false, false),
+                                    ("Auto notch", true, false),
+                                    ("Manual notch", false, true),
+                                ] {
+                                    if ui
+                                        .selectable_label(
+                                            snapshot.notch_auto == Some(auto)
+                                                && snapshot.notch_manual == Some(manual),
+                                            label,
+                                        )
+                                        .clicked()
+                                    {
+                                        self.send_command(GuiCommand::SetControl(
+                                            ControlId::Notch,
+                                            ControlValue::Bool(auto),
+                                        ));
+                                        self.send_command(GuiCommand::SetControl(
+                                            ControlId::ManualNotch,
+                                            ControlValue::Bool(manual),
+                                        ));
+                                        ui.close();
+                                    }
+                                }
+                            },
+                        )
+                        .response
+                        .on_hover_text("Select off, auto notch, or manual notch");
+                    }
+                    if supports_control(ControlId::Agc) {
+                        let color = if snapshot.agc.is_some() {
+                            Color32::LIGHT_BLUE
+                        } else {
+                            Color32::DARK_GRAY
+                        };
+                        ui.menu_button(RichText::new("AGC").color(color), |ui| {
+                            for value in 0_u8..=3 {
+                                if ui
+                                    .selectable_label(snapshot.agc == Some(value), format!("AGC {value}"))
+                                    .clicked()
+                                {
+                                    self.send_command(GuiCommand::SetControl(
+                                        ControlId::Agc,
+                                        ControlValue::U8(value),
+                                    ));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
+                    if supports_control(ControlId::Preamp) {
+                        let color = match snapshot.preamp {
+                            Some(value) if value > 0 => Color32::LIGHT_GREEN,
+                            Some(_) => Color32::GRAY,
+                            None => Color32::DARK_GRAY,
+                        };
+                        let max_preamp = if self.config.radio.model == "IC-705"
+                            || self.config.radio.model == "IC-7610"
+                        {
+                            2
+                        } else {
+                            1
+                        };
+                        ui.menu_button(RichText::new("PRE").color(color), |ui| {
+                            for value in 0_u8..=max_preamp {
+                                if ui
+                                    .selectable_label(
+                                        snapshot.preamp == Some(value),
+                                        format!("PRE {value}"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.send_command(GuiCommand::SetControl(
+                                        ControlId::Preamp,
+                                        ControlValue::U8(value),
+                                    ));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
+                    if supports_control(ControlId::Attenuator) {
+                        let attenuator_values: &[u8] = match self.config.radio.model.as_str() {
+                            "IC-7610" => &[0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45],
+                            "IC-9700" => &[0, 10],
+                            _ => &[0, 20],
+                        };
+                        let color = match snapshot.attenuator {
+                            Some(value) if value > 0 => Color32::from_rgb(255, 190, 105),
+                            Some(_) => Color32::GRAY,
+                            None => Color32::DARK_GRAY,
+                        };
+                        ui.menu_button(RichText::new("ATT").color(color), |ui| {
+                            for &value in attenuator_values {
+                                if ui
+                                    .selectable_label(
+                                        snapshot.attenuator == Some(value),
+                                        format!("ATT {value}"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.send_command(GuiCommand::SetControl(
+                                        ControlId::Attenuator,
+                                        ControlValue::U8(value),
+                                    ));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
+                    ui.separator();
+                    let monitor_label = "MON";
                     let monitor_color = if self.config.audio.monitor_enabled {
                         Color32::LIGHT_GREEN
                     } else {
@@ -3856,74 +4343,71 @@ impl eframe::App for QsonautGuiApp {
                         self.persist_profile("Audio monitor saved to");
                         self.restart_audio();
                     }
-                    let old_monitor_output = self.config.audio.monitor_output_device.clone();
-                    egui::ComboBox::from_id_salt("top_audio_monitor_output")
-                        .selected_text(
-                            self.config
-                                .audio
-                                .monitor_output_device
-                                .as_deref()
-                                .or(self.config.audio.output_device.as_deref())
-                                .unwrap_or("Audio output"),
-                        )
-                        .width(180.0)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.config.audio.monitor_output_device,
-                                None,
-                                "Audio output",
+                    let (speaker_rect, speaker_button) = ui.allocate_exact_size(
+                        egui::vec2(28.0, 28.0),
+                        egui::Sense::click(),
+                    );
+                    let speaker_color = if self.config.audio.monitor_enabled {
+                        Color32::LIGHT_GREEN
+                    } else {
+                        Color32::GRAY
+                    };
+                    let speaker_painter = ui.painter_at(speaker_rect);
+                    let speaker_center = speaker_rect.center();
+                    speaker_painter.rect_filled(
+                        egui::Rect::from_center_size(
+                            egui::pos2(speaker_center.x - 5.0, speaker_center.y),
+                            egui::vec2(4.0, 9.0),
+                        ),
+                        1.0,
+                        speaker_color,
+                    );
+                    speaker_painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            egui::pos2(speaker_center.x - 3.0, speaker_center.y - 5.0),
+                            egui::pos2(speaker_center.x + 3.0, speaker_center.y - 9.0),
+                            egui::pos2(speaker_center.x + 3.0, speaker_center.y + 9.0),
+                            egui::pos2(speaker_center.x - 3.0, speaker_center.y + 5.0),
+                        ],
+                        speaker_color,
+                        egui::Stroke::NONE,
+                    ));
+                    speaker_painter.line_segment(
+                        [
+                            egui::pos2(speaker_center.x + 6.0, speaker_center.y - 5.0),
+                            egui::pos2(speaker_center.x + 9.0, speaker_center.y - 2.0),
+                        ],
+                        egui::Stroke::new(1.5_f32, speaker_color),
+                    );
+                    speaker_painter.line_segment(
+                        [
+                            egui::pos2(speaker_center.x + 6.0, speaker_center.y + 5.0),
+                            egui::pos2(speaker_center.x + 9.0, speaker_center.y + 2.0),
+                        ],
+                        egui::Stroke::new(1.5_f32, speaker_color),
+                    );
+                    let speaker_button = speaker_button.on_hover_text("RX monitor volume");
+                    egui::Popup::menu(&speaker_button).show(|ui| {
+                        ui.horizontal(|ui| {
+                            let mut volume = self.config.audio.monitor_volume.clamp(0.0, 2.0);
+                            let response = ui.add(
+                                egui::Slider::new(&mut volume, 0.0..=2.0)
+                                    .vertical()
+                                    .show_value(false),
                             );
-                            for name in &self.audio_output_devices {
-                                ui.selectable_value(
-                                    &mut self.config.audio.monitor_output_device,
-                                    Some(name.clone()),
-                                    name,
-                                );
+                            ui.vertical(|ui| {
+                                ui.label("RX");
+                                ui.label(format!("{:.0}%", volume * 100.0));
+                            });
+                            if response.changed() {
+                                self.config.audio.monitor_volume = volume;
+                                self.monitor_volume
+                                    .store(volume.to_bits(), Ordering::Relaxed);
+                                self.profile_dirty = true;
+                                self.persist_profile("RX monitor volume saved to");
                             }
                         });
-                    if old_monitor_output != self.config.audio.monitor_output_device {
-                        self.profile_dirty = true;
-                        self.persist_profile("Audio monitor output saved to");
-                        self.restart_audio();
-                    }
-                    let mut monitor_percent =
-                        (self.config.audio.monitor_volume.clamp(0.0, 2.0) * 100.0).round() as u16;
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut monitor_percent)
-                                .range(0..=200)
-                                .speed(1)
-                                .suffix("%"),
-                        )
-                        .on_hover_text("RX monitor volume · applies immediately")
-                        .changed()
-                    {
-                        self.config.audio.monitor_volume = f32::from(monitor_percent) / 100.0;
-                        self.monitor_volume.store(
-                            self.config.audio.monitor_volume.to_bits(),
-                            Ordering::Relaxed,
-                        );
-                        self.profile_dirty = true;
-                        self.persist_profile("RX monitor volume saved to");
-                    }
-                    let armed = self.any_tx_armed(&snapshot);
-                    ui.label(
-                        RichText::new(if snapshot.ptt_on {
-                            "🔥 ON AIR"
-                        } else if armed {
-                            "⚠ TX ARMED"
-                        } else {
-                            "🔒 TX SAFE"
-                        })
-                        .strong()
-                        .color(if snapshot.ptt_on {
-                            Color32::from_rgb(255, 95, 85)
-                        } else if armed {
-                            Color32::from_rgb(255, 170, 75)
-                        } else {
-                            Color32::from_rgb(100, 205, 225)
-                        }),
-                    );
+                    });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let power_known = snapshot.radio_power_on.is_some();
                         let power_on = snapshot.radio_power_on.unwrap_or(false);
