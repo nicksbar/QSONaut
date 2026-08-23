@@ -43,6 +43,11 @@ console. This is an honest capability snapshot, not a compatibility promise:
 | QSONaut Server | Optional WSS event/catalog sync, station presence, radio metadata, idempotent QSO publication, shared channels, and manual diagnostics. Each outbound data category is independently opt-in. |
 | Automation and compute | Permission-gated automation foundations and compute-backend detection exist; Discord/IRC connectors and GPU/NPU decoder kernels are not validated yet. |
 
+See the detailed [QSONaut feature matrix](docs/feature-matrix.md) for the
+implementation-level status of radio controls, normalized meters, SWR/tuner
+workflows, digital modes, SSTV, station tools, server integration, automation,
+and deliberate gaps.
+
 The primary development environment is Linux/WSL with USB audio and Icom CI-V.
 Windows and ARM build jobs exist, but a green build is not the same as hardware
 validation.
@@ -195,8 +200,7 @@ At minimum:
 1. Confirm the selected audio input/output and CI-V serial device.
 2. Verify dial frequency, mode, filter, data mode, RF power, and TX audio level.
 3. Start into a dummy load or minimum safe power where practical.
-4. Confirm **TX SAFE** really means PTT is released on your own hardware.
-5. Keep the global **STOP + DISARM ALL TX** control visible and tested.
+4. Keep the global **STOP + DISARM ALL TX** control visible and tested.
 
 You are responsible for lawful operation and for every transmission made with
 this software.
