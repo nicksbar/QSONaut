@@ -3501,6 +3501,47 @@ impl QsonautGuiApp {
                     self.send_command(GuiCommand::SetFilter(filter));
                 }
             }
+            ui.separator();
+            let radio_scope_supported =
+                native_radio_profile(&self.config.radio.backend, &self.config.radio.model)
+                    .is_some_and(|profile| profile.capabilities.spectrum);
+            ui.label(RichText::new("Radio scope").strong());
+            let radio_scope_detail = if !radio_scope_supported {
+                "unavailable".to_string()
+            } else {
+                let view = match self.radio_scope_view {
+                    RadioScopeView::Narrow => {
+                        format!("NARROW · {}", scope_span_label(self.radio_scope_span_code))
+                    }
+                    RadioScopeView::Overview => "ACTIVE BAND".to_string(),
+                };
+                format!("{view} · {}", snapshot.radio_waterfall_status)
+            };
+            ui.label(
+                RichText::new(radio_scope_detail)
+                    .small()
+                    .color(if radio_scope_supported {
+                        Color32::LIGHT_GREEN
+                    } else {
+                        Color32::GRAY
+                    }),
+            );
+            ui.separator();
+            let audio_bandwidth =
+                filter_bandwidth_hz(&snapshot.mode, snapshot.filter).min(AUDIO_MAX_FREQ_HZ);
+            let audio_filter = snapshot
+                .filter
+                .map(|filter| format!("FIL{filter}"))
+                .unwrap_or_else(|| "FIL?".to_string());
+            ui.label(RichText::new("Audio scope").strong());
+            ui.label(
+                RichText::new(format!(
+                    "RX/TX · 0–{audio_bandwidth} Hz · {} · {audio_filter}",
+                    snapshot.mode
+                ))
+                .small()
+                .color(Color32::LIGHT_BLUE),
+            );
         });
     }
 }
@@ -4607,26 +4648,6 @@ impl eframe::App for QsonautGuiApp {
             .default_height(self.waterfall_deck_height)
             .height_range(monitor_min_height..=monitor_max_height)
             .show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Waterfalls").strong());
-                    let wf_color = if snapshot.radio_spectrum_enabled {
-                        Color32::LIGHT_GREEN
-                    } else if self.civ_spectrum_on {
-                        theme_warning(ui)
-                    } else {
-                        Color32::GRAY
-                    };
-                    ui.label(
-                        RichText::new(&snapshot.radio_waterfall_status)
-                            .small()
-                            .color(wf_color),
-                    );
-                    ui.label(
-                        RichText::new("drag lower edge to resize")
-                            .small()
-                            .color(Color32::GRAY),
-                    );
-                });
                 // Own exactly the remainder of the panel. Waterfall controls and
                 // images may clip inside this child, but they must never enlarge
                 // the parent response and ratchet the saved panel height upward.
