@@ -872,6 +872,11 @@ struct GuiState {
     af_gain: Option<u8>,
     rf_gain: Option<u8>,
     rf_power: Option<u8>,
+    radio_power_on: Option<bool>,
+    radio_power_supported: bool,
+    radio_power_command_pending: bool,
+    radio_power_settling: bool,
+    radio_power_wake_deadline: Option<Instant>,
     ptt_on: bool,
     radio_spectrum_desired: bool,
     radio_spectrum_enabled: bool,
@@ -942,6 +947,11 @@ impl Default for GuiState {
             af_gain: None,
             rf_gain: None,
             rf_power: None,
+            radio_power_on: None,
+            radio_power_supported: false,
+            radio_power_command_pending: false,
+            radio_power_settling: false,
+            radio_power_wake_deadline: None,
             ptt_on: false,
             radio_spectrum_desired: false,
             radio_spectrum_enabled: false,
@@ -1018,6 +1028,7 @@ enum GuiCommand {
     SetControl(ControlId, ControlValue),
     SetPtt(bool),
     SetPttWithAck(bool, mpsc::Sender<std::result::Result<(), String>>),
+    SetPower(bool),
     Quit,
 }
 
@@ -3914,6 +3925,55 @@ impl eframe::App for QsonautGuiApp {
                         }),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let power_known = snapshot.radio_power_on.is_some();
+                        let power_on = snapshot.radio_power_on.unwrap_or(false);
+                        let (power_rect, power_button) = ui.allocate_exact_size(
+                            egui::vec2(28.0, 28.0),
+                            if snapshot.radio_power_supported
+                                && !snapshot.radio_power_command_pending
+                            {
+                                egui::Sense::click()
+                            } else {
+                                egui::Sense::hover()
+                            },
+                        );
+                        let power_color = if !snapshot.radio_power_supported {
+                            Color32::DARK_GRAY
+                        } else if !power_known {
+                            Color32::GRAY
+                        } else if power_on {
+                            Color32::LIGHT_GREEN
+                        } else {
+                            Color32::GRAY
+                        };
+                        let painter = ui.painter_at(power_rect);
+                        let center = power_rect.center();
+                        painter.circle_stroke(
+                            center,
+                            8.0,
+                            egui::Stroke::new(2.0_f32, power_color),
+                        );
+                        painter.line_segment(
+                            [
+                                egui::pos2(center.x, center.y - 11.0),
+                                egui::pos2(center.x, center.y + 1.0),
+                            ],
+                            egui::Stroke::new(2.0_f32, power_color),
+                        );
+                        if power_button.clicked() {
+                            self.state
+                                .lock()
+                                .expect("ui state lock poisoned")
+                                .radio_power_command_pending = true;
+                            self.send_command(GuiCommand::SetPower(!power_on));
+                        }
+                        power_button.on_hover_text(if !power_known {
+                            "Radio power: unknown · click to turn on"
+                        } else if power_on {
+                            "Radio power: ON · click to turn off"
+                        } else {
+                            "Radio power: OFF · click to turn on"
+                        });
                         ui.label(
                             RichText::new(format!(
                                 "📍 {} · {}",

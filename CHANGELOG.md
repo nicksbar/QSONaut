@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2026-08-23
+
+### Added
+- Added a capability-gated upper-right radio power button. Native modern
+  Icom CI-V, Yaesu CAT, and Kenwood PC-control drivers now expose documented
+  radio on/off commands; unsupported backends remain disabled.
+
 ## [0.3.7] - 2026-08-22
 
 ### Added

@@ -34,6 +34,10 @@ pub(crate) fn spawn_radio_worker(
     repaint_ctx: Arc<OnceLock<egui::Context>>,
 ) -> std::thread::JoinHandle<()> {
     thread::spawn(move || {
+        {
+            let mut s = state.lock().expect("ui state lock poisoned");
+            s.radio_power_supported = radio.capabilities().can_set_power;
+        }
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -87,6 +91,9 @@ pub(crate) fn spawn_radio_worker(
                 let (
                     spectrum_desired,
                     spectrum_enabled,
+                    power_on,
+                    power_settling,
+                    power_command_pending,
                     scope_view,
                     frequency_hz,
                     span_code,
@@ -100,6 +107,9 @@ pub(crate) fn spawn_radio_worker(
                     (
                         s.radio_spectrum_desired,
                         s.radio_spectrum_enabled,
+                        s.radio_power_on,
+                        s.radio_power_settling,
+                        s.radio_power_command_pending,
                         s.radio_scope_view,
                         s.frequency_hz,
                         s.radio_scope_span_code,
@@ -110,6 +120,25 @@ pub(crate) fn spawn_radio_worker(
                         s.radio_scope_reference_tenths_db,
                     )
                 };
+
+                // Do not send scope traffic while the radio state is unknown,
+                // powered off, or still waking. The initial state can be
+                // unknown briefly while the core worker performs its first
+                // probe, and sending CI-V scope commands during that window
+                // can delay a cold power-on.
+                if power_on != Some(true) || power_settling || power_command_pending {
+                    let mut s = stream_state.lock().expect("ui state lock poisoned");
+                    s.radio_spectrum_enabled = false;
+                    s.radio_waterfall_status = if power_on == Some(false) {
+                        "OFF (radio off)".to_string()
+                    } else {
+                        "WAITING FOR RADIO".to_string()
+                    };
+                    drop(s);
+                    last_scope_config = None;
+                    thread::sleep(Duration::from_millis(250));
+                    continue;
+                }
 
                 if spectrum_desired {
                     let scope_edges = match (scope_view, workspace_mode) {
@@ -290,6 +319,7 @@ pub(crate) fn spawn_radio_worker(
         poll_radio_core_state(&rt, &radio, &state, true);
         let mut next_core_poll = Instant::now() + RADIO_CORE_POLL_INTERVAL;
         let mut next_level_poll = Instant::now() + RADIO_LEVEL_POLL_INTERVAL;
+        let mut radio_power_settle_until = Instant::now();
 
         while !stop.load(Ordering::Relaxed) {
             let wait = next_core_poll
@@ -302,6 +332,22 @@ pub(crate) fn spawn_radio_worker(
             };
 
             if let Some(cmd) = cmd {
+                let radio_unavailable = {
+                    let s = state.lock().expect("ui state lock poisoned");
+                    s.radio_power_on == Some(false)
+                        || s.radio_power_command_pending
+                        || s.radio_power_settling
+                };
+                if radio_unavailable && !matches!(&cmd, GuiCommand::Quit | GuiCommand::SetPower(_))
+                {
+                    warn!(command = ?cmd, "Radio command skipped while radio is unavailable");
+                    let mut s = state.lock().expect("ui state lock poisoned");
+                    s.last_error = Some("radio command skipped: radio is unavailable".to_string());
+                    if let GuiCommand::SetPttWithAck(_, ack_tx) = &cmd {
+                        let _ = ack_tx.send(Err("radio is powered off".to_string()));
+                    }
+                    continue;
+                }
                 match cmd {
                     GuiCommand::Quit => return,
                     GuiCommand::TuneDelta(delta) => {
@@ -414,6 +460,35 @@ pub(crate) fn spawn_radio_worker(
                         }
                         let _ = ack_tx.send(result);
                         poll_radio_core_state(&rt, &radio, &state, true);
+                    }
+                    GuiCommand::SetPower(target) => {
+                        info!(power_on = target, "Radio power command requested");
+                        match rt.block_on(radio.set_power(target)) {
+                            Ok(()) => {
+                                info!(power_on = target, "Radio power command accepted");
+                                let mut s = state.lock().expect("ui state lock poisoned");
+                                // A successful write only means the command was
+                                // accepted. Do not show ON until a status probe
+                                // confirms that the radio has actually woken.
+                                s.radio_power_on = if target { None } else { Some(false) };
+                                s.radio_power_command_pending = target;
+                                s.radio_power_settling = target;
+                                s.radio_power_wake_deadline =
+                                    target.then_some(Instant::now() + Duration::from_secs(12));
+                                s.last_error = None;
+                            }
+                            Err(error) => {
+                                error!(power_on = target, error = %error, "Radio power command failed");
+                                let mut s = state.lock().expect("ui state lock poisoned");
+                                s.last_error = Some(error.to_string());
+                                s.radio_power_command_pending = false;
+                                s.radio_power_settling = false;
+                                s.radio_power_wake_deadline = None;
+                            }
+                        }
+                        if target {
+                            radio_power_settle_until = Instant::now() + Duration::from_secs(2);
+                        }
                     }
                     GuiCommand::ApplyWorkspace {
                         mode: workspace_mode,
@@ -581,7 +656,28 @@ pub(crate) fn spawn_radio_worker(
             }
 
             let now = Instant::now();
-            if now >= next_core_poll {
+            if now >= radio_power_settle_until {
+                let mut s = state.lock().expect("ui state lock poisoned");
+                s.radio_power_settling = false;
+            }
+            {
+                let mut s = state.lock().expect("ui state lock poisoned");
+                if s.radio_power_command_pending
+                    && s.radio_power_wake_deadline
+                        .is_some_and(|deadline| now >= deadline)
+                {
+                    warn!("Radio did not respond after power-on wake window");
+                    s.radio_power_on = Some(false);
+                    s.radio_power_command_pending = false;
+                    s.radio_power_settling = false;
+                    s.radio_power_wake_deadline = None;
+                    s.last_error = Some("radio did not respond after power-on command".to_string());
+                }
+            }
+            let power_off =
+                state.lock().expect("ui state lock poisoned").radio_power_on == Some(false);
+            let power_settling = now < radio_power_settle_until;
+            if now >= next_core_poll && !power_off && !power_settling {
                 let poll_levels = now >= next_level_poll;
                 poll_radio_core_state(&rt, &radio, &state, poll_levels);
                 next_core_poll = Instant::now() + RADIO_CORE_POLL_INTERVAL;
@@ -623,10 +719,22 @@ fn poll_radio_core_state(
                 }
                 .to_string();
                 s.data_mode = Some(mode == Mode::Data);
+                s.radio_power_on = Some(true);
+                s.radio_power_command_pending = false;
+                s.radio_power_settling = false;
+                s.radio_power_wake_deadline = None;
                 s.last_update = Some(Instant::now());
                 s.last_error = None;
             }
             (frequency, mode) => {
+                let wake_pending = s.radio_power_command_pending
+                    && s.radio_power_wake_deadline
+                        .is_some_and(|deadline| Instant::now() < deadline);
+                if !wake_pending {
+                    s.radio_power_on = Some(false);
+                    s.radio_power_command_pending = false;
+                    s.radio_power_wake_deadline = None;
+                }
                 s.last_error = Some(
                     frequency
                         .err()
@@ -649,6 +757,19 @@ fn poll_radio_core_state(
     } else {
         radio.probe()
     };
+    if let Err(error) = &status_result {
+        let mut s = state.lock().expect("ui state lock poisoned");
+        let wake_pending = s.radio_power_command_pending
+            && s.radio_power_wake_deadline
+                .is_some_and(|deadline| Instant::now() < deadline);
+        if !wake_pending {
+            s.radio_power_on = Some(false);
+            s.radio_power_command_pending = false;
+            s.radio_power_wake_deadline = None;
+            s.last_error = Some(error.to_string());
+        }
+        return;
+    }
     // IC-7300 mode status can report a misleading data byte through the
     // generic 0x04 response. Query the model-specific DataMode control for the
     // flag used by the UI label.
@@ -674,6 +795,10 @@ fn poll_radio_core_state(
     let filt = read_u8_control(rt, radio, ControlId::Filter);
     let mut s = state.lock().expect("ui state lock poisoned");
     if let Ok(status) = status_result {
+        s.radio_power_on = Some(true);
+        s.radio_power_command_pending = false;
+        s.radio_power_settling = false;
+        s.radio_power_wake_deadline = None;
         if let Some(freq) = status.frequency_hz {
             s.frequency_hz = Some(freq);
         }
