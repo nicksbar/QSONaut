@@ -70,16 +70,6 @@ use tracing::{debug, error, info, warn};
 
 const QSONAUT_ICON_PNG: &[u8] = include_bytes!("../../../assets/branding/qsonaut-icon.png");
 
-fn swr_ratio_label(raw: u8) -> &'static str {
-    match raw {
-        0..=31 => "1.0",
-        32..=63 => "1.5",
-        64..=99 => "2.0",
-        100..=139 => "3.0",
-        _ => ">3.0",
-    }
-}
-
 use activity::{draw_activity_icon, OperatingActivity};
 use automation_hunter::{
     AchievementKind, CustomAchievementRule, ExternalSendRecord, HunterAlert, HunterMetric,
@@ -4030,8 +4020,8 @@ impl eframe::App for QsonautGuiApp {
                             }
                             ui.separator();
                             ui.label(format!(
-                                "Meter: {}",
-                                snapshot.swr.map(|value| format!("raw {value} ({}:1 approx)", swr_ratio_label(value))).unwrap_or_else(|| "unavailable".to_string())
+                                "SWR level: {} / 255 (normalized)",
+                                snapshot.swr.map(|value| value.to_string()).unwrap_or_else(|| "unavailable".to_string())
                             ));
                             ui.colored_label(
                                 Color32::YELLOW,
@@ -4083,9 +4073,9 @@ impl eframe::App for QsonautGuiApp {
                                 egui::pos2(chart_left, chart_top),
                                 egui::pos2(chart_right, chart_bottom),
                             );
-                            for (raw, label) in [(0_u8, "1.0"), (48, "1.5"), (80, "2.0"), (120, "3+")] {
+                            for (level, label) in [(0_u8, "0"), (64, "64"), (128, "128"), (192, "192"), (255, "255")] {
                                 let y = chart_bottom
-                                    - (f32::from(raw) / 120.0) * chart_rect.height();
+                                    - (f32::from(level) / 255.0) * chart_rect.height();
                                 painter.line_segment(
                                     [egui::pos2(chart_left, y), egui::pos2(chart_right, y)],
                                     egui::Stroke::new(1.0_f32, Color32::from_gray(65)),

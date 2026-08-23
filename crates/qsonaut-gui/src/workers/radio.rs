@@ -784,7 +784,7 @@ pub(crate) fn spawn_radio_worker(
                                     info!(
                                         point = points + 1,
                                         frequency_hz = frequency,
-                                        swr_raw = value,
+                                        swr_level = value,
                                         "SWR sweep sample"
                                     );
                                     let mut s = state.lock().expect("ui state lock poisoned");
