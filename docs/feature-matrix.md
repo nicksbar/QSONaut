@@ -19,11 +19,23 @@ what remains experimental or planned.
 
 ## Radio integration
 
+QSONaut currently has four selectable radio backends. The native backend covers
+four Rigwright protocol families; the other three backends are integration,
+diagnostic, or test backends. The backend determines which capability surface
+can be advertised to the UI.
+
+| Backend | Level | Radio features exposed in QSONaut |
+|---|---|---|
+| Native Rigwright | Integrated / Gated | Model-aware frequency, mode, PTT, power, typed controls, normalized meters, tuner, SWR, and Icom scope where the selected profile supports them. |
+| Hamlib `rigctld` | Integrated / Experimental | External frequency/mode/PTT/power transport through rigctld. Native Rigwright vendor controls, normalized meters, tuner, and scope are not assumed or advertised through this backend. |
+| DX Lab Commander | Integrated / Experimental | External Commander frequency/mode/PTT/power transport. Vendor-specific controls, normalized meters, tuner, and scope are not assumed. |
+| Null/offline radio | Integrated / Test | In-memory frequency, mode, and PTT behavior for UI development and tests; no physical radio capabilities. |
+
 | Feature | Level | Current implementation |
 |---|---|---|
 | Multi-vendor radio selection | Integrated / Gated | Model-aware Rigwright profiles for Icom CI-V, modern Yaesu CAT, classic Yaesu CAT, and Kenwood PC control. Generic profiles remain conservative. |
 | Frequency, mode, data mode, filter, and PTT | Integrated / Gated | Native radio worker and workspace presets use Rigwright’s protocol-neutral HAL; unsupported operations are capability-gated. |
-| Radio power | Integrated | Upper-right graphical power control with pending/settling state and tooltip; power-read support varies by vendor. |
+| Radio power | Gated | Upper-right graphical power control with pending/settling state and tooltip; power-read support varies by backend/vendor, and Icom power state is write-only at the protocol level. |
 | AF/RF gain, squelch, and RF power | Gated | Compact banner controls use normalized `0..=255` values and convert display percentages at the UI boundary. RF power is also used by the low-power SWR workflow. |
 | Preamp and attenuator | Gated | Profile-dependent compact controls; exact ranges remain radio-specific. |
 | NB, NR, NR level, IP+, notch, manual notch, and AGC | Gated | Compact top-banner controls appear only when the loaded Rigwright profile advertises them. NR level is currently consumed for modern Yaesu profiles. |
@@ -32,18 +44,25 @@ what remains experimental or planned.
 | Live SWR display | Integrated / Gated | SWR is shown with IC-7300-specific calibrated ratio anchors; other radios show normalized meter presentation unless a verified ratio mapping exists. |
 | Stepped TX SWR sweep | Experimental / Gated | Active-band defaults, configurable start/stop/step/interval, low-power RTTY carrier pipeline, tuner disable/restore, per-point logging, stop control, charting, and state restoration. It requires a radio that exposes SWR telemetry. |
 | Native Icom scope/waterfall | Validated / Gated | Profile-specific CI-V scope setup and ordered waveform assembly; IC-7300 is the hardware-validated path, with additional model geometries implemented but not broadly validated. |
-| Radio capability discovery | Integrated | Controls/meters are collected from Rigwright’s `supports_control` and `supports_meter` methods rather than assumed from vendor names. |
+| Radio capability discovery | Integrated | Native controls/meters are collected from Rigwright’s `supports_control` and `supports_meter` methods rather than assumed from vendor names; external backends expose only their own root capabilities. |
 | RIT/XIT, antenna selection, memory/channel, main/sub workflow | Not implemented / Partial | HAL/manual surfaces may exist or be documented, but QSONaut has no complete operator workflow for these functions. |
 
 ### Current radio maturity
 
-| Radio family | Application level | Notes |
+| Radio family/profile | Application level | Current QSONaut coverage |
 |---|---|---|
-| Icom IC-7300 | Validated | Primary hardware path, including power, profile controls, scope, normalized SWR, tuner workflow, and CI-V echo-back tolerance. |
-| Icom IC-705, IC-7610, IC-9700 | Gated / Experimental | Model-specific controls and scope geometry are available where profiled; broader physical validation remains open. |
-| Modern Yaesu | Gated / Experimental | Frequency, mode, PTT, power, split where profiled, AGC, NR, NR level, and normalized meters are wired through Rigwright. No project-wide hardware validation yet. |
-| Classic Yaesu | Gated / Experimental | Frequency, mode, PTT/status, and split are available through the separate legacy CAT family. Power and modern controls are intentionally absent. |
-| Kenwood TS-590SG, TS-890S, TS-2000 | Gated / Experimental | Frequency, mode, power, split, model-specific PTT behavior, normalized signal/SWR, and response handling are profiled. No project-wide hardware validation yet. |
+| Icom CI-V generic | Gated / Experimental | Protocol-only profile. Core radio operations may work, but model-specific controls, meters, and scope are deliberately withheld. |
+| Icom IC-7300 | Validated | Primary hardware path: power write, profile controls, IP+, notch, tuner, normalized SWR, SWR sweep, scope, and CI-V echo-back tolerance. |
+| Icom IC-705 | Gated / Experimental | Profile-specific controls, tuner, normalized SWR, and scope geometry; no broad physical validation. |
+| Icom IC-7610 | Gated / Experimental | Profile-specific controls, main/sub metadata, tuner, normalized SWR, and dual-receiver scope geometry; no broad physical validation. |
+| Icom IC-9700 | Gated / Experimental | Profile-specific controls, external preamp, main/sub metadata, tuner, normalized SWR, and VHF/UHF scope ranges; no broad physical validation. |
+| Modern Yaesu CAT generic | Gated / Experimental | Protocol-only profile; typed modern controls and meters require an exact model profile. |
+| FT-710, FTDX10, FTDX101D, FTDX101MP | Gated / Experimental | Frequency, mode, readable PTT, power, profile split, AGC, NR, NR level, and normalized signal/power/SWR/ALC/compression/current/voltage meters. |
+| FT-991A | Gated / Experimental | Same modern CAT meter/control family, with model-specific mode/range behavior and split not currently profiled as typed. |
+| Classic Yaesu CAT generic | Gated / Experimental | Protocol-only five-byte CAT profile; no model-specific split until an exact classic model is selected. |
+| FT-817ND, FT-818, FT-857D, FT-897D | Gated / Experimental | Frequency, mode, readable/writable PTT, status, and split through the legacy CAT family. Power, normalized meters, tuner, and modern controls are intentionally absent. |
+| Kenwood PC control generic | Gated / Experimental | Protocol-only profile; model-specific power, split, meter selector, range, and PTT behavior require an exact model. |
+| TS-590SG, TS-890S, TS-2000 | Gated / Experimental | Frequency, mode, power, split, model-specific PTT behavior, normalized signal/SWR, and interleaved Auto Information response handling. |
 
 ## Digital modes
 
