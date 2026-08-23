@@ -15,7 +15,7 @@ tracing.workspace = true
 qsonaut-audio = { path = "../../crates/qsonaut-audio" }
 qsonaut-core = { path = "../../crates/qsonaut-core" }
 qsonaut-log = { path = "../../crates/qsonaut-log" }
-qsonaut-radio = { package = "rigwright", git = "https://github.com/nicksbar/rigwright", tag = "v0.1.7" }
+qsonaut-radio = { package = "rigwright", version = "0.1.8" }
 qsonaut-gui = { path = "../../crates/qsonaut-gui" }
 
 [target.'cfg(windows)'.dependencies]

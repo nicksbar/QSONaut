@@ -35,6 +35,7 @@ console. This is an honest capability snapshot, not a compatibility promise:
 | Area | Current maturity |
 | --- | --- |
 | Digital modes | FT8 and FT4 provide native decode, activity, conversation, TX history, sequencing, logging, and explicit global TX disarm. FST4-60, JT9, JT65, and Q65-30A have experimental receive/scheduled-TX paths; WSPR and MSK144 are receive-only integrations. |
+| SSTV and local images | Single-channel auto-targeting finds shifted VIS headers across the audio baseband, and Auto VIS receive or manual receive filtering decodes 13 Martin/Scottie/Robot/PD modes. Waterfall clicking overrides targeting; acquisition, ranked-candidate, progress, and failure diagnostics use the filterable Application Log. The pinned adapter also provides selectable experimental TX. Existing images can be browsed or generated through local Ollama/Lemonade models, and TX remains explicitly armed. |
 | CW | Software audio CW through [cw-dit](https://github.com/nicksbar/cw-dit), with selected-channel streaming decode, adaptive timing, noise-floor slicing, and generated subband TX. Paddle/keyed-carrier input, prosigns, punctuation, and auto-sequencing are not implemented yet. |
 | Radio control | Rigwright profiles cover Icom CI-V, modern and classic Yaesu CAT, and Kenwood PC control, with generic and model-specific profiles. IC-7300 is hardware-validated; other serial drivers remain experimental. |
 | Spectrum and audio | Radio waterfalls, audio waterfalls, narrow/wide views, VBW controls, audio-device selection, decoder-channel monitoring, and RX monitor volume. |
@@ -120,8 +121,12 @@ Copy `.env.example` for optional environment overrides or pass
 `--config qsonaut.toml.example`. Local `.env`, operator profile, QSO log, and
 recorded WAV files are ignored by Git.
 
-AI-related environment keys are currently inert placeholders and can be left at
-their defaults.
+The SSTV workspace can use an Ollama or Lemonade Server image model running on
+the same computer. This integration is local-only by construction: QSONaut
+accepts only `http://localhost`, `127.0.0.0/8`, or IPv6 loopback endpoints and
+disables proxy discovery for these requests. No prompt, station detail, or
+generated image is sent to QSONaut Server. See
+[`docs/sstv-local-images.md`](docs/sstv-local-images.md).
 
 Runtime logs are written to `qsonaut.log` under the platform app directory:
 
@@ -164,6 +169,7 @@ to `.cargo/config.toml`; the local file is ignored by Git and overrides the
 Git dependency with `../rigwright` without changing committed manifests. Run
 `cargo update -p rigwright` when you intentionally want the latest GitHub head.
 - `crates/qsonaut-audio` — real-time audio and high-quality 48→12 kHz decimation
+- `crates/qsonaut-sstv` — streaming VIS/AFC adapter plus pinned multi-mode SSTV codecs
 - `mfsk-core` — WSJT-family modem encoding and decoding
 - [`cw-dit`](https://github.com/nicksbar/cw-dit) — reusable Rust CW DSP and streaming Morse components (`cwdit-dsp`, `cwdit-morse`), MIT OR Apache-2.0
 - `crates/qsonaut-log`, `qsonaut-pskreporter` — local logging and opt-in reporting

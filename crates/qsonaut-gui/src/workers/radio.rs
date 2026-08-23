@@ -76,6 +76,7 @@ pub(crate) fn spawn_radio_worker(
             let mut last_waterfall_repaint = Instant::now() - waterfall_repaint_interval;
 
             let Some(stream_radio) = stream_radio else {
+                warn!("Radio scope worker unavailable: radio has no scope stream");
                 let mut s = stream_state.lock().expect("ui state lock poisoned");
                 s.radio_spectrum_enabled = false;
                 s.radio_waterfall_status = "UNAVAILABLE (radio has no scope stream)".to_string();
@@ -90,6 +91,7 @@ pub(crate) fn spawn_radio_worker(
                     frequency_hz,
                     span_code,
                     vbw_wide,
+                    workspace_mode,
                     mode,
                     scope_hold,
                     scope_reference_tenths_db,
@@ -102,6 +104,7 @@ pub(crate) fn spawn_radio_worker(
                         s.frequency_hz,
                         s.radio_scope_span_code,
                         s.radio_scope_vbw_wide,
+                        s.workspace_mode,
                         s.mode.clone(),
                         s.radio_scope_hold,
                         s.radio_scope_reference_tenths_db,
@@ -109,11 +112,15 @@ pub(crate) fn spawn_radio_worker(
                 };
 
                 if spectrum_desired {
-                    let scope_edges = match scope_view {
-                        RadioScopeView::Overview => frequency_hz
+                    let scope_edges = match (scope_view, workspace_mode) {
+                        // Voice does not need a mode-aware passband. Keep the
+                        // radio scope in its normal centered-span mode so a
+                        // voice transition does not rewrite fixed edge memory.
+                        (RadioScopeView::Narrow, WorkspaceMode::Voice) => None,
+                        (RadioScopeView::Overview, _) => frequency_hz
                             .and_then(|hz| band_edges_for_frequency(Some(hz)))
                             .map(|(low, high, _)| (low, high)),
-                        RadioScopeView::Narrow => frequency_hz.and_then(|hz| {
+                        (RadioScopeView::Narrow, _) => frequency_hz.and_then(|hz| {
                             sideband_scope_edges(
                                 hz,
                                 scope_span_hz(span_code),
@@ -166,6 +173,7 @@ pub(crate) fn spawn_radio_worker(
                                 s.last_error = None;
                             }
                             Err(err) => {
+                                warn!(error = %err, view = ?config.view, "Radio scope configuration failed");
                                 let mut s = stream_state.lock().expect("ui state lock poisoned");
                                 s.radio_waterfall_status = "CONFIG ERROR".to_string();
                                 s.last_error = Some(err.to_string());
@@ -187,6 +195,7 @@ pub(crate) fn spawn_radio_worker(
                             Err(err) => {
                                 s.radio_waterfall_status = "DISABLE ERROR".to_string();
                                 s.last_error = Some(err.to_string());
+                                error!(error = %err, "Radio spectrum stream disable failed");
                             }
                         }
                     }
@@ -214,6 +223,7 @@ pub(crate) fn spawn_radio_worker(
                             s.radio_spectrum_enabled = false;
                             s.radio_waterfall_status = "ENABLE RETRY".to_string();
                             s.last_error = Some(err.to_string());
+                            warn!(error = %err, "Radio spectrum stream enable failed; retrying");
                             drop(s);
                             thread::sleep(Duration::from_millis(1_000));
                         }
@@ -266,6 +276,7 @@ pub(crate) fn spawn_radio_worker(
                         if is_transient_civ_read_error(&msg) {
                             s.radio_waterfall_status = "WAITING FRAME".to_string();
                         } else {
+                            error!(error = %msg, "Radio scope waveform read failed");
                             s.radio_spectrum_enabled = false;
                             s.radio_waterfall_status = "NO FRAME".to_string();
                             s.last_error = Some(msg);
@@ -301,9 +312,40 @@ pub(crate) fn spawn_radio_worker(
                             } else {
                                 freq.saturating_add(delta as u64)
                             };
-                            if let Err(err) = rt.block_on(radio.set_frequency_hz(target)) {
-                                let mut s = state.lock().expect("ui state lock poisoned");
-                                s.last_error = Some(err.to_string());
+                            info!(
+                                delta_hz = delta,
+                                from_hz = freq,
+                                target_hz = target,
+                                "Radio tune command requested"
+                            );
+                            match rt.block_on(radio.set_frequency_hz(target)) {
+                                Ok(()) => {
+                                    info!(frequency_hz = target, "Radio tune command accepted")
+                                }
+                                Err(err) => {
+                                    error!(target_hz = target, error = %err, "Radio tune command failed");
+                                    let mut s = state.lock().expect("ui state lock poisoned");
+                                    s.last_error = Some(err.to_string());
+                                }
+                            }
+                        } else {
+                            warn!(
+                                delta_hz = delta,
+                                "Radio tune command skipped: frequency unavailable"
+                            );
+                        }
+                        poll_radio_core_state(&rt, &radio, &state, true);
+                    }
+                    GuiCommand::TuneTo(target) => {
+                        info!(target_hz = target, "Radio direct tune command requested");
+                        match rt.block_on(radio.set_frequency_hz(target)) {
+                            Ok(()) => {
+                                info!(frequency_hz = target, "Radio direct tune command accepted")
+                            }
+                            Err(err) => {
+                                error!(target_hz = target, error = %err, "Radio direct tune command failed");
+                                state.lock().expect("ui state lock poisoned").last_error =
+                                    Some(err.to_string());
                             }
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
@@ -317,28 +359,42 @@ pub(crate) fn spawn_radio_worker(
                             Mode::Data => Mode::Usb,
                             _ => Mode::Usb,
                         };
-                        if let Err(err) = rt.block_on(Radio::set_mode(&radio, next)) {
-                            let mut s = state.lock().expect("ui state lock poisoned");
-                            s.last_error = Some(err.to_string());
+                        info!(from = ?current, to = ?next, "Radio mode cycle requested");
+                        match rt.block_on(Radio::set_mode(&radio, next)) {
+                            Ok(()) => info!(mode = ?next, "Radio mode cycle accepted"),
+                            Err(err) => {
+                                error!(mode = ?next, error = %err, "Radio mode cycle failed");
+                                let mut s = state.lock().expect("ui state lock poisoned");
+                                s.last_error = Some(err.to_string());
+                            }
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::SetPtt(target) => {
+                        info!(ptt = target, "Radio PTT command requested");
                         let result = rt
                             .block_on(radio.set_ptt(target))
                             .map_err(|error| error.to_string());
                         let mut s = state.lock().expect("ui state lock poisoned");
                         match result {
                             Ok(()) => {
+                                info!(ptt = target, "Radio PTT command accepted");
                                 s.ptt_on = target;
                                 s.last_error = None;
                             }
-                            Err(error) => s.last_error = Some(error),
+                            Err(error) => {
+                                error!(ptt = target, error = %error, "Radio PTT command failed");
+                                s.last_error = Some(error)
+                            }
                         }
                         drop(s);
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::SetPttWithAck(target, ack_tx) => {
+                        info!(
+                            ptt = target,
+                            "Radio PTT command requested with acknowledgement"
+                        );
                         let result = rt
                             .block_on(radio.set_ptt(target))
                             .map_err(|error| error.to_string());
@@ -346,10 +402,14 @@ pub(crate) fn spawn_radio_worker(
                             let mut s = state.lock().expect("ui state lock poisoned");
                             match &result {
                                 Ok(()) => {
+                                    info!(ptt = target, "Radio PTT command accepted");
                                     s.ptt_on = target;
                                     s.last_error = None;
                                 }
-                                Err(error) => s.last_error = Some(error.clone()),
+                                Err(error) => {
+                                    error!(ptt = target, error = %error, "Radio PTT command failed");
+                                    s.last_error = Some(error.clone())
+                                }
                             }
                         }
                         let _ = ack_tx.send(result);
@@ -359,7 +419,20 @@ pub(crate) fn spawn_radio_worker(
                         mode: workspace_mode,
                         frequency_hz,
                     } => {
-                        let preset = workspace_radio_preset(workspace_mode);
+                        info!(
+                            workspace = %workspace_mode.label(),
+                            frequency_hz,
+                            "Applying radio workspace preset"
+                        );
+                        // Publish the requested workspace before applying the
+                        // radio preset so a following filter/control command
+                        // cannot briefly reuse the previous digital mode.
+                        state.lock().expect("ui state lock poisoned").workspace_mode =
+                            workspace_mode;
+                        let preset = workspace_radio_preset_for_frequency(
+                            workspace_mode,
+                            Some(frequency_hz),
+                        );
                         let filter = preset.filter.clamp(1, 3);
                         let frequency_result = rt.block_on(radio.set_frequency_hz(frequency_hz));
                         let (nr_id, nr_value, nb_id, nb_value) =
@@ -373,10 +446,30 @@ pub(crate) fn spawn_radio_worker(
                                 preset.data_mode,
                                 filter,
                             ));
-                            if let Err(error) = frequency_result.and(mode_result).and(noise_result)
+                            let data_mode_result =
+                                if workspace_mode == WorkspaceMode::Voice {
+                                    rt.block_on(radio.set_control(
+                                        ControlId::DataMode,
+                                        ControlValue::Bool(false),
+                                    ))
+                                } else {
+                                    Ok(())
+                                };
+                            if let Err(error) = frequency_result
+                                .and(mode_result)
+                                .and(data_mode_result)
+                                .and(noise_result)
                             {
+                                error!(
+                                    workspace = %workspace_mode.label(),
+                                    frequency_hz,
+                                    error = %error,
+                                    "Radio workspace preset failed"
+                                );
                                 state.lock().expect("ui state lock poisoned").last_error =
                                     Some(error.to_string());
+                            } else {
+                                info!(workspace = %workspace_mode.label(), frequency_hz, mode = ?preset.base_mode, data_mode = preset.data_mode, filter, "Radio workspace preset accepted");
                             }
                         } else {
                             let mode = if preset.data_mode {
@@ -385,13 +478,22 @@ pub(crate) fn spawn_radio_worker(
                                 match preset.base_mode {
                                     BaseMode::Lsb => Mode::Lsb,
                                     BaseMode::Cw | BaseMode::CwR => Mode::Cw,
+                                    BaseMode::Fm => Mode::Fm,
                                     _ => Mode::Usb,
                                 }
                             };
                             let mode_result = rt.block_on(Radio::set_mode(&radio, mode));
                             if let Err(error) = frequency_result.and(mode_result) {
+                                error!(
+                                    workspace = %workspace_mode.label(),
+                                    frequency_hz,
+                                    error = %error,
+                                    "Radio workspace preset failed"
+                                );
                                 state.lock().expect("ui state lock poisoned").last_error =
                                     Some(error.to_string());
+                            } else {
+                                info!(workspace = %workspace_mode.label(), frequency_hz, mode = ?preset.base_mode, data_mode = preset.data_mode, "Radio workspace preset accepted");
                             }
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
@@ -399,8 +501,12 @@ pub(crate) fn spawn_radio_worker(
                     GuiCommand::SetFilter(n) => {
                         let workspace_mode =
                             state.lock().expect("ui state lock poisoned").workspace_mode;
-                        let preset = workspace_radio_preset(workspace_mode);
+                        let frequency_hz =
+                            state.lock().expect("ui state lock poisoned").frequency_hz;
+                        let preset =
+                            workspace_radio_preset_for_frequency(workspace_mode, frequency_hz);
                         let target_filter = n.clamp(1, 3);
+                        info!(filter = target_filter, workspace = %workspace_mode.label(), "Radio filter change requested");
                         let result = if let Some(icom) = radio.as_icom() {
                             rt.block_on(icom.set_operating_mode_details(
                                 preset.base_mode,
@@ -412,16 +518,27 @@ pub(crate) fn spawn_radio_worker(
                                 "filter selection is unavailable for this radio profile"
                             ))
                         };
-                        if let Err(err) = result {
-                            let mut s = state.lock().expect("ui state lock poisoned");
-                            s.last_error = Some(err.to_string());
+                        match result {
+                            Ok(()) => {
+                                info!(filter = target_filter, workspace = %workspace_mode.label(), "Radio filter change accepted")
+                            }
+                            Err(err) => {
+                                error!(filter = target_filter, error = %err, "Radio filter change failed");
+                                let mut s = state.lock().expect("ui state lock poisoned");
+                                s.last_error = Some(err.to_string());
+                            }
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::SetControl(id, value) => {
-                        if let Err(error) = rt.block_on(radio.set_control(id, value)) {
-                            state.lock().expect("ui state lock poisoned").last_error =
-                                Some(error.to_string());
+                        debug!(control = ?id, value = ?value, "Radio control change requested");
+                        match rt.block_on(radio.set_control(id, value)) {
+                            Ok(()) => info!(control = ?id, "Radio control change accepted"),
+                            Err(error) => {
+                                error!(control = ?id, error = %error, "Radio control change failed");
+                                state.lock().expect("ui state lock poisoned").last_error =
+                                    Some(error.to_string());
+                            }
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
@@ -439,11 +556,19 @@ pub(crate) fn spawn_radio_worker(
                         } else {
                             current.saturating_add(delta as u8)
                         };
-                        if let Err(err) = rt.block_on(
+                        match rt.block_on(
                             radio.set_control(ControlId::AfGain, ControlValue::U8(target)),
                         ) {
-                            let mut s = state.lock().expect("ui state lock poisoned");
-                            s.last_error = Some(err.to_string());
+                            Ok(()) => info!(
+                                control = "AfGain",
+                                value = target,
+                                "Radio control change accepted"
+                            ),
+                            Err(err) => {
+                                error!(control = "AfGain", value = target, error = %err, "Radio control change failed");
+                                let mut s = state.lock().expect("ui state lock poisoned");
+                                s.last_error = Some(err.to_string());
+                            }
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
@@ -524,6 +649,17 @@ fn poll_radio_core_state(
     } else {
         radio.probe()
     };
+    // IC-7300 mode status can report a misleading data byte through the
+    // generic 0x04 response. Query the model-specific DataMode control for the
+    // flag used by the UI label.
+    let data_mode = rt
+        .block_on(radio.get_control(ControlId::DataMode))
+        .ok()
+        .flatten()
+        .and_then(|value| match value {
+            ControlValue::Bool(enabled) => Some(enabled),
+            _ => None,
+        });
     let (af, rf, pwr) = if poll_levels {
         (
             read_u8_control(rt, radio, ControlId::AfGain),
@@ -547,6 +683,9 @@ fn poll_radio_core_state(
         if let Some(details) = status.mode_details {
             s.data_mode = Some(details.data_mode);
             s.filter = details.filter;
+        }
+        if let Some(data_mode) = data_mode {
+            s.data_mode = Some(data_mode);
         }
         s.last_update = Some(Instant::now());
     }

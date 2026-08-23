@@ -26,6 +26,18 @@ pub(super) struct OperatorProfile {
     pub(super) callsign: String,
     pub(super) grid: String,
     pub(super) qth: String,
+    #[serde(default)]
+    pub(super) station_rig: String,
+    #[serde(default)]
+    pub(super) station_antenna: String,
+    #[serde(default)]
+    pub(super) station_notes: String,
+    #[serde(default)]
+    pub(super) llm_prompt_context: String,
+    #[serde(default)]
+    pub(super) sstv_image_requirements: String,
+    #[serde(default)]
+    pub(super) llm_model_notes: String,
     pub(super) follow_log: bool,
     pub(super) max_log_entries: usize,
     pub(super) deep_decode: bool,
@@ -149,6 +161,8 @@ pub(super) struct OperatorProfile {
     pub(super) radio_profiles: Vec<RadioProfile>,
     #[serde(default)]
     pub(super) mode_radio_profile: std::collections::BTreeMap<String, String>,
+    #[serde(default = "default_workspace_mode")]
+    pub(super) workspace_mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,6 +194,10 @@ pub(super) struct RadioProfile {
 
 pub(super) fn default_gui_scale() -> f32 {
     GUI_SCALE_BASE
+}
+
+fn default_workspace_mode() -> String {
+    "FT8".to_string()
 }
 
 pub(super) fn default_waterfall_deck_height() -> f32 {

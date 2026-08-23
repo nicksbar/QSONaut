@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+ab_glyph = "0.2"
 anyhow.workspace = true
 eframe.workspace = true
 tokio.workspace = true
@@ -21,12 +22,17 @@ cwdit-dsp = { git = "https://github.com/swilcox/cw-dit.git", rev = "153fc247ce6e
 cwdit-morse = { git = "https://github.com/swilcox/cw-dit.git", rev = "153fc247ce6e4934c94e0cd2dcbf7887e368ec29" }
 hound = "3.5"
 tempfile = "3"
+base64.workspace = true
+image.workspace = true
+imageproc = "0.25"
+egui-file-dialog = { version = "=0.12.0", default-features = false }
 
 qsonaut-audio = { path = "../qsonaut-audio" }
 qsonaut-accelerate = { path = "../qsonaut-accelerate" }
 qsonaut-core = { path = "../qsonaut-core" }
 qsonaut-automation = { path = "../qsonaut-automation" }
 qsonaut-log = { path = "../qsonaut-log" }
-qsonaut-radio = { package = "rigwright", git = "https://github.com/nicksbar/rigwright", tag = "v0.1.7" }
+qsonaut-radio = { package = "rigwright", version = "0.1.8" }
 qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }
 qsonaut-server-client = { path = "../qsonaut-server-client" }
+qsonaut-sstv = { path = "../qsonaut-sstv" }

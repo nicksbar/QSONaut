@@ -61,6 +61,22 @@ pub fn read_log_tail(max_bytes: usize) -> Result<String> {
     read_file_tail(&log_file_path(), max_bytes)
 }
 
+/// Remove all existing application log records while preserving the active
+/// logger and its file location.
+pub fn clear_log() -> Result<()> {
+    let path = log_file_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&path)
+        .with_context(|| format!("truncate {}", path.display()))?;
+    Ok(())
+}
+
 fn read_file_tail(path: &Path, max_bytes: usize) -> Result<String> {
     if max_bytes == 0 {
         return Ok(String::new());

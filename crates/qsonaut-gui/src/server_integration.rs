@@ -39,6 +39,7 @@ impl QsonautGuiApp {
         let url = self.config.server.url.trim();
         let token = self.config.server.device_token.trim();
         if enabled && (url.is_empty() || token.is_empty()) {
+            warn!("Server connection requires both endpoint and device token");
             self.profile_io_status =
                 "Server needs both an endpoint and device token before connecting".to_string();
             return;
@@ -52,6 +53,7 @@ impl QsonautGuiApp {
             })
         });
         self.server_client = next_client;
+        info!(enabled, endpoint = %url, "Server connection configuration changed");
         self.profile_dirty = true;
         self.persist_profile(if enabled {
             "Server settings saved to"
@@ -91,6 +93,7 @@ impl QsonautGuiApp {
             "points": 0,
             "source": "qsonaut",
         }));
+        info!(callsign = %record.callsign, band = %record.band, mode = %record.mode, "QSO queued for server log publishing");
     }
 
     pub(super) fn publish_server_presence(&mut self, snapshot: &GuiState) {
@@ -225,8 +228,14 @@ impl QsonautGuiApp {
             }
         });
         self.profile_io_status = match client.publish_diagnostic(diagnostic) {
-            Ok(()) => "Diagnostic snapshot sent; waiting for server acceptance".to_string(),
-            Err(error) => format!("Diagnostic snapshot could not be queued: {error}"),
+            Ok(()) => {
+                info!("Server diagnostic snapshot queued");
+                "Diagnostic snapshot sent; waiting for server acceptance".to_string()
+            }
+            Err(error) => {
+                warn!(error = %error, "Server diagnostic snapshot could not be queued");
+                format!("Diagnostic snapshot could not be queued: {error}")
+            }
         };
     }
 }

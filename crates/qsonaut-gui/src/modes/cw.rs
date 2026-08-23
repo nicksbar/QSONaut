@@ -58,6 +58,7 @@ impl QsonautGuiApp {
                 .expect("ui state lock poisoned")
                 .cw_record_rx;
             if ui.checkbox(&mut record_rx, "Record RX stream").changed() {
+                info!(enabled = record_rx, "CW RX recording preference changed");
                 let mut state = self.state.lock().expect("ui state lock poisoned");
                 state.cw_record_rx = record_rx;
                 state.cw_recording_status = if record_rx {
@@ -105,6 +106,7 @@ impl QsonautGuiApp {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("Clear").clicked() {
+                    info!("CW transcript cleared by operator");
                     let mut state = self.state.lock().expect("ui state lock poisoned");
                     state
                         .digital_decodes
@@ -144,6 +146,7 @@ impl QsonautGuiApp {
                 .add(egui::Slider::new(&mut self.cw_wpm, 5..=40).suffix(" WPM"))
                 .changed()
             {
+                info!(wpm = self.cw_wpm, "CW transmit speed changed");
                 self.profile_dirty = true;
                 self.persist_profile("CW speed saved to");
             }
@@ -153,6 +156,7 @@ impl QsonautGuiApp {
                 .add(egui::Slider::new(&mut self.cw_tone_hz, 200..=3_000).suffix(" Hz"))
                 .changed()
             {
+                info!(tone_hz = self.cw_tone_hz, "CW operating tone changed");
                 self.profile_dirty = true;
                 self.persist_profile("CW tone saved to");
             }

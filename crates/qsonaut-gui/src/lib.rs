@@ -1,7 +1,9 @@
+mod activity;
 mod automation_hunter;
 mod band_plan;
 mod contest;
 mod decode_model;
+mod local_ai;
 mod modes;
 mod panels;
 mod profile;
@@ -35,8 +37,8 @@ use qsonaut_core::{
     SplitPolicy,
 };
 use qsonaut_log::{
-    app_config_dir, hamdb_cache_path, log_file_path, read_log_tail, AdifExportFilter, HamDbCache,
-    HamDbCacheEntry, QsoLog, QsoRecord,
+    app_config_dir, clear_log, hamdb_cache_path, log_file_path, read_log_tail, AdifExportFilter,
+    HamDbCache, HamDbCacheEntry, QsoLog, QsoRecord,
 };
 use qsonaut_pskreporter::{
     ReceptionReport, ReportSender, Reporter, ReporterConfig, ReporterTuning,
@@ -63,20 +65,25 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::error::TryRecvError;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 const QSONAUT_ICON_PNG: &[u8] = include_bytes!("../../../assets/branding/qsonaut-icon.png");
 
+use activity::{draw_activity_icon, OperatingActivity};
 use automation_hunter::{
     AchievementKind, CustomAchievementRule, ExternalSendRecord, HunterAlert, HunterMetric,
 };
 use band_plan::{
-    band_for_frequency, workspace_band_plan, workspace_radio_preset, WorkspaceMode,
-    HF_WORKSPACE_MODES, OTHER_WORKSPACE_MODES, WORKSPACE_MODES,
+    band_for_frequency, workspace_band_plan, workspace_radio_preset,
+    workspace_radio_preset_for_frequency, WorkspaceMode, HF_WORKSPACE_MODES, OTHER_WORKSPACE_MODES,
+    WORKSPACE_MODES,
 };
 use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
     DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, OperatorCallHit, PendingFt8Decode, PotaSpot,
+};
+use local_ai::{
+    LocalImageEvent, LocalImageProvider, LocalImageSettings, LocalModelInfo, LocalModelRole,
 };
 use modes::exchange::{
     callsign_eq, is_probable_callsign, next_reply_period, next_tx_period, parse_message,
@@ -84,6 +91,7 @@ use modes::exchange::{
     AutoReplyPolicy, AutoTxStopPolicy, Exchange, ParsedMessage, QsoSession, QsoStage,
     ReplyCandidate, SLOT_SECONDS,
 };
+use modes::voice::VoiceContestField;
 use profile::{
     active_operator_profile_name, default_contest_fake_split_offset_hz, default_cw_tone_hz,
     default_cw_wpm, default_gui_scale, default_max_attempts as default_ft8_max_attempts,
@@ -154,6 +162,7 @@ enum SignalPanelTab {
     Reporting,
     Waterfall,
     Settings,
+    Ai,
     Server,
     RadioTuning,
     AppLog,
@@ -311,8 +320,19 @@ fn parse_workspace_mode_token(mode: &str) -> Option<WorkspaceMode> {
         "Q65" => Some(WorkspaceMode::Q65),
         "MSK144" => Some(WorkspaceMode::Msk144),
         "CW" => Some(WorkspaceMode::Cw),
+        "VOICE" | "SSB" | "PHONE" => Some(WorkspaceMode::Voice),
+        "SSTV" => Some(WorkspaceMode::Sstv),
         "FLDIGI" => Some(WorkspaceMode::Fldigi),
         _ => None,
+    }
+}
+
+fn radio_mode_label(mode: &str, data_mode: Option<bool>) -> String {
+    let base_mode = mode.strip_suffix("-D").unwrap_or(mode);
+    match data_mode {
+        Some(false) => base_mode.to_string(),
+        Some(true) if !mode.ends_with("-D") => format!("{base_mode}-D"),
+        _ => mode.to_string(),
     }
 }
 
@@ -325,6 +345,7 @@ fn workspace_mode_supports_native_tx(mode: WorkspaceMode) -> bool {
             | WorkspaceMode::Jt65
             | WorkspaceMode::Q65
             | WorkspaceMode::Cw
+            | WorkspaceMode::Sstv
     )
 }
 
@@ -458,11 +479,13 @@ fn start_psk_reporter(
         .expect("ui state lock poisoned")
         .psk_report_sender = None;
     if !enabled || callsign.trim().is_empty() || callsign == "N0CALL" || grid == "AA00" {
+        info!(enabled, callsign = %callsign, grid = %grid, "PSK Reporter not started: station identity is incomplete or reporting is disabled");
         return None;
     }
     let mut config = ReporterConfig::production(callsign, grid);
     config.tuning = tuning;
     let reporter = Reporter::start(config);
+    info!(callsign = %callsign, grid = %grid, "PSK Reporter started");
     state
         .lock()
         .expect("ui state lock poisoned")
@@ -498,7 +521,8 @@ fn submit_psk_report(
         return;
     };
     let frequency_hz = dial.saturating_add(u64::from(audio_frequency_hz));
-    sender.submit(ReceptionReport {
+    let callsign_for_log = callsign.clone();
+    let queued = sender.submit(ReceptionReport {
         sender_callsign: callsign,
         frequency_hz,
         snr_db: snr_db.round().clamp(-127.0, 127.0) as i8,
@@ -506,6 +530,11 @@ fn submit_psk_report(
         sender_locator,
         received_at,
     });
+    if queued {
+        debug!(callsign = %callsign_for_log, frequency_hz, mode = %mode, "PSK Reporter reception report queued");
+    } else {
+        warn!(callsign = %callsign_for_log, mode = %mode, "PSK Reporter reception report rejected: worker unavailable");
+    }
 }
 
 fn should_move_tx_to_decode(message: &ParsedMessage, continuing_exchange: bool) -> bool {
@@ -771,6 +800,70 @@ impl Ft8SeqState {
 }
 
 #[derive(Debug, Clone)]
+struct ReceivedSstvImage {
+    id: String,
+    path: Option<String>,
+    mode: Option<qsonaut_sstv::SstvMode>,
+    frequency_hz: Option<u64>,
+    width: usize,
+    height: usize,
+    rgb: Vec<u8>,
+    received_unix_ms: u128,
+    analysis: Option<String>,
+    debug_audio_path: Option<String>,
+    debug_metadata_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SstvOverlayCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl SstvOverlayCorner {
+    const ALL: [Self; 4] = [
+        Self::TopLeft,
+        Self::TopRight,
+        Self::BottomLeft,
+        Self::BottomRight,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::TopLeft => "Top left",
+            Self::TopRight => "Top right",
+            Self::BottomLeft => "Bottom left",
+            Self::BottomRight => "Bottom right",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SstvAiPipelineMode {
+    StationQsl,
+    AnalyzeReceived,
+    ReinterpretReceived,
+}
+
+impl SstvAiPipelineMode {
+    const ALL: [Self; 3] = [
+        Self::StationQsl,
+        Self::AnalyzeReceived,
+        Self::ReinterpretReceived,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::StationQsl => "Station QSL",
+            Self::AnalyzeReceived => "Analyze received",
+            Self::ReinterpretReceived => "Reinterpret received",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct GuiState {
     frequency_hz: Option<u64>,
     mode: String,
@@ -810,6 +903,23 @@ struct GuiState {
     cw_record_rx: bool,
     cw_recording_status: String,
     cw_wpm: u8,
+    sstv_status: String,
+    sstv_progress: Option<f32>,
+    sstv_rgb: Vec<u8>,
+    sstv_width: usize,
+    sstv_height: usize,
+    sstv_revision: u64,
+    sstv_tuning_offset_hz: i32,
+    sstv_auto_target: bool,
+    sstv_locked_offset_hz: Option<i32>,
+    sstv_reset_generation: u64,
+    sstv_rx_mode: Option<qsonaut_sstv::SstvMode>,
+    sstv_detected_mode: Option<qsonaut_sstv::SstvMode>,
+    sstv_saved_path: Option<String>,
+    sstv_received_images: VecDeque<ReceivedSstvImage>,
+    sstv_received_revision: u64,
+    sstv_debug_capture_requested: bool,
+    sstv_debug_status: String,
     ft4_last_decode_period: Option<u64>,
     digital_tx_period: Option<(WorkspaceMode, u64)>,
     selected_audio_hz: u32,
@@ -863,6 +973,23 @@ impl Default for GuiState {
             cw_record_rx: false,
             cw_recording_status: "Recording off".to_string(),
             cw_wpm: default_cw_wpm(),
+            sstv_status: "READY: Auto (VIS) · waiting for a complete SSTV header".to_string(),
+            sstv_progress: None,
+            sstv_rgb: Vec::new(),
+            sstv_width: qsonaut_sstv::WIDTH,
+            sstv_height: qsonaut_sstv::HEIGHT,
+            sstv_revision: 0,
+            sstv_tuning_offset_hz: 0,
+            sstv_auto_target: true,
+            sstv_locked_offset_hz: None,
+            sstv_reset_generation: 0,
+            sstv_rx_mode: None,
+            sstv_detected_mode: None,
+            sstv_saved_path: None,
+            sstv_received_images: VecDeque::with_capacity(24),
+            sstv_received_revision: 0,
+            sstv_debug_capture_requested: false,
+            sstv_debug_status: "Debug capture idle".to_string(),
             ft4_last_decode_period: None,
             digital_tx_period: None,
             selected_audio_hz: default_rx_tone_hz(),
@@ -880,6 +1007,7 @@ impl Default for GuiState {
 #[derive(Debug, Clone)]
 enum GuiCommand {
     TuneDelta(i64),
+    TuneTo(u64),
     CycleMode,
     AfGainDelta(i16),
     ApplyWorkspace {
@@ -977,7 +1105,7 @@ pub fn run_gui(config: AppConfig) -> Result<()> {
             info!("eframe run_native completed normally");
         }
         Err(err) => {
-            info!(error = %err, "eframe run_native failed");
+            error!(error = %err, "eframe run_native failed");
             return Err(anyhow!("eframe launch failed: {err}"));
         }
     }
@@ -1149,15 +1277,24 @@ struct DeviceInventory {
 fn spawn_device_scan() -> mpsc::Receiver<DeviceInventory> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
+        info!("Device inventory scan started");
         let (serial_ports, serial_port_labels, detected_models) =
             radio_port_inventory(enumerate_serial_port_descriptors().unwrap_or_default());
-        let _ = tx.send(DeviceInventory {
+        let inventory = DeviceInventory {
             audio_inputs: AudioService::input_devices().unwrap_or_default(),
             audio_outputs: AudioService::output_devices().unwrap_or_default(),
             serial_ports,
             serial_port_labels,
             detected_models,
-        });
+        };
+        info!(
+            audio_inputs = inventory.audio_inputs.len(),
+            audio_outputs = inventory.audio_outputs.len(),
+            serial_ports = inventory.serial_ports.len(),
+            detected_models = inventory.detected_models.len(),
+            "Device inventory scan completed"
+        );
+        let _ = tx.send(inventory);
     });
     rx
 }
@@ -1309,7 +1446,48 @@ struct QsonautGuiApp {
     audio_waterfall_texture_revision: u64,
     audio_waterfall_texture_bins: usize,
     audio_waterfall_texture_theme: WaterfallTheme,
+    sstv_texture: Option<TextureHandle>,
+    sstv_texture_revision: u64,
+    sstv_tx_armed: bool,
+    sstv_tuning_offset_hz: i32,
+    sstv_auto_target: bool,
+    sstv_rx_width_percent: u8,
+    sstv_tx_rgb: Vec<u8>,
+    sstv_tx_base_rgb: Vec<u8>,
+    sstv_tx_width: usize,
+    sstv_tx_height: usize,
+    sstv_tx_revision: u64,
+    sstv_tx_texture: Option<TextureHandle>,
+    sstv_tx_texture_revision: u64,
+    sstv_tx_mode: qsonaut_sstv::SstvMode,
+    sstv_overlay_callsign: bool,
+    sstv_overlay_grid: bool,
+    sstv_overlay_frequency: bool,
+    sstv_overlay_mode: bool,
+    sstv_overlay_corner: SstvOverlayCorner,
+    sstv_overlay_background: Color32,
+    sstv_overlay_background_opacity: f32,
+    sstv_background_zoom: f32,
+    sstv_background_pan_x: f32,
+    sstv_background_pan_y: f32,
+    sstv_overlay_revision: u64,
+    sstv_file_dialog: egui_file_dialog::FileDialog,
+    sstv_image_path: String,
+    sstv_ai_prompt: String,
+    local_image_settings: LocalImageSettings,
+    local_image_models: Vec<LocalModelInfo>,
+    local_image_status: String,
+    local_image_refresh_started: bool,
+    local_image_event_tx: mpsc::Sender<LocalImageEvent>,
+    local_image_event_rx: mpsc::Receiver<LocalImageEvent>,
+    sstv_ai_pipeline_mode: SstvAiPipelineMode,
+    sstv_active_received_id: Option<String>,
+    sstv_show_prior_received: bool,
+    sstv_received_textures: HashMap<String, TextureHandle>,
+    sstv_received_texture_revision: u64,
+    sstv_reinterpret_prompt: String,
     workspace_mode: WorkspaceMode,
+    activity: OperatingActivity,
     fst4_submode: modes::fst4::Submode,
     display_tuning: Arc<Mutex<DisplayTuning>>,
     repaint_ctx: Arc<OnceLock<egui::Context>>,
@@ -1391,6 +1569,25 @@ struct QsonautGuiApp {
     station_callsign: String,
     station_grid: String,
     station_qth: String,
+    station_rig: String,
+    station_antenna: String,
+    station_notes: String,
+    llm_prompt_context: String,
+    sstv_image_requirements: String,
+    llm_model_notes: String,
+    voice_callsign: String,
+    voice_grid: String,
+    voice_state: String,
+    voice_rst_sent: String,
+    voice_rst_received: String,
+    voice_contest_serial_sent: String,
+    voice_contest_serial_received: String,
+    voice_notes: String,
+    voice_contest_fields: Vec<VoiceContestField>,
+    voice_qso_started_at: Option<u64>,
+    voice_lookup_requested: String,
+    voice_lookup_status: String,
+    voice_hamdb: Option<HamDbCacheEntry>,
     contest_enabled: bool,
     contest_operating_mode: ContestOperatingMode,
     contest_split_policy: SplitPolicy,
@@ -1571,6 +1768,12 @@ impl QsonautGuiApp {
             .unwrap_or_else(|| "AA00".to_string());
 
         let mut station_qth = String::new();
+        let mut station_rig = String::new();
+        let mut station_antenna = String::new();
+        let mut station_notes = String::new();
+        let mut llm_prompt_context = String::new();
+        let mut sstv_image_requirements = String::new();
+        let mut llm_model_notes = String::new();
         let mut ft8_follow_log = true;
         let mut ft8_max_log_entries = 300usize;
         let mut ft8_deep_decode = false;
@@ -1624,12 +1827,19 @@ impl QsonautGuiApp {
         let mut hunter_custom_rules = Vec::new();
         let mut radio_profiles = Vec::new();
         let mut mode_radio_profile = std::collections::BTreeMap::new();
+        let mut workspace_mode = WorkspaceMode::Ft8;
         let profile_io_status: String;
 
         if let Some(p) = load_operator_profile() {
             station_callsign = p.callsign;
             station_grid = p.grid;
             station_qth = p.qth;
+            station_rig = p.station_rig;
+            station_antenna = p.station_antenna;
+            station_notes = p.station_notes;
+            llm_prompt_context = p.llm_prompt_context;
+            sstv_image_requirements = p.sstv_image_requirements;
+            llm_model_notes = p.llm_model_notes;
             ft8_follow_log = p.follow_log;
             ft8_max_log_entries = p.max_log_entries.clamp(80, 1000);
             ft8_deep_decode = p.deep_decode;
@@ -1699,6 +1909,8 @@ impl QsonautGuiApp {
             hunter_custom_rules = p.hunter_custom_rules;
             radio_profiles = p.radio_profiles;
             mode_radio_profile = p.mode_radio_profile;
+            workspace_mode =
+                parse_workspace_mode_token(&p.workspace_mode).unwrap_or(WorkspaceMode::Ft8);
             config.station.callsign = Some(station_callsign.clone());
             config.station.grid = Some(station_grid.clone());
             config.contest = ContestProfile {
@@ -1722,6 +1934,12 @@ impl QsonautGuiApp {
                 callsign: station_callsign.clone(),
                 grid: station_grid.clone(),
                 qth: station_qth.clone(),
+                station_rig: station_rig.clone(),
+                station_antenna: station_antenna.clone(),
+                station_notes: station_notes.clone(),
+                llm_prompt_context: llm_prompt_context.clone(),
+                sstv_image_requirements: sstv_image_requirements.clone(),
+                llm_model_notes: llm_model_notes.clone(),
                 follow_log: ft8_follow_log,
                 max_log_entries: ft8_max_log_entries,
                 deep_decode: ft8_deep_decode,
@@ -1785,6 +2003,7 @@ impl QsonautGuiApp {
                 hunter_custom_rules: Vec::new(),
                 radio_profiles: Vec::new(),
                 mode_radio_profile: std::collections::BTreeMap::new(),
+                workspace_mode: workspace_mode.label().to_string(),
             };
             match save_operator_profile(&bootstrap) {
                 Ok(_) => {
@@ -1827,6 +2046,7 @@ impl QsonautGuiApp {
 
         let (ft8_tx_event_tx, ft8_tx_event_rx) = mpsc::channel();
         let (digital_tx_event_tx, digital_tx_event_rx) = mpsc::channel();
+        let (local_image_event_tx, local_image_event_rx) = mpsc::channel();
         let (qso_log, qso_log_status) = match QsoLog::load(&qso_log_path()) {
             Ok(log) => {
                 let count = log.contacts.len();
@@ -1907,7 +2127,48 @@ impl QsonautGuiApp {
             audio_waterfall_texture_revision: 0,
             audio_waterfall_texture_bins: 0,
             audio_waterfall_texture_theme: WaterfallTheme::RadioBlue,
-            workspace_mode: WorkspaceMode::Ft8,
+            sstv_texture: None,
+            sstv_texture_revision: 0,
+            sstv_tx_armed: false,
+            sstv_tuning_offset_hz: 0,
+            sstv_auto_target: true,
+            sstv_rx_width_percent: 43,
+            sstv_tx_rgb: Vec::new(),
+            sstv_tx_base_rgb: Vec::new(),
+            sstv_tx_width: qsonaut_sstv::WIDTH,
+            sstv_tx_height: qsonaut_sstv::HEIGHT,
+            sstv_tx_revision: 0,
+            sstv_tx_texture: None,
+            sstv_tx_texture_revision: 0,
+            sstv_tx_mode: qsonaut_sstv::SstvMode::MartinM1,
+            sstv_overlay_callsign: true,
+            sstv_overlay_grid: true,
+            sstv_overlay_frequency: false,
+            sstv_overlay_mode: true,
+            sstv_overlay_corner: SstvOverlayCorner::BottomLeft,
+            sstv_overlay_background: Color32::BLACK,
+            sstv_overlay_background_opacity: 0.65,
+            sstv_background_zoom: 1.0,
+            sstv_background_pan_x: 0.0,
+            sstv_background_pan_y: 0.0,
+            sstv_overlay_revision: 0,
+            sstv_file_dialog: egui_file_dialog::FileDialog::new(),
+            sstv_image_path: String::new(),
+            sstv_ai_prompt: String::new(),
+            local_image_settings: LocalImageSettings::load(),
+            local_image_models: Vec::new(),
+            local_image_status: "Local image server not checked".to_string(),
+            local_image_refresh_started: false,
+            local_image_event_tx,
+            local_image_event_rx,
+            sstv_ai_pipeline_mode: SstvAiPipelineMode::StationQsl,
+            sstv_active_received_id: None,
+            sstv_show_prior_received: false,
+            sstv_received_textures: HashMap::new(),
+            sstv_received_texture_revision: 0,
+            sstv_reinterpret_prompt: String::new(),
+            workspace_mode,
+            activity: OperatingActivity::General,
             fst4_submode: modes::fst4::Submode::default(),
             display_tuning,
             repaint_ctx,
@@ -1986,6 +2247,25 @@ impl QsonautGuiApp {
             station_callsign,
             station_grid,
             station_qth,
+            station_rig,
+            station_antenna,
+            station_notes,
+            llm_prompt_context,
+            sstv_image_requirements,
+            llm_model_notes,
+            voice_callsign: String::new(),
+            voice_grid: String::new(),
+            voice_state: String::new(),
+            voice_rst_sent: "59".to_string(),
+            voice_rst_received: "59".to_string(),
+            voice_contest_serial_sent: String::new(),
+            voice_contest_serial_received: String::new(),
+            voice_notes: String::new(),
+            voice_contest_fields: Vec::new(),
+            voice_qso_started_at: None,
+            voice_lookup_requested: String::new(),
+            voice_lookup_status: String::new(),
+            voice_hamdb: None,
             contest_enabled,
             contest_operating_mode,
             contest_split_policy,
@@ -2065,12 +2345,14 @@ impl QsonautGuiApp {
             &self.current_operator_profile(),
         ) {
             Ok(_) => {
+                info!(profile = %self.selected_profile_name, status = %status_prefix, "Operator profile saved");
                 self.profile_io_status =
                     format!("{status_prefix} profile ‘{}’", self.selected_profile_name);
                 self.available_profiles = list_operator_profiles();
                 self.profile_dirty = false;
             }
             Err(err) => {
+                warn!(profile = %self.selected_profile_name, error = %err, "Operator profile save failed");
                 self.profile_io_status = format!("Save failed: {err}");
             }
         }
@@ -2093,6 +2375,12 @@ impl QsonautGuiApp {
         self.station_callsign = profile.callsign;
         self.station_grid = profile.grid;
         self.station_qth = profile.qth;
+        self.station_rig = profile.station_rig;
+        self.station_antenna = profile.station_antenna;
+        self.station_notes = profile.station_notes;
+        self.llm_prompt_context = profile.llm_prompt_context;
+        self.sstv_image_requirements = profile.sstv_image_requirements;
+        self.llm_model_notes = profile.llm_model_notes;
         self.ft8_follow_log = profile.follow_log;
         self.ft8_max_log_entries = profile.max_log_entries.clamp(80, 1000);
         self.ft8_deep_decode = profile.deep_decode;
@@ -2229,10 +2517,14 @@ impl QsonautGuiApp {
     fn persist_qso_log(&mut self, status_prefix: &str) {
         match self.qso_log.save(&qso_log_path()) {
             Ok(()) => {
+                info!(contacts = self.qso_log.contacts.len(), status = %status_prefix, "QSO log saved");
                 self.qso_log_status = format!("{status_prefix} {}", QSO_LOG_FILE);
                 self.qso_log_dirty = false;
             }
-            Err(error) => self.qso_log_status = format!("Log save failed: {error}"),
+            Err(error) => {
+                warn!(error = %error, path = %qso_log_path().display(), "QSO log save failed");
+                self.qso_log_status = format!("Log save failed: {error}");
+            }
         }
     }
 
@@ -2240,16 +2532,39 @@ impl QsonautGuiApp {
         let Some(rx) = self.hamdb_lookup_rx.as_ref() else {
             return;
         };
-        let Ok(Some(entry)) = rx.try_recv() else {
-            return;
+        let entry = match rx.try_recv() {
+            Ok(Some(entry)) => entry,
+            Ok(None) | Err(mpsc::TryRecvError::Disconnected) => {
+                warn!(callsign = %self.voice_lookup_requested, "HamDB callsign lookup returned no record");
+                self.voice_lookup_status = "HamDB: callsign not found".to_string();
+                self.hamdb_lookup_rx = None;
+                return;
+            }
+            Err(mpsc::TryRecvError::Empty) => return,
         };
         let cache = HamDbCache::open(&hamdb_cache_path()).ok();
+        let voice_match = self
+            .voice_lookup_requested
+            .eq_ignore_ascii_case(&entry.callsign);
+        if voice_match {
+            info!(callsign = %entry.callsign, "HamDB Voice contact lookup completed");
+            if self.voice_grid.trim().is_empty() {
+                self.voice_grid = entry.grid.clone();
+            }
+            if self.voice_state.trim().is_empty() {
+                self.voice_state = entry.state.clone();
+            }
+            self.voice_hamdb = Some(entry.clone());
+            self.voice_lookup_status = "HamDB: operator found".to_string();
+        }
+        let mut log_updated = false;
         for record in self
             .qso_log
             .contacts
             .iter_mut()
             .filter(|record| record.callsign.eq_ignore_ascii_case(&entry.callsign))
         {
+            log_updated = true;
             if record.grid.trim().is_empty() {
                 record.grid = entry.grid.clone();
             }
@@ -2261,8 +2576,10 @@ impl QsonautGuiApp {
         if let Some(cache) = cache {
             let _ = cache.upsert(&entry);
         }
-        self.qso_log_dirty = true;
-        self.persist_qso_log("HamDB details saved to");
+        if log_updated {
+            self.qso_log_dirty = true;
+            self.persist_qso_log("HamDB details saved to");
+        }
         self.hamdb_lookup_rx = None;
     }
 
@@ -2273,12 +2590,14 @@ impl QsonautGuiApp {
         let entry = match rx.try_recv() {
             Ok(Some(entry)) => entry,
             Ok(None) | Err(mpsc::TryRecvError::Disconnected) => {
+                warn!(callsign = %self.station_callsign, "HamDB operator profile lookup returned no record");
                 self.profile_io_status = "HamDB did not return a license record".to_string();
                 self.hamdb_profile_lookup_rx = None;
                 return;
             }
             Err(mpsc::TryRecvError::Empty) => return,
         };
+        info!(callsign = %entry.callsign, "HamDB operator profile lookup completed");
         self.station_callsign = entry.callsign.clone();
         if !entry.grid.trim().is_empty() {
             self.station_grid = entry.grid.clone();
@@ -2312,6 +2631,7 @@ impl QsonautGuiApp {
     fn pump_pota_spots(&mut self) {
         if let Some(rx) = &self.pota_lookup_rx {
             if let Ok(spots) = rx.try_recv() {
+                info!(count = spots.len(), "POTA activator spots refreshed");
                 self.pota_spots = spots;
                 self.pota_lookup_rx = None;
             }
@@ -2322,6 +2642,7 @@ impl QsonautGuiApp {
             return;
         }
         self.pota_last_lookup = Instant::now();
+        info!("POTA activator spot lookup started");
         let (tx, rx) = mpsc::channel();
         self.pota_lookup_rx = Some(rx);
         thread::spawn(move || {
@@ -2363,6 +2684,7 @@ impl QsonautGuiApp {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs())
             .unwrap_or_default();
+        info!(callsign = %callsign, "HamDB operator profile lookup started");
         self.hamdb_profile_lookup_rx = Some(spawn_hamdb_lookup(callsign, now));
         self.profile_io_status = "Loading license record from HamDB…".to_string();
     }
@@ -2445,6 +2767,7 @@ impl QsonautGuiApp {
             || self.ft8_tx_active.load(Ordering::Acquire)
             || self.ft8_tx_queued_period.is_some()
             || self.digital_tx_active.load(Ordering::Acquire)
+            || self.sstv_tx_armed
     }
 
     fn read_radio_profile(&self, name: &str, snapshot: &GuiState) -> RadioProfile {
@@ -2527,6 +2850,7 @@ impl QsonautGuiApp {
         self.stop_native_digital_tx();
         self.ft8_autoseq = false;
         self.ft4_autoseq = false;
+        self.sstv_tx_armed = false;
         self.ft8_stop_policy = AutoTxStopPolicy::Continuous;
         self.ft4_stop_policy = AutoTxStopPolicy::Continuous;
         self.ft4_session = None;
@@ -2545,6 +2869,12 @@ impl QsonautGuiApp {
             callsign: self.station_callsign_or_default().to_string(),
             grid: self.station_grid_or_default().to_string(),
             qth: self.station_qth.trim().to_string(),
+            station_rig: self.station_rig.trim().to_string(),
+            station_antenna: self.station_antenna.trim().to_string(),
+            station_notes: self.station_notes.trim().to_string(),
+            llm_prompt_context: self.llm_prompt_context.trim().to_string(),
+            sstv_image_requirements: self.sstv_image_requirements.trim().to_string(),
+            llm_model_notes: self.llm_model_notes.trim().to_string(),
             follow_log: self.ft8_follow_log,
             max_log_entries: self.ft8_max_log_entries.clamp(80, 1000),
             deep_decode: self.ft8_deep_decode,
@@ -2611,6 +2941,7 @@ impl QsonautGuiApp {
             hunter_custom_rules: self.hunter_custom_rules.clone(),
             radio_profiles: self.radio_profiles.clone(),
             mode_radio_profile: self.mode_radio_profile.clone(),
+            workspace_mode: self.workspace_mode.label().to_string(),
         }
     }
 
@@ -2699,6 +3030,12 @@ impl QsonautGuiApp {
         let channel = self.external_ingress_channel.trim();
         let message = self.external_ingress_message.trim();
         if source.is_empty() || author.is_empty() || message.is_empty() {
+            warn!(
+                source_present = !source.is_empty(),
+                author_present = !author.is_empty(),
+                message_present = !message.is_empty(),
+                "External ingress rejected: required metadata missing"
+            );
             self.automation_status =
                 "🤖 External ingress blocked: source, author, and message are required".to_string();
             return;
@@ -2714,6 +3051,7 @@ impl QsonautGuiApp {
                 channel.to_string()
             },
         });
+        info!(source = %source, author = %author, channel = %if channel.is_empty() { "(unspecified)" } else { channel }, message_length = message.chars().count(), "External ingress accepted");
         self.automation_status =
             format!("🤖 External message injected from {source} as {author}: {message}");
         self.external_ingress_message.clear();
@@ -2741,10 +3079,18 @@ impl QsonautGuiApp {
     }
 
     fn refresh_device_lists(&mut self) {
+        info!("Device inventory refresh requested");
         self.device_scan = Some(spawn_device_scan());
     }
 
     fn apply_device_inventory(&mut self, inventory: DeviceInventory) {
+        info!(
+            audio_inputs = inventory.audio_inputs.len(),
+            audio_outputs = inventory.audio_outputs.len(),
+            serial_ports = inventory.serial_ports.len(),
+            detected_models = inventory.detected_models.len(),
+            "Device inventory applied"
+        );
         self.audio_input_devices = inventory.audio_inputs;
         self.audio_output_devices = inventory.audio_outputs;
         self.radio_serial_ports = inventory.serial_ports;
@@ -2759,14 +3105,14 @@ impl QsonautGuiApp {
                 Color32::from_rgb(73, 35, 24),
                 Color32::from_rgb(255, 137, 61),
                 "🔥 TRANSMIT ARMED",
-                "FT8/FT4 automation, queued audio, or PTT can transmit",
+                "Digital automation, SSTV, queued audio, or PTT can transmit",
             )
         } else {
             (
                 Color32::from_rgb(22, 48, 59),
                 Color32::from_rgb(77, 184, 211),
                 "🔒 ALL TX DISARMED",
-                "Safe state · arm from the FT8 or FT4 workspace",
+                "Safe state · arm explicitly from a transmit workspace",
             )
         };
 
@@ -2813,6 +3159,8 @@ impl QsonautGuiApp {
             WorkspaceMode::Jt65 => self.draw_jt65_workspace(ui, snapshot),
             WorkspaceMode::Q65 => self.draw_q65_workspace(ui, snapshot),
             WorkspaceMode::Cw => self.draw_cw_workspace(ui, snapshot),
+            WorkspaceMode::Voice => self.draw_voice_workspace(ui, snapshot),
+            WorkspaceMode::Sstv => self.draw_sstv_workspace(ui, ctx, snapshot),
             WorkspaceMode::Msk144 | WorkspaceMode::Fldigi => {
                 self.draw_mfsk_mode_workspace(ui, snapshot, self.workspace_mode)
             }
@@ -2825,7 +3173,10 @@ impl QsonautGuiApp {
         ctx: &egui::Context,
         snapshot: &GuiState,
     ) {
-        if matches!(self.workspace_mode, WorkspaceMode::Ft8 | WorkspaceMode::Ft4) {
+        if matches!(
+            self.workspace_mode,
+            WorkspaceMode::Ft8 | WorkspaceMode::Ft4 | WorkspaceMode::Voice | WorkspaceMode::Sstv
+        ) {
             self.draw_workspace(ui, ctx, snapshot);
         } else {
             egui::ScrollArea::both()
@@ -2968,6 +3319,8 @@ impl QsonautGuiApp {
                     .clicked()
                 {
                     self.workspace_mode = mode;
+                    self.profile_dirty = true;
+                    self.persist_profile("Mode saved to");
                     if let Some(frequency_hz) =
                         workspace_frequency_for_current_band(mode, snapshot.frequency_hz)
                     {
@@ -2989,6 +3342,8 @@ impl QsonautGuiApp {
                 );
                 if response.clicked() && enabled {
                     self.workspace_mode = mode;
+                    self.profile_dirty = true;
+                    self.persist_profile("Mode saved to");
                     if let Some(frequency_hz) =
                         workspace_frequency_for_current_band(mode, snapshot.frequency_hz)
                     {
@@ -3059,6 +3414,10 @@ impl eframe::App for QsonautGuiApp {
                 "QSONaut first GUI frame reached"
             );
         }
+        if !self.local_image_refresh_started {
+            self.local_image_refresh_started = true;
+            self.refresh_local_image_models();
+        }
         // Zoom is layered on top of the OS DPI scale, so text, controls,
         // spacing, hit targets, and custom drawings stay in proportion.
         if (ctx.zoom_factor() - self.gui_scale).abs() > 0.001 {
@@ -3086,7 +3445,10 @@ impl eframe::App for QsonautGuiApp {
                     self.device_scan = None;
                     self.apply_device_inventory(inventory);
                 }
-                Err(mpsc::TryRecvError::Disconnected) => self.device_scan = None,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    warn!("Device inventory scan worker disconnected before delivering results");
+                    self.device_scan = None;
+                }
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
@@ -3162,6 +3524,8 @@ impl eframe::App for QsonautGuiApp {
             } else {
                 self.rx_tone_hz
             };
+            s.sstv_tuning_offset_hz = self.sstv_tuning_offset_hz;
+            s.sstv_auto_target = self.sstv_auto_target;
             s.cw_wpm = self.cw_wpm;
             s.compute_backend = self.acceleration_report.active;
             s.radio_spectrum_desired = self.civ_spectrum_on;
@@ -3273,9 +3637,81 @@ impl eframe::App for QsonautGuiApp {
                             RichText::new("AMATEUR RADIO MISSION CONTROL")
                                 .strong()
                                 .size(10.0)
-                                .color(Color32::from_rgb(255, 137, 108)),
+                            .color(Color32::from_rgb(255, 137, 108)),
                         );
                     });
+                    let selected_activity = self.activity;
+                    ui.menu_button(
+                        RichText::new(selected_activity.label())
+                            .strong()
+                            .color(Color32::from_rgb(255, 190, 105)),
+                        |ui| {
+                            ui.label(RichText::new("OPERATING ACTIVITY").strong());
+                            ui.separator();
+                            ui.horizontal_wrapped(|ui| {
+                                for activity in OperatingActivity::ALL {
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::vec2(78.0, 52.0),
+                                        egui::Sense::click(),
+                                    );
+                                    let fill = if selected_activity == activity {
+                                        ui.visuals().selection.bg_fill
+                                    } else if response.hovered() {
+                                        ui.visuals().widgets.hovered.bg_fill
+                                    } else {
+                                        ui.visuals().widgets.inactive.bg_fill
+                                    };
+                                    ui.painter().rect_filled(rect, 4.0, fill);
+                                    draw_activity_icon(
+                                        ui.painter(),
+                                        activity,
+                                        rect.center_top() + egui::vec2(0.0, 14.0),
+                                        ui.visuals().text_color(),
+                                    );
+                                    ui.painter().text(
+                                        rect.center_bottom() - egui::vec2(0.0, 8.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        activity.label(),
+                                        egui::FontId::proportional(12.0),
+                                        ui.visuals().text_color(),
+                                    );
+                                    if response.clicked() {
+                                        info!(activity = %activity.label(), "Operating activity changed");
+                                        self.activity = activity;
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            let profile = self.activity.profile();
+                            let band_summary = if profile.bands.is_unrestricted() {
+                                "all core".to_string()
+                            } else {
+                                profile.bands.labels().join(", ")
+                            };
+                            let mode_summary = if profile.modes.is_unrestricted() {
+                                "all core".to_string()
+                            } else {
+                                profile
+                                    .modes
+                                    .modes()
+                                    .iter()
+                                    .map(|mode| mode.label())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            };
+                            ui.separator();
+                            ui.label(
+                                RichText::new(format!(
+                                    "{}  ·  Bands {}  ·  Modes {}",
+                                    profile.tx_cq,
+                                    band_summary,
+                                    mode_summary,
+                                ))
+                                .small()
+                                .color(Color32::GRAY),
+                            );
+                        },
+                    );
                     ui.separator();
                     let frequency = snapshot
                         .frequency_hz
@@ -3301,7 +3737,7 @@ impl eframe::App for QsonautGuiApp {
                     }
                     ui.separator();
                     ui.label(
-                        RichText::new(&snapshot.mode)
+                        RichText::new(radio_mode_label(&snapshot.mode, snapshot.data_mode))
                             .monospace()
                             .strong()
                             .color(Color32::WHITE),
@@ -3321,6 +3757,37 @@ impl eframe::App for QsonautGuiApp {
                             .strong()
                             .color(Color32::LIGHT_BLUE),
                     );
+                    let activity_profile = self.activity.profile();
+                    ui.label(
+                        RichText::new(activity_profile.tx_cq)
+                            .small()
+                            .monospace()
+                            .color(Color32::from_rgb(255, 190, 105)),
+                    )
+                    .on_hover_text("Activity TX starter; mode panels will consume this profile incrementally");
+                    if let Some(client) = &self.server_client {
+                        let server_status = client.status();
+                        let server_connected =
+                            server_status.state == ServerConnectionState::Connected;
+                        if server_connected && server_status.active_event_count > 0 {
+                            let participating = self.activity == OperatingActivity::Contest
+                                && self.contest_enabled;
+                            let label = if participating {
+                                "✓ SERVER CONTEST · PARTICIPATING".to_string()
+                            } else {
+                                format!("✓ SERVER CONTEST · {} ACTIVE", server_status.active_event_count)
+                            };
+                            ui.label(
+                                RichText::new(label)
+                                    .small()
+                                    .strong()
+                                    .color(Color32::from_rgb(125, 225, 150)),
+                            )
+                            .on_hover_text(
+                                "Active events reported by QSONaut Server; contest participation is controlled by the contest workflow",
+                            );
+                        }
+                    }
                     let active_profile = self.active_radio_profile_name().unwrap_or("None");
                     ui.label(
                         RichText::new(format!("🎛 {active_profile}"))
@@ -3534,6 +4001,11 @@ impl eframe::App for QsonautGuiApp {
             .unwrap_or(previous_deck_height)
             .clamp(monitor_min_height, monitor_max_height);
         if (actual_deck_height - previous_deck_height).abs() > 0.5 {
+            info!(
+                previous_height = previous_deck_height,
+                actual_height = actual_deck_height,
+                "Waterfall panel resized"
+            );
             self.waterfall_deck_height = actual_deck_height;
             self.profile_dirty = true;
             self.waterfall_deck_resize_pending = true;
@@ -3591,6 +4063,7 @@ impl eframe::App for QsonautGuiApp {
                             (SignalPanelTab::Reporting, "REPORTING"),
                             (SignalPanelTab::Waterfall, "WATERFALL"),
                             (SignalPanelTab::Settings, "SETTINGS"),
+                            (SignalPanelTab::Ai, "AI"),
                             (SignalPanelTab::Server, "SERVER"),
                             (SignalPanelTab::RadioTuning, "RADIO TUNING"),
                             (SignalPanelTab::AppLog, "APP LOG"),
@@ -3626,6 +4099,7 @@ impl eframe::App for QsonautGuiApp {
                                     self.draw_waterfall_panel(ui, &snapshot)
                                 }
                                 SignalPanelTab::Settings => self.draw_settings_panel(ui),
+                                SignalPanelTab::Ai => self.draw_ai_panel(ui),
                                 SignalPanelTab::Server => self.draw_server_panel(ui),
                                 SignalPanelTab::RadioTuning => {
                                     self.draw_radio_tuning_panel(ui, &snapshot)
@@ -4584,6 +5058,14 @@ mod tests {
         assert_eq!(parse_workspace_mode_token("FT8"), Some(WorkspaceMode::Ft8));
         assert_eq!(parse_workspace_mode_token("ft4"), Some(WorkspaceMode::Ft4));
         assert_eq!(
+            parse_workspace_mode_token("ssb"),
+            Some(WorkspaceMode::Voice)
+        );
+        assert_eq!(
+            parse_workspace_mode_token("sstv"),
+            Some(WorkspaceMode::Sstv)
+        );
+        assert_eq!(
             parse_workspace_mode_token("JT65"),
             Some(WorkspaceMode::Jt65)
         );
@@ -4591,10 +5073,19 @@ mod tests {
     }
 
     #[test]
+    fn radio_mode_label_honors_reported_data_mode() {
+        assert_eq!(radio_mode_label("LSB-D", Some(false)), "LSB");
+        assert_eq!(radio_mode_label("USB", Some(true)), "USB-D");
+        assert_eq!(radio_mode_label("USB-D", Some(true)), "USB-D");
+    }
+
+    #[test]
     fn workspace_mode_supports_native_tx_matches_current_backends() {
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Ft4));
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Jt9));
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Cw));
+        assert!(workspace_mode_supports_native_tx(WorkspaceMode::Sstv));
+        assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Voice));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Ft8));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Wspr));
     }
@@ -4612,6 +5103,10 @@ mod tests {
         assert_eq!(
             workspace_frequency_for_current_band(WorkspaceMode::Ft8, None),
             None
+        );
+        assert_eq!(
+            workspace_frequency_for_current_band(WorkspaceMode::Sstv, Some(14_074_000)),
+            Some(14_230_000)
         );
     }
 }

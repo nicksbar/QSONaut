@@ -145,6 +145,14 @@ impl QsonautGuiApp {
     }
 
     pub(super) fn emit_contest_profile_hooks(&self) {
+        info!(
+            enabled = self.contest_enabled,
+            mode = contest_operating_mode_label(self.contest_operating_mode),
+            split = split_policy_label(self.contest_split_policy),
+            role = fox_hound_role_label(self.contest_fox_hound_role),
+            serial = self.contest_serial_current,
+            "Contest operating profile changed"
+        );
         self.app_events.publish(AppEvent::ContestProfileChanged {
             enabled: self.contest_enabled,
             operating_mode: contest_operating_mode_label(self.contest_operating_mode).to_string(),

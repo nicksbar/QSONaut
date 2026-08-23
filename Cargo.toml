@@ -8,12 +8,13 @@ members = [
     "crates/qsonaut-automation",
     "crates/qsonaut-pskreporter",
     "crates/qsonaut-server-client",
+    "crates/qsonaut-sstv",
     "crates/qsonaut-gui",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.6"
+version = "0.3.7"
 edition = "2021"
 license = "MIT"
 authors = ["QSONaut Contributors"]
@@ -38,9 +39,11 @@ rustfft = "6"
 cpal = "0.15"
 futures-util = "0.3"
 url = "2"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["serde", "v4"] }
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [profile.dev.package."mfsk-core"]
 opt-level = 3

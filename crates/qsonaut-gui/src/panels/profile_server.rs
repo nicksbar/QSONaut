@@ -1,5 +1,59 @@
 use super::super::*;
 
+fn draw_local_model_selector(
+    ui: &mut egui::Ui,
+    label: &str,
+    help: &str,
+    models: &[LocalModelInfo],
+    selected: &mut String,
+    role: LocalModelRole,
+    id: &str,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(label);
+        ui.small_button("?").on_hover_text(help);
+        let selected_text = if selected.trim().is_empty() {
+            "Select a model"
+        } else {
+            selected.as_str()
+        };
+        egui::ComboBox::from_id_salt(id)
+            .selected_text(selected_text)
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                for model in models.iter().filter(|model| model.supports(role)) {
+                    ui.selectable_value(selected, model.id.clone(), &model.id)
+                        .on_hover_text(model.detail());
+                }
+            });
+    });
+    if !selected.trim().is_empty() {
+        match models.iter().find(|model| model.id == selected.trim()) {
+            Some(model) => {
+                let color = if model.supports(role) {
+                    Color32::GRAY
+                } else {
+                    theme_warning(ui)
+                };
+                let text = model
+                    .role_unavailable_reason(role)
+                    .unwrap_or_else(|| model.detail());
+                ui.label(RichText::new(text).small().color(color));
+            }
+            None => {
+                ui.label(
+                    RichText::new(format!(
+                        "Selected model '{}' is not in the current provider inventory.",
+                        selected.trim()
+                    ))
+                    .small()
+                    .color(theme_warning(ui)),
+                );
+            }
+        }
+    }
+}
+
 fn edit_optional_u8(ui: &mut egui::Ui, value: &mut Option<u8>, min: u8, max: u8) {
     let mut current = i32::from(value.unwrap_or(min));
     if ui
@@ -95,6 +149,72 @@ impl QsonautGuiApp {
                 self.emit_operator_profile_hook("qth_changed");
             }
         });
+
+        ui.add_space(8.0);
+        ui.label(RichText::new("Station and image-generation notes").strong());
+        ui.label("These details are saved with the selected operator profile and used to improve SSTV image prompts.");
+
+        let mut station_details_changed = false;
+        ui.label(RichText::new("Rig").strong());
+        station_details_changed |= ui
+            .add(
+                egui::TextEdit::singleline(&mut self.station_rig)
+                    .desired_width(ui.available_width())
+                    .hint_text("IC-7300, FT-991A, …"),
+            )
+            .changed();
+        ui.label(RichText::new("Antenna").strong());
+        station_details_changed |= ui
+            .add(
+                egui::TextEdit::singleline(&mut self.station_antenna)
+                    .desired_width(ui.available_width())
+                    .hint_text("Dipole, vertical, beam, …"),
+            )
+            .changed();
+        ui.label(RichText::new("Station notes").strong());
+        station_details_changed |= ui
+            .add(
+                egui::TextEdit::multiline(&mut self.station_notes)
+                    .desired_width(ui.available_width())
+                    .desired_rows(2)
+                    .hint_text("Location, propagation, operating preferences, or constraints"),
+            )
+            .changed();
+        ui.label(RichText::new("General LLM prompt context").strong());
+        station_details_changed |= ui
+            .add(
+                egui::TextEdit::multiline(&mut self.llm_prompt_context)
+                    .desired_width(ui.available_width())
+                    .desired_rows(2)
+                    .hint_text("Style, audience, branding, or recurring subjects"),
+            )
+            .changed();
+        ui.label(RichText::new("SSTV image requirements").strong());
+        station_details_changed |= ui
+            .add(
+                egui::TextEdit::multiline(&mut self.sstv_image_requirements)
+                    .desired_width(ui.available_width())
+                    .desired_rows(3)
+                    .hint_text(
+                        "Readable callsign, high contrast, simple composition, no tiny text, …",
+                    ),
+            )
+            .changed();
+        ui.label(RichText::new("LLM/model notes").strong());
+        station_details_changed |= ui
+            .add(
+                egui::TextEdit::multiline(&mut self.llm_model_notes)
+                    .desired_width(ui.available_width())
+                    .desired_rows(2)
+                    .hint_text(
+                        "Use an image-capable model; avoid text-only models for image generation",
+                    ),
+            )
+            .changed();
+        if station_details_changed {
+            self.profile_dirty = true;
+            self.persist_profile("Station and LLM notes saved to");
+        }
 
         ui.add_space(8.0);
         ui.label(RichText::new("Saved profiles").strong());
@@ -497,6 +617,143 @@ impl QsonautGuiApp {
             self.profile_dirty = true;
             self.persist_profile("PSK Reporter tuning saved to");
         }
+    }
+
+    pub(in super::super) fn draw_ai_panel(&mut self, ui: &mut egui::Ui) {
+        self.poll_local_image_events();
+        ui.heading("🧠 AI Models");
+        ui.label(
+            RichText::new(
+                "Global model configuration for image generation and future AI-assisted activities.",
+            )
+            .small()
+            .color(theme_accent(ui)),
+        );
+        ui.label(
+            RichText::new(
+                "Local-only policy: QSONaut accepts HTTP endpoints only on localhost or a loopback IP.",
+            )
+            .small()
+            .color(Color32::GRAY),
+        );
+        ui.add_space(8.0);
+
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(RichText::new("Provider").strong());
+            let old_provider = self.local_image_settings.provider;
+            egui::ComboBox::from_id_salt("global-ai-provider")
+                .selected_text(self.local_image_settings.provider.label())
+                .show_ui(ui, |ui| {
+                    for provider in LocalImageProvider::ALL {
+                        ui.selectable_value(
+                            &mut self.local_image_settings.provider,
+                            provider,
+                            provider.label(),
+                        );
+                    }
+            });
+            if old_provider != self.local_image_settings.provider {
+                self.local_image_models.clear();
+            }
+
+            ui.add_space(6.0);
+            ui.label(RichText::new("API base URL").strong());
+            match self.local_image_settings.provider {
+                LocalImageProvider::Ollama => {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.local_image_settings.ollama_url)
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.label(
+                        RichText::new("Default: http://127.0.0.1:11434")
+                            .small()
+                            .color(Color32::GRAY),
+                    );
+                }
+                LocalImageProvider::Lemonade => {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.local_image_settings.lemonade_url)
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.label(
+                        RichText::new("Default: http://localhost:13305/api/v1")
+                            .small()
+                            .color(Color32::GRAY),
+                    );
+                }
+            }
+
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("🔌 FIND MODELS").clicked() {
+                    let _ = self.local_image_settings.save();
+                    self.refresh_local_image_models();
+                }
+                ui.label(
+                    RichText::new(&self.local_image_status)
+                        .small()
+                        .color(Color32::GRAY),
+                );
+            });
+            draw_local_model_selector(
+                ui,
+                "Vision/context model",
+                "Used to inspect received SSTV images and produce descriptive context for the image pipeline. The selected model must support image input, usually identified by the vision capability, and must support chat/completions. This model analyzes images but does not generate artwork.",
+                &self.local_image_models,
+                &mut self.local_image_settings.vision_model,
+                LocalModelRole::Vision,
+                "global-ai-vision-model",
+            );
+            draw_local_model_selector(
+                ui,
+                "Image-generation model",
+                "Used to create one new image from text or reinterpret a selected received image. The selected model must advertise the image capability. Models marked only vision can inspect images but cannot create artwork.",
+                &self.local_image_models,
+                &mut self.local_image_settings.image_model,
+                LocalModelRole::Image,
+                "global-ai-image-model",
+            );
+            draw_local_model_selector(
+                ui,
+                "Image-editing model",
+                "Received-image reinterpretation requires a model that supports both image generation and image editing. Look for image plus edit capabilities. If no compatible edit model is available, station/QSL generation can still be used, but reinterpretation will be disabled.",
+                &self.local_image_models,
+                &mut self.local_image_settings.edit_model,
+                LocalModelRole::Edit,
+                "global-ai-edit-model",
+            );
+
+            ui.add_space(6.0);
+            ui.label(RichText::new("Image generation defaults").strong());
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Size");
+                ui.add(
+                    egui::DragValue::new(&mut self.local_image_settings.width).range(256..=2048),
+                );
+                ui.label("×");
+                ui.add(
+                    egui::DragValue::new(&mut self.local_image_settings.height).range(256..=2048),
+                );
+                ui.separator();
+                ui.label("Steps");
+                ui.add(egui::DragValue::new(&mut self.local_image_settings.steps).range(1..=100));
+            });
+
+            ui.add_space(8.0);
+            if ui.button("💾 SAVE AI SETTINGS").clicked() {
+                self.local_image_settings.model = self.local_image_settings.image_model.clone();
+                self.local_image_status = match local_ai::validate_loopback_endpoint(
+                    self.local_image_settings.endpoint(),
+                ) {
+                    Ok(_) => match self.local_image_settings.save() {
+                        Ok(()) => "AI settings saved".to_string(),
+                        Err(error) => format!("AI settings save failed: {error}"),
+                    },
+                    Err(error) => error.to_string(),
+                };
+            }
+        });
     }
 
     pub(in super::super) fn draw_settings_panel(&mut self, ui: &mut egui::Ui) {

@@ -14,6 +14,71 @@ use std::sync::atomic::AtomicU32;
 
 type CwRecording = (WavWriter<BufWriter<File>>, BufWriter<File>, PathBuf, u64);
 
+fn save_received_sstv_image(
+    image: &qsonaut_sstv::DecodedImage,
+    mode: Option<qsonaut_sstv::SstvMode>,
+    radio_frequency_hz: Option<u64>,
+) -> anyhow::Result<PathBuf> {
+    let directory = qsonaut_log::app_config_dir().join("sstv-images");
+    std::fs::create_dir_all(&directory)?;
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let mode_name = mode
+        .map(|value| value.name().to_ascii_lowercase().replace(' ', "-"))
+        .unwrap_or_else(|| "unknown".to_string());
+    let frequency = radio_frequency_hz
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown-rf".to_string());
+    let path = directory.join(format!("rx-{timestamp_ms}-{frequency}-{mode_name}.png"));
+    let rgb = image::RgbImage::from_raw(image.width as u32, image.height as u32, image.rgb.clone())
+        .ok_or_else(|| anyhow::anyhow!("decoded SSTV dimensions do not match the RGB buffer"))?;
+    rgb.save(&path)?;
+    Ok(path)
+}
+
+fn save_sstv_debug_capture(
+    samples: &[f32],
+    sample_rate_hz: u32,
+    received_id: &str,
+    mode: Option<qsonaut_sstv::SstvMode>,
+    frequency_hz: Option<u64>,
+    frequency_offset_hz: f32,
+    received_unix_ms: u128,
+) -> anyhow::Result<(PathBuf, PathBuf)> {
+    let directory = qsonaut_log::app_config_dir().join("sstv-images");
+    std::fs::create_dir_all(&directory)?;
+    let stem = format!("{received_id}-debug");
+    let wav_path = directory.join(format!("{stem}.wav"));
+    let metadata_path = directory.join(format!("{stem}.jsonl"));
+    let spec = WavSpec {
+        channels: 1,
+        sample_rate: sample_rate_hz,
+        bits_per_sample: 16,
+        sample_format: SampleFormat::Int,
+    };
+    let mut writer = WavWriter::create(&wav_path, spec)?;
+    for &sample in samples {
+        writer.write_sample((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)?;
+    }
+    writer.finalize()?;
+    let metadata = json!({
+        "type": "sstv_debug_capture",
+        "received_id": received_id,
+        "received_unix_ms": received_unix_ms,
+        "sample_rate_hz": sample_rate_hz,
+        "sample_count": samples.len(),
+        "duration_s": samples.len() as f64 / sample_rate_hz.max(1) as f64,
+        "mode": mode.map(|value| value.name()),
+        "frequency_hz": frequency_hz,
+        "frequency_offset_hz": frequency_offset_hz,
+        "wav_path": wav_path,
+    });
+    std::fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata)?)?;
+    Ok((wav_path, metadata_path))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(in super::super) fn spawn_audio_spectrum_worker(
     state: Arc<Mutex<GuiState>>,
@@ -32,6 +97,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
 ) -> std::thread::JoinHandle<()> {
     thread::spawn(move || {
         if !enabled {
+            info!("Audio worker disabled by configuration");
             let mut s = state.lock().expect("ui state lock poisoned");
             s.audio_spectrum_status = "DISABLED".to_string();
             return;
@@ -41,11 +107,16 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut stream = match audio_service.open_stream(sample_rate_hz, channels as u16) {
             Ok(stream) => stream,
             Err(err) => {
+                tracing::error!(sample_rate_hz, channels, error = %err, "Audio input stream failed to open");
                 let mut s = state.lock().expect("ui state lock poisoned");
                 s.audio_spectrum_status = format!("NO INPUT ({err})");
                 return;
             }
         };
+        info!(
+            sample_rate_hz,
+            channels, monitor_enabled, "Audio input worker started"
+        );
         let (monitor, monitor_status) = if monitor_enabled {
             match qsonaut_audio::AudioMonitor::open(
                 sample_rate_hz,
@@ -91,11 +162,11 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 .expect("ui state lock poisoned")
                 .ft8_decode_status = "READY: waiting for full slot".to_string();
         } else {
-            state
-                .lock()
-                .expect("ui state lock poisoned")
-                .ft8_decode_status =
+            let mut shared = state.lock().expect("ui state lock poisoned");
+            shared.ft8_decode_status =
                 format!("UNAVAILABLE: FT8 requires 48 kHz input (configured {sample_rate_hz} Hz)");
+            shared.sstv_status =
+                format!("UNAVAILABLE: SSTV requires 48 kHz input (configured {sample_rate_hz} Hz)");
         }
         // 15-second accumulation buffer at 12 kHz (180 000 samples)
         // Retain pre-boundary audio so adaptive timing can compensate for a
@@ -111,6 +182,20 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut last_cw_diagnostics = Instant::now();
         let mut last_cw_status = Instant::now() - Duration::from_secs(1);
         let mut cw_recording: Option<CwRecording> = None;
+        let mut sstv_receiver = qsonaut_sstv::MultiModeReceiver::default();
+        let mut sstv_tuning_offset_hz = 0_i32;
+        let mut last_sstv_vis: Option<u8> = None;
+        let mut sstv_receive_started: Option<Instant> = None;
+        let mut sstv_progress_bucket = 0_u8;
+        let mut last_sstv_reset_generation = 0_u64;
+        let mut sstv_session_power_sum = 0.0_f64;
+        let mut sstv_session_chunks = 0_u64;
+        let mut sstv_session_max_clip_percent = 0.0_f32;
+        let mut sstv_debug_recording = false;
+        let mut sstv_debug_samples = Vec::<f32>::new();
+        let mut sstv_tail_decoder: Option<CwDitChannel> = None;
+        let mut sstv_tail_samples_remaining = 0_usize;
+        let mut last_sstv_no_header_log = Instant::now() - Duration::from_secs(10);
         let mut digital_slot_gate = DigitalSlotGate::default();
         let mut ft4_slot_gate = Ft8SlotGate::default();
         let mut decode_workspace_last: Option<WorkspaceMode> = None;
@@ -220,6 +305,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                         let active_workspace_mode =
                             state.lock().expect("ui state lock poisoned").workspace_mode;
                         if decode_workspace_last != Some(active_workspace_mode) {
+                            info!(workspace = %active_workspace_mode.label(), "Audio decoder workspace changed");
                             decode_workspace_last = Some(active_workspace_mode);
                             ft8_buf.clear();
                             digital_buf.clear();
@@ -229,6 +315,10 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             ft8_slot_gate.reset();
                             ft4_slot_gate.reset();
                             digital_slot_gate.reset();
+                            sstv_receiver.reset();
+                            last_sstv_vis = None;
+                            sstv_receive_started = None;
+                            sstv_progress_bucket = 0;
                             *dec = Decimator::new(sample_rate_hz);
                             let mut s = state.lock().expect("ui state lock poisoned");
                             if active_workspace_mode == WorkspaceMode::Ft8 {
@@ -238,6 +328,31 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 s.digital_decode_status =
                                     "READY: live CW decode starts after 3 seconds".to_string();
                                 s.cw_live_text.clear();
+                            } else if active_workspace_mode == WorkspaceMode::Sstv {
+                                s.sstv_status = format!(
+                                    "READY: {} · {}",
+                                    s.sstv_rx_mode
+                                        .map(|mode| mode.name())
+                                        .unwrap_or("Auto (VIS)"),
+                                    if s.sstv_auto_target {
+                                        "auto-target scanning baseband"
+                                    } else {
+                                        "waiting at the manual target"
+                                    }
+                                );
+                                s.sstv_progress = None;
+                                s.sstv_locked_offset_hz = None;
+                                info!(
+                                    auto_target = s.sstv_auto_target,
+                                    scan_min_offset_hz = qsonaut_sstv::AUTO_TARGET_MIN_OFFSET_HZ,
+                                    scan_max_offset_hz = qsonaut_sstv::AUTO_TARGET_MAX_OFFSET_HZ,
+                                    manual_offset_hz = s.sstv_tuning_offset_hz,
+                                    receive_mode = s
+                                        .sstv_rx_mode
+                                        .map(|mode| mode.name())
+                                        .unwrap_or("Auto (VIS)"),
+                                    "SSTV receiver ready"
+                                );
                             } else if active_workspace_mode.has_native_decoder() {
                                 s.digital_decode_status = format!(
                                     "READY: collecting a fresh {} slot",
@@ -350,6 +465,434 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     info!(
                                         "FT8 decode deferred: previous decode pass still running"
                                     );
+                                }
+                            }
+                        } else if active_workspace_mode == WorkspaceMode::Sstv {
+                            if tx_active.load(Ordering::Acquire)
+                                || digital_tx_active.load(Ordering::Acquire)
+                            {
+                                sstv_receiver.reset();
+                                let mut shared = state.lock().expect("ui state lock poisoned");
+                                shared.sstv_status = "SSTV TX active; RX reset".to_string();
+                                shared.sstv_progress = None;
+                                shared.sstv_detected_mode = None;
+                                shared.sstv_locked_offset_hz = None;
+                                sstv_receive_started = None;
+                                sstv_progress_bucket = 0;
+                            } else {
+                                let (debug_requested, selected_tone_hz, cw_wpm) = {
+                                    let shared = state.lock().expect("ui state lock poisoned");
+                                    (
+                                        shared.sstv_debug_capture_requested,
+                                        shared.selected_audio_hz,
+                                        shared.cw_wpm,
+                                    )
+                                };
+                                if debug_requested && !sstv_debug_recording {
+                                    sstv_debug_recording = true;
+                                    sstv_debug_samples.clear();
+                                    let mut shared = state.lock().expect("ui state lock poisoned");
+                                    shared.sstv_debug_capture_requested = false;
+                                    shared.sstv_debug_status =
+                                        "Debug capture armed; waiting for SSTV completion"
+                                            .to_string();
+                                    info!("SSTV debug capture started");
+                                }
+                                if sstv_debug_recording {
+                                    sstv_debug_samples.extend_from_slice(&ds);
+                                }
+                                if sstv_tail_samples_remaining > 0 {
+                                    if let Some(decoder) = sstv_tail_decoder.as_mut() {
+                                        let (events, _) = decoder.push_samples_with_audio(&ds);
+                                        let mut shared =
+                                            state.lock().expect("ui state lock poisoned");
+                                        for event in events {
+                                            let text = match event {
+                                                cwdit_morse::Decoded::Char(character) => {
+                                                    character.to_string()
+                                                }
+                                                cwdit_morse::Decoded::WordBreak => " ".to_string(),
+                                                cwdit_morse::Decoded::Unknown => continue,
+                                            };
+                                            shared.cw_live_text.push_str(&text);
+                                            shared.digital_decode_status =
+                                                format!("SSTV TAIL CW · cw-dit · +{text}");
+                                            shared.digital_decodes.push_back(DigitalDecodeEntry {
+                                                mode: WorkspaceMode::Cw,
+                                                period: SystemTime::now()
+                                                    .duration_since(UNIX_EPOCH)
+                                                    .map(|d| d.as_secs())
+                                                    .unwrap_or_default(),
+                                                utc: utc_hhmmss_millis(
+                                                    SystemTime::now()
+                                                        .duration_since(UNIX_EPOCH)
+                                                        .map(|d| d.as_secs_f64())
+                                                        .unwrap_or_default(),
+                                                ),
+                                                snr_db: 0.0,
+                                                dt_s: 0.0,
+                                                freq_hz: selected_tone_hz,
+                                                message: text,
+                                            });
+                                        }
+                                    }
+                                    sstv_tail_samples_remaining =
+                                        sstv_tail_samples_remaining.saturating_sub(ds.len());
+                                    if sstv_tail_samples_remaining == 0 {
+                                        sstv_tail_decoder = None;
+                                        info!("SSTV tail CW decode window ended");
+                                    }
+                                }
+                                let (
+                                    requested_offset_hz,
+                                    requested_mode,
+                                    requested_auto_target,
+                                    radio_frequency_hz,
+                                    reset_generation,
+                                ) = {
+                                    let shared = state.lock().expect("ui state lock poisoned");
+                                    (
+                                        shared.sstv_tuning_offset_hz,
+                                        shared.sstv_rx_mode,
+                                        shared.sstv_auto_target,
+                                        shared.frequency_hz,
+                                        shared.sstv_reset_generation,
+                                    )
+                                };
+                                if reset_generation != last_sstv_reset_generation {
+                                    sstv_receiver.reset();
+                                    last_sstv_reset_generation = reset_generation;
+                                    last_sstv_vis = None;
+                                    sstv_receive_started = None;
+                                    sstv_progress_bucket = 0;
+                                    info!("SSTV receiver reset; scanning for a new complete VIS header");
+                                }
+                                let targeting_changed = sstv_receiver.selected_mode()
+                                    != requested_mode
+                                    || sstv_receiver.auto_target() != requested_auto_target;
+                                sstv_receiver.set_selected_mode(requested_mode);
+                                sstv_receiver.set_auto_target(requested_auto_target);
+                                if targeting_changed {
+                                    last_sstv_vis = None;
+                                    sstv_receive_started = None;
+                                    sstv_progress_bucket = 0;
+                                }
+                                if !requested_auto_target
+                                    && requested_offset_hz != sstv_tuning_offset_hz
+                                {
+                                    sstv_tuning_offset_hz = requested_offset_hz;
+                                    sstv_receiver
+                                        .set_tuning_offset_hz(sstv_tuning_offset_hz as f32);
+                                    last_sstv_vis = None;
+                                    sstv_receive_started = None;
+                                    sstv_progress_bucket = 0;
+                                }
+                                let active_mode_before_push = sstv_receiver.active_mode();
+                                let locked_offset_before_push = sstv_receiver.locked_offset_hz();
+                                let decoded = sstv_receiver.push(&ds);
+                                let completed_mode = sstv_receiver.take_completed_mode();
+                                let decode_error = sstv_receiver.take_decode_error();
+                                let auto_reacquired = sstv_receiver.take_auto_reacquired();
+                                let progress = sstv_receiver.progress();
+                                let active_mode = sstv_receiver.active_mode();
+                                let detected_vis = sstv_receiver.detected_vis();
+                                let scan_candidate_offset_hz =
+                                    sstv_receiver.scan_candidate_offset_hz();
+                                let scan_prominence_db = sstv_receiver.scan_prominence_db();
+                                let locked_offset_hz =
+                                    sstv_receiver.locked_offset_hz().or_else(|| {
+                                        decoded.as_ref().map(|_| {
+                                            locked_offset_before_push
+                                                .unwrap_or(sstv_tuning_offset_hz as f32)
+                                        })
+                                    });
+                                let frequency_offset_hz = sstv_receiver
+                                    .frequency_offset_hz()
+                                    .or(locked_offset_hz)
+                                    .unwrap_or_default();
+                                let afc_residual_hz = if requested_auto_target {
+                                    0.0
+                                } else {
+                                    frequency_offset_hz - sstv_tuning_offset_hz as f32
+                                };
+                                let rms_dbfs = 20.0 * rms.max(1e-9).log10();
+                                let new_vis =
+                                    detected_vis.filter(|vis| Some(*vis) != last_sstv_vis);
+                                if detected_vis != last_sstv_vis {
+                                    if let Some(vis) = detected_vis {
+                                        info!(
+                                            vis,
+                                            mode = qsonaut_sstv::vis_mode_name(vis),
+                                            supported = qsonaut_sstv::mode_from_vis(vis).is_some(),
+                                            frequency_offset_hz,
+                                            input_rms_dbfs = rms_dbfs,
+                                            input_clip_percent = clip_percent,
+                                            leader_prominence_db = scan_prominence_db,
+                                            auto_target = requested_auto_target,
+                                            radio_frequency_hz,
+                                            "SSTV target acquired from VIS header"
+                                        );
+                                    }
+                                    last_sstv_vis = detected_vis;
+                                }
+                                if auto_reacquired {
+                                    sstv_receive_started = None;
+                                    sstv_progress_bucket = 0;
+                                    info!(
+                                        timeout_s = 2.0,
+                                        "SSTV unresolved VIS acquisition expired; auto-target scanning resumed"
+                                    );
+                                }
+                                let mut shared = state.lock().expect("ui state lock poisoned");
+                                shared.sstv_progress = progress;
+                                shared.sstv_locked_offset_hz = requested_auto_target
+                                    .then(|| locked_offset_hz.map(|offset| offset.round() as i32))
+                                    .flatten();
+                                if let Some(mode) =
+                                    detected_vis.and_then(qsonaut_sstv::mode_from_vis)
+                                {
+                                    shared.sstv_detected_mode = Some(mode);
+                                }
+                                if auto_reacquired {
+                                    shared.sstv_detected_mode = None;
+                                    shared.sstv_locked_offset_hz = None;
+                                }
+                                if let Some(vis) = new_vis {
+                                    let detected = qsonaut_sstv::mode_from_vis(vis);
+                                    let accepted = detected.is_some()
+                                        && (requested_mode.is_none() || requested_mode == detected);
+                                    if accepted {
+                                        sstv_receive_started = Some(Instant::now());
+                                        sstv_progress_bucket = 0;
+                                        sstv_session_power_sum = 0.0;
+                                        sstv_session_chunks = 0;
+                                        sstv_session_max_clip_percent = 0.0;
+                                    } else {
+                                        info!(
+                                            vis,
+                                            mode = qsonaut_sstv::vis_mode_name(vis),
+                                            target_offset_hz = frequency_offset_hz,
+                                            receive_filter = requested_mode
+                                                .map(|mode| mode.name())
+                                                .unwrap_or("Auto (VIS)"),
+                                            "SSTV VIS header ignored by receive-mode filter"
+                                        );
+                                    }
+                                }
+                                if let (Some(value), Some(mode)) = (progress, active_mode) {
+                                    sstv_session_power_sum += f64::from(rms * rms);
+                                    sstv_session_chunks = sstv_session_chunks.saturating_add(1);
+                                    sstv_session_max_clip_percent =
+                                        sstv_session_max_clip_percent.max(clip_percent);
+                                    let bucket = ((value * 100.0) / 25.0).floor() as u8;
+                                    if bucket > sstv_progress_bucket && bucket < 4 {
+                                        sstv_progress_bucket = bucket;
+                                        let percent = bucket * 25;
+                                        info!(
+                                            mode = mode.name(),
+                                            percent,
+                                            target_offset_hz = frequency_offset_hz,
+                                            "SSTV receive progress"
+                                        );
+                                    }
+                                }
+                                if detected_vis.is_none()
+                                    && active_mode.is_none()
+                                    && rms >= 0.005
+                                    && last_sstv_no_header_log.elapsed() >= Duration::from_secs(10)
+                                {
+                                    last_sstv_no_header_log = Instant::now();
+                                    info!(
+                                        input_rms_dbfs = rms_dbfs,
+                                        auto_target = requested_auto_target,
+                                        manual_offset_hz = sstv_tuning_offset_hz,
+                                        scan_candidate_offset_hz,
+                                        scan_prominence_db,
+                                        "SSTV audio present without a complete VIS header"
+                                    );
+                                }
+                                shared.sstv_status = if auto_reacquired {
+                                    "AUTO REACQUIRE: unresolved VIS timed out after 2.0s · scanning baseband"
+                                        .to_string()
+                                } else if let Some(error) = decode_error {
+                                    let mode = active_mode_before_push
+                                        .map(|mode| mode.name())
+                                        .unwrap_or("SSTV");
+                                    tracing::warn!(mode, error = %error, "SSTV image decode failed");
+                                    sstv_receive_started = None;
+                                    sstv_progress_bucket = 0;
+                                    format!("SSTV DECODE FAILED: {error}")
+                                } else if let (Some(value), Some(mode)) = (progress, active_mode) {
+                                    format!(
+                                        "RECEIVING {} · {:.0}% · target {frequency_offset_hz:+.0} Hz · AFC residual {afc_residual_hz:+.0} Hz",
+                                        mode.name(),
+                                        value * 100.0,
+                                    )
+                                } else if let Some(vis) = detected_vis {
+                                    let detected = qsonaut_sstv::mode_from_vis(vis);
+                                    if requested_mode.is_some() && requested_mode != detected {
+                                        format!(
+                                            "VIS {vis}: {} ignored · RX filter is {}",
+                                            qsonaut_sstv::vis_mode_name(vis),
+                                            requested_mode
+                                                .map(|mode| mode.name())
+                                                .unwrap_or("Auto (VIS)"),
+                                        )
+                                    } else {
+                                        format!(
+                                            "VIS {vis}: {} detected · preparing decoder",
+                                            qsonaut_sstv::vis_mode_name(vis),
+                                        )
+                                    }
+                                } else if rms >= 0.005 {
+                                    format!(
+                                        "AUDIO PRESENT ({:.0} dBFS) · no complete VIS header; start RX before the image",
+                                        20.0 * rms.max(1e-9).log10()
+                                    )
+                                } else if requested_auto_target {
+                                    match (scan_candidate_offset_hz, scan_prominence_db) {
+                                        (Some(candidate), Some(prominence)) => format!(
+                                            "SCANNING: strongest 1900 Hz leader candidate {candidate:+.0} Hz · prominence {prominence:.1} dB · waiting for complete VIS",
+                                        ),
+                                        _ => format!(
+                                            "SCANNING: VIS offsets {:+}..{:+} Hz · waiting for a complete header",
+                                            qsonaut_sstv::AUTO_TARGET_MIN_OFFSET_HZ,
+                                            qsonaut_sstv::AUTO_TARGET_MAX_OFFSET_HZ,
+                                        ),
+                                    }
+                                } else {
+                                    format!(
+                                        "LISTENING: decoder {}–{} Hz ({sstv_tuning_offset_hz:+} Hz) · waiting for VIS",
+                                        1_100 + sstv_tuning_offset_hz,
+                                        2_300 + sstv_tuning_offset_hz,
+                                    )
+                                };
+                                if let Some(image) = decoded {
+                                    let received_unix_ms = SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis();
+                                    let saved_path = match save_received_sstv_image(
+                                        &image,
+                                        completed_mode,
+                                        radio_frequency_hz,
+                                    ) {
+                                        Ok(path) => {
+                                            info!(path = %path.display(), "SSTV received image saved");
+                                            Some(path.display().to_string())
+                                        }
+                                        Err(error) => {
+                                            tracing::warn!(error = %error, "failed to save received SSTV image");
+                                            None
+                                        }
+                                    };
+                                    let rgb = image.rgb;
+                                    let received_id = saved_path
+                                        .clone()
+                                        .unwrap_or_else(|| format!("rx-{received_unix_ms}"));
+                                    shared.sstv_width = image.width;
+                                    shared.sstv_height = image.height;
+                                    shared.sstv_rgb = rgb.clone();
+                                    shared.sstv_revision = shared.sstv_revision.wrapping_add(1);
+                                    shared.sstv_saved_path = saved_path.clone();
+                                    shared.sstv_received_images.push_front(ReceivedSstvImage {
+                                        id: received_id.clone(),
+                                        path: saved_path.clone(),
+                                        mode: completed_mode,
+                                        frequency_hz: radio_frequency_hz,
+                                        width: image.width,
+                                        height: image.height,
+                                        rgb,
+                                        received_unix_ms,
+                                        analysis: None,
+                                        debug_audio_path: None,
+                                        debug_metadata_path: None,
+                                    });
+                                    info!(
+                                        received_image_id = %received_id,
+                                        path = ?saved_path,
+                                        carousel_size = shared.sstv_received_images.len(),
+                                        "SSTV received image added to carousel"
+                                    );
+                                    while shared.sstv_received_images.len() > 24 {
+                                        shared.sstv_received_images.pop_back();
+                                    }
+                                    shared.sstv_received_revision =
+                                        shared.sstv_received_revision.wrapping_add(1);
+                                    shared.sstv_progress = None;
+                                    shared.sstv_detected_mode = completed_mode;
+                                    shared.sstv_status = format!(
+                                        "RECEIVED: {} image complete · {}×{} · target {frequency_offset_hz:+.0} Hz",
+                                        completed_mode.map(|mode| mode.name()).unwrap_or("SSTV"),
+                                        shared.sstv_width,
+                                        shared.sstv_height,
+                                    );
+                                    let elapsed_s = sstv_receive_started
+                                        .take()
+                                        .map(|started| started.elapsed().as_secs_f32())
+                                        .unwrap_or_default();
+                                    let mode =
+                                        completed_mode.map(|mode| mode.name()).unwrap_or("SSTV");
+                                    let average_rms_dbfs = if sstv_session_chunks == 0 {
+                                        rms_dbfs
+                                    } else {
+                                        20.0 * ((sstv_session_power_sum
+                                            / sstv_session_chunks as f64)
+                                            .sqrt()
+                                            .max(1e-9)
+                                            .log10()
+                                            as f32)
+                                    };
+                                    info!(
+                                        mode,
+                                        width = shared.sstv_width,
+                                        height = shared.sstv_height,
+                                        target_offset_hz = frequency_offset_hz,
+                                        elapsed_s,
+                                        radio_frequency_hz,
+                                        average_input_rms_dbfs = average_rms_dbfs,
+                                        max_input_clip_percent = sstv_session_max_clip_percent,
+                                        leader_prominence_db = scan_prominence_db,
+                                        "SSTV image receive complete"
+                                    );
+                                    sstv_tail_decoder =
+                                        Some(CwDitChannel::new(12_000, selected_tone_hz, cw_wpm));
+                                    sstv_tail_samples_remaining = 12_000 * 12;
+                                    if sstv_debug_recording {
+                                        match save_sstv_debug_capture(
+                                            &sstv_debug_samples,
+                                            12_000,
+                                            &received_id,
+                                            completed_mode,
+                                            radio_frequency_hz,
+                                            frequency_offset_hz,
+                                            received_unix_ms,
+                                        ) {
+                                            Ok((wav_path, metadata_path)) => {
+                                                if let Some(saved) =
+                                                    shared.sstv_received_images.front_mut()
+                                                {
+                                                    saved.debug_audio_path =
+                                                        Some(wav_path.display().to_string());
+                                                    saved.debug_metadata_path =
+                                                        Some(metadata_path.display().to_string());
+                                                }
+                                                shared.sstv_debug_status = format!(
+                                                    "Saved debug capture {}",
+                                                    wav_path.display()
+                                                );
+                                                info!(path = %wav_path.display(), metadata = %metadata_path.display(), "SSTV debug capture saved");
+                                            }
+                                            Err(error) => {
+                                                shared.sstv_debug_status =
+                                                    format!("Debug capture save failed: {error}");
+                                                tracing::warn!(error = %error, "failed to save SSTV debug capture");
+                                            }
+                                        }
+                                        sstv_debug_recording = false;
+                                        sstv_debug_samples.clear();
+                                    }
+                                    sstv_progress_bucket = 0;
                                 }
                             }
                         } else if active_workspace_mode == WorkspaceMode::Cw {

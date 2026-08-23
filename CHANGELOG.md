@@ -5,7 +5,79 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.6] - Unreleased
+## [0.3.7] - 2026-08-22
+
+### Added
+- Added a real Application Log clear action that truncates the active log file,
+  plus structured logging for device lifecycle, PSK Reporter, automation,
+  server ingress, and core rendering failures.
+- Added a contact-editor delete action that removes the selected QSO from the
+  persistent contact log.
+- Added a dedicated Voice Logger workspace with callsign-first QSO entry,
+  reports, grid/state, contest exchanges and serials, notes, and explicit
+  logging through the existing `QsoRecord` and HamDB enrichment flow.
+- Added blur-triggered HamDB callsign lookup for active Voice contacts, with
+  cached results, operator preview, and blank-field population.
+- Added an initial top-bar operating activity framework with icon-based
+  selectors for General, POTA, SOTA, Contest, Field Day, DX, Satellite, and
+  EMCOMM activities.
+- Added shared core band scopes and activity mode preferences; General remains
+  unrestricted, while hard band/mode limits are reserved for active local or
+  server contest constraints.
+- Added native Martin M1 SSTV receive and transmit at 12 kHz, including VIS 44
+  detection, live receive progress, 320×256 image preview, standard HF calling
+  frequencies, and one-shot TX through the global disarm/PTT safety path.
+- Added strictly local image generation for SSTV activity artwork through
+  Ollama and Lemonade Server, with server/model selection, activity-aware
+  prompts, local image persistence, and hard loopback-only URL enforcement.
+- Added the reusable `qsonaut-sstv` modem crate with encode/decode and streaming
+  receiver tests.
+- Added a revision-pinned `komitoto-sstv` adapter for 13 Martin, Scottie, Robot,
+  and PD codecs, with VIS mapping and cross-backend Martin M2 round-trip tests.
+- Added an explicit RX `Auto (VIS)` state with the detected mode shown in the
+  SSTV header, plus a 13-mode TX selector with native resolution and duration.
+- Connected automatic VIS selection and the manual RX-mode filter to live image
+  reconstruction for all 13 pinned Martin, Scottie, Robot, and PD codecs.
+- Added single-channel SSTV auto-target acquisition across shifted audio-baseband
+  VIS headers, with visible scan/lock/manual states and waterfall click override.
+- Added structured Application Log events for SSTV acquisition, ranked leader
+  diagnostics, no-header audio, progress, completion, and decode failure, plus
+  an SSTV filter shortcut instead of a duplicate mode-local log.
+
+### Changed
+- Kept Voice focused on contact logging; PTT and radio controls remain in the
+  global radio operations bar.
+- Made Voice band presets follow conventional sidebands: LSB on 160/80/40 m,
+  USB on higher HF bands, and FM on 2 m/70 cm.
+- Extended the prominent global TX safety control to cover armed, queued, and
+  active SSTV transmissions.
+- Documented local image-server setup, SSTV operating frequencies, format
+  boundaries, and the distinction between software validation and on-air
+  validation.
+- Persisted the selected workspace mode so QSONaut restores the last-used mode
+  instead of always starting in FT8.
+- Expanded operator profiles with rig, antenna, station notes, and reusable LLM
+  prompt guidance, including SSTV image requirements and model notes.
+- Moved station and image-generation profile fields below the HamDB controls and
+  made them fill the available profile-panel width.
+
+### Fixed
+- Corrected CI-V Voice transitions so the waterfall stays in centered-span
+  mode, and the top-bar mode label reflects the radio's actual data-mode flag.
+- Made the 1200 Hz-wide SSTV decoder window movable on the audio waterfall;
+  clicking a received signal now shifts VIS detection, pixel decoding, and the
+  displayed tone plan together while residual AFC handles fine alignment.
+- Restored the SSTV decode/model layout after the image-path row could overflow
+  its column, and made existing PNG/JPEG loading a prominent full-width block
+  with an in-app cross-platform file browser.
+- Fitted the SSTV frame and local-model panels to the available central
+  viewport like FT8/FT4; image loading stays at the top while the model lab
+  scrolls within its own column.
+- Added explicit SSTV RX diagnostics for audio without a complete header,
+  unsupported parity-valid VIS modes, configured sample-rate incompatibility,
+  and the requirement to begin capture before the VIS header.
+
+## [0.3.6] - 2026-08-21
 
 ### Added
 - Added selectable native serial, Hamlib `rigctld`, and DX Lab Suite Commander
