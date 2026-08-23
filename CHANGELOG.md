@@ -24,8 +24,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   reconstruction for all 13 pinned Martin, Scottie, Robot, and PD codecs.
 - Added single-channel SSTV auto-target acquisition across shifted audio-baseband
   VIS headers, with visible scan/lock/manual states and waterfall click override.
-- Added a bounded SSTV RX activity history plus structured application-log events
-  for acquisition, no-header audio, progress, completion, and decode failure.
+- Added structured Application Log events for SSTV acquisition, ranked leader
+  diagnostics, no-header audio, progress, completion, and decode failure, plus
+  an SSTV filter shortcut instead of a duplicate mode-local log.
 
 ### Changed
 - Extended the prominent global TX safety control to cover armed, queued, and

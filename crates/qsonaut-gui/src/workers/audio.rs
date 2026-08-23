@@ -262,19 +262,17 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 );
                                 s.sstv_progress = None;
                                 s.sstv_locked_offset_hz = None;
-                                let targeting_event = if s.sstv_auto_target {
-                                    format!(
-                                        "AUTO TARGET scanning {:+}..{:+} Hz",
-                                        qsonaut_sstv::AUTO_TARGET_MIN_OFFSET_HZ,
-                                        qsonaut_sstv::AUTO_TARGET_MAX_OFFSET_HZ,
-                                    )
-                                } else {
-                                    format!(
-                                        "MANUAL TARGET listening at {:+} Hz",
-                                        s.sstv_tuning_offset_hz
-                                    )
-                                };
-                                s.record_sstv_rx_event(targeting_event);
+                                info!(
+                                    auto_target = s.sstv_auto_target,
+                                    scan_min_offset_hz = qsonaut_sstv::AUTO_TARGET_MIN_OFFSET_HZ,
+                                    scan_max_offset_hz = qsonaut_sstv::AUTO_TARGET_MAX_OFFSET_HZ,
+                                    manual_offset_hz = s.sstv_tuning_offset_hz,
+                                    receive_mode = s
+                                        .sstv_rx_mode
+                                        .map(|mode| mode.name())
+                                        .unwrap_or("Auto (VIS)"),
+                                    "SSTV receiver ready"
+                                );
                             } else if active_workspace_mode.has_native_decoder() {
                                 s.digital_decode_status = format!(
                                     "READY: collecting a fresh {} slot",
@@ -444,6 +442,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 let progress = sstv_receiver.progress();
                                 let active_mode = sstv_receiver.active_mode();
                                 let detected_vis = sstv_receiver.detected_vis();
+                                let scan_candidate_offset_hz =
+                                    sstv_receiver.scan_candidate_offset_hz();
+                                let scan_prominence_db = sstv_receiver.scan_prominence_db();
                                 let locked_offset_hz =
                                     sstv_receiver.locked_offset_hz().or_else(|| {
                                         decoded.as_ref().map(|_| {
@@ -495,17 +496,16 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     if accepted {
                                         sstv_receive_started = Some(Instant::now());
                                         sstv_progress_bucket = 0;
-                                        shared.record_sstv_rx_event(format!(
-                                            "ACQUIRED {} · VIS {vis} · target {frequency_offset_hz:+.0} Hz · {rms_dbfs:.0} dBFS · RF {:.3} MHz",
-                                            qsonaut_sstv::vis_mode_name(vis),
-                                            radio_frequency_hz.unwrap_or_default() as f64 / 1_000_000.0,
-                                        ));
                                     } else {
-                                        shared.record_sstv_rx_event(format!(
-                                            "IGNORED {} · VIS {vis} · target {frequency_offset_hz:+.0} Hz · RX filter {}",
-                                            qsonaut_sstv::vis_mode_name(vis),
-                                            requested_mode.map(|mode| mode.name()).unwrap_or("Auto (VIS)"),
-                                        ));
+                                        info!(
+                                            vis,
+                                            mode = qsonaut_sstv::vis_mode_name(vis),
+                                            target_offset_hz = frequency_offset_hz,
+                                            receive_filter = requested_mode
+                                                .map(|mode| mode.name())
+                                                .unwrap_or("Auto (VIS)"),
+                                            "SSTV VIS header ignored by receive-mode filter"
+                                        );
                                     }
                                 }
                                 if let (Some(value), Some(mode)) = (progress, active_mode) {
@@ -519,10 +519,6 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                             target_offset_hz = frequency_offset_hz,
                                             "SSTV receive progress"
                                         );
-                                        shared.record_sstv_rx_event(format!(
-                                            "RECEIVING {} · {percent}% · target {frequency_offset_hz:+.0} Hz",
-                                            mode.name(),
-                                        ));
                                     }
                                 }
                                 if detected_vis.is_none()
@@ -535,25 +531,16 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         input_rms_dbfs = rms_dbfs,
                                         auto_target = requested_auto_target,
                                         manual_offset_hz = sstv_tuning_offset_hz,
+                                        scan_candidate_offset_hz,
+                                        scan_prominence_db,
                                         "SSTV audio present without a complete VIS header"
                                     );
-                                    shared.record_sstv_rx_event(format!(
-                                        "AUDIO {rms_dbfs:.0} dBFS · no complete VIS · {}",
-                                        if requested_auto_target {
-                                            "auto-target still scanning".to_string()
-                                        } else {
-                                            format!("manual target {sstv_tuning_offset_hz:+} Hz")
-                                        }
-                                    ));
                                 }
                                 shared.sstv_status = if let Some(error) = decode_error {
                                     let mode = active_mode_before_push
                                         .map(|mode| mode.name())
                                         .unwrap_or("SSTV");
                                     tracing::warn!(mode, error = %error, "SSTV image decode failed");
-                                    shared.record_sstv_rx_event(format!(
-                                        "FAILED {mode} · target {frequency_offset_hz:+.0} Hz · {error}"
-                                    ));
                                     sstv_receive_started = None;
                                     sstv_progress_bucket = 0;
                                     format!("SSTV DECODE FAILED: {error}")
@@ -585,11 +572,16 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         20.0 * rms.max(1e-9).log10()
                                     )
                                 } else if requested_auto_target {
-                                    format!(
-                                        "SCANNING: VIS offsets {:+}..{:+} Hz · waiting for a complete header",
-                                        qsonaut_sstv::AUTO_TARGET_MIN_OFFSET_HZ,
-                                        qsonaut_sstv::AUTO_TARGET_MAX_OFFSET_HZ,
-                                    )
+                                    match (scan_candidate_offset_hz, scan_prominence_db) {
+                                        (Some(candidate), Some(prominence)) => format!(
+                                            "SCANNING: strongest 1900 Hz leader candidate {candidate:+.0} Hz · prominence {prominence:.1} dB · waiting for complete VIS",
+                                        ),
+                                        _ => format!(
+                                            "SCANNING: VIS offsets {:+}..{:+} Hz · waiting for a complete header",
+                                            qsonaut_sstv::AUTO_TARGET_MIN_OFFSET_HZ,
+                                            qsonaut_sstv::AUTO_TARGET_MAX_OFFSET_HZ,
+                                        ),
+                                    }
                                 } else {
                                     format!(
                                         "LISTENING: decoder {}–{} Hz ({sstv_tuning_offset_hz:+} Hz) · waiting for VIS",
@@ -625,13 +617,6 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         radio_frequency_hz,
                                         "SSTV image receive complete"
                                     );
-                                    let received_width = shared.sstv_width;
-                                    let received_height = shared.sstv_height;
-                                    shared.record_sstv_rx_event(format!(
-                                        "COMPLETE {mode} · {}×{} · target {frequency_offset_hz:+.0} Hz · {elapsed_s:.1}s",
-                                        received_width,
-                                        received_height,
-                                    ));
                                     sstv_progress_bucket = 0;
                                 }
                             }

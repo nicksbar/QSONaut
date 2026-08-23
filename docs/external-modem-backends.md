@@ -20,7 +20,7 @@ This project is intentionally moving toward **integration-first** modem strategy
     the codec automatically from VIS or filter for an explicitly selected mode.
   - A QSONaut-owned single-channel acquisition layer scans shifted VIS headers
     across the audio baseband, retains waterfall click override, and publishes
-    bounded activity plus structured local diagnostics.
+    structured diagnostics to the shared local Application Log.
 
 ## Next targets
 

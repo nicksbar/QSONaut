@@ -51,23 +51,10 @@ impl QsonautGuiApp {
             let old_auto_target = self.sstv_auto_target;
             ui.checkbox(&mut self.sstv_auto_target, "AUTO TARGET");
             if self.sstv_auto_target != old_auto_target {
-                let detail = if self.sstv_auto_target {
-                    format!(
-                        "AUTO TARGET scanning offsets {:+}..{:+} Hz",
-                        qsonaut_sstv::AUTO_TARGET_MIN_OFFSET_HZ,
-                        qsonaut_sstv::AUTO_TARGET_MAX_OFFSET_HZ,
-                    )
-                } else {
-                    format!(
-                        "MANUAL TARGET selected at {:+} Hz",
-                        self.sstv_tuning_offset_hz
-                    )
-                };
                 let mut shared = self.state.lock().expect("ui state lock poisoned");
                 shared.sstv_auto_target = self.sstv_auto_target;
                 shared.sstv_locked_offset_hz = None;
                 shared.sstv_progress = None;
-                shared.record_sstv_rx_event(&detail);
                 tracing::info!(
                     auto_target = self.sstv_auto_target,
                     manual_offset_hz = self.sstv_tuning_offset_hz,
@@ -90,6 +77,11 @@ impl QsonautGuiApp {
                     theme_accent(ui)
                 }),
             );
+            if ui.small_button("VIEW SSTV LOG").clicked() {
+                self.app_log_filter = "SSTV".to_string();
+                self.app_log_level_filter = AppLogLevelFilter::All;
+                self.signal_panel_tab = SignalPanelTab::AppLog;
+            }
             ui.separator();
             ui.label(RichText::new("RX mode").strong());
             egui::ComboBox::from_id_salt("sstv_rx_mode")
@@ -123,11 +115,6 @@ impl QsonautGuiApp {
                 "RX MODE: {} · waiting for a complete VIS header",
                 rx_mode.map(|mode| mode.name()).unwrap_or("Auto (VIS)")
             );
-            let detail = format!(
-                "RX MODE changed to {}",
-                rx_mode.map(|mode| mode.name()).unwrap_or("Auto (VIS)")
-            );
-            shared.record_sstv_rx_event(&detail);
             tracing::info!(
                 receive_mode = rx_mode.map(|mode| mode.name()).unwrap_or("Auto (VIS)"),
                 "SSTV receive mode changed"
@@ -140,7 +127,7 @@ impl QsonautGuiApp {
         );
         ui.label(
             RichText::new(
-                "Auto uses the VIS header to select and decode Martin, Scottie, Robot, or PD. Choose a receive mode to accept only that mode. Start before the VIS header, and click the signal center in the audio waterfall to align the decoder.",
+                "Auto Target searches the filter for a complete shifted VIS header; Auto (VIS) then selects the image mode. Start before the header. Clicking the signal's 1900 Hz leader/pixel center switches to manual targeting.",
             )
             .small()
             .color(theme_accent(ui)),
@@ -234,32 +221,6 @@ impl QsonautGuiApp {
                                 );
                             }
                         });
-                });
-                ui.separator();
-                egui::CollapsingHeader::new(format!(
-                    "📡 RX ACTIVITY ({})",
-                    snapshot.sstv_rx_events.len()
-                ))
-                .default_open(false)
-                .show(ui, |ui| {
-                    if snapshot.sstv_rx_events.is_empty() {
-                        ui.label(
-                            RichText::new("No SSTV acquisition events yet")
-                                .small()
-                                .color(theme_muted(ui)),
-                        );
-                    } else {
-                        if ui.small_button("CLEAR HISTORY").clicked() {
-                            self.state
-                                .lock()
-                                .expect("ui state lock poisoned")
-                                .sstv_rx_events
-                                .clear();
-                        }
-                        for event in snapshot.sstv_rx_events.iter().rev().take(8) {
-                            ui.label(RichText::new(event).small().monospace());
-                        }
-                    }
                 });
                 ui.separator();
                 ui.label(RichText::new("🧠 LOCAL IMAGE LAB").strong());

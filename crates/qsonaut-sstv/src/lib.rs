@@ -16,6 +16,7 @@ pub const VIS_CODE_MARTIN_M1: u8 = 0x2c;
 pub const MULTIMODE_SAMPLE_RATE_HZ: u32 = 48_000;
 pub const AUTO_TARGET_MIN_OFFSET_HZ: i32 = -900;
 pub const AUTO_TARGET_MAX_OFFSET_HZ: i32 = 700;
+pub const AUTO_TARGET_CANDIDATES_PER_WINDOW: usize = 16;
 
 const LEADER_MS: f64 = 300.0;
 const VIS_BREAK_MS: f64 = 10.0;
@@ -189,6 +190,8 @@ pub struct MultiModeReceiver {
     tuning_offset_hz: f32,
     last_decode_error: Option<String>,
     last_completed_mode: Option<SstvMode>,
+    scan_candidate_offset_hz: Option<f32>,
+    scan_prominence_db: Option<f32>,
 }
 
 impl MultiModeReceiver {
@@ -202,6 +205,8 @@ impl MultiModeReceiver {
         self.locked_offset_hz = None;
         self.last_decode_error = None;
         self.last_completed_mode = None;
+        self.scan_candidate_offset_hz = None;
+        self.scan_prominence_db = None;
     }
 
     pub fn set_selected_mode(&mut self, mode: Option<SstvMode>) {
@@ -224,6 +229,14 @@ impl MultiModeReceiver {
 
     pub fn locked_offset_hz(&self) -> Option<f32> {
         self.locked_offset_hz
+    }
+
+    pub fn scan_candidate_offset_hz(&self) -> Option<f32> {
+        self.scan_candidate_offset_hz
+    }
+
+    pub fn scan_prominence_db(&self) -> Option<f32> {
+        self.scan_prominence_db
     }
 
     pub fn selected_mode(&self) -> Option<SstvMode> {
@@ -311,7 +324,10 @@ impl MultiModeReceiver {
         while self.search_from + header <= self.buffer.len() {
             let header_audio = &self.buffer[self.search_from..self.search_from + header];
             let detection = if self.auto_target {
-                decode_vis_header_auto(header_audio)
+                let scan = decode_vis_header_auto(header_audio);
+                self.scan_candidate_offset_hz = scan.strongest_offset_hz;
+                self.scan_prominence_db = scan.prominence_db;
+                scan.detection
             } else {
                 decode_vis_header(header_audio, self.tuning_offset_hz)
             };
@@ -588,15 +604,59 @@ fn decode_vis_header(audio: &[f32], tuning_offset_hz: f32) -> Option<(u8, f32)> 
     (parity_ok && stop == 1200.0).then_some((vis, frequency_offset_hz))
 }
 
-fn decode_vis_header_auto(audio: &[f32]) -> Option<(u8, f32)> {
+struct AutoTargetScan {
+    detection: Option<(u8, f32)>,
+    strongest_offset_hz: Option<f32>,
+    prominence_db: Option<f32>,
+}
+
+fn decode_vis_header_auto(audio: &[f32]) -> AutoTargetScan {
     let leader = slice_ms(audio, 40.0, 260.0);
-    let peak_hz = peak_frequency(
-        leader,
-        (1_900 + AUTO_TARGET_MIN_OFFSET_HZ) as u32,
-        (1_900 + AUTO_TARGET_MAX_OFFSET_HZ) as u32,
-        25,
-    );
-    decode_vis_header(audio, peak_hz - 1_900.0)
+    let mut candidates = ((1_900 + AUTO_TARGET_MIN_OFFSET_HZ)
+        ..=(1_900 + AUTO_TARGET_MAX_OFFSET_HZ))
+        .step_by(25)
+        .map(|frequency_hz| {
+            (
+                frequency_hz as f32 - 1_900.0,
+                tone_power(leader, frequency_hz as f32),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut powers = candidates
+        .iter()
+        .map(|(_, power)| *power)
+        .collect::<Vec<_>>();
+    powers.sort_by(f32::total_cmp);
+    let median_power = powers.get(powers.len() / 2).copied().unwrap_or_default();
+    candidates.sort_by(|left, right| right.1.total_cmp(&left.1));
+    let strongest = candidates.first().copied();
+    let prominence_db = strongest
+        .map(|(_, power)| 10.0 * ((power + f32::EPSILON) / (median_power + f32::EPSILON)).log10());
+
+    let mut tested_offsets = Vec::with_capacity(AUTO_TARGET_CANDIDATES_PER_WINDOW);
+    let mut detection = None;
+    for (offset_hz, _) in candidates {
+        if tested_offsets
+            .iter()
+            .any(|tested: &f32| (*tested - offset_hz).abs() < 50.0)
+        {
+            continue;
+        }
+        tested_offsets.push(offset_hz);
+        if let Some(found) = decode_vis_header(audio, offset_hz) {
+            detection = Some(found);
+            break;
+        }
+        if tested_offsets.len() == AUTO_TARGET_CANDIDATES_PER_WINDOW {
+            break;
+        }
+    }
+
+    AutoTargetScan {
+        detection,
+        strongest_offset_hz: strongest.map(|(offset, _)| offset),
+        prominence_db,
+    }
 }
 
 fn append_vis_header<F>(vis_code: u8, tone: &mut F, out: &mut Vec<i16>)
@@ -877,6 +937,40 @@ mod tests {
         }
         assert!(receiver.detected_vis().is_none());
         assert!(receiver.buffer.len() <= ms_samples(HEADER_MS + 400.0));
+    }
+
+    #[test]
+    fn auto_target_validates_ranked_candidates_beyond_the_strongest_tone() {
+        let mut pcm = Vec::new();
+        let mut phase = 0.0_f64;
+        let mut remainder = 0.0_f64;
+        let mut shifted_tone = |frequency: f64, duration_ms: f64, out: &mut Vec<i16>| {
+            remainder += duration_ms * SAMPLE_RATE_HZ as f64 / 1000.0;
+            let count = remainder.floor() as usize;
+            remainder -= count as f64;
+            let step = std::f64::consts::TAU * (frequency + 420.0) / SAMPLE_RATE_HZ as f64;
+            for _ in 0..count {
+                out.push((phase.sin() * 12_000.0).round() as i16);
+                phase = (phase + step) % std::f64::consts::TAU;
+            }
+        };
+        append_vis_header(VIS_CODE_MARTIN_M1, &mut shifted_tone, &mut pcm);
+        let mut audio: Vec<f32> = pcm
+            .iter()
+            .map(|sample| *sample as f32 / i16::MAX as f32)
+            .collect();
+        let start = ms_samples(40.0);
+        let end = ms_samples(260.0);
+        for (index, sample) in audio[start..end].iter_mut().enumerate() {
+            *sample += (TAU * 1_100.0 * index as f32 / SAMPLE_RATE_HZ as f32).sin() * 0.8;
+        }
+
+        let scan = decode_vis_header_auto(&audio);
+        assert_eq!(scan.detection.map(|(vis, _)| vis), Some(VIS_CODE_MARTIN_M1));
+        assert!(
+            scan.strongest_offset_hz.unwrap_or_default() < -700.0,
+            "the interference should be the strongest leader candidate"
+        );
     }
 
     #[test]

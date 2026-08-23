@@ -253,15 +253,19 @@ impl QsonautGuiApp {
         let is_cw = self.workspace_mode == WorkspaceMode::Cw;
         let is_sstv = self.workspace_mode == WorkspaceMode::Sstv;
         let bw_hz = filter_bw_hz;
-        let sstv_display_offset_hz = if snapshot.sstv_auto_target {
-            snapshot
-                .sstv_locked_offset_hz
-                .unwrap_or(self.sstv_tuning_offset_hz)
+        let sstv_target_offset_hz = if snapshot.sstv_auto_target {
+            snapshot.sstv_locked_offset_hz
         } else {
-            self.sstv_tuning_offset_hz
+            Some(self.sstv_tuning_offset_hz)
         };
+        let sstv_scanning = is_sstv && sstv_target_offset_hz.is_none();
+        let sstv_display_offset_hz = sstv_target_offset_hz.unwrap_or_default();
         let rx_cursor_hz = if is_sstv {
-            (1_100_i32 + sstv_display_offset_hz).max(0) as u32
+            if sstv_scanning {
+                (1_100_i32 + qsonaut_sstv::AUTO_TARGET_MIN_OFFSET_HZ) as u32
+            } else {
+                (1_100_i32 + sstv_display_offset_hz).max(0) as u32
+            }
         } else if is_cw {
             u32::from(self.cw_tone_hz)
         } else {
@@ -284,6 +288,11 @@ impl QsonautGuiApp {
                 WorkspaceMode::Wspr => 6,
                 WorkspaceMode::Jt9 => 16,
                 WorkspaceMode::Jt65 | WorkspaceMode::Q65 => 180,
+                WorkspaceMode::Sstv if sstv_scanning => {
+                    (2_300 + qsonaut_sstv::AUTO_TARGET_MAX_OFFSET_HZ
+                        - (1_100 + qsonaut_sstv::AUTO_TARGET_MIN_OFFSET_HZ))
+                        as u32
+                }
                 WorkspaceMode::Sstv => 1_200,
                 _ => 50,
             }
@@ -335,11 +344,13 @@ impl QsonautGuiApp {
 
                 if response.clicked() {
                     if is_sstv {
-                        let minimum_center_hz = 700_i32;
-                        let maximum_center_hz = (capped_bw as i32 - 600).max(minimum_center_hz);
+                        let minimum_center_hz = 1_900 + qsonaut_sstv::AUTO_TARGET_MIN_OFFSET_HZ;
+                        let maximum_center_hz = (capped_bw as i32 - 400)
+                            .min(1_900 + qsonaut_sstv::AUTO_TARGET_MAX_OFFSET_HZ)
+                            .max(minimum_center_hz);
                         let selected_center_hz =
                             (pick_hz as i32).clamp(minimum_center_hz, maximum_center_hz);
-                        self.sstv_tuning_offset_hz = selected_center_hz - 1_700;
+                        self.sstv_tuning_offset_hz = selected_center_hz - 1_900;
                         self.sstv_auto_target = false;
                         self.profile_io_status = format!(
                             "SSTV manual target: {}–{} Hz ({:+} Hz)",
@@ -352,12 +363,6 @@ impl QsonautGuiApp {
                         shared.sstv_tuning_offset_hz = self.sstv_tuning_offset_hz;
                         shared.sstv_locked_offset_hz = None;
                         shared.sstv_progress = None;
-                        shared.record_sstv_rx_event(format!(
-                            "MANUAL TARGET clicked at {:+} Hz · window {}–{} Hz",
-                            self.sstv_tuning_offset_hz,
-                            1_100_i32 + self.sstv_tuning_offset_hz,
-                            2_300_i32 + self.sstv_tuning_offset_hz,
-                        ));
                         tracing::info!(
                             offset_hz = self.sstv_tuning_offset_hz,
                             window_low_hz = 1_100_i32 + self.sstv_tuning_offset_hz,
@@ -465,6 +470,29 @@ impl QsonautGuiApp {
                     egui::Stroke::new(1.0_f32, Color32::from_rgb(120, 220, 120)),
                 );
             }
+            if is_sstv {
+                if let Some(offset_hz) = sstv_target_offset_hz {
+                    let marker_x = |frequency_hz: i32| {
+                        response.rect.left()
+                            + ((frequency_hz.max(0) as f32 / bw) * response.rect.width())
+                    };
+                    for (frequency_hz, color, width) in [
+                        (1_200 + offset_hz, Color32::from_rgb(100, 255, 145), 1.5),
+                        (1_500 + offset_hz, Color32::from_rgb(255, 180, 70), 1.0),
+                        (1_900 + offset_hz, Color32::WHITE, 1.8),
+                        (2_300 + offset_hz, Color32::from_rgb(255, 180, 70), 1.0),
+                    ] {
+                        let x = marker_x(frequency_hz);
+                        ui.painter().line_segment(
+                            [
+                                egui::pos2(x, response.rect.top()),
+                                egui::pos2(x, response.rect.bottom()),
+                            ],
+                            egui::Stroke::new(width, color),
+                        );
+                    }
+                }
+            }
             if !is_sstv {
                 ui.painter().line_segment(
                     [
@@ -479,20 +507,24 @@ impl QsonautGuiApp {
                 egui::pos2(response.rect.left() + 6.0, response.rect.top() + 4.0),
                 egui::Align2::LEFT_TOP,
                 if is_sstv {
-                    format!(
-                        "SSTV RX {}–{} Hz · {}",
-                        rx_cursor_hz,
-                        rx_cursor_hz + channel_hz,
-                        if snapshot.sstv_auto_target {
-                            if snapshot.sstv_locked_offset_hz.is_some() {
+                    if sstv_scanning {
+                        format!(
+                            "SSTV AUTO SEARCH {}–{} Hz · awaiting complete VIS",
+                            rx_cursor_hz,
+                            rx_cursor_hz + channel_hz,
+                        )
+                    } else {
+                        format!(
+                            "SSTV RX {}–{} Hz · {}",
+                            rx_cursor_hz,
+                            rx_cursor_hz + channel_hz,
+                            if snapshot.sstv_auto_target {
                                 "AUTO LOCK"
                             } else {
-                                "AUTO SCAN"
+                                "MANUAL"
                             }
-                        } else {
-                            "MANUAL"
-                        }
-                    )
+                        )
+                    }
                 } else {
                     format!(
                         "{} RX {} Hz",
@@ -507,13 +539,23 @@ impl QsonautGuiApp {
                 egui::pos2(response.rect.left() + 6.0, response.rect.top() + 20.0),
                 egui::Align2::LEFT_TOP,
                 if is_sstv {
-                    format!(
-                        "Sync {} · pixels {}–{} Hz · offset {:+} Hz",
-                        1_200_i32 + sstv_display_offset_hz,
-                        1_500_i32 + sstv_display_offset_hz,
-                        2_300_i32 + sstv_display_offset_hz,
-                        sstv_display_offset_hz,
-                    )
+                    if sstv_scanning {
+                        format!(
+                            "Leader search {}–{} Hz · 5 ms / 25 Hz · validates top {} candidates",
+                            1_900 + qsonaut_sstv::AUTO_TARGET_MIN_OFFSET_HZ,
+                            1_900 + qsonaut_sstv::AUTO_TARGET_MAX_OFFSET_HZ,
+                            qsonaut_sstv::AUTO_TARGET_CANDIDATES_PER_WINDOW,
+                        )
+                    } else {
+                        format!(
+                            "Sync {} · black {} · center {} · white {} Hz · offset {:+} Hz",
+                            1_200_i32 + sstv_display_offset_hz,
+                            1_500_i32 + sstv_display_offset_hz,
+                            1_900_i32 + sstv_display_offset_hz,
+                            2_300_i32 + sstv_display_offset_hz,
+                            sstv_display_offset_hz,
+                        )
+                    }
                 } else {
                     format!("TX {} Hz", self.tx_tone_hz)
                 },

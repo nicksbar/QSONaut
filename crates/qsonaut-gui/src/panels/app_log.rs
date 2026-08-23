@@ -114,6 +114,10 @@ impl QsonautGuiApp {
                     .desired_width(170.0)
                     .hint_text("text, target, error…"),
             );
+            if ui.small_button("SSTV").clicked() {
+                self.app_log_filter = "SSTV".to_string();
+                self.app_log_level_filter = AppLogLevelFilter::All;
+            }
             egui::ComboBox::from_id_salt("app_log_level_filter")
                 .selected_text(self.app_log_level_filter.label())
                 .show_ui(ui, |ui| {

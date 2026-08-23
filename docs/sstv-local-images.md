@@ -18,6 +18,8 @@ plan inside the normal approximately 0–3000 Hz radio passband. It locks the fi
 valid signal, and shows `AUTO SCAN` or `AUTO LOCK` on the audio waterfall.
 Clicking a signal center immediately switches to a manual target; re-enable
 Auto Target to resume scanning. This is deliberately single-channel reception.
+Acquisition advances every 5 ms, ranks leader candidates on a 25 Hz grid, then
+validates the strongest 16 against the complete VIS sequence before locking.
 
 Experimental transmit codecs are selectable for 13 modes: Martin M1/M2,
 Scottie S1/S2, Robot 36/72, and PD 50/90/120/160/180/240/290. The selector
@@ -45,11 +47,11 @@ tone falls on the displayed sync marker.
 Reception must begin before the roughly 0.9-second VIS header; joining an image
 mid-transmission cannot recover its mode or missing lines.
 
-The SSTV workspace keeps the newest 80 acquisition events and displays the
-newest eight. The local application log also records target offset, VIS/mode,
-input level, RF frequency, 25/50/75-percent progress, completion dimensions and
-elapsed time, no-header audio diagnostics, and failures. Repeated no-header
-audio diagnostics are rate-limited to one every ten seconds.
+The local Application Log records target offset, VIS/mode, input level, RF
+frequency, 25/50/75-percent progress, completion dimensions and elapsed time,
+ranked leader-candidate diagnostics, no-header audio, and failures. Use **VIEW
+SSTV LOG** in the workspace or the **SSTV** filter preset in Application Log.
+Repeated no-header diagnostics are rate-limited to one every ten seconds.
 
 The implementation is software-tested with encode/decode round trips and
 streaming acquisition. It is **not yet on-air validated**. Slant correction,
