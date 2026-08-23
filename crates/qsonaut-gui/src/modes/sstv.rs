@@ -130,11 +130,6 @@ impl QsonautGuiApp {
                 "Radio {:.3} MHz · USB FIL1",
                 snapshot.frequency_hz.unwrap_or_default() as f64 / 1_000_000.0
             ));
-            ui.add(
-                egui::Slider::new(&mut self.sstv_rx_width_percent, 45..=72)
-                    .text("RX width")
-                    .show_value(false),
-            );
         });
         if rx_mode != snapshot.sstv_rx_mode {
             let mut shared = self.state.lock().expect("ui state lock poisoned");
@@ -169,7 +164,7 @@ impl QsonautGuiApp {
         // than making the entire SSTV workspace taller than the central panel.
         let body_height = fitted_sstv_body_height(ui.available_height());
         ui.horizontal(|ui| {
-            let gap = 8.0;
+            let gap = 12.0;
             let deck_width = (ui.available_width() - gap).max(2.0);
             let left_width = deck_width * self.sstv_rx_width_percent as f32 / 100.0;
             let right_width = (deck_width - left_width).max(1.0);
@@ -177,7 +172,27 @@ impl QsonautGuiApp {
                 egui::vec2(left_width, body_height),
                 egui::Sense::hover(),
             );
-            ui.add_space(gap);
+            let (divider_rect, divider_response) = ui.allocate_exact_size(
+                egui::vec2(gap, body_height),
+                egui::Sense::drag(),
+            );
+            let divider_response = divider_response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+            if divider_response.dragged() {
+                let delta_percent = ctx.input(|input| input.pointer.delta().x) / deck_width * 100.0;
+                self.sstv_rx_width_percent =
+                    ((self.sstv_rx_width_percent as f32 + delta_percent).round() as i32)
+                        .clamp(36, 72) as u8;
+                ctx.request_repaint();
+            }
+            ui.painter().rect_filled(
+                divider_rect.shrink2(egui::vec2(4.0, 4.0)),
+                2.0,
+                if divider_response.hovered() || divider_response.dragged() {
+                    theme_accent(ui)
+                } else {
+                    ui.visuals().widgets.inactive.bg_stroke.color
+                },
+            );
             let (right_rect, _) = ui.allocate_exact_size(
                 egui::vec2(right_width, body_height),
                 egui::Sense::hover(),
@@ -196,6 +211,7 @@ impl QsonautGuiApp {
             );
 
             egui::Frame::group(left.style()).show(&mut left, |ui| {
+                ui.set_min_width(ui.available_width());
                 ui.label(RichText::new("📡 LIVE RX").strong().color(theme_accent(ui)));
                 ui.label(RichText::new(&snapshot.sstv_status).monospace());
                 if let Some(progress) = snapshot.sstv_progress {
@@ -232,6 +248,7 @@ impl QsonautGuiApp {
                 .max_height(body_height)
                 .auto_shrink([false, false])
                 .show(&mut right, |ui| egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
                 ui.label(RichText::new("📤 TX IMAGE").strong().color(theme_accent(ui)));
                 ui.horizontal_wrapped(|ui| {
                     if ui.button("📂 OPEN IMAGE…").clicked() {
@@ -240,7 +257,7 @@ impl QsonautGuiApp {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.sstv_image_path)
                             .hint_text("PNG/JPEG path")
-                            .desired_width((ui.available_width() - 86.0).max(80.0)),
+                            .desired_width((ui.available_width() - 62.0).max(120.0)),
                     );
                     if ui.small_button("LOAD").clicked() {
                         match std::fs::read(self.sstv_image_path.trim()) {
@@ -307,10 +324,10 @@ impl QsonautGuiApp {
                     ui.label("URL");
                     match self.local_image_settings.provider {
                         LocalImageProvider::Ollama => {
-                            ui.add(egui::TextEdit::singleline(&mut self.local_image_settings.ollama_url).desired_width(220.0));
+                            ui.add(egui::TextEdit::singleline(&mut self.local_image_settings.ollama_url).desired_width((ui.available_width() - 105.0).max(160.0)));
                         }
                         LocalImageProvider::Lemonade => {
-                            ui.add(egui::TextEdit::singleline(&mut self.local_image_settings.lemonade_url).desired_width(220.0));
+                            ui.add(egui::TextEdit::singleline(&mut self.local_image_settings.lemonade_url).desired_width((ui.available_width() - 105.0).max(160.0)));
                         }
                     }
                     ui.button("Find models").clicked()
@@ -350,6 +367,7 @@ impl QsonautGuiApp {
                 }
                 ui.add(
                     egui::TextEdit::multiline(&mut self.sstv_ai_prompt)
+                        .desired_width(f32::INFINITY)
                         .desired_rows(5)
                         .hint_text("Describe the image to transmit"),
                 );
@@ -390,6 +408,7 @@ impl QsonautGuiApp {
                 },
             ))
             .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
                     if ui
                         .add_enabled(

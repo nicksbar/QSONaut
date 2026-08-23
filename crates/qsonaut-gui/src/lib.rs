@@ -1993,7 +1993,7 @@ impl QsonautGuiApp {
             sstv_tx_armed: false,
             sstv_tuning_offset_hz: 0,
             sstv_auto_target: true,
-            sstv_rx_width_percent: 60,
+            sstv_rx_width_percent: 43,
             sstv_tx_rgb: Vec::new(),
             sstv_tx_width: qsonaut_sstv::WIDTH,
             sstv_tx_height: qsonaut_sstv::HEIGHT,
