@@ -93,6 +93,18 @@ pub(super) const HF_WORKSPACE_MODES: [WorkspaceMode; 9] = [
 pub(super) const OTHER_WORKSPACE_MODES: [WorkspaceMode; 2] =
     [WorkspaceMode::Msk144, WorkspaceMode::Fldigi];
 
+// Shared band vocabulary for higher-level activity profiles. Mode-specific
+// center frequencies remain owned by each workspace band plan below.
+pub(super) const CORE_BAND_LABELS: &[&str] = &[
+    "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "2m",
+    "70cm",
+];
+pub(super) const CORE_HF_BAND_LABELS: &[&str] = &[
+    "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m",
+];
+pub(super) const CORE_VHF_BAND_LABELS: &[&str] = &["2m", "70cm"];
+pub(super) const CORE_EMCOMM_BAND_LABELS: &[&str] = &["80m", "40m", "20m"];
+
 pub(super) fn band_for_frequency(frequency_hz: u64) -> &'static str {
     match frequency_hz {
         1_800_000..=2_000_000 => "160m",

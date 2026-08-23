@@ -8,6 +8,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [0.3.7] - 2026-08-22
 
 ### Added
+- Added an initial top-bar operating activity framework with icon-based
+  selectors for General, POTA, SOTA, Contest, Field Day, DX, Satellite, and
+  EMCOMM activities.
+- Added shared core band scopes and activity mode preferences; General remains
+  unrestricted, while hard band/mode limits are reserved for active local or
+  server contest constraints.
 - Added native Martin M1 SSTV receive and transmit at 12 kHz, including VIS 44
   detection, live receive progress, 320×256 image preview, standard HF calling
   frequencies, and one-shot TX through the global disarm/PTT safety path.

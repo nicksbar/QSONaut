@@ -1,4 +1,5 @@
 mod automation_hunter;
+mod activity;
 mod band_plan;
 mod contest;
 mod decode_model;
@@ -71,6 +72,7 @@ const QSONAUT_ICON_PNG: &[u8] = include_bytes!("../../../assets/branding/qsonaut
 use automation_hunter::{
     AchievementKind, CustomAchievementRule, ExternalSendRecord, HunterAlert, HunterMetric,
 };
+use activity::{draw_activity_icon, OperatingActivity};
 use band_plan::{
     band_for_frequency, workspace_band_plan, workspace_radio_preset, WorkspaceMode,
     HF_WORKSPACE_MODES, OTHER_WORKSPACE_MODES, WORKSPACE_MODES,
@@ -1456,6 +1458,7 @@ struct QsonautGuiApp {
     sstv_received_texture_revision: u64,
     sstv_reinterpret_prompt: String,
     workspace_mode: WorkspaceMode,
+    activity: OperatingActivity,
     fst4_submode: modes::fst4::Submode,
     display_tuning: Arc<Mutex<DisplayTuning>>,
     repaint_ctx: Arc<OnceLock<egui::Context>>,
@@ -2123,6 +2126,7 @@ impl QsonautGuiApp {
             sstv_received_texture_revision: 0,
             sstv_reinterpret_prompt: String::new(),
             workspace_mode,
+            activity: OperatingActivity::General,
             fst4_submode: modes::fst4::Submode::default(),
             display_tuning,
             repaint_ctx,
@@ -3523,9 +3527,80 @@ impl eframe::App for QsonautGuiApp {
                             RichText::new("AMATEUR RADIO MISSION CONTROL")
                                 .strong()
                                 .size(10.0)
-                                .color(Color32::from_rgb(255, 137, 108)),
+                            .color(Color32::from_rgb(255, 137, 108)),
                         );
                     });
+                    let selected_activity = self.activity;
+                    ui.menu_button(
+                        RichText::new(selected_activity.label())
+                            .strong()
+                            .color(Color32::from_rgb(255, 190, 105)),
+                        |ui| {
+                            ui.label(RichText::new("OPERATING ACTIVITY").strong());
+                            ui.separator();
+                            ui.horizontal_wrapped(|ui| {
+                                for activity in OperatingActivity::ALL {
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::vec2(78.0, 52.0),
+                                        egui::Sense::click(),
+                                    );
+                                    let fill = if selected_activity == activity {
+                                        ui.visuals().selection.bg_fill
+                                    } else if response.hovered() {
+                                        ui.visuals().widgets.hovered.bg_fill
+                                    } else {
+                                        ui.visuals().widgets.inactive.bg_fill
+                                    };
+                                    ui.painter().rect_filled(rect, 4.0, fill);
+                                    draw_activity_icon(
+                                        ui.painter(),
+                                        activity,
+                                        rect.center_top() + egui::vec2(0.0, 14.0),
+                                        ui.visuals().text_color(),
+                                    );
+                                    ui.painter().text(
+                                        rect.center_bottom() - egui::vec2(0.0, 8.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        activity.label(),
+                                        egui::FontId::proportional(12.0),
+                                        ui.visuals().text_color(),
+                                    );
+                                    if response.clicked() {
+                                        self.activity = activity;
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            let profile = self.activity.profile();
+                            let band_summary = if profile.bands.is_unrestricted() {
+                                "all core".to_string()
+                            } else {
+                                profile.bands.labels().join(", ")
+                            };
+                            let mode_summary = if profile.modes.is_unrestricted() {
+                                "all core".to_string()
+                            } else {
+                                profile
+                                    .modes
+                                    .modes()
+                                    .iter()
+                                    .map(|mode| mode.label())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            };
+                            ui.separator();
+                            ui.label(
+                                RichText::new(format!(
+                                    "{}  ·  Bands {}  ·  Modes {}",
+                                    profile.tx_cq,
+                                    band_summary,
+                                    mode_summary,
+                                ))
+                                .small()
+                                .color(Color32::GRAY),
+                            );
+                        },
+                    );
                     ui.separator();
                     let frequency = snapshot
                         .frequency_hz
@@ -3571,6 +3646,37 @@ impl eframe::App for QsonautGuiApp {
                             .strong()
                             .color(Color32::LIGHT_BLUE),
                     );
+                    let activity_profile = self.activity.profile();
+                    ui.label(
+                        RichText::new(activity_profile.tx_cq)
+                            .small()
+                            .monospace()
+                            .color(Color32::from_rgb(255, 190, 105)),
+                    )
+                    .on_hover_text("Activity TX starter; mode panels will consume this profile incrementally");
+                    if let Some(client) = &self.server_client {
+                        let server_status = client.status();
+                        let server_connected =
+                            server_status.state == ServerConnectionState::Connected;
+                        if server_connected && server_status.active_event_count > 0 {
+                            let participating = self.activity == OperatingActivity::Contest
+                                && self.contest_enabled;
+                            let label = if participating {
+                                "✓ SERVER CONTEST · PARTICIPATING".to_string()
+                            } else {
+                                format!("✓ SERVER CONTEST · {} ACTIVE", server_status.active_event_count)
+                            };
+                            ui.label(
+                                RichText::new(label)
+                                    .small()
+                                    .strong()
+                                    .color(Color32::from_rgb(125, 225, 150)),
+                            )
+                            .on_hover_text(
+                                "Active events reported by QSONaut Server; contest participation is controlled by the contest workflow",
+                            );
+                        }
+                    }
                     let active_profile = self.active_radio_profile_name().unwrap_or("None");
                     ui.label(
                         RichText::new(format!("🎛 {active_profile}"))
