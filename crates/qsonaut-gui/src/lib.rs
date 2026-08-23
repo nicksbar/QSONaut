@@ -878,11 +878,21 @@ struct GuiState {
     attenuator: Option<u8>,
     noise_blank: Option<bool>,
     noise_reduction: Option<bool>,
+    noise_reduction_level: Option<u8>,
     ip_plus: Option<bool>,
     notch_auto: Option<bool>,
     notch_manual: Option<bool>,
     agc: Option<u8>,
     swr: Option<u8>,
+    signal_meter: Option<u8>,
+    power_meter: Option<u8>,
+    alc_meter: Option<u8>,
+    compression_meter: Option<u8>,
+    current_meter: Option<u8>,
+    voltage_meter: Option<u8>,
+    temperature_meter: Option<u8>,
+    supported_controls: HashSet<ControlId>,
+    supported_meters: HashSet<MeterId>,
     tuner_status: Option<TunerStatus>,
     swr_sweep_active: bool,
     swr_sweep_status: String,
@@ -972,11 +982,21 @@ impl Default for GuiState {
             attenuator: None,
             noise_blank: None,
             noise_reduction: None,
+            noise_reduction_level: None,
             ip_plus: None,
             notch_auto: None,
             notch_manual: None,
             agc: None,
             swr: None,
+            signal_meter: None,
+            power_meter: None,
+            alc_meter: None,
+            compression_meter: None,
+            current_meter: None,
+            voltage_meter: None,
+            temperature_meter: None,
+            supported_controls: HashSet::new(),
+            supported_meters: HashSet::new(),
             tuner_status: None,
             swr_sweep_active: false,
             swr_sweep_status: "Idle".to_string(),
@@ -3344,12 +3364,8 @@ impl QsonautGuiApp {
     }
 
     fn draw_banner_radio_controls(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
-        let native_profile =
-            native_radio_profile(&self.config.radio.backend, &self.config.radio.model);
-        let supports_levels =
-            native_profile.is_some_and(|profile| profile.supports_control(ControlId::AfGain));
-        let supports_filter =
-            native_profile.is_some_and(|profile| profile.supports_control(ControlId::Filter));
+        let supports_levels = snapshot.supported_controls.contains(&ControlId::AfGain);
+        let supports_filter = snapshot.supported_controls.contains(&ControlId::Filter);
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Radio").strong());
             if ui.small_button("-1 kHz").clicked() {
@@ -3862,15 +3878,9 @@ impl eframe::App for QsonautGuiApp {
                     .on_hover_text(
                         "Enabled radio tuning profile for this QSONaut mode; edit it in RADIO TUNING",
                     );
-                    let native_profile = native_radio_profile(
-                        &self.config.radio.backend,
-                        &self.config.radio.model,
-                    );
                     let radio_ready = snapshot.radio_power_on == Some(true)
                         && !snapshot.radio_power_command_pending;
-                    let supports_control = |id| {
-                        native_profile.is_some_and(|profile| profile.supports_control(id))
-                    };
+                    let supports_control = |id| snapshot.supported_controls.contains(&id);
                     let tuning_color = if !radio_ready {
                         Color32::GRAY
                     } else if [ControlId::AfGain, ControlId::RfGain, ControlId::RfPower]
@@ -4163,6 +4173,32 @@ impl eframe::App for QsonautGuiApp {
                             ));
                         }
                     }
+                    if supports_control(ControlId::NoiseReductionLevel) {
+                        ui.menu_button(
+                            RichText::new("NRL").color(if snapshot.noise_reduction_level.is_some() {
+                                Color32::LIGHT_BLUE
+                            } else {
+                                Color32::DARK_GRAY
+                            }),
+                            |ui| {
+                                ui.label("Noise reduction level");
+                                let mut level = snapshot.noise_reduction_level.unwrap_or(8) as f32;
+                                let response = ui.add(
+                                    egui::Slider::new(&mut level, 1.0..=15.0)
+                                        .step_by(1.0)
+                                        .show_value(true),
+                                );
+                                if response.changed() && response.drag_stopped() {
+                                    self.send_command(GuiCommand::SetControl(
+                                        ControlId::NoiseReductionLevel,
+                                        ControlValue::U8(level.round() as u8),
+                                    ));
+                                }
+                            },
+                        )
+                        .response
+                        .on_hover_text("Set the Yaesu noise-reduction level");
+                    }
                     if supports_control(ControlId::IpPlus) {
                         let color = match snapshot.ip_plus {
                             Some(true) => Color32::LIGHT_GREEN,
@@ -4252,6 +4288,35 @@ impl eframe::App for QsonautGuiApp {
                                 }
                             }
                         });
+                    }
+                    if !snapshot.supported_meters.is_empty() {
+                        ui.menu_button(RichText::new("MTR").color(Color32::LIGHT_BLUE), |ui| {
+                            ui.label("Normalized meter levels");
+                            for (label, id, value) in [
+                                ("SIG", MeterId::Signal, snapshot.signal_meter),
+                                ("PWR", MeterId::Power, snapshot.power_meter),
+                                ("SWR", MeterId::Swr, snapshot.swr),
+                                ("ALC", MeterId::Alc, snapshot.alc_meter),
+                                ("COMP", MeterId::Compression, snapshot.compression_meter),
+                                ("I", MeterId::Current, snapshot.current_meter),
+                                ("V", MeterId::Voltage, snapshot.voltage_meter),
+                                ("TEMP", MeterId::Temperature, snapshot.temperature_meter),
+                            ] {
+                                if snapshot.supported_meters.contains(&id) {
+                                    ui.horizontal(|ui| {
+                                        ui.label(label);
+                                        let fraction = value.map_or(0.0, |raw| f32::from(raw) / 255.0);
+                                        ui.add(
+                                            egui::ProgressBar::new(fraction)
+                                                .desired_width(120.0)
+                                                .text(value.map_or_else(|| "—".to_string(), |raw| format!("{raw}/255"))),
+                                        );
+                                    });
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text("Normalized vendor meter levels; physical units and SWR ratios remain vendor-specific");
                     }
                     if supports_control(ControlId::Preamp) {
                         let color = match snapshot.preamp {

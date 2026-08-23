@@ -5,6 +5,42 @@ const RADIO_LEVEL_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const RADIO_COMMAND_WAKE_INTERVAL: Duration = Duration::from_millis(50);
 const RADIO_SCOPE_READ_SLICE: Duration = Duration::from_millis(50);
 
+const RADIO_CONTROL_IDS: &[ControlId] = &[
+    ControlId::AfGain,
+    ControlId::RfGain,
+    ControlId::Squelch,
+    ControlId::RfPower,
+    ControlId::Preamp,
+    ControlId::ExternalPreamp,
+    ControlId::Attenuator,
+    ControlId::NoiseBlanker,
+    ControlId::NoiseReduction,
+    ControlId::NoiseReductionLevel,
+    ControlId::IpPlus,
+    ControlId::Notch,
+    ControlId::ManualNotch,
+    ControlId::DataMode,
+    ControlId::Filter,
+    ControlId::Agc,
+    ControlId::Rit,
+    ControlId::Xit,
+    ControlId::Split,
+    ControlId::Tuner,
+    ControlId::Vfo,
+    ControlId::MainSub,
+];
+
+const RADIO_METER_IDS: &[MeterId] = &[
+    MeterId::Signal,
+    MeterId::Power,
+    MeterId::Swr,
+    MeterId::Alc,
+    MeterId::Compression,
+    MeterId::Current,
+    MeterId::Voltage,
+    MeterId::Temperature,
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RadioScopeStreamConfig {
     view: RadioScopeView,
@@ -38,6 +74,16 @@ pub(crate) fn spawn_radio_worker(
         {
             let mut s = state.lock().expect("ui state lock poisoned");
             s.radio_power_supported = radio.capabilities().can_set_power;
+            s.supported_controls = RADIO_CONTROL_IDS
+                .iter()
+                .copied()
+                .filter(|id| radio.supports_control(*id))
+                .collect();
+            s.supported_meters = RADIO_METER_IDS
+                .iter()
+                .copied()
+                .filter(|id| radio.supports_meter(*id))
+                .collect();
         }
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1018,6 +1064,9 @@ fn poll_radio_core_state(
                 );
             }
         }
+        if poll_levels {
+            poll_radio_level_state(rt, radio, state);
+        }
         return;
     }
     let radio = radio.as_icom().expect("checked Icom driver");
@@ -1070,6 +1119,7 @@ fn poll_radio_core_state(
         attenuator,
         noise_blank,
         noise_reduction,
+        noise_reduction_level,
         ip_plus,
         notch_auto,
         notch_manual,
@@ -1083,6 +1133,7 @@ fn poll_radio_core_state(
             read_u8_control(rt, radio, ControlId::Attenuator),
             read_bool_control(rt, radio, ControlId::NoiseBlanker),
             read_bool_control(rt, radio, ControlId::NoiseReduction),
+            read_u8_control(rt, radio, ControlId::NoiseReductionLevel),
             read_bool_control(rt, radio, ControlId::IpPlus),
             read_bool_control(rt, radio, ControlId::Notch),
             read_bool_control(rt, radio, ControlId::ManualNotch),
@@ -1096,7 +1147,7 @@ fn poll_radio_core_state(
         )
     } else {
         (
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None,
         )
     };
     // The IC-7300's regular mode response does not consistently include the
@@ -1147,6 +1198,9 @@ fn poll_radio_core_state(
     if let Some(v) = noise_reduction {
         s.noise_reduction = Some(v);
     }
+    if let Some(v) = noise_reduction_level {
+        s.noise_reduction_level = Some(v);
+    }
     if let Some(v) = ip_plus {
         s.ip_plus = Some(v);
     }
@@ -1167,6 +1221,114 @@ fn poll_radio_core_state(
     }
     if let Some(v) = filt {
         s.filter = Some(v);
+    }
+}
+
+fn poll_radio_level_state(
+    rt: &tokio::runtime::Runtime,
+    radio: &ConfiguredRadio,
+    state: &Arc<Mutex<GuiState>>,
+) {
+    let read_meter = |id| {
+        radio
+            .supports_meter(id)
+            .then(|| rt.block_on(radio.get_meter(id)).ok().flatten())
+            .flatten()
+    };
+    let values = [
+        (
+            ControlId::AfGain,
+            read_u8_control(rt, radio, ControlId::AfGain),
+        ),
+        (
+            ControlId::RfGain,
+            read_u8_control(rt, radio, ControlId::RfGain),
+        ),
+        (
+            ControlId::Squelch,
+            read_u8_control(rt, radio, ControlId::Squelch),
+        ),
+        (
+            ControlId::RfPower,
+            read_u8_control(rt, radio, ControlId::RfPower),
+        ),
+        (
+            ControlId::Preamp,
+            read_u8_control(rt, radio, ControlId::Preamp),
+        ),
+        (
+            ControlId::Attenuator,
+            read_u8_control(rt, radio, ControlId::Attenuator),
+        ),
+        (ControlId::Agc, read_u8_control(rt, radio, ControlId::Agc)),
+        (
+            ControlId::NoiseReductionLevel,
+            read_u8_control(rt, radio, ControlId::NoiseReductionLevel),
+        ),
+    ];
+    let noise_blank = read_bool_control(rt, radio, ControlId::NoiseBlanker);
+    let noise_reduction = read_bool_control(rt, radio, ControlId::NoiseReduction);
+    let ip_plus = read_bool_control(rt, radio, ControlId::IpPlus);
+    let notch_auto = read_bool_control(rt, radio, ControlId::Notch);
+    let notch_manual = read_bool_control(rt, radio, ControlId::ManualNotch);
+    let tuner_status = rt.block_on(radio.get_tuner_status()).ok().flatten();
+    let meters = [
+        (MeterId::Signal, read_meter(MeterId::Signal)),
+        (MeterId::Power, read_meter(MeterId::Power)),
+        (MeterId::Swr, read_meter(MeterId::Swr)),
+        (MeterId::Alc, read_meter(MeterId::Alc)),
+        (MeterId::Compression, read_meter(MeterId::Compression)),
+        (MeterId::Current, read_meter(MeterId::Current)),
+        (MeterId::Voltage, read_meter(MeterId::Voltage)),
+        (MeterId::Temperature, read_meter(MeterId::Temperature)),
+    ];
+    let mut s = state.lock().expect("ui state lock poisoned");
+    for (id, value) in values {
+        if let Some(value) = value {
+            match id {
+                ControlId::AfGain => s.af_gain = Some(value),
+                ControlId::RfGain => s.rf_gain = Some(value),
+                ControlId::Squelch => s.squelch = Some(value),
+                ControlId::RfPower => s.rf_power = Some(value),
+                ControlId::Preamp => s.preamp = Some(value),
+                ControlId::Attenuator => s.attenuator = Some(value),
+                ControlId::Agc => s.agc = Some(value),
+                ControlId::NoiseReductionLevel => s.noise_reduction_level = Some(value),
+                _ => {}
+            }
+        }
+    }
+    for (id, value) in meters {
+        if let Some(value) = value {
+            match id {
+                MeterId::Signal => s.signal_meter = Some(value),
+                MeterId::Power => s.power_meter = Some(value),
+                MeterId::Swr => s.swr = Some(value),
+                MeterId::Alc => s.alc_meter = Some(value),
+                MeterId::Compression => s.compression_meter = Some(value),
+                MeterId::Current => s.current_meter = Some(value),
+                MeterId::Voltage => s.voltage_meter = Some(value),
+                MeterId::Temperature => s.temperature_meter = Some(value),
+            }
+        }
+    }
+    if let Some(value) = noise_blank {
+        s.noise_blank = Some(value);
+    }
+    if let Some(value) = noise_reduction {
+        s.noise_reduction = Some(value);
+    }
+    if let Some(value) = ip_plus {
+        s.ip_plus = Some(value);
+    }
+    if let Some(value) = notch_auto {
+        s.notch_auto = Some(value);
+    }
+    if let Some(value) = notch_manual {
+        s.notch_manual = Some(value);
+    }
+    if tuner_status.is_some() {
+        s.tuner_status = tuner_status;
     }
 }
 
