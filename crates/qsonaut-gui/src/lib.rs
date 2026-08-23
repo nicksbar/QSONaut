@@ -1263,6 +1263,21 @@ fn format_swr_display(model: &str, normalized: Option<u8>) -> String {
     format!("SWR meter {meter_percent:.0}%")
 }
 
+fn swr_chart_value(model: &str, normalized: u8) -> f32 {
+    if !model.eq_ignore_ascii_case("IC-7300") {
+        return f32::from(normalized) * 100.0 / 255.0;
+    }
+    let anchors = [(0_u8, 1.0_f32), (48, 1.5), (80, 2.0), (120, 3.0)];
+    if let Some(window) = anchors.windows(2).find(|window| normalized <= window[1].0) {
+        let (low_level, low_ratio) = window[0];
+        let (high_level, high_ratio) = window[1];
+        let fraction =
+            f32::from(normalized.saturating_sub(low_level)) / f32::from(high_level - low_level);
+        return low_ratio + fraction * (high_ratio - low_ratio);
+    }
+    3.0
+}
+
 /// Native window geometry restored by QSONaut instead of eframe. Applying it to
 /// the `ViewportBuilder` means winit configures the window once, while it is
 /// still hidden, instead of showing and re-hiding it for each late change.
@@ -4108,9 +4123,21 @@ impl eframe::App for QsonautGuiApp {
                                 egui::pos2(chart_left, chart_top),
                                 egui::pos2(chart_right, chart_bottom),
                             );
-                            for (level, label) in [(0_u8, "0"), (64, "64"), (128, "128"), (192, "192"), (255, "255")] {
+                            let icom_swr_chart = self
+                                .config
+                                .radio
+                                .model
+                                .eq_ignore_ascii_case("IC-7300");
+                            let chart_axes = if icom_swr_chart {
+                                [(1.0_f32, "1.0:1"), (1.5, "1.5:1"), (2.0, "2.0:1"), (2.5, "2.5:1"), (3.0, "3.0:1")]
+                            } else {
+                                [(0.0_f32, "0%"), (25.0, "25%"), (50.0, "50%"), (75.0, "75%"), (100.0, "100%")]
+                            };
+                            let chart_min = chart_axes[0].0;
+                            let chart_max = chart_axes[4].0;
+                            for (value, label) in chart_axes {
                                 let y = chart_bottom
-                                    - (f32::from(level) / 255.0) * chart_rect.height();
+                                    - ((value - chart_min) / (chart_max - chart_min)) * chart_rect.height();
                                 painter.line_segment(
                                     [egui::pos2(chart_left, y), egui::pos2(chart_right, y)],
                                     egui::Stroke::new(1.0_f32, Color32::from_gray(65)),
@@ -4128,7 +4155,10 @@ impl eframe::App for QsonautGuiApp {
                                 let max_hz = points.last().map(|point| point.0).unwrap_or(1).max(points.first().map(|point| point.0).unwrap_or(0) + 1) as f32;
                                 let polyline: Vec<_> = points.iter().map(|(hz, raw)| {
                                     let x = chart_left + ((*hz as f32 - min_hz) / (max_hz - min_hz)) * chart_rect.width();
-                                    let y = chart_bottom - (f32::from(*raw).min(120.0) / 120.0) * chart_rect.height();
+                                    let value = swr_chart_value(&self.config.radio.model, *raw)
+                                        .clamp(chart_min, chart_max);
+                                    let y = chart_bottom
+                                        - ((value - chart_min) / (chart_max - chart_min)) * chart_rect.height();
                                     egui::pos2(x, y)
                                 }).collect();
                                 painter.add(egui::Shape::line(polyline.clone(), egui::Stroke::new(2.0_f32, Color32::LIGHT_GREEN)));
@@ -5013,6 +5043,8 @@ mod tests {
     #[test]
     fn swr_display_does_not_claim_unverified_vendor_ratios() {
         assert_eq!(format_swr_display("FTDX10", Some(128)), "SWR meter 50%");
+        assert!((swr_chart_value("FTDX10", 128) - 50.196).abs() < 0.01);
+        assert!((swr_chart_value("IC-7300", 80) - 2.0).abs() < f32::EPSILON);
     }
 
     fn decode_pcm_samples(bytes: &[u8]) -> Vec<i16> {
