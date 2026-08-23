@@ -1242,6 +1242,7 @@ fn format_swr_display(model: &str, normalized: Option<u8>) -> String {
     let Some(level) = normalized else {
         return "unavailable".to_string();
     };
+    let meter_percent = (f32::from(level) * 100.0 / 255.0).round();
     if model.eq_ignore_ascii_case("IC-7300") {
         // The IC-7300 manual documents these CI-V meter anchors. Interpolate
         // only between known points; do not invent a ratio above the documented
@@ -1252,11 +1253,14 @@ fn format_swr_display(model: &str, normalized: Option<u8>) -> String {
             let (high_level, high_ratio) = window[1];
             let fraction =
                 f32::from(level.saturating_sub(low_level)) / f32::from(high_level - low_level);
-            return format!("{:.2}:1", low_ratio + fraction * (high_ratio - low_ratio));
+            return format!(
+                "{:.2}:1 ({meter_percent:.0}% meter)",
+                low_ratio + fraction * (high_ratio - low_ratio)
+            );
         }
-        return ">3.00:1".to_string();
+        return format!(">3.00:1 ({meter_percent:.0}% meter)");
     }
-    format!("meter {level}/255")
+    format!("SWR meter {meter_percent:.0}%")
 }
 
 /// Native window geometry restored by QSONaut instead of eframe. Applying it to
@@ -4986,17 +4990,29 @@ mod tests {
 
     #[test]
     fn swr_display_uses_documented_ic7300_ratio_anchors() {
-        assert_eq!(format_swr_display("IC-7300", Some(0)), "1.00:1");
-        assert_eq!(format_swr_display("IC-7300", Some(48)), "1.50:1");
-        assert_eq!(format_swr_display("IC-7300", Some(80)), "2.00:1");
-        assert_eq!(format_swr_display("IC-7300", Some(120)), "3.00:1");
-        assert_eq!(format_swr_display("IC-7300", Some(121)), ">3.00:1");
+        assert_eq!(format_swr_display("IC-7300", Some(0)), "1.00:1 (0% meter)");
+        assert_eq!(
+            format_swr_display("IC-7300", Some(48)),
+            "1.50:1 (19% meter)"
+        );
+        assert_eq!(
+            format_swr_display("IC-7300", Some(80)),
+            "2.00:1 (31% meter)"
+        );
+        assert_eq!(
+            format_swr_display("IC-7300", Some(120)),
+            "3.00:1 (47% meter)"
+        );
+        assert_eq!(
+            format_swr_display("IC-7300", Some(121)),
+            ">3.00:1 (47% meter)"
+        );
         assert_eq!(format_swr_display("IC-7300", None), "unavailable");
     }
 
     #[test]
     fn swr_display_does_not_claim_unverified_vendor_ratios() {
-        assert_eq!(format_swr_display("FTDX10", Some(128)), "meter 128/255");
+        assert_eq!(format_swr_display("FTDX10", Some(128)), "SWR meter 50%");
     }
 
     fn decode_pcm_samples(bytes: &[u8]) -> Vec<i16> {
