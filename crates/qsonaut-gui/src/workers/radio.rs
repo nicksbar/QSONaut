@@ -90,6 +90,7 @@ pub(crate) fn spawn_radio_worker(
                     frequency_hz,
                     span_code,
                     vbw_wide,
+                    workspace_mode,
                     mode,
                     scope_hold,
                     scope_reference_tenths_db,
@@ -102,6 +103,7 @@ pub(crate) fn spawn_radio_worker(
                         s.frequency_hz,
                         s.radio_scope_span_code,
                         s.radio_scope_vbw_wide,
+                        s.workspace_mode,
                         s.mode.clone(),
                         s.radio_scope_hold,
                         s.radio_scope_reference_tenths_db,
@@ -109,11 +111,15 @@ pub(crate) fn spawn_radio_worker(
                 };
 
                 if spectrum_desired {
-                    let scope_edges = match scope_view {
-                        RadioScopeView::Overview => frequency_hz
+                    let scope_edges = match (scope_view, workspace_mode) {
+                        // Voice does not need a mode-aware passband. Keep the
+                        // radio scope in its normal centered-span mode so a
+                        // voice transition does not rewrite fixed edge memory.
+                        (RadioScopeView::Narrow, WorkspaceMode::Voice) => None,
+                        (RadioScopeView::Overview, _) => frequency_hz
                             .and_then(|hz| band_edges_for_frequency(Some(hz)))
                             .map(|(low, high, _)| (low, high)),
-                        RadioScopeView::Narrow => frequency_hz.and_then(|hz| {
+                        (RadioScopeView::Narrow, _) => frequency_hz.and_then(|hz| {
                             sideband_scope_edges(
                                 hz,
                                 scope_span_hz(span_code),
@@ -366,7 +372,17 @@ pub(crate) fn spawn_radio_worker(
                         mode: workspace_mode,
                         frequency_hz,
                     } => {
-                        let preset = workspace_radio_preset(workspace_mode);
+                        // Publish the requested workspace before applying the
+                        // radio preset so a following filter/control command
+                        // cannot briefly reuse the previous digital mode.
+                        state
+                            .lock()
+                            .expect("ui state lock poisoned")
+                            .workspace_mode = workspace_mode;
+                        let preset = workspace_radio_preset_for_frequency(
+                            workspace_mode,
+                            Some(frequency_hz),
+                        );
                         let filter = preset.filter.clamp(1, 3);
                         let frequency_result = rt.block_on(radio.set_frequency_hz(frequency_hz));
                         let (nr_id, nr_value, nb_id, nb_value) =
@@ -380,7 +396,18 @@ pub(crate) fn spawn_radio_worker(
                                 preset.data_mode,
                                 filter,
                             ));
-                            if let Err(error) = frequency_result.and(mode_result).and(noise_result)
+                            let data_mode_result = if workspace_mode == WorkspaceMode::Voice {
+                                rt.block_on(radio.set_control(
+                                    ControlId::DataMode,
+                                    ControlValue::Bool(false),
+                                ))
+                            } else {
+                                Ok(())
+                            };
+                            if let Err(error) = frequency_result
+                                .and(mode_result)
+                                .and(data_mode_result)
+                                .and(noise_result)
                             {
                                 state.lock().expect("ui state lock poisoned").last_error =
                                     Some(error.to_string());
@@ -392,6 +419,7 @@ pub(crate) fn spawn_radio_worker(
                                 match preset.base_mode {
                                     BaseMode::Lsb => Mode::Lsb,
                                     BaseMode::Cw | BaseMode::CwR => Mode::Cw,
+                                    BaseMode::Fm => Mode::Fm,
                                     _ => Mode::Usb,
                                 }
                             };
@@ -406,7 +434,8 @@ pub(crate) fn spawn_radio_worker(
                     GuiCommand::SetFilter(n) => {
                         let workspace_mode =
                             state.lock().expect("ui state lock poisoned").workspace_mode;
-                        let preset = workspace_radio_preset(workspace_mode);
+                        let frequency_hz = state.lock().expect("ui state lock poisoned").frequency_hz;
+                        let preset = workspace_radio_preset_for_frequency(workspace_mode, frequency_hz);
                         let target_filter = n.clamp(1, 3);
                         let result = if let Some(icom) = radio.as_icom() {
                             rt.block_on(icom.set_operating_mode_details(
@@ -531,6 +560,17 @@ fn poll_radio_core_state(
     } else {
         radio.probe()
     };
+    // IC-7300 mode status can report a misleading data byte through the
+    // generic 0x04 response. Query the model-specific DataMode control for the
+    // flag used by the UI label.
+    let data_mode = rt
+        .block_on(radio.get_control(ControlId::DataMode))
+        .ok()
+        .flatten()
+        .and_then(|value| match value {
+            ControlValue::Bool(enabled) => Some(enabled),
+            _ => None,
+        });
     let (af, rf, pwr) = if poll_levels {
         (
             read_u8_control(rt, radio, ControlId::AfGain),
@@ -554,6 +594,9 @@ fn poll_radio_core_state(
         if let Some(details) = status.mode_details {
             s.data_mode = Some(details.data_mode);
             s.filter = details.filter;
+        }
+        if let Some(data_mode) = data_mode {
+            s.data_mode = Some(data_mode);
         }
         s.last_update = Some(Instant::now());
     }

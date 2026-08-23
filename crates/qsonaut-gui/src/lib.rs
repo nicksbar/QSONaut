@@ -74,8 +74,9 @@ use automation_hunter::{
 };
 use activity::{draw_activity_icon, OperatingActivity};
 use band_plan::{
-    band_for_frequency, workspace_band_plan, workspace_radio_preset, WorkspaceMode,
-    HF_WORKSPACE_MODES, OTHER_WORKSPACE_MODES, WORKSPACE_MODES,
+    band_for_frequency, workspace_band_plan, workspace_radio_preset,
+    workspace_radio_preset_for_frequency, WorkspaceMode, HF_WORKSPACE_MODES,
+    OTHER_WORKSPACE_MODES, WORKSPACE_MODES,
 };
 use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
@@ -90,6 +91,7 @@ use modes::exchange::{
     AutoReplyPolicy, AutoTxStopPolicy, Exchange, ParsedMessage, QsoSession, QsoStage,
     ReplyCandidate, SLOT_SECONDS,
 };
+use modes::voice::VoiceContestField;
 use profile::{
     active_operator_profile_name, default_contest_fake_split_offset_hz, default_cw_tone_hz,
     default_cw_wpm, default_gui_scale, default_max_attempts as default_ft8_max_attempts,
@@ -318,9 +320,19 @@ fn parse_workspace_mode_token(mode: &str) -> Option<WorkspaceMode> {
         "Q65" => Some(WorkspaceMode::Q65),
         "MSK144" => Some(WorkspaceMode::Msk144),
         "CW" => Some(WorkspaceMode::Cw),
+        "VOICE" | "SSB" | "PHONE" => Some(WorkspaceMode::Voice),
         "SSTV" => Some(WorkspaceMode::Sstv),
         "FLDIGI" => Some(WorkspaceMode::Fldigi),
         _ => None,
+    }
+}
+
+fn radio_mode_label(mode: &str, data_mode: Option<bool>) -> String {
+    let base_mode = mode.strip_suffix("-D").unwrap_or(mode);
+    match data_mode {
+        Some(false) => base_mode.to_string(),
+        Some(true) if !mode.ends_with("-D") => format!("{base_mode}-D"),
+        _ => mode.to_string(),
     }
 }
 
@@ -1546,6 +1558,19 @@ struct QsonautGuiApp {
     llm_prompt_context: String,
     sstv_image_requirements: String,
     llm_model_notes: String,
+    voice_callsign: String,
+    voice_grid: String,
+    voice_state: String,
+    voice_rst_sent: String,
+    voice_rst_received: String,
+    voice_contest_serial_sent: String,
+    voice_contest_serial_received: String,
+    voice_notes: String,
+    voice_contest_fields: Vec<VoiceContestField>,
+    voice_qso_started_at: Option<u64>,
+    voice_lookup_requested: String,
+    voice_lookup_status: String,
+    voice_hamdb: Option<HamDbCacheEntry>,
     contest_enabled: bool,
     contest_operating_mode: ContestOperatingMode,
     contest_split_policy: SplitPolicy,
@@ -2211,6 +2236,19 @@ impl QsonautGuiApp {
             llm_prompt_context,
             sstv_image_requirements,
             llm_model_notes,
+            voice_callsign: String::new(),
+            voice_grid: String::new(),
+            voice_state: String::new(),
+            voice_rst_sent: "59".to_string(),
+            voice_rst_received: "59".to_string(),
+            voice_contest_serial_sent: String::new(),
+            voice_contest_serial_received: String::new(),
+            voice_notes: String::new(),
+            voice_contest_fields: Vec::new(),
+            voice_qso_started_at: None,
+            voice_lookup_requested: String::new(),
+            voice_lookup_status: String::new(),
+            voice_hamdb: None,
             contest_enabled,
             contest_operating_mode,
             contest_split_policy,
@@ -2471,16 +2509,37 @@ impl QsonautGuiApp {
         let Some(rx) = self.hamdb_lookup_rx.as_ref() else {
             return;
         };
-        let Ok(Some(entry)) = rx.try_recv() else {
-            return;
+        let entry = match rx.try_recv() {
+            Ok(Some(entry)) => entry,
+            Ok(None) | Err(mpsc::TryRecvError::Disconnected) => {
+                self.voice_lookup_status = "HamDB: callsign not found".to_string();
+                self.hamdb_lookup_rx = None;
+                return;
+            }
+            Err(mpsc::TryRecvError::Empty) => return,
         };
         let cache = HamDbCache::open(&hamdb_cache_path()).ok();
+        let voice_match = self
+            .voice_lookup_requested
+            .eq_ignore_ascii_case(&entry.callsign);
+        if voice_match {
+            if self.voice_grid.trim().is_empty() {
+                self.voice_grid = entry.grid.clone();
+            }
+            if self.voice_state.trim().is_empty() {
+                self.voice_state = entry.state.clone();
+            }
+            self.voice_hamdb = Some(entry.clone());
+            self.voice_lookup_status = "HamDB: operator found".to_string();
+        }
+        let mut log_updated = false;
         for record in self
             .qso_log
             .contacts
             .iter_mut()
             .filter(|record| record.callsign.eq_ignore_ascii_case(&entry.callsign))
         {
+            log_updated = true;
             if record.grid.trim().is_empty() {
                 record.grid = entry.grid.clone();
             }
@@ -2492,8 +2551,10 @@ impl QsonautGuiApp {
         if let Some(cache) = cache {
             let _ = cache.upsert(&entry);
         }
-        self.qso_log_dirty = true;
-        self.persist_qso_log("HamDB details saved to");
+        if log_updated {
+            self.qso_log_dirty = true;
+            self.persist_qso_log("HamDB details saved to");
+        }
         self.hamdb_lookup_rx = None;
     }
 
@@ -3053,6 +3114,7 @@ impl QsonautGuiApp {
             WorkspaceMode::Jt65 => self.draw_jt65_workspace(ui, snapshot),
             WorkspaceMode::Q65 => self.draw_q65_workspace(ui, snapshot),
             WorkspaceMode::Cw => self.draw_cw_workspace(ui, snapshot),
+            WorkspaceMode::Voice => self.draw_voice_workspace(ui, snapshot),
             WorkspaceMode::Sstv => self.draw_sstv_workspace(ui, ctx, snapshot),
             WorkspaceMode::Msk144 | WorkspaceMode::Fldigi => {
                 self.draw_mfsk_mode_workspace(ui, snapshot, self.workspace_mode)
@@ -3068,7 +3130,7 @@ impl QsonautGuiApp {
     ) {
         if matches!(
             self.workspace_mode,
-            WorkspaceMode::Ft8 | WorkspaceMode::Ft4 | WorkspaceMode::Sstv
+            WorkspaceMode::Ft8 | WorkspaceMode::Ft4 | WorkspaceMode::Voice | WorkspaceMode::Sstv
         ) {
             self.draw_workspace(ui, ctx, snapshot);
         } else {
@@ -3626,7 +3688,7 @@ impl eframe::App for QsonautGuiApp {
                     }
                     ui.separator();
                     ui.label(
-                        RichText::new(&snapshot.mode)
+                        RichText::new(radio_mode_label(&snapshot.mode, snapshot.data_mode))
                             .monospace()
                             .strong()
                             .color(Color32::WHITE),
@@ -4941,6 +5003,7 @@ mod tests {
     fn parse_workspace_mode_token_recognizes_supported_labels() {
         assert_eq!(parse_workspace_mode_token("FT8"), Some(WorkspaceMode::Ft8));
         assert_eq!(parse_workspace_mode_token("ft4"), Some(WorkspaceMode::Ft4));
+        assert_eq!(parse_workspace_mode_token("ssb"), Some(WorkspaceMode::Voice));
         assert_eq!(
             parse_workspace_mode_token("sstv"),
             Some(WorkspaceMode::Sstv)
@@ -4953,11 +5016,19 @@ mod tests {
     }
 
     #[test]
+    fn radio_mode_label_honors_reported_data_mode() {
+        assert_eq!(radio_mode_label("LSB-D", Some(false)), "LSB");
+        assert_eq!(radio_mode_label("USB", Some(true)), "USB-D");
+        assert_eq!(radio_mode_label("USB-D", Some(true)), "USB-D");
+    }
+
+    #[test]
     fn workspace_mode_supports_native_tx_matches_current_backends() {
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Ft4));
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Jt9));
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Cw));
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Sstv));
+        assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Voice));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Ft8));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Wspr));
     }

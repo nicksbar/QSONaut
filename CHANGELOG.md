@@ -8,6 +8,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [0.3.7] - 2026-08-22
 
 ### Added
+- Added a dedicated Voice Logger workspace with callsign-first QSO entry,
+  reports, grid/state, contest exchanges and serials, notes, and explicit
+  logging through the existing `QsoRecord` and HamDB enrichment flow.
+- Added blur-triggered HamDB callsign lookup for active Voice contacts, with
+  cached results, operator preview, and blank-field population.
 - Added an initial top-bar operating activity framework with icon-based
   selectors for General, POTA, SOTA, Contest, Field Day, DX, Satellite, and
   EMCOMM activities.
@@ -35,6 +40,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   an SSTV filter shortcut instead of a duplicate mode-local log.
 
 ### Changed
+- Kept Voice focused on contact logging; PTT and radio controls remain in the
+  global radio operations bar.
+- Made Voice band presets follow conventional sidebands: LSB on 160/80/40 m,
+  USB on higher HF bands, and FM on 2 m/70 cm.
 - Extended the prominent global TX safety control to cover armed, queued, and
   active SSTV transmissions.
 - Documented local image-server setup, SSTV operating frequencies, format
@@ -48,6 +57,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   made them fill the available profile-panel width.
 
 ### Fixed
+- Corrected CI-V Voice transitions so the waterfall stays in centered-span
+  mode, and the top-bar mode label reflects the radio's actual data-mode flag.
 - Made the 1200 Hz-wide SSTV decoder window movable on the audio waterfall;
   clicking a received signal now shifts VIS detection, pixel decoding, and the
   displayed tone plan together while residual AFC handles fine alignment.

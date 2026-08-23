@@ -11,4 +11,5 @@ pub(super) mod jt9;
 pub(super) mod native;
 pub(super) mod q65;
 pub(super) mod sstv;
+pub(super) mod voice;
 pub(super) mod wspr;
