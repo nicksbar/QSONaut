@@ -477,10 +477,10 @@ impl QsonautGuiApp {
                             + ((frequency_hz.max(0) as f32 / bw) * response.rect.width())
                     };
                     for (frequency_hz, color, width) in [
-                        (1_200 + offset_hz, Color32::from_rgb(100, 255, 145), 1.5),
-                        (1_500 + offset_hz, Color32::from_rgb(255, 180, 70), 1.0),
-                        (1_900 + offset_hz, Color32::WHITE, 1.8),
-                        (2_300 + offset_hz, Color32::from_rgb(255, 180, 70), 1.0),
+                        (1_200 + offset_hz, Color32::from_rgb(100, 255, 145), 1.5_f32),
+                        (1_500 + offset_hz, Color32::from_rgb(255, 180, 70), 1.0_f32),
+                        (1_900 + offset_hz, Color32::WHITE, 1.8_f32),
+                        (2_300 + offset_hz, Color32::from_rgb(255, 180, 70), 1.0_f32),
                     ] {
                         let x = marker_x(frequency_hz);
                         ui.painter().line_segment(

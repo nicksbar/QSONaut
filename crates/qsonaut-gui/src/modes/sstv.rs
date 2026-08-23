@@ -374,7 +374,7 @@ impl QsonautGuiApp {
                 Color32::from_rgb(20, 43, 52)
             })
             .stroke(egui::Stroke::new(
-                2.0,
+                2.0_f32,
                 if self.sstv_tx_armed {
                     Color32::LIGHT_RED
                 } else {
