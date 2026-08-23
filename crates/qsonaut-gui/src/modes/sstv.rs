@@ -43,6 +43,17 @@ impl QsonautGuiApp {
             self.sstv_texture = Some(ctx.load_texture("sstv-frame", image, TextureOptions::LINEAR));
             self.sstv_texture_revision = snapshot.sstv_revision;
         }
+        if self.sstv_tx_revision != self.sstv_tx_texture_revision
+            && self.sstv_tx_width > 0
+            && self.sstv_tx_height > 0
+            && self.sstv_tx_rgb.len() == self.sstv_tx_width * self.sstv_tx_height * 3
+        {
+            let image =
+                ColorImage::from_rgb([self.sstv_tx_width, self.sstv_tx_height], &self.sstv_tx_rgb);
+            self.sstv_tx_texture =
+                Some(ctx.load_texture("sstv-tx-frame", image, TextureOptions::LINEAR));
+            self.sstv_tx_texture_revision = self.sstv_tx_revision;
+        }
 
         let mut rx_mode = snapshot.sstv_rx_mode;
         ui.horizontal_wrapped(|ui| {
@@ -82,6 +93,20 @@ impl QsonautGuiApp {
                 self.app_log_level_filter = AppLogLevelFilter::All;
                 self.signal_panel_tab = SignalPanelTab::AppLog;
             }
+            if ui
+                .button(RichText::new("⟳ DROP + REACQUIRE").color(theme_warning(ui)))
+                .clicked()
+            {
+                self.sstv_auto_target = true;
+                let mut shared = self.state.lock().expect("ui state lock poisoned");
+                shared.sstv_auto_target = true;
+                shared.sstv_locked_offset_hz = None;
+                shared.sstv_detected_mode = None;
+                shared.sstv_progress = None;
+                shared.sstv_reset_generation = shared.sstv_reset_generation.wrapping_add(1);
+                shared.sstv_status = "DROPPED: reacquiring across the audio filter".to_string();
+                tracing::info!("SSTV receive dropped by operator; reacquiring");
+            }
             ui.separator();
             ui.label(RichText::new("RX mode").strong());
             egui::ComboBox::from_id_salt("sstv_rx_mode")
@@ -105,6 +130,11 @@ impl QsonautGuiApp {
                 "Radio {:.3} MHz · USB FIL1",
                 snapshot.frequency_hz.unwrap_or_default() as f64 / 1_000_000.0
             ));
+            ui.add(
+                egui::Slider::new(&mut self.sstv_rx_width_percent, 45..=72)
+                    .text("RX width")
+                    .show_value(false),
+            );
         });
         if rx_mode != snapshot.sstv_rx_mode {
             let mut shared = self.state.lock().expect("ui state lock poisoned");
@@ -138,34 +168,35 @@ impl QsonautGuiApp {
         // remaining viewport. Each column then manages its own overflow rather
         // than making the entire SSTV workspace taller than the central panel.
         let body_height = fitted_sstv_body_height(ui.available_height());
-        ui.columns(2, |columns| {
-            let (left, right) = columns.split_at_mut(1);
-            let left = &mut left[0];
-            let right = &mut right[0];
+        ui.horizontal(|ui| {
+            let gap = 8.0;
+            let deck_width = (ui.available_width() - gap).max(2.0);
+            let left_width = deck_width * self.sstv_rx_width_percent as f32 / 100.0;
+            let right_width = (deck_width - left_width).max(1.0);
+            let (left_rect, _) = ui.allocate_exact_size(
+                egui::vec2(left_width, body_height),
+                egui::Sense::hover(),
+            );
+            ui.add_space(gap);
+            let (right_rect, _) = ui.allocate_exact_size(
+                egui::vec2(right_width, body_height),
+                egui::Sense::hover(),
+            );
+            let mut left = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("sstv_rx_deck")
+                    .max_rect(left_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            let mut right = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("sstv_tx_deck")
+                    .max_rect(right_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
 
-            left.allocate_ui_with_layout(
-                egui::vec2(left.available_width(), body_height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
-                ui.label(RichText::new("SSTV FRAME").strong());
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("📂 OPEN IMAGE…").clicked() {
-                        self.sstv_file_dialog.pick_file();
-                    }
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.sstv_image_path)
-                            .hint_text("PNG/JPEG path")
-                            .desired_width((ui.available_width() - 92.0).max(80.0)),
-                    );
-                    if ui.small_button("LOAD PATH").clicked() {
-                        match std::fs::read(self.sstv_image_path.trim()) {
-                            Ok(bytes) => self.install_sstv_image(&bytes, "Loaded image"),
-                            Err(error) => {
-                                self.local_image_status = format!("Image load failed: {error}")
-                            }
-                        }
-                    }
-                });
+            egui::Frame::group(left.style()).show(&mut left, |ui| {
+                ui.label(RichText::new("📡 LIVE RX").strong().color(theme_accent(ui)));
                 ui.label(RichText::new(&snapshot.sstv_status).monospace());
                 if let Some(progress) = snapshot.sstv_progress {
                     ui.add(
@@ -174,33 +205,57 @@ impl QsonautGuiApp {
                             .text(format!("Receiving {:.0}%", progress * 100.0)),
                     );
                 }
+                if let Some(path) = &snapshot.sstv_saved_path {
+                    ui.label(RichText::new(format!("Saved: {path}")).small().color(theme_muted(ui)));
+                }
+                ui.add_space(3.0);
+                egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
                     let available_width = ui.available_width().max(1.0);
                     let available_height = ui.available_height().max(1.0);
-                let aspect = snapshot.sstv_height as f32 / snapshot.sstv_width.max(1) as f32;
-                let image_width = available_width.min(available_height / aspect.max(0.01));
-                let size = egui::vec2(image_width, image_width * aspect);
-                if let Some(texture) = &self.sstv_texture {
-                    ui.add(egui::Image::new((texture.id(), size)).corner_radius(5.0));
-                } else {
-                    ui.allocate_ui_with_layout(
-                        size,
-                        egui::Layout::centered_and_justified(egui::Direction::TopDown),
-                        |ui| {
-                            ui.label(
-                                RichText::new("Listening for a frame\nor load/generate one for TX")
-                                    .color(theme_muted(ui)),
-                            );
-                        },
-                    );
-                }
-                }),
-            );
+                    let aspect = snapshot.sstv_height as f32 / snapshot.sstv_width.max(1) as f32;
+                    let image_width = available_width.min(available_height / aspect.max(0.01));
+                    let size = egui::vec2(image_width, image_width * aspect);
+                    if let Some(texture) = &self.sstv_texture {
+                        ui.add(egui::Image::new((texture.id(), size)).corner_radius(5.0));
+                    } else {
+                        ui.allocate_ui_with_layout(
+                            size,
+                            egui::Layout::centered_and_justified(egui::Direction::TopDown),
+                            |ui| ui.label(RichText::new("Listening for an SSTV frame").color(theme_muted(ui))),
+                        );
+                    }
+                });
+            });
 
             egui::ScrollArea::vertical()
                 .id_salt("sstv_local_image_lab_scroll")
                 .max_height(body_height)
                 .auto_shrink([false, false])
-                .show(right, |ui| egui::Frame::group(ui.style()).show(ui, |ui| {
+                .show(&mut right, |ui| egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.label(RichText::new("📤 TX IMAGE").strong().color(theme_accent(ui)));
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("📂 OPEN IMAGE…").clicked() {
+                        self.sstv_file_dialog.pick_file();
+                    }
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.sstv_image_path)
+                            .hint_text("PNG/JPEG path")
+                            .desired_width((ui.available_width() - 86.0).max(80.0)),
+                    );
+                    if ui.small_button("LOAD").clicked() {
+                        match std::fs::read(self.sstv_image_path.trim()) {
+                            Ok(bytes) => self.install_sstv_image(&bytes, "Loaded image"),
+                            Err(error) => self.local_image_status = format!("Image load failed: {error}"),
+                        }
+                    }
+                });
+                if let Some(texture) = &self.sstv_tx_texture {
+                    let aspect = self.sstv_tx_height as f32 / self.sstv_tx_width.max(1) as f32;
+                    let width = ui.available_width().min(230.0 / aspect.max(0.01));
+                    ui.add(egui::Image::new((texture.id(), egui::vec2(width, width * aspect))).corner_radius(4.0));
+                } else {
+                    ui.label(RichText::new("Open or generate an image to prepare TX").small().color(theme_muted(ui)));
+                }
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("TX mode").strong());
                     egui::ComboBox::from_id_salt("sstv_tx_mode")
@@ -317,9 +372,9 @@ impl QsonautGuiApp {
         });
 
         ui.add_space(5.0);
-        let has_frame = snapshot.sstv_width > 0
-            && snapshot.sstv_height > 0
-            && snapshot.sstv_rgb.len() == snapshot.sstv_width * snapshot.sstv_height * 3;
+        let has_frame = self.sstv_tx_width > 0
+            && self.sstv_tx_height > 0
+            && self.sstv_tx_rgb.len() == self.sstv_tx_width * self.sstv_tx_height * 3;
         egui::Frame::group(ui.style())
             .fill(if self.sstv_tx_armed {
                 Color32::from_rgb(76, 31, 25)
@@ -363,11 +418,12 @@ impl QsonautGuiApp {
                         )
                         .clicked()
                     {
+                        let rgb = self.sstv_tx_rgb.clone();
                         self.start_sstv_tx(
                             self.sstv_tx_mode,
-                            snapshot.sstv_width,
-                            snapshot.sstv_height,
-                            &snapshot.sstv_rgb,
+                            self.sstv_tx_width,
+                            self.sstv_tx_height,
+                            &rgb,
                         );
                     }
                     if ui
@@ -490,12 +546,10 @@ impl QsonautGuiApp {
                     rgb.save(generated_dir.join(format!("sstv-{timestamp}.png")))
                         .map_err(std::io::Error::other)
                 });
-                let mut shared = self.state.lock().expect("ui state lock poisoned");
-                shared.sstv_rgb = rgb.into_raw();
-                shared.sstv_width = qsonaut_sstv::WIDTH;
-                shared.sstv_height = qsonaut_sstv::HEIGHT;
-                shared.sstv_revision = shared.sstv_revision.wrapping_add(1);
-                shared.sstv_status = format!("{source}: ready for SSTV TX");
+                self.sstv_tx_rgb = rgb.into_raw();
+                self.sstv_tx_width = qsonaut_sstv::WIDTH;
+                self.sstv_tx_height = qsonaut_sstv::HEIGHT;
+                self.sstv_tx_revision = self.sstv_tx_revision.wrapping_add(1);
                 self.local_image_status = match saved {
                     Ok(()) => format!("{source}; 320×256 SSTV frame saved locally"),
                     Err(error) => format!("{source}; local save failed: {error}"),

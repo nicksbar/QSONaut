@@ -14,6 +14,30 @@ use std::sync::atomic::AtomicU32;
 
 type CwRecording = (WavWriter<BufWriter<File>>, BufWriter<File>, PathBuf, u64);
 
+fn save_received_sstv_image(
+    image: &qsonaut_sstv::DecodedImage,
+    mode: Option<qsonaut_sstv::SstvMode>,
+    radio_frequency_hz: Option<u64>,
+) -> anyhow::Result<PathBuf> {
+    let directory = qsonaut_log::app_config_dir().join("sstv-images");
+    std::fs::create_dir_all(&directory)?;
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let mode_name = mode
+        .map(|value| value.name().to_ascii_lowercase().replace(' ', "-"))
+        .unwrap_or_else(|| "unknown".to_string());
+    let frequency = radio_frequency_hz
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown-rf".to_string());
+    let path = directory.join(format!("rx-{timestamp_ms}-{frequency}-{mode_name}.png"));
+    let rgb = image::RgbImage::from_raw(image.width as u32, image.height as u32, image.rgb.clone())
+        .ok_or_else(|| anyhow::anyhow!("decoded SSTV dimensions do not match the RGB buffer"))?;
+    rgb.save(&path)?;
+    Ok(path)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(in super::super) fn spawn_audio_spectrum_worker(
     state: Arc<Mutex<GuiState>>,
@@ -116,6 +140,10 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut last_sstv_vis: Option<u8> = None;
         let mut sstv_receive_started: Option<Instant> = None;
         let mut sstv_progress_bucket = 0_u8;
+        let mut last_sstv_reset_generation = 0_u64;
+        let mut sstv_session_power_sum = 0.0_f64;
+        let mut sstv_session_chunks = 0_u64;
+        let mut sstv_session_max_clip_percent = 0.0_f32;
         let mut last_sstv_no_header_log = Instant::now() - Duration::from_secs(10);
         let mut digital_slot_gate = DigitalSlotGate::default();
         let mut ft4_slot_gate = Ft8SlotGate::default();
@@ -405,6 +433,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     requested_mode,
                                     requested_auto_target,
                                     radio_frequency_hz,
+                                    reset_generation,
                                 ) = {
                                     let shared = state.lock().expect("ui state lock poisoned");
                                     (
@@ -412,8 +441,17 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         shared.sstv_rx_mode,
                                         shared.sstv_auto_target,
                                         shared.frequency_hz,
+                                        shared.sstv_reset_generation,
                                     )
                                 };
+                                if reset_generation != last_sstv_reset_generation {
+                                    sstv_receiver.reset();
+                                    last_sstv_reset_generation = reset_generation;
+                                    last_sstv_vis = None;
+                                    sstv_receive_started = None;
+                                    sstv_progress_bucket = 0;
+                                    info!("SSTV receiver reset; scanning for a new complete VIS header");
+                                }
                                 let targeting_changed = sstv_receiver.selected_mode()
                                     != requested_mode
                                     || sstv_receiver.auto_target() != requested_auto_target;
@@ -472,6 +510,8 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                             supported = qsonaut_sstv::mode_from_vis(vis).is_some(),
                                             frequency_offset_hz,
                                             input_rms_dbfs = rms_dbfs,
+                                            input_clip_percent = clip_percent,
+                                            leader_prominence_db = scan_prominence_db,
                                             auto_target = requested_auto_target,
                                             radio_frequency_hz,
                                             "SSTV target acquired from VIS header"
@@ -496,6 +536,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     if accepted {
                                         sstv_receive_started = Some(Instant::now());
                                         sstv_progress_bucket = 0;
+                                        sstv_session_power_sum = 0.0;
+                                        sstv_session_chunks = 0;
+                                        sstv_session_max_clip_percent = 0.0;
                                     } else {
                                         info!(
                                             vis,
@@ -509,6 +552,10 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     }
                                 }
                                 if let (Some(value), Some(mode)) = (progress, active_mode) {
+                                    sstv_session_power_sum += f64::from(rms * rms);
+                                    sstv_session_chunks = sstv_session_chunks.saturating_add(1);
+                                    sstv_session_max_clip_percent =
+                                        sstv_session_max_clip_percent.max(clip_percent);
                                     let bucket = ((value * 100.0) / 25.0).floor() as u8;
                                     if bucket > sstv_progress_bucket && bucket < 4 {
                                         sstv_progress_bucket = bucket;
@@ -590,10 +637,25 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     )
                                 };
                                 if let Some(image) = decoded {
+                                    let saved_path = match save_received_sstv_image(
+                                        &image,
+                                        completed_mode,
+                                        radio_frequency_hz,
+                                    ) {
+                                        Ok(path) => {
+                                            info!(path = %path.display(), "SSTV received image saved");
+                                            Some(path.display().to_string())
+                                        }
+                                        Err(error) => {
+                                            tracing::warn!(error = %error, "failed to save received SSTV image");
+                                            None
+                                        }
+                                    };
                                     shared.sstv_width = image.width;
                                     shared.sstv_height = image.height;
                                     shared.sstv_rgb = image.rgb;
                                     shared.sstv_revision = shared.sstv_revision.wrapping_add(1);
+                                    shared.sstv_saved_path = saved_path;
                                     shared.sstv_progress = None;
                                     shared.sstv_detected_mode = completed_mode;
                                     shared.sstv_status = format!(
@@ -608,6 +670,16 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         .unwrap_or_default();
                                     let mode =
                                         completed_mode.map(|mode| mode.name()).unwrap_or("SSTV");
+                                    let average_rms_dbfs = if sstv_session_chunks == 0 {
+                                        rms_dbfs
+                                    } else {
+                                        20.0 * ((sstv_session_power_sum
+                                            / sstv_session_chunks as f64)
+                                            .sqrt()
+                                            .max(1e-9)
+                                            .log10()
+                                            as f32)
+                                    };
                                     info!(
                                         mode,
                                         width = shared.sstv_width,
@@ -615,6 +687,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         target_offset_hz = frequency_offset_hz,
                                         elapsed_s,
                                         radio_frequency_hz,
+                                        average_input_rms_dbfs = average_rms_dbfs,
+                                        max_input_clip_percent = sstv_session_max_clip_percent,
+                                        leader_prominence_db = scan_prominence_db,
                                         "SSTV image receive complete"
                                     );
                                     sstv_progress_bucket = 0;
