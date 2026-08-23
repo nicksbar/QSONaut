@@ -97,6 +97,72 @@ impl QsonautGuiApp {
         });
 
         ui.add_space(8.0);
+        ui.label(RichText::new("Station and image-generation notes").strong());
+        ui.label("These details are saved with the selected operator profile and used to improve SSTV image prompts.");
+
+        let mut station_details_changed = false;
+        ui.label(RichText::new("Rig").strong());
+        station_details_changed |= ui
+            .add(
+                egui::TextEdit::singleline(&mut self.station_rig)
+                    .desired_width(ui.available_width())
+                    .hint_text("IC-7300, FT-991A, …"),
+            )
+            .changed();
+        ui.label(RichText::new("Antenna").strong());
+        station_details_changed |= ui
+            .add(
+                egui::TextEdit::singleline(&mut self.station_antenna)
+                    .desired_width(ui.available_width())
+                    .hint_text("Dipole, vertical, beam, …"),
+            )
+            .changed();
+        ui.label(RichText::new("Station notes").strong());
+        station_details_changed |= ui
+            .add(
+                egui::TextEdit::multiline(&mut self.station_notes)
+                    .desired_width(ui.available_width())
+                    .desired_rows(2)
+                    .hint_text("Location, propagation, operating preferences, or constraints"),
+            )
+            .changed();
+        ui.label(RichText::new("General LLM prompt context").strong());
+        station_details_changed |= ui
+            .add(
+                egui::TextEdit::multiline(&mut self.llm_prompt_context)
+                    .desired_width(ui.available_width())
+                    .desired_rows(2)
+                    .hint_text("Style, audience, branding, or recurring subjects"),
+            )
+            .changed();
+        ui.label(RichText::new("SSTV image requirements").strong());
+        station_details_changed |= ui
+            .add(
+                egui::TextEdit::multiline(&mut self.sstv_image_requirements)
+                    .desired_width(ui.available_width())
+                    .desired_rows(3)
+                    .hint_text(
+                        "Readable callsign, high contrast, simple composition, no tiny text, …",
+                    ),
+            )
+            .changed();
+        ui.label(RichText::new("LLM/model notes").strong());
+        station_details_changed |= ui
+            .add(
+                egui::TextEdit::multiline(&mut self.llm_model_notes)
+                    .desired_width(ui.available_width())
+                    .desired_rows(2)
+                    .hint_text(
+                        "Use an image-capable model; avoid text-only models for image generation",
+                    ),
+            )
+            .changed();
+        if station_details_changed {
+            self.profile_dirty = true;
+            self.persist_profile("Station and LLM notes saved to");
+        }
+
+        ui.add_space(8.0);
         ui.label(RichText::new("Saved profiles").strong());
         ui.horizontal_wrapped(|ui| {
             let previous_profile = self.selected_profile_name.clone();

@@ -1432,6 +1432,12 @@ struct QsonautGuiApp {
     station_callsign: String,
     station_grid: String,
     station_qth: String,
+    station_rig: String,
+    station_antenna: String,
+    station_notes: String,
+    llm_prompt_context: String,
+    sstv_image_requirements: String,
+    llm_model_notes: String,
     contest_enabled: bool,
     contest_operating_mode: ContestOperatingMode,
     contest_split_policy: SplitPolicy,
@@ -1612,6 +1618,12 @@ impl QsonautGuiApp {
             .unwrap_or_else(|| "AA00".to_string());
 
         let mut station_qth = String::new();
+        let mut station_rig = String::new();
+        let mut station_antenna = String::new();
+        let mut station_notes = String::new();
+        let mut llm_prompt_context = String::new();
+        let mut sstv_image_requirements = String::new();
+        let mut llm_model_notes = String::new();
         let mut ft8_follow_log = true;
         let mut ft8_max_log_entries = 300usize;
         let mut ft8_deep_decode = false;
@@ -1665,12 +1677,19 @@ impl QsonautGuiApp {
         let mut hunter_custom_rules = Vec::new();
         let mut radio_profiles = Vec::new();
         let mut mode_radio_profile = std::collections::BTreeMap::new();
+        let mut workspace_mode = WorkspaceMode::Ft8;
         let profile_io_status: String;
 
         if let Some(p) = load_operator_profile() {
             station_callsign = p.callsign;
             station_grid = p.grid;
             station_qth = p.qth;
+            station_rig = p.station_rig;
+            station_antenna = p.station_antenna;
+            station_notes = p.station_notes;
+            llm_prompt_context = p.llm_prompt_context;
+            sstv_image_requirements = p.sstv_image_requirements;
+            llm_model_notes = p.llm_model_notes;
             ft8_follow_log = p.follow_log;
             ft8_max_log_entries = p.max_log_entries.clamp(80, 1000);
             ft8_deep_decode = p.deep_decode;
@@ -1740,6 +1759,8 @@ impl QsonautGuiApp {
             hunter_custom_rules = p.hunter_custom_rules;
             radio_profiles = p.radio_profiles;
             mode_radio_profile = p.mode_radio_profile;
+            workspace_mode =
+                parse_workspace_mode_token(&p.workspace_mode).unwrap_or(WorkspaceMode::Ft8);
             config.station.callsign = Some(station_callsign.clone());
             config.station.grid = Some(station_grid.clone());
             config.contest = ContestProfile {
@@ -1763,6 +1784,12 @@ impl QsonautGuiApp {
                 callsign: station_callsign.clone(),
                 grid: station_grid.clone(),
                 qth: station_qth.clone(),
+                station_rig: station_rig.clone(),
+                station_antenna: station_antenna.clone(),
+                station_notes: station_notes.clone(),
+                llm_prompt_context: llm_prompt_context.clone(),
+                sstv_image_requirements: sstv_image_requirements.clone(),
+                llm_model_notes: llm_model_notes.clone(),
                 follow_log: ft8_follow_log,
                 max_log_entries: ft8_max_log_entries,
                 deep_decode: ft8_deep_decode,
@@ -1826,6 +1853,7 @@ impl QsonautGuiApp {
                 hunter_custom_rules: Vec::new(),
                 radio_profiles: Vec::new(),
                 mode_radio_profile: std::collections::BTreeMap::new(),
+                workspace_mode: workspace_mode.label().to_string(),
             };
             match save_operator_profile(&bootstrap) {
                 Ok(_) => {
@@ -1963,7 +1991,7 @@ impl QsonautGuiApp {
             local_image_status: "Local image server not checked".to_string(),
             local_image_event_tx,
             local_image_event_rx,
-            workspace_mode: WorkspaceMode::Ft8,
+            workspace_mode,
             fst4_submode: modes::fst4::Submode::default(),
             display_tuning,
             repaint_ctx,
@@ -2042,6 +2070,12 @@ impl QsonautGuiApp {
             station_callsign,
             station_grid,
             station_qth,
+            station_rig,
+            station_antenna,
+            station_notes,
+            llm_prompt_context,
+            sstv_image_requirements,
+            llm_model_notes,
             contest_enabled,
             contest_operating_mode,
             contest_split_policy,
@@ -2149,6 +2183,12 @@ impl QsonautGuiApp {
         self.station_callsign = profile.callsign;
         self.station_grid = profile.grid;
         self.station_qth = profile.qth;
+        self.station_rig = profile.station_rig;
+        self.station_antenna = profile.station_antenna;
+        self.station_notes = profile.station_notes;
+        self.llm_prompt_context = profile.llm_prompt_context;
+        self.sstv_image_requirements = profile.sstv_image_requirements;
+        self.llm_model_notes = profile.llm_model_notes;
         self.ft8_follow_log = profile.follow_log;
         self.ft8_max_log_entries = profile.max_log_entries.clamp(80, 1000);
         self.ft8_deep_decode = profile.deep_decode;
@@ -2603,6 +2643,12 @@ impl QsonautGuiApp {
             callsign: self.station_callsign_or_default().to_string(),
             grid: self.station_grid_or_default().to_string(),
             qth: self.station_qth.trim().to_string(),
+            station_rig: self.station_rig.trim().to_string(),
+            station_antenna: self.station_antenna.trim().to_string(),
+            station_notes: self.station_notes.trim().to_string(),
+            llm_prompt_context: self.llm_prompt_context.trim().to_string(),
+            sstv_image_requirements: self.sstv_image_requirements.trim().to_string(),
+            llm_model_notes: self.llm_model_notes.trim().to_string(),
             follow_log: self.ft8_follow_log,
             max_log_entries: self.ft8_max_log_entries.clamp(80, 1000),
             deep_decode: self.ft8_deep_decode,
@@ -2669,6 +2715,7 @@ impl QsonautGuiApp {
             hunter_custom_rules: self.hunter_custom_rules.clone(),
             radio_profiles: self.radio_profiles.clone(),
             mode_radio_profile: self.mode_radio_profile.clone(),
+            workspace_mode: self.workspace_mode.label().to_string(),
         }
     }
 
@@ -3030,6 +3077,8 @@ impl QsonautGuiApp {
                     .clicked()
                 {
                     self.workspace_mode = mode;
+                    self.profile_dirty = true;
+                    self.persist_profile("Mode saved to");
                     if let Some(frequency_hz) =
                         workspace_frequency_for_current_band(mode, snapshot.frequency_hz)
                     {
@@ -3051,6 +3100,8 @@ impl QsonautGuiApp {
                 );
                 if response.clicked() && enabled {
                     self.workspace_mode = mode;
+                    self.profile_dirty = true;
+                    self.persist_profile("Mode saved to");
                     if let Some(frequency_hz) =
                         workspace_frequency_for_current_band(mode, snapshot.frequency_hz)
                     {

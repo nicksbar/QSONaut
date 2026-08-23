@@ -34,6 +34,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Documented local image-server setup, SSTV operating frequencies, format
   boundaries, and the distinction between software validation and on-air
   validation.
+- Persisted the selected workspace mode so QSONaut restores the last-used mode
+  instead of always starting in FT8.
+- Expanded operator profiles with rig, antenna, station notes, and reusable LLM
+  prompt guidance, including SSTV image requirements and model notes.
+- Moved station and image-generation profile fields below the HamDB controls and
+  made them fill the available profile-panel width.
 
 ### Fixed
 - Made the 1200 Hz-wide SSTV decoder window movable on the audio waterfall;

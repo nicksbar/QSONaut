@@ -387,12 +387,18 @@ impl QsonautGuiApp {
 
     fn sstv_activity_prompt(&self, snapshot: &GuiState) -> String {
         format!(
-            "Create bold, high-contrast amateur radio SSTV QSL artwork for callsign {} in {} {}. Current activity: {:.3} MHz SSTV {}. Use a striking radio-space aesthetic, one strong central subject, large readable callsign, no tiny text, and a composition that survives analog SSTV transmission.",
+            "Create bold, high-contrast amateur radio SSTV QSL artwork for callsign {} in {} {}. Current activity: {:.3} MHz SSTV {}. Rig: {}. Antenna: {}. Station notes: {}. General prompt context: {}. SSTV image requirements: {}. Model notes: {}. Use a striking radio-space aesthetic, one strong central subject, large readable callsign, no tiny text, and a composition that survives analog SSTV transmission.",
             self.station_callsign_or_default(),
             self.station_qth.trim(),
             self.station_grid_or_default(),
             snapshot.frequency_hz.unwrap_or(14_230_000) as f64 / 1_000_000.0,
             self.sstv_tx_mode.name(),
+            self.station_rig.trim(),
+            self.station_antenna.trim(),
+            self.station_notes.trim(),
+            self.llm_prompt_context.trim(),
+            self.sstv_image_requirements.trim(),
+            self.llm_model_notes.trim(),
         )
     }
 
