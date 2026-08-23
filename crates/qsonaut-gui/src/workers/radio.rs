@@ -1087,7 +1087,11 @@ fn poll_radio_core_state(
             read_bool_control(rt, radio, ControlId::Notch),
             read_bool_control(rt, radio, ControlId::ManualNotch),
             read_u8_control(rt, radio, ControlId::Agc),
-            rt.block_on(radio.get_meter(MeterId::Swr)).ok().flatten(),
+            if radio.supports_meter(MeterId::Swr) {
+                rt.block_on(radio.get_meter(MeterId::Swr)).ok().flatten()
+            } else {
+                None
+            },
             rt.block_on(radio.get_tuner_status()).ok().flatten(),
         )
     } else {
