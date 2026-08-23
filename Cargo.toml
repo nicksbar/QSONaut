@@ -39,7 +39,7 @@ rustfft = "6"
 cpal = "0.15"
 futures-util = "0.3"
 url = "2"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 base64 = "0.22"

@@ -1,5 +1,59 @@
 use super::super::*;
 
+fn draw_local_model_selector(
+    ui: &mut egui::Ui,
+    label: &str,
+    help: &str,
+    models: &[LocalModelInfo],
+    selected: &mut String,
+    role: LocalModelRole,
+    id: &str,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(label);
+        ui.small_button("?").on_hover_text(help);
+        let selected_text = if selected.trim().is_empty() {
+            "Select a model"
+        } else {
+            selected.as_str()
+        };
+        egui::ComboBox::from_id_salt(id)
+            .selected_text(selected_text)
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                for model in models.iter().filter(|model| model.supports(role)) {
+                    ui.selectable_value(selected, model.id.clone(), &model.id)
+                        .on_hover_text(model.detail());
+                }
+            });
+    });
+    if !selected.trim().is_empty() {
+        match models.iter().find(|model| model.id == selected.trim()) {
+            Some(model) => {
+                let color = if model.supports(role) {
+                    Color32::GRAY
+                } else {
+                    theme_warning(ui)
+                };
+                let text = model
+                    .role_unavailable_reason(role)
+                    .unwrap_or_else(|| model.detail());
+                ui.label(RichText::new(text).small().color(color));
+            }
+            None => {
+                ui.label(
+                    RichText::new(format!(
+                        "Selected model '{}' is not in the current provider inventory.",
+                        selected.trim()
+                    ))
+                    .small()
+                    .color(theme_warning(ui)),
+                );
+            }
+        }
+    }
+}
+
 fn edit_optional_u8(ui: &mut egui::Ui, value: &mut Option<u8>, min: u8, max: u8) {
     let mut current = i32::from(value.unwrap_or(min));
     if ui
@@ -598,10 +652,9 @@ impl QsonautGuiApp {
                             provider.label(),
                         );
                     }
-                });
+            });
             if old_provider != self.local_image_settings.provider {
                 self.local_image_models.clear();
-                self.local_image_settings.model.clear();
             }
 
             ui.add_space(6.0);
@@ -643,24 +696,33 @@ impl QsonautGuiApp {
                         .color(Color32::GRAY),
                 );
             });
-            ui.horizontal(|ui| {
-                ui.label("Image model");
-                egui::ComboBox::from_id_salt("global-ai-image-model")
-                    .selected_text(if self.local_image_settings.model.is_empty() {
-                        "Select a model"
-                    } else {
-                        &self.local_image_settings.model
-                    })
-                    .show_ui(ui, |ui| {
-                        for model in &self.local_image_models {
-                            ui.selectable_value(
-                                &mut self.local_image_settings.model,
-                                model.clone(),
-                                model,
-                            );
-                        }
-                    });
-            });
+            draw_local_model_selector(
+                ui,
+                "Vision/context model",
+                "Used to inspect received SSTV images and produce descriptive context for the image pipeline. The selected model must support image input, usually identified by the vision capability, and must support chat/completions. This model analyzes images but does not generate artwork.",
+                &self.local_image_models,
+                &mut self.local_image_settings.vision_model,
+                LocalModelRole::Vision,
+                "global-ai-vision-model",
+            );
+            draw_local_model_selector(
+                ui,
+                "Image-generation model",
+                "Used to create one new image from text or reinterpret a selected received image. The selected model must advertise the image capability. Models marked only vision can inspect images but cannot create artwork.",
+                &self.local_image_models,
+                &mut self.local_image_settings.image_model,
+                LocalModelRole::Image,
+                "global-ai-image-model",
+            );
+            draw_local_model_selector(
+                ui,
+                "Image-editing model",
+                "Received-image reinterpretation requires a model that supports both image generation and image editing. Look for image plus edit capabilities. If no compatible edit model is available, station/QSL generation can still be used, but reinterpretation will be disabled.",
+                &self.local_image_models,
+                &mut self.local_image_settings.edit_model,
+                LocalModelRole::Edit,
+                "global-ai-edit-model",
+            );
 
             ui.add_space(6.0);
             ui.label(RichText::new("Image generation defaults").strong());
@@ -680,6 +742,7 @@ impl QsonautGuiApp {
 
             ui.add_space(8.0);
             if ui.button("💾 SAVE AI SETTINGS").clicked() {
+                self.local_image_settings.model = self.local_image_settings.image_model.clone();
                 self.local_image_status = match local_ai::validate_loopback_endpoint(
                     self.local_image_settings.endpoint(),
                 ) {

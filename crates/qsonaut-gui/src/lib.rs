@@ -79,7 +79,9 @@ use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
     DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, OperatorCallHit, PendingFt8Decode, PotaSpot,
 };
-use local_ai::{LocalImageEvent, LocalImageProvider, LocalImageSettings};
+use local_ai::{
+    LocalImageEvent, LocalImageProvider, LocalImageSettings, LocalModelInfo, LocalModelRole,
+};
 use modes::exchange::{
     callsign_eq, is_probable_callsign, next_reply_period, next_tx_period, parse_message,
     select_candidate, should_finalize_after_tx, should_repeat_cq, should_retry_after_decode,
@@ -776,6 +778,70 @@ impl Ft8SeqState {
 }
 
 #[derive(Debug, Clone)]
+struct ReceivedSstvImage {
+    id: String,
+    path: Option<String>,
+    mode: Option<qsonaut_sstv::SstvMode>,
+    frequency_hz: Option<u64>,
+    width: usize,
+    height: usize,
+    rgb: Vec<u8>,
+    received_unix_ms: u128,
+    analysis: Option<String>,
+    debug_audio_path: Option<String>,
+    debug_metadata_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SstvOverlayCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl SstvOverlayCorner {
+    const ALL: [Self; 4] = [
+        Self::TopLeft,
+        Self::TopRight,
+        Self::BottomLeft,
+        Self::BottomRight,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::TopLeft => "Top left",
+            Self::TopRight => "Top right",
+            Self::BottomLeft => "Bottom left",
+            Self::BottomRight => "Bottom right",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SstvAiPipelineMode {
+    StationQsl,
+    AnalyzeReceived,
+    ReinterpretReceived,
+}
+
+impl SstvAiPipelineMode {
+    const ALL: [Self; 3] = [
+        Self::StationQsl,
+        Self::AnalyzeReceived,
+        Self::ReinterpretReceived,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::StationQsl => "Station QSL",
+            Self::AnalyzeReceived => "Analyze received",
+            Self::ReinterpretReceived => "Reinterpret received",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct GuiState {
     frequency_hz: Option<u64>,
     mode: String,
@@ -828,6 +894,10 @@ struct GuiState {
     sstv_rx_mode: Option<qsonaut_sstv::SstvMode>,
     sstv_detected_mode: Option<qsonaut_sstv::SstvMode>,
     sstv_saved_path: Option<String>,
+    sstv_received_images: VecDeque<ReceivedSstvImage>,
+    sstv_received_revision: u64,
+    sstv_debug_capture_requested: bool,
+    sstv_debug_status: String,
     ft4_last_decode_period: Option<u64>,
     digital_tx_period: Option<(WorkspaceMode, u64)>,
     selected_audio_hz: u32,
@@ -894,6 +964,10 @@ impl Default for GuiState {
             sstv_rx_mode: None,
             sstv_detected_mode: None,
             sstv_saved_path: None,
+            sstv_received_images: VecDeque::with_capacity(24),
+            sstv_received_revision: 0,
+            sstv_debug_capture_requested: false,
+            sstv_debug_status: "Debug capture idle".to_string(),
             ft4_last_decode_period: None,
             digital_tx_period: None,
             selected_audio_hz: default_rx_tone_hz(),
@@ -1348,20 +1422,39 @@ struct QsonautGuiApp {
     sstv_auto_target: bool,
     sstv_rx_width_percent: u8,
     sstv_tx_rgb: Vec<u8>,
+    sstv_tx_base_rgb: Vec<u8>,
     sstv_tx_width: usize,
     sstv_tx_height: usize,
     sstv_tx_revision: u64,
     sstv_tx_texture: Option<TextureHandle>,
     sstv_tx_texture_revision: u64,
     sstv_tx_mode: qsonaut_sstv::SstvMode,
+    sstv_overlay_callsign: bool,
+    sstv_overlay_grid: bool,
+    sstv_overlay_frequency: bool,
+    sstv_overlay_mode: bool,
+    sstv_overlay_corner: SstvOverlayCorner,
+    sstv_overlay_background: Color32,
+    sstv_overlay_background_opacity: f32,
+    sstv_background_zoom: f32,
+    sstv_background_pan_x: f32,
+    sstv_background_pan_y: f32,
+    sstv_overlay_revision: u64,
     sstv_file_dialog: egui_file_dialog::FileDialog,
     sstv_image_path: String,
     sstv_ai_prompt: String,
     local_image_settings: LocalImageSettings,
-    local_image_models: Vec<String>,
+    local_image_models: Vec<LocalModelInfo>,
     local_image_status: String,
+    local_image_refresh_started: bool,
     local_image_event_tx: mpsc::Sender<LocalImageEvent>,
     local_image_event_rx: mpsc::Receiver<LocalImageEvent>,
+    sstv_ai_pipeline_mode: SstvAiPipelineMode,
+    sstv_active_received_id: Option<String>,
+    sstv_show_prior_received: bool,
+    sstv_received_textures: HashMap<String, TextureHandle>,
+    sstv_received_texture_revision: u64,
+    sstv_reinterpret_prompt: String,
     workspace_mode: WorkspaceMode,
     fst4_submode: modes::fst4::Submode,
     display_tuning: Arc<Mutex<DisplayTuning>>,
@@ -1996,20 +2089,39 @@ impl QsonautGuiApp {
             sstv_auto_target: true,
             sstv_rx_width_percent: 43,
             sstv_tx_rgb: Vec::new(),
+            sstv_tx_base_rgb: Vec::new(),
             sstv_tx_width: qsonaut_sstv::WIDTH,
             sstv_tx_height: qsonaut_sstv::HEIGHT,
             sstv_tx_revision: 0,
             sstv_tx_texture: None,
             sstv_tx_texture_revision: 0,
             sstv_tx_mode: qsonaut_sstv::SstvMode::MartinM1,
+            sstv_overlay_callsign: true,
+            sstv_overlay_grid: true,
+            sstv_overlay_frequency: false,
+            sstv_overlay_mode: true,
+            sstv_overlay_corner: SstvOverlayCorner::BottomLeft,
+            sstv_overlay_background: Color32::BLACK,
+            sstv_overlay_background_opacity: 0.65,
+            sstv_background_zoom: 1.0,
+            sstv_background_pan_x: 0.0,
+            sstv_background_pan_y: 0.0,
+            sstv_overlay_revision: 0,
             sstv_file_dialog: egui_file_dialog::FileDialog::new(),
             sstv_image_path: String::new(),
             sstv_ai_prompt: String::new(),
             local_image_settings: LocalImageSettings::load(),
             local_image_models: Vec::new(),
             local_image_status: "Local image server not checked".to_string(),
+            local_image_refresh_started: false,
             local_image_event_tx,
             local_image_event_rx,
+            sstv_ai_pipeline_mode: SstvAiPipelineMode::StationQsl,
+            sstv_active_received_id: None,
+            sstv_show_prior_received: false,
+            sstv_received_textures: HashMap::new(),
+            sstv_received_texture_revision: 0,
+            sstv_reinterpret_prompt: String::new(),
             workspace_mode,
             fst4_submode: modes::fst4::Submode::default(),
             display_tuning,
@@ -3190,6 +3302,10 @@ impl eframe::App for QsonautGuiApp {
                 pixels_per_point = ctx.pixels_per_point(),
                 "QSONaut first GUI frame reached"
             );
+        }
+        if !self.local_image_refresh_started {
+            self.local_image_refresh_started = true;
+            self.refresh_local_image_models();
         }
         // Zoom is layered on top of the OS DPI scale, so text, controls,
         // spacing, hit targets, and custom drawings stay in proportion.

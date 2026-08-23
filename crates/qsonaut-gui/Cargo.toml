@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+ab_glyph = "0.2"
 anyhow.workspace = true
 eframe.workspace = true
 tokio.workspace = true
@@ -23,6 +24,7 @@ hound = "3.5"
 tempfile = "3"
 base64.workspace = true
 image.workspace = true
+imageproc = "0.25"
 egui-file-dialog = { version = "=0.12.0", default-features = false }
 
 qsonaut-audio = { path = "../qsonaut-audio" }
