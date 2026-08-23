@@ -154,7 +154,11 @@ impl QsonautGuiApp {
         let mut changed = false;
         let mut delete_selected = false;
         let mut close_editor = false;
-        if let Some(id) = self.qso_selected {
+        egui::ScrollArea::vertical()
+            .id_salt("qso_contact_editor")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if let Some(id) = self.qso_selected {
             let Some(index) = self
                 .qso_log
                 .contacts
@@ -186,6 +190,20 @@ impl QsonautGuiApp {
                         .clicked()
                     {
                         refresh_clicked = true;
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new("Delete")
+                                .fill(Color32::from_rgb(126, 25, 39))
+                                .stroke(egui::Stroke::new(
+                                    1.0_f32,
+                                    Color32::from_rgb(255, 105, 115),
+                                )),
+                        )
+                        .on_hover_text("Delete this contact from the persistent QSO log")
+                        .clicked()
+                    {
+                        delete_selected = true;
                     }
                     if let Some(hamdb) = &contact.hamdb {
                         let operator_name = [
@@ -384,9 +402,6 @@ impl QsonautGuiApp {
                         .changed();
                 });
                 ui.horizontal(|ui| {
-                    if ui.small_button("Delete").clicked() {
-                        delete_selected = true;
-                    }
                     ui.label(RichText::new(&self.qso_log_status).small().color(
                         if self.qso_log_dirty {
                             theme_warning(ui)
@@ -399,48 +414,49 @@ impl QsonautGuiApp {
             if refresh_clicked {
                 self.refresh_hamdb_for_contact(index);
             }
-        } else {
-            ui.label(
-                RichText::new(&self.qso_log_status)
-                    .small()
-                    .color(theme_muted(ui)),
-            );
-        }
+                } else {
+                    ui.label(
+                        RichText::new(&self.qso_log_status)
+                            .small()
+                            .color(theme_muted(ui)),
+                    );
+                }
 
-        if close_editor {
-            self.qso_selected = None;
-        }
-        if changed {
-            if let Some(id) = self.qso_selected {
-                if let Some(contact) = self
-                    .qso_log
-                    .contacts
-                    .iter_mut()
-                    .find(|contact| contact.id == id)
-                {
-                    contact.callsign = contact.callsign.trim().to_ascii_uppercase();
-                    contact.grid = contact.grid.trim().to_ascii_uppercase();
-                    contact.mode = contact.mode.trim().to_ascii_uppercase();
+                if close_editor {
+                    self.qso_selected = None;
                 }
-            }
-            self.qso_log_dirty = true;
-            self.qso_log_status = "Unsaved changes".to_string();
-        }
-        if delete_selected {
-            if let Some(id) = self.qso_selected.take() {
-                if let Some(index) = self
-                    .qso_log
-                    .contacts
-                    .iter()
-                    .position(|contact| contact.id == id)
-                {
-                    let callsign = self.qso_log.contacts[index].callsign.clone();
-                    self.qso_log.contacts.remove(index);
-                    info!(contact_id = id, callsign = %callsign, "QSO contact deleted");
+                if changed {
+                    if let Some(id) = self.qso_selected {
+                        if let Some(contact) = self
+                            .qso_log
+                            .contacts
+                            .iter_mut()
+                            .find(|contact| contact.id == id)
+                        {
+                            contact.callsign = contact.callsign.trim().to_ascii_uppercase();
+                            contact.grid = contact.grid.trim().to_ascii_uppercase();
+                            contact.mode = contact.mode.trim().to_ascii_uppercase();
+                        }
+                    }
+                    self.qso_log_dirty = true;
+                    self.qso_log_status = "Unsaved changes".to_string();
                 }
-                self.qso_log_dirty = true;
-                self.persist_qso_log("Deleted contact from");
-            }
-        }
+                if delete_selected {
+                    if let Some(id) = self.qso_selected.take() {
+                        if let Some(index) = self
+                            .qso_log
+                            .contacts
+                            .iter()
+                            .position(|contact| contact.id == id)
+                        {
+                            let callsign = self.qso_log.contacts[index].callsign.clone();
+                            self.qso_log.contacts.remove(index);
+                            info!(contact_id = id, callsign = %callsign, "QSO contact deleted");
+                        }
+                        self.qso_log_dirty = true;
+                        self.persist_qso_log("Deleted contact from");
+                    }
+                }
+            });
     }
 }
