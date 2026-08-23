@@ -2,6 +2,7 @@ use super::super::*;
 
 impl QsonautGuiApp {
     pub(in super::super) fn reconnect_radio(&mut self) {
+        info!(backend = %self.config.radio.backend, model = %self.config.radio.model, "Radio reconnect requested");
         if let Some(tx) = &self.command_tx {
             let _ = tx.send(GuiCommand::Quit);
         }
@@ -13,6 +14,7 @@ impl QsonautGuiApp {
         self.radio_worker_stop = Arc::new(AtomicBool::new(false));
 
         if !self.config.radio.enabled {
+            info!("Radio reconnect skipped: radio is disabled");
             self.radio_init_rx = None;
             self.radio_init_attempted = true;
             let mut state = self.state.lock().expect("ui state lock poisoned");
@@ -32,12 +34,14 @@ impl QsonautGuiApp {
         ));
         self.radio_init_attempted = false;
         self.device_restart_required = false;
+        info!(port = %self.config.radio.serial_port.as_deref().unwrap_or("auto"), "Radio reconnect initialization queued");
         let mut state = self.state.lock().expect("ui state lock poisoned");
         state.radio_waterfall_status = "CONNECTING…".to_string();
         state.last_error = None;
     }
 
     pub(in super::super) fn restart_audio(&mut self) {
+        info!(enabled = self.config.audio.enabled, input = ?self.config.audio.input_device, "Audio worker restart requested");
         self.audio_worker_stop.store(true, Ordering::Relaxed);
         if let Some(handle) = self.audio_worker_handle.take() {
             let _ = handle.join();
@@ -63,6 +67,7 @@ impl QsonautGuiApp {
             self.display_tuning.clone(),
         ));
         self.audio_restart_required = false;
+        info!("Audio worker restart queued");
     }
 
     pub(in super::super) fn draw_device_settings(&mut self, ui: &mut egui::Ui) {

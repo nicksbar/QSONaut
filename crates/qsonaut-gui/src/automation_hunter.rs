@@ -697,6 +697,16 @@ impl QsonautGuiApp {
                     let report = self.automation_host.dispatch(&event);
 
                     for approved in &report.approved {
+                        let action_name = match &approved.action {
+                            Action::Notify { .. } => "notify",
+                            Action::SetCompose { .. } => "set_compose",
+                            Action::SendExternal { .. } => "send_external",
+                            Action::ServerSync => "server_sync",
+                            Action::ServerSendMessage { .. } => "server_send_message",
+                            Action::RadioCommand { .. } => "radio_command",
+                            Action::RequestTransmit { .. } => "request_transmit",
+                        };
+                        info!(event = %event.source, action = action_name, "Automation action approved");
                         match &approved.action {
                             Action::Notify {
                                 title,
@@ -772,9 +782,19 @@ impl QsonautGuiApp {
                                 );
                             }
                         }
+                        let status = self.automation_status.to_ascii_lowercase();
+                        let failed = ["rejected", "blocked", "unavailable", "failed", "error"]
+                            .iter()
+                            .any(|marker| status.contains(marker));
+                        if failed {
+                            warn!(event = %event.source, action = action_name, "Automation action failed");
+                        } else {
+                            info!(event = %event.source, action = action_name, "Automation action completed");
+                        }
                     }
 
                     if !report.denied.is_empty() {
+                        warn!(event = %event.source, denied = report.denied.len(), "Automation actions denied");
                         self.automation_status = format!(
                             "🤖 Automation denied {} action(s) (capability not granted/requested)",
                             report.denied.len()
@@ -786,10 +806,12 @@ impl QsonautGuiApp {
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Lagged(skipped)) => {
+                    warn!(skipped, "Automation event stream lagged");
                     self.automation_status =
                         format!("🤖 Automation event stream lagged; skipped {skipped} event(s)");
                 }
                 Err(TryRecvError::Closed) => {
+                    error!("Automation event stream closed");
                     self.automation_status =
                         "🤖 Automation event stream closed; restart required".to_string();
                     break;
@@ -803,6 +825,7 @@ impl QsonautGuiApp {
             return;
         };
         for event in client.drain_automation_events() {
+            info!(kind = %event.kind, field_count = event.fields.len(), "Server event received");
             if event.kind == "diagnostic_accepted" {
                 let id = event
                     .fields
@@ -816,10 +839,12 @@ impl QsonautGuiApp {
                     format!("Diagnostic snapshot accepted by QSONaut Server · {short_id}")
                 };
             } else if event.kind == "error" {
+                warn!(kind = %event.kind, "Server reported request failure");
                 if let Some(message) = event.fields.get("message") {
                     self.profile_io_status = format!("QSONaut Server rejected request: {message}");
                 }
             }
+            info!(kind = %event.kind, "Server event published to application event bus");
             self.app_events.publish(AppEvent::ServerMessageReceived {
                 kind: event.kind,
                 fields: event.fields,

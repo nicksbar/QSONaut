@@ -37,7 +37,8 @@ use qsonaut_core::{
     SplitPolicy,
 };
 use qsonaut_log::{
-    app_config_dir, hamdb_cache_path, log_file_path, read_log_tail, AdifExportFilter, HamDbCache,
+    app_config_dir, clear_log, hamdb_cache_path, log_file_path, read_log_tail, AdifExportFilter,
+    HamDbCache,
     HamDbCacheEntry, QsoLog, QsoRecord,
 };
 use qsonaut_pskreporter::{
@@ -65,7 +66,7 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::error::TryRecvError;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 const QSONAUT_ICON_PNG: &[u8] = include_bytes!("../../../assets/branding/qsonaut-icon.png");
 
@@ -479,11 +480,13 @@ fn start_psk_reporter(
         .expect("ui state lock poisoned")
         .psk_report_sender = None;
     if !enabled || callsign.trim().is_empty() || callsign == "N0CALL" || grid == "AA00" {
+        info!(enabled, callsign = %callsign, grid = %grid, "PSK Reporter not started: station identity is incomplete or reporting is disabled");
         return None;
     }
     let mut config = ReporterConfig::production(callsign, grid);
     config.tuning = tuning;
     let reporter = Reporter::start(config);
+    info!(callsign = %callsign, grid = %grid, "PSK Reporter started");
     state
         .lock()
         .expect("ui state lock poisoned")
@@ -519,7 +522,8 @@ fn submit_psk_report(
         return;
     };
     let frequency_hz = dial.saturating_add(u64::from(audio_frequency_hz));
-    sender.submit(ReceptionReport {
+    let callsign_for_log = callsign.clone();
+    let queued = sender.submit(ReceptionReport {
         sender_callsign: callsign,
         frequency_hz,
         snr_db: snr_db.round().clamp(-127.0, 127.0) as i8,
@@ -527,6 +531,11 @@ fn submit_psk_report(
         sender_locator,
         received_at,
     });
+    if queued {
+        debug!(callsign = %callsign_for_log, frequency_hz, mode = %mode, "PSK Reporter reception report queued");
+    } else {
+        warn!(callsign = %callsign_for_log, mode = %mode, "PSK Reporter reception report rejected: worker unavailable");
+    }
 }
 
 fn should_move_tx_to_decode(message: &ParsedMessage, continuing_exchange: bool) -> bool {
@@ -1097,7 +1106,7 @@ pub fn run_gui(config: AppConfig) -> Result<()> {
             info!("eframe run_native completed normally");
         }
         Err(err) => {
-            info!(error = %err, "eframe run_native failed");
+            error!(error = %err, "eframe run_native failed");
             return Err(anyhow!("eframe launch failed: {err}"));
         }
     }
@@ -1269,15 +1278,18 @@ struct DeviceInventory {
 fn spawn_device_scan() -> mpsc::Receiver<DeviceInventory> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
+        info!("Device inventory scan started");
         let (serial_ports, serial_port_labels, detected_models) =
             radio_port_inventory(enumerate_serial_port_descriptors().unwrap_or_default());
-        let _ = tx.send(DeviceInventory {
+        let inventory = DeviceInventory {
             audio_inputs: AudioService::input_devices().unwrap_or_default(),
             audio_outputs: AudioService::output_devices().unwrap_or_default(),
             serial_ports,
             serial_port_labels,
             detected_models,
-        });
+        };
+        info!(audio_inputs = inventory.audio_inputs.len(), audio_outputs = inventory.audio_outputs.len(), serial_ports = inventory.serial_ports.len(), detected_models = inventory.detected_models.len(), "Device inventory scan completed");
+        let _ = tx.send(inventory);
     });
     rx
 }
@@ -2328,12 +2340,14 @@ impl QsonautGuiApp {
             &self.current_operator_profile(),
         ) {
             Ok(_) => {
+                info!(profile = %self.selected_profile_name, status = %status_prefix, "Operator profile saved");
                 self.profile_io_status =
                     format!("{status_prefix} profile ‘{}’", self.selected_profile_name);
                 self.available_profiles = list_operator_profiles();
                 self.profile_dirty = false;
             }
             Err(err) => {
+                warn!(profile = %self.selected_profile_name, error = %err, "Operator profile save failed");
                 self.profile_io_status = format!("Save failed: {err}");
             }
         }
@@ -2498,10 +2512,14 @@ impl QsonautGuiApp {
     fn persist_qso_log(&mut self, status_prefix: &str) {
         match self.qso_log.save(&qso_log_path()) {
             Ok(()) => {
+                info!(contacts = self.qso_log.contacts.len(), status = %status_prefix, "QSO log saved");
                 self.qso_log_status = format!("{status_prefix} {}", QSO_LOG_FILE);
                 self.qso_log_dirty = false;
             }
-            Err(error) => self.qso_log_status = format!("Log save failed: {error}"),
+            Err(error) => {
+                warn!(error = %error, path = %qso_log_path().display(), "QSO log save failed");
+                self.qso_log_status = format!("Log save failed: {error}");
+            }
         }
     }
 
@@ -2512,6 +2530,7 @@ impl QsonautGuiApp {
         let entry = match rx.try_recv() {
             Ok(Some(entry)) => entry,
             Ok(None) | Err(mpsc::TryRecvError::Disconnected) => {
+                warn!(callsign = %self.voice_lookup_requested, "HamDB callsign lookup returned no record");
                 self.voice_lookup_status = "HamDB: callsign not found".to_string();
                 self.hamdb_lookup_rx = None;
                 return;
@@ -2523,6 +2542,7 @@ impl QsonautGuiApp {
             .voice_lookup_requested
             .eq_ignore_ascii_case(&entry.callsign);
         if voice_match {
+            info!(callsign = %entry.callsign, "HamDB Voice contact lookup completed");
             if self.voice_grid.trim().is_empty() {
                 self.voice_grid = entry.grid.clone();
             }
@@ -2565,12 +2585,14 @@ impl QsonautGuiApp {
         let entry = match rx.try_recv() {
             Ok(Some(entry)) => entry,
             Ok(None) | Err(mpsc::TryRecvError::Disconnected) => {
+                warn!(callsign = %self.station_callsign, "HamDB operator profile lookup returned no record");
                 self.profile_io_status = "HamDB did not return a license record".to_string();
                 self.hamdb_profile_lookup_rx = None;
                 return;
             }
             Err(mpsc::TryRecvError::Empty) => return,
         };
+        info!(callsign = %entry.callsign, "HamDB operator profile lookup completed");
         self.station_callsign = entry.callsign.clone();
         if !entry.grid.trim().is_empty() {
             self.station_grid = entry.grid.clone();
@@ -2604,6 +2626,7 @@ impl QsonautGuiApp {
     fn pump_pota_spots(&mut self) {
         if let Some(rx) = &self.pota_lookup_rx {
             if let Ok(spots) = rx.try_recv() {
+                info!(count = spots.len(), "POTA activator spots refreshed");
                 self.pota_spots = spots;
                 self.pota_lookup_rx = None;
             }
@@ -2614,6 +2637,7 @@ impl QsonautGuiApp {
             return;
         }
         self.pota_last_lookup = Instant::now();
+        info!("POTA activator spot lookup started");
         let (tx, rx) = mpsc::channel();
         self.pota_lookup_rx = Some(rx);
         thread::spawn(move || {
@@ -2655,6 +2679,7 @@ impl QsonautGuiApp {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs())
             .unwrap_or_default();
+        info!(callsign = %callsign, "HamDB operator profile lookup started");
         self.hamdb_profile_lookup_rx = Some(spawn_hamdb_lookup(callsign, now));
         self.profile_io_status = "Loading license record from HamDB…".to_string();
     }
@@ -3000,6 +3025,7 @@ impl QsonautGuiApp {
         let channel = self.external_ingress_channel.trim();
         let message = self.external_ingress_message.trim();
         if source.is_empty() || author.is_empty() || message.is_empty() {
+            warn!(source_present = !source.is_empty(), author_present = !author.is_empty(), message_present = !message.is_empty(), "External ingress rejected: required metadata missing");
             self.automation_status =
                 "🤖 External ingress blocked: source, author, and message are required".to_string();
             return;
@@ -3015,6 +3041,7 @@ impl QsonautGuiApp {
                 channel.to_string()
             },
         });
+        info!(source = %source, author = %author, channel = %if channel.is_empty() { "(unspecified)" } else { channel }, message_length = message.chars().count(), "External ingress accepted");
         self.automation_status =
             format!("🤖 External message injected from {source} as {author}: {message}");
         self.external_ingress_message.clear();
@@ -3042,10 +3069,12 @@ impl QsonautGuiApp {
     }
 
     fn refresh_device_lists(&mut self) {
+        info!("Device inventory refresh requested");
         self.device_scan = Some(spawn_device_scan());
     }
 
     fn apply_device_inventory(&mut self, inventory: DeviceInventory) {
+        info!(audio_inputs = inventory.audio_inputs.len(), audio_outputs = inventory.audio_outputs.len(), serial_ports = inventory.serial_ports.len(), detected_models = inventory.detected_models.len(), "Device inventory applied");
         self.audio_input_devices = inventory.audio_inputs;
         self.audio_output_devices = inventory.audio_outputs;
         self.radio_serial_ports = inventory.serial_ports;
@@ -3400,7 +3429,10 @@ impl eframe::App for QsonautGuiApp {
                     self.device_scan = None;
                     self.apply_device_inventory(inventory);
                 }
-                Err(mpsc::TryRecvError::Disconnected) => self.device_scan = None,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    warn!("Device inventory scan worker disconnected before delivering results");
+                    self.device_scan = None;
+                }
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
@@ -3628,6 +3660,7 @@ impl eframe::App for QsonautGuiApp {
                                         ui.visuals().text_color(),
                                     );
                                     if response.clicked() {
+                                        info!(activity = %activity.label(), "Operating activity changed");
                                         self.activity = activity;
                                         ui.close();
                                     }
@@ -3952,6 +3985,11 @@ impl eframe::App for QsonautGuiApp {
             .unwrap_or(previous_deck_height)
             .clamp(monitor_min_height, monitor_max_height);
         if (actual_deck_height - previous_deck_height).abs() > 0.5 {
+            info!(
+                previous_height = previous_deck_height,
+                actual_height = actual_deck_height,
+                "Waterfall panel resized"
+            );
             self.waterfall_deck_height = actual_deck_height;
             self.profile_dirty = true;
             self.waterfall_deck_resize_pending = true;

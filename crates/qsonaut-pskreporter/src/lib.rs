@@ -98,6 +98,13 @@ pub struct Reporter {
 
 impl Reporter {
     pub fn start(config: ReporterConfig) -> Self {
+        tracing::info!(
+            callsign = %config.receiver_callsign,
+            destination = %config.destination,
+            batch_interval_secs = config.tuning.batch_interval_secs,
+            max_pending = config.tuning.max_pending,
+            "PSK Reporter worker starting"
+        );
         let (tx, rx) = mpsc::channel();
         let status = Arc::new(Mutex::new(ReporterStatus {
             active: true,
@@ -134,8 +141,8 @@ impl Drop for Reporter {
 pub struct ReportSender(mpsc::Sender<Command>);
 
 impl ReportSender {
-    pub fn submit(&self, report: ReceptionReport) {
-        let _ = self.0.send(Command::Report(report));
+    pub fn submit(&self, report: ReceptionReport) -> bool {
+        self.0.send(Command::Report(report)).is_ok()
     }
 }
 
@@ -151,6 +158,7 @@ fn run_worker(
     let socket = match socket {
         Ok(socket) => socket,
         Err(error) => {
+            tracing::error!(error = %error, "PSK Reporter socket initialization failed");
             let mut state = status.lock().expect("PSK status lock");
             state.active = false;
             state.last_error = Some(error.to_string());
@@ -178,6 +186,7 @@ fn run_worker(
                     recent.insert(key, now);
                     queue.push(report);
                     status.lock().expect("PSK status lock").queued = queue.len();
+                    tracing::debug!(queued = queue.len(), "PSK Reporter report queued");
                 }
                 if queue.len() < tuning.max_pending {
                     continue;
@@ -199,12 +208,20 @@ fn run_worker(
             let mut state = status.lock().expect("PSK status lock");
             match socket.send(&packet) {
                 Ok(_) => {
+                    tracing::info!(reports = queue.len(), "PSK Reporter batch sent");
                     sequence = sequence.wrapping_add(queue.len() as u32);
                     state.sent += queue.len() as u64;
                     state.last_error = None;
                     queue.clear();
                 }
-                Err(error) => state.last_error = Some(error.to_string()),
+                Err(error) => {
+                    tracing::error!(
+                        reports = queue.len(),
+                        error = %error,
+                        "PSK Reporter batch send failed"
+                    );
+                    state.last_error = Some(error.to_string())
+                }
             }
             state.queued = queue.len();
             packets = packets.wrapping_add(1);
@@ -213,6 +230,7 @@ fn run_worker(
         deadline = Instant::now() + interval;
     }
     status.lock().expect("PSK status lock").active = false;
+    tracing::info!("PSK Reporter worker stopped");
 }
 
 pub fn encode_packet(

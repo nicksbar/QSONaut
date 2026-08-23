@@ -97,6 +97,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
 ) -> std::thread::JoinHandle<()> {
     thread::spawn(move || {
         if !enabled {
+            info!("Audio worker disabled by configuration");
             let mut s = state.lock().expect("ui state lock poisoned");
             s.audio_spectrum_status = "DISABLED".to_string();
             return;
@@ -106,11 +107,13 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut stream = match audio_service.open_stream(sample_rate_hz, channels as u16) {
             Ok(stream) => stream,
             Err(err) => {
+                tracing::error!(sample_rate_hz, channels, error = %err, "Audio input stream failed to open");
                 let mut s = state.lock().expect("ui state lock poisoned");
                 s.audio_spectrum_status = format!("NO INPUT ({err})");
                 return;
             }
         };
+        info!(sample_rate_hz, channels, monitor_enabled, "Audio input worker started");
         let (monitor, monitor_status) = if monitor_enabled {
             match qsonaut_audio::AudioMonitor::open(
                 sample_rate_hz,
@@ -299,6 +302,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                         let active_workspace_mode =
                             state.lock().expect("ui state lock poisoned").workspace_mode;
                         if decode_workspace_last != Some(active_workspace_mode) {
+                            info!(workspace = %active_workspace_mode.label(), "Audio decoder workspace changed");
                             decode_workspace_last = Some(active_workspace_mode);
                             ft8_buf.clear();
                             digital_buf.clear();

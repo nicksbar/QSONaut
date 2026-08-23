@@ -8,6 +8,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [0.3.7] - 2026-08-22
 
 ### Added
+- Added a real Application Log clear action that truncates the active log file,
+  plus structured logging for device lifecycle, PSK Reporter, automation,
+  server ingress, and core rendering failures.
+- Added a contact-editor delete action that removes the selected QSO from the
+  persistent contact log.
 - Added a dedicated Voice Logger workspace with callsign-first QSO entry,
   reports, grid/state, contest exchanges and serials, notes, and explicit
   logging through the existing `QsoRecord` and HamDB enrichment flow.

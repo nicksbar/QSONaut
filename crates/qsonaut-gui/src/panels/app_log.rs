@@ -98,6 +98,18 @@ impl QsonautGuiApp {
             if ui.small_button("Refresh").clicked() {
                 self.refresh_app_log();
             }
+            if ui.small_button("Clear log").clicked() {
+                match clear_log() {
+                    Ok(()) => {
+                        self.app_log_text.clear();
+                        self.app_log_last_refresh = Instant::now();
+                        self.app_log_status = format!("Log cleared · {}", log_file_path().display());
+                    }
+                    Err(error) => {
+                        self.app_log_status = format!("Could not clear application log: {error}");
+                    }
+                }
+            }
             ui.checkbox(&mut self.app_log_follow, "Follow bottom");
             if ui.small_button("Bottom").clicked() {
                 self.app_log_follow = true;
@@ -117,6 +129,15 @@ impl QsonautGuiApp {
             if ui.small_button("SSTV").clicked() {
                 self.app_log_filter = "SSTV".to_string();
                 self.app_log_level_filter = AppLogLevelFilter::All;
+            }
+            for component in [
+                "Radio", "Voice", "FT8", "FT4", "HamDB", "Contest", "Activity", "Audio",
+                "Device", "PSK", "Automation", "Server", "Ingress",
+            ] {
+                if ui.small_button(component).clicked() {
+                    self.app_log_filter = component.to_string();
+                    self.app_log_level_filter = AppLogLevelFilter::All;
+                }
             }
             egui::ComboBox::from_id_salt("app_log_level_filter")
                 .selected_text(self.app_log_level_filter.label())

@@ -434,7 +434,9 @@ impl QsonautGuiApp {
                     .iter()
                     .position(|contact| contact.id == id)
                 {
+                    let callsign = self.qso_log.contacts[index].callsign.clone();
                     self.qso_log.contacts.remove(index);
+                    info!(contact_id = id, callsign = %callsign, "QSO contact deleted");
                 }
                 self.qso_log_dirty = true;
                 self.persist_qso_log("Deleted contact from");

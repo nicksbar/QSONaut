@@ -197,6 +197,7 @@ impl QsonautGuiApp {
         self.voice_lookup_requested = callsign.clone();
         self.voice_hamdb = None;
         self.voice_lookup_status = "HamDB: looking up...".to_string();
+        info!(callsign = %callsign, "HamDB Voice callsign lookup started");
         let now = unix_now();
         if let Ok(Some(entry)) = HamDbCache::open(&hamdb_cache_path())
             .and_then(|cache| cache.get_fresh(&callsign, now, HAMDB_CACHE_TTL_SECONDS))
@@ -238,6 +239,13 @@ impl QsonautGuiApp {
             .map(|field| format!("{}={}", field.name.trim(), field.received.trim()))
             .collect::<Vec<_>>().join(" ");
         record.notes = self.voice_notes.trim().to_string();
+        info!(
+            callsign = %record.callsign,
+            band = %record.band,
+            frequency_hz = record.frequency_hz,
+            activity = %record.operation_mode,
+            "Voice QSO logging requested"
+        );
         self.append_qso(record, "Voice QSO saved");
         self.voice_callsign.clear();
         self.voice_grid.clear();

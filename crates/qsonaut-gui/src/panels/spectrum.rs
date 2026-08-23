@@ -76,6 +76,19 @@ impl QsonautGuiApp {
             || self.radio_waterfall_texture_view != self.radio_scope_view
             || self.radio_waterfall_texture_theme != self.waterfall_theme
         {
+            if self.radio_waterfall_texture.is_none()
+                || self.radio_waterfall_texture_bins != render_bins
+                || self.radio_waterfall_texture_view != self.radio_scope_view
+                || self.radio_waterfall_texture_theme != self.waterfall_theme
+            {
+                debug!(
+                    revision = source_revision,
+                    bins = render_bins,
+                    rows = rows.len(),
+                    view = ?self.radio_scope_view,
+                    "Rebuilding radio waterfall texture geometry"
+                );
+            }
             let image = build_scope_waterfall_image(
                 rows,
                 render_bins,
@@ -312,6 +325,17 @@ impl QsonautGuiApp {
             || self.audio_waterfall_texture_bins != display_bins
             || self.audio_waterfall_texture_theme != self.waterfall_theme
         {
+            if self.audio_waterfall_texture.is_none()
+                || self.audio_waterfall_texture_bins != display_bins
+                || self.audio_waterfall_texture_theme != self.waterfall_theme
+            {
+                debug!(
+                    revision = snapshot.audio_waterfall_revision,
+                    bins = display_bins,
+                    rows = snapshot.audio_waterfall_rows.len(),
+                    "Rebuilding audio waterfall texture geometry"
+                );
+            }
             let image = build_audio_waterfall_image_with_theme(
                 &snapshot.audio_waterfall_rows,
                 bw_hz,

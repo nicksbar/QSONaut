@@ -3280,6 +3280,9 @@ dependencies = [
 [[package]]
 name = "qsonaut-pskreporter"
 version = "0.3.7"
+dependencies = [
+ "tracing",
+]
 
 [[package]]
 name = "qsonaut-server-client"
