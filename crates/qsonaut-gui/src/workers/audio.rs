@@ -477,6 +477,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 let decoded = sstv_receiver.push(&ds);
                                 let completed_mode = sstv_receiver.take_completed_mode();
                                 let decode_error = sstv_receiver.take_decode_error();
+                                let auto_reacquired = sstv_receiver.take_auto_reacquired();
                                 let progress = sstv_receiver.progress();
                                 let active_mode = sstv_receiver.active_mode();
                                 let detected_vis = sstv_receiver.detected_vis();
@@ -519,6 +520,14 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     }
                                     last_sstv_vis = detected_vis;
                                 }
+                                if auto_reacquired {
+                                    sstv_receive_started = None;
+                                    sstv_progress_bucket = 0;
+                                    info!(
+                                        timeout_s = 2.0,
+                                        "SSTV unresolved VIS acquisition expired; auto-target scanning resumed"
+                                    );
+                                }
                                 let mut shared = state.lock().expect("ui state lock poisoned");
                                 shared.sstv_progress = progress;
                                 shared.sstv_locked_offset_hz = requested_auto_target
@@ -528,6 +537,10 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     detected_vis.and_then(qsonaut_sstv::mode_from_vis)
                                 {
                                     shared.sstv_detected_mode = Some(mode);
+                                }
+                                if auto_reacquired {
+                                    shared.sstv_detected_mode = None;
+                                    shared.sstv_locked_offset_hz = None;
                                 }
                                 if let Some(vis) = new_vis {
                                     let detected = qsonaut_sstv::mode_from_vis(vis);
@@ -583,7 +596,10 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         "SSTV audio present without a complete VIS header"
                                     );
                                 }
-                                shared.sstv_status = if let Some(error) = decode_error {
+                                shared.sstv_status = if auto_reacquired {
+                                    "AUTO REACQUIRE: unresolved VIS timed out after 2.0s · scanning baseband"
+                                        .to_string()
+                                } else if let Some(error) = decode_error {
                                     let mode = active_mode_before_push
                                         .map(|mode| mode.name())
                                         .unwrap_or("SSTV");

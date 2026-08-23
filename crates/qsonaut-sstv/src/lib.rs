@@ -28,6 +28,7 @@ const LINE_MS: f64 = SYNC_MS + 4.0 * GAP_MS + 3.0 * CHANNEL_MS;
 const HEADER_MS: f64 = LEADER_MS * 2.0 + VIS_BREAK_MS + VIS_BIT_MS * 10.0;
 const IMAGE_MS: f64 = LINE_MS * HEIGHT as f64;
 const STREAM_DECODE_GUARD_MS: f64 = 20.0;
+const AUTO_REACQUIRE_TIMEOUT_MS: f64 = 2_000.0;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SstvError {
@@ -192,6 +193,8 @@ pub struct MultiModeReceiver {
     last_completed_mode: Option<SstvMode>,
     scan_candidate_offset_hz: Option<f32>,
     scan_prominence_db: Option<f32>,
+    unresolved_auto_samples: Option<usize>,
+    auto_reacquired: bool,
 }
 
 impl MultiModeReceiver {
@@ -207,6 +210,8 @@ impl MultiModeReceiver {
         self.last_completed_mode = None;
         self.scan_candidate_offset_hz = None;
         self.scan_prominence_db = None;
+        self.unresolved_auto_samples = None;
+        self.auto_reacquired = false;
     }
 
     pub fn set_selected_mode(&mut self, mode: Option<SstvMode>) {
@@ -272,6 +277,12 @@ impl MultiModeReceiver {
         self.last_completed_mode.take()
     }
 
+    /// Reports that Auto Target discarded a VIS acquisition which never
+    /// resolved to an accepted image mode.
+    pub fn take_auto_reacquired(&mut self) -> bool {
+        std::mem::take(&mut self.auto_reacquired)
+    }
+
     pub fn set_tuning_offset_hz(&mut self, offset_hz: f32) {
         let offset_hz = offset_hz.clamp(-1_000.0, 1_000.0);
         if (self.tuning_offset_hz - offset_hz).abs() >= 1.0 {
@@ -281,9 +292,22 @@ impl MultiModeReceiver {
     }
 
     pub fn push(&mut self, samples: &[f32]) -> Option<DecodedImage> {
+        if let Some(elapsed) = &mut self.unresolved_auto_samples {
+            *elapsed = elapsed.saturating_add(samples.len());
+        }
         self.buffer.extend_from_slice(samples);
         if self.transmission_start.is_none() {
             self.find_header();
+        }
+        if self
+            .unresolved_auto_samples
+            .is_some_and(|samples| samples >= ms_samples(AUTO_REACQUIRE_TIMEOUT_MS))
+        {
+            self.last_vis = None;
+            self.frequency_offset_hz = None;
+            self.locked_offset_hz = None;
+            self.unresolved_auto_samples = None;
+            self.auto_reacquired = true;
         }
         if let (Some(start), Some(mode)) = (self.transmission_start, self.active_mode) {
             let needed = start + mode_sample_count_12k(mode) + ms_samples(STREAM_DECODE_GUARD_MS);
@@ -339,8 +363,12 @@ impl MultiModeReceiver {
                     if self.selected_mode.is_none() || self.selected_mode == Some(detected_mode) {
                         self.transmission_start = Some(self.search_from);
                         self.active_mode = Some(detected_mode);
+                        self.unresolved_auto_samples = None;
                         return;
                     }
+                }
+                if self.auto_target && self.unresolved_auto_samples.is_none() {
+                    self.unresolved_auto_samples = Some(0);
                 }
                 self.search_from += header;
                 continue;
@@ -998,5 +1026,40 @@ mod tests {
         assert!(receiver.push(&audio).is_none());
         assert_eq!(receiver.detected_vis(), Some(0x3c));
         assert_eq!(receiver.active_mode(), None);
+    }
+
+    #[test]
+    fn auto_target_expires_a_vis_that_does_not_match_the_receive_filter() {
+        let mut pcm = Vec::new();
+        let mut phase = 0.0_f64;
+        let mut remainder = 0.0_f64;
+        let mut tone = |frequency: f64, duration_ms: f64, out: &mut Vec<i16>| {
+            remainder += duration_ms * SAMPLE_RATE_HZ as f64 / 1000.0;
+            let count = remainder.floor() as usize;
+            remainder -= count as f64;
+            let step = std::f64::consts::TAU * frequency / SAMPLE_RATE_HZ as f64;
+            for _ in 0..count {
+                out.push((phase.sin() * 18_000.0).round() as i16);
+                phase = (phase + step) % std::f64::consts::TAU;
+            }
+        };
+        append_vis_header(0x3c, &mut tone, &mut pcm);
+        let audio = pcm
+            .iter()
+            .map(|sample| *sample as f32 / i16::MAX as f32)
+            .collect::<Vec<_>>();
+        let mut receiver = MultiModeReceiver::default();
+        receiver.set_auto_target(true);
+        receiver.set_selected_mode(Some(SstvMode::MartinM1));
+        assert!(receiver.push(&audio).is_none());
+        assert_eq!(receiver.detected_vis(), Some(0x3c));
+
+        let silence = vec![0.0; ms_samples(AUTO_REACQUIRE_TIMEOUT_MS)];
+        for chunk in silence.chunks(1024) {
+            assert!(receiver.push(chunk).is_none());
+        }
+        assert!(receiver.detected_vis().is_none());
+        assert!(receiver.locked_offset_hz().is_none());
+        assert!(receiver.take_auto_reacquired());
     }
 }
