@@ -3724,9 +3724,9 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rigwright"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0323f2a36bbeb669b86b7ef7a73053735e6021f311cef2a19b4dbe15b6437276"
+checksum = "59ff2218db9a87f4557fb1bf063dfea905aef4027a622b84ebfa6db31d55ab12"
 dependencies = [
  "anyhow",
  "async-trait",
