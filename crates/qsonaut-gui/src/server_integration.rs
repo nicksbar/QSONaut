@@ -50,6 +50,8 @@ impl QsonautGuiApp {
                 server_url: url.to_string(),
                 device_token: token.to_string(),
                 client_version: env!("CARGO_PKG_VERSION").to_string(),
+                queue_path: app_config_dir().join("server-log-queue.json"),
+                share_logs: self.config.server.share_logs,
             })
         });
         self.server_client = next_client;

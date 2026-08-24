@@ -2,6 +2,8 @@
 
 use std::{
     collections::{BTreeMap, VecDeque},
+    fs,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -36,6 +38,8 @@ pub struct ConnectionConfig {
     pub server_url: String,
     pub device_token: String,
     pub client_version: String,
+    pub queue_path: PathBuf,
+    pub share_logs: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -92,7 +96,7 @@ pub struct ServerAutomationEvent {
 #[derive(Debug)]
 enum Command {
     Presence(Box<Presence>),
-    Log(Value),
+    Wake,
     Diagnostic(Value),
     Sync,
     ChannelMessage { channel: String, message: String },
@@ -103,8 +107,81 @@ pub struct ServerClient {
     commands: mpsc::UnboundedSender<Command>,
     status: Arc<Mutex<ConnectionStatus>>,
     automation_events: Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    log_queue: Arc<Mutex<DurableLogQueue>>,
     stop: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PendingLog {
+    idempotency_key: String,
+    payload: Value,
+}
+
+#[derive(Debug)]
+struct DurableLogQueue {
+    path: PathBuf,
+    entries: VecDeque<PendingLog>,
+}
+
+impl DurableLogQueue {
+    fn load(path: &Path) -> Self {
+        let entries = fs::read_to_string(path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Vec<PendingLog>>(&text).ok())
+            .map(VecDeque::from)
+            .unwrap_or_default();
+        Self {
+            path: path.to_owned(),
+            entries,
+        }
+    }
+
+    fn push(&mut self, payload: Value) -> Result<()> {
+        let Some(idempotency_key) = payload
+            .get("idempotency_key")
+            .and_then(Value::as_str)
+            .filter(|key| !key.trim().is_empty())
+        else {
+            return Err(anyhow!("server log is missing idempotency_key"));
+        };
+        if self
+            .entries
+            .iter()
+            .any(|entry| entry.idempotency_key == idempotency_key)
+        {
+            return Ok(());
+        }
+        self.entries.push_back(PendingLog {
+            idempotency_key: idempotency_key.to_owned(),
+            payload,
+        });
+        self.persist()
+    }
+
+    fn remove(&mut self, idempotency_key: &str) -> Result<()> {
+        let before = self.entries.len();
+        self.entries
+            .retain(|entry| entry.idempotency_key != idempotency_key);
+        if self.entries.len() != before {
+            self.persist()?;
+        }
+        Ok(())
+    }
+
+    fn persist(&self) -> Result<()> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create server queue directory {}", parent.display()))?;
+        }
+        let temporary = self.path.with_extension("json.tmp");
+        let body = serde_json::to_vec_pretty(&self.entries)?;
+        fs::write(&temporary, body)
+            .with_context(|| format!("write server queue {}", temporary.display()))?;
+        fs::rename(&temporary, &self.path)
+            .with_context(|| format!("replace server queue {}", self.path.display()))?;
+        Ok(())
+    }
 }
 
 impl ServerClient {
@@ -112,6 +189,7 @@ impl ServerClient {
     pub fn spawn(config: ConnectionConfig) -> Self {
         install_tls_crypto_provider();
         let (commands, receiver) = mpsc::unbounded_channel();
+        let log_queue = Arc::new(Mutex::new(DurableLogQueue::load(&config.queue_path)));
         let status = Arc::new(Mutex::new(ConnectionStatus {
             state: ConnectionState::Connecting,
             ..ConnectionStatus::default()
@@ -119,6 +197,7 @@ impl ServerClient {
         let worker_status = Arc::clone(&status);
         let automation_events = Arc::new(Mutex::new(VecDeque::with_capacity(256)));
         let worker_events = Arc::clone(&automation_events);
+        let worker_queue = Arc::clone(&log_queue);
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let worker = thread::spawn(move || {
@@ -131,6 +210,7 @@ impl ServerClient {
                     receiver,
                     worker_status,
                     worker_events,
+                    worker_queue,
                     worker_stop,
                 )),
                 Err(error) => {
@@ -142,6 +222,7 @@ impl ServerClient {
             commands,
             status,
             automation_events,
+            log_queue,
             stop,
             worker: Some(worker),
         }
@@ -152,7 +233,16 @@ impl ServerClient {
     }
 
     pub fn publish_log(&self, log: Value) {
-        let _ = self.commands.send(Command::Log(log));
+        let mut queue = self
+            .log_queue
+            .lock()
+            .expect("server log queue lock poisoned");
+        if let Err(error) = queue.push(log) {
+            tracing::warn!(%error, "could not persist QSONaut Server log queue entry");
+            return;
+        }
+        drop(queue);
+        let _ = self.commands.send(Command::Wake);
     }
 
     pub fn publish_diagnostic(&self, diagnostic: Value) -> Result<(), String> {
@@ -212,6 +302,7 @@ async fn run(
     mut commands: mpsc::UnboundedReceiver<Command>,
     status: Arc<Mutex<ConnectionStatus>>,
     automation_events: Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    log_queue: Arc<Mutex<DurableLogQueue>>,
     stop: Arc<AtomicBool>,
 ) {
     let mut delay = Duration::from_secs(1);
@@ -221,7 +312,15 @@ async fn run(
             return;
         }
         set_state(&status, ConnectionState::Connecting);
-        match connect(&config, &mut commands, &status, &automation_events).await {
+        match connect(
+            &config,
+            &mut commands,
+            &status,
+            &automation_events,
+            &log_queue,
+        )
+        .await
+        {
             Ok(ConnectionEnd::Shutdown) => {
                 set_state(&status, ConnectionState::Stopped);
                 return;
@@ -257,6 +356,7 @@ async fn connect(
     commands: &mut mpsc::UnboundedReceiver<Command>,
     status: &Arc<Mutex<ConnectionStatus>>,
     automation_events: &Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    log_queue: &Arc<Mutex<DurableLogQueue>>,
 ) -> Result<ConnectionEnd> {
     let socket_url = websocket_url(&config.server_url)?;
     let mut request = socket_url
@@ -287,20 +387,28 @@ async fn connect(
     )
     .await?;
     send(&mut writer, ClientMessage::Sync).await?;
+    let mut inflight = BTreeMap::new();
+    if config.share_logs {
+        send_pending_logs(&mut writer, log_queue, &mut inflight).await?;
+    }
 
     let mut heartbeat = tokio::time::interval(Duration::from_secs(25));
     let mut last_presence: Option<Presence> = None;
     loop {
         tokio::select! {
-            _ = heartbeat.tick() => send(&mut writer, ClientMessage::Ping).await?,
+            _ = heartbeat.tick() => { let _ = send(&mut writer, ClientMessage::Ping).await?; },
             command = commands.recv() => match command {
                 Some(Command::Presence(presence)) => {
                     last_presence = Some((*presence).clone());
                     send(&mut writer, ClientMessage::Presence(presence)).await?;
                 }
-                Some(Command::Log(log)) => send(&mut writer, ClientMessage::Log(log)).await?,
-                Some(Command::Diagnostic(report)) => send(&mut writer, ClientMessage::Diagnostic(report)).await?,
-                Some(Command::Sync) => send(&mut writer, ClientMessage::Sync).await?,
+                Some(Command::Wake) => {
+                    if config.share_logs {
+                        send_pending_logs(&mut writer, log_queue, &mut inflight).await?;
+                    }
+                },
+                Some(Command::Diagnostic(report)) => { let _ = send(&mut writer, ClientMessage::Diagnostic(report)).await?; },
+                Some(Command::Sync) => { let _ = send(&mut writer, ClientMessage::Sync).await?; },
                 Some(Command::ChannelMessage { channel, message }) => {
                     send(
                         &mut writer,
@@ -322,7 +430,7 @@ async fn connect(
                 }
             },
             message = reader.next() => match message {
-                Some(Ok(Message::Text(text))) => receive(&text, status, automation_events)?,
+                Some(Ok(Message::Text(text))) => receive(&text, status, automation_events, log_queue, &mut inflight)?,
                 Some(Ok(Message::Close(_))) | None => return Ok(ConnectionEnd::Disconnected),
                 Some(Err(error)) => return Err(error).context("WebSocket receive failed"),
                 _ => {}
@@ -346,18 +454,43 @@ fn websocket_url(server_url: &str) -> Result<Url> {
     Ok(url)
 }
 
-async fn send<S>(writer: &mut S, message: ClientMessage) -> Result<()>
+async fn send<S>(writer: &mut S, message: ClientMessage) -> Result<Uuid>
 where
     S: futures_util::Sink<Message> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
 {
+    let event_id = Uuid::new_v4();
     let envelope = ClientEnvelope {
         protocol_version: PROTOCOL_VERSION.to_owned(),
-        event_id: Uuid::new_v4(),
+        event_id,
         message,
     };
     let text = serde_json::to_string(&envelope)?;
     writer.send(Message::Text(text.into())).await?;
+    Ok(event_id)
+}
+
+async fn send_pending_logs<S>(
+    writer: &mut S,
+    queue: &Arc<Mutex<DurableLogQueue>>,
+    inflight: &mut BTreeMap<Uuid, String>,
+) -> Result<()>
+where
+    S: futures_util::Sink<Message> + Unpin,
+    S::Error: std::error::Error + Send + Sync + 'static,
+{
+    let pending = queue
+        .lock()
+        .expect("server log queue lock poisoned")
+        .entries
+        .iter()
+        .filter(|entry| !inflight.values().any(|key| key == &entry.idempotency_key))
+        .cloned()
+        .collect::<Vec<_>>();
+    for entry in pending {
+        let event_id = send(&mut *writer, ClientMessage::Log(entry.payload)).await?;
+        inflight.insert(event_id, entry.idempotency_key);
+    }
     Ok(())
 }
 
@@ -365,6 +498,8 @@ fn receive(
     text: &str,
     status: &Arc<Mutex<ConnectionStatus>>,
     automation_events: &Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    log_queue: &Arc<Mutex<DurableLogQueue>>,
+    inflight: &mut BTreeMap<Uuid, String>,
 ) -> Result<()> {
     let envelope: ServerEnvelope = serde_json::from_str(text).context("invalid server message")?;
     if envelope.protocol_version != PROTOCOL_VERSION {
@@ -410,13 +545,6 @@ fn receive(
                 push_channel_event(automation_events, "channel_history", message);
             }
         }
-        ServerMessage::Error { message } => {
-            status
-                .lock()
-                .expect("server status lock poisoned")
-                .last_error = Some(message.clone());
-            push_automation_event(automation_events, "error", [("message", message)]);
-        }
         ServerMessage::ChannelMessagePublished(message) => {
             push_channel_event(automation_events, "channel_message", message);
         }
@@ -455,8 +583,27 @@ fn receive(
                 ],
             );
         }
-        ServerMessage::PresenceAccepted(value) | ServerMessage::LogAccepted(value) => {
+        ServerMessage::PresenceAccepted(value) => {
             drop(value);
+        }
+        ServerMessage::LogAccepted(value) => {
+            if let Some(idempotency_key) = inflight.remove(&envelope.event_id) {
+                log_queue
+                    .lock()
+                    .expect("server log queue lock poisoned")
+                    .remove(&idempotency_key)?;
+            }
+            drop(value);
+        }
+        ServerMessage::Error { message } => {
+            if inflight.remove(&envelope.event_id).is_some() {
+                tracing::warn!(%message, "QSONaut Server rejected a queued log");
+            }
+            status
+                .lock()
+                .expect("server status lock poisoned")
+                .last_error = Some(message.clone());
+            push_automation_event(automation_events, "error", [("message", message)]);
         }
         ServerMessage::Ack | ServerMessage::Pong => {}
     }
@@ -673,6 +820,8 @@ mod tests {
     fn published_channel_message_becomes_an_automation_event() {
         let status = Arc::new(Mutex::new(ConnectionStatus::default()));
         let events = Arc::new(Mutex::new(VecDeque::new()));
+        let queue = Arc::new(Mutex::new(DurableLogQueue::load(&test_queue_path())));
+        let mut inflight = BTreeMap::new();
         receive(
             r#"{
                 "protocol_version":"v1",
@@ -688,6 +837,8 @@ mod tests {
             }"#,
             &status,
             &events,
+            &queue,
+            &mut inflight,
         )
         .unwrap();
         let event = events.lock().unwrap().pop_front().unwrap();
@@ -700,6 +851,8 @@ mod tests {
     fn accepted_diagnostic_becomes_a_client_event() {
         let status = Arc::new(Mutex::new(ConnectionStatus::default()));
         let events = Arc::new(Mutex::new(VecDeque::new()));
+        let queue = Arc::new(Mutex::new(DurableLogQueue::load(&test_queue_path())));
+        let mut inflight = BTreeMap::new();
         receive(
             r#"{
                 "protocol_version":"v1",
@@ -713,6 +866,8 @@ mod tests {
             }"#,
             &status,
             &events,
+            &queue,
+            &mut inflight,
         )
         .unwrap();
         let event = events.lock().unwrap().pop_front().unwrap();
@@ -722,5 +877,30 @@ mod tests {
             event.fields["summary"],
             "IC-7300 radio and runtime snapshot"
         );
+    }
+
+    #[test]
+    fn durable_log_queue_deduplicates_and_survives_reload() {
+        let path = test_queue_path();
+        let mut queue = DurableLogQueue::load(&path);
+        let payload = serde_json::json!({
+            "idempotency_key": "11111111-1111-1111-1111-111111111111",
+            "callsign": "W1AW"
+        });
+        queue.push(payload.clone()).unwrap();
+        queue.push(payload).unwrap();
+        assert_eq!(queue.entries.len(), 1);
+
+        let reloaded = DurableLogQueue::load(&path);
+        assert_eq!(reloaded.entries.len(), 1);
+        assert_eq!(
+            reloaded.entries[0].idempotency_key,
+            "11111111-1111-1111-1111-111111111111"
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    fn test_queue_path() -> PathBuf {
+        std::env::temp_dir().join(format!("qsonaut-server-client-{}.json", Uuid::new_v4()))
     }
 }

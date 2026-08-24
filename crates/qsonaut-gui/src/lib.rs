@@ -2154,6 +2154,8 @@ impl QsonautGuiApp {
                 server_url: config.server.url.trim().to_string(),
                 device_token: config.server.device_token.trim().to_string(),
                 client_version: env!("CARGO_PKG_VERSION").to_string(),
+                queue_path: app_config_dir().join("server-log-queue.json"),
+                share_logs: config.server.share_logs,
             })
         });
 
