@@ -4,6 +4,7 @@ use super::decode::{
     prepare_early_digital_slot, prepare_early_ft8_slot, run_ft8_decode_worker,
     run_native_digital_decode, warm_ft8_decoder,
 };
+use super::request_gui_repaint;
 use hound::{SampleFormat, WavSpec, WavWriter};
 use qsonaut_audio::resample::Decimator;
 use serde_json::json;
@@ -218,8 +219,8 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 ((sample_rate_hz as u64 * interval_ms / 1_000) as usize).max(256)
             };
             let chunk_bytes = (chunk_samples * 2).max(512);
-            match stream.read_chunk(chunk_bytes) {
-                Ok(samples) => {
+            match stream.read_chunk_until_stopped(chunk_bytes, &stop) {
+                Ok(Some(samples)) => {
                     if last_audio_read_error.take().is_some() {
                         info!("Audio input stream recovered");
                     }
@@ -1247,16 +1248,12 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                         }
                     }
 
-                    if let Some(ctx) = repaint_ctx.get() {
-                        let elapsed = last_repaint.elapsed();
-                        if elapsed >= repaint_interval {
-                            last_repaint = Instant::now();
-                            ctx.request_repaint();
-                        } else {
-                            ctx.request_repaint_after(repaint_interval - elapsed);
-                        }
+                    if last_repaint.elapsed() >= repaint_interval {
+                        last_repaint = Instant::now();
+                        request_gui_repaint(&repaint_ctx);
                     }
                 }
+                Ok(None) => break,
                 Err(err) => {
                     let message = err.to_string();
                     if last_audio_read_error.as_deref() != Some(message.as_str()) {

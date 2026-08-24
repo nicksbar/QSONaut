@@ -2,7 +2,10 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use super::{WINDOW_GEOMETRY_FILE, WINDOW_MIN_SIZE};
+use super::{WINDOW_DEFAULT_SIZE, WINDOW_GEOMETRY_FILE, WINDOW_MIN_SIZE};
+
+const WINDOW_MAX_RESTORE_SIZE: [f32; 2] = [8_192.0, 8_192.0];
+const WINDOW_MAX_RESTORE_COORDINATE: f32 = 16_384.0;
 
 /// Native window geometry restored by QSONaut instead of eframe. Applying it to
 /// the `ViewportBuilder` means winit configures the window once, while it is
@@ -23,9 +26,14 @@ impl WindowGeometry {
     }
 
     pub(super) fn load() -> Option<Self> {
-        let raw = std::fs::read_to_string(Self::path()).ok()?;
+        let path = Self::path();
+        let raw = std::fs::read_to_string(&path).ok()?;
         match serde_json::from_str::<Self>(&raw) {
-            Ok(geometry) => Some(geometry.sanitized()),
+            Ok(geometry) => {
+                let geometry = geometry.sanitized();
+                info!(path = %path.display(), ?geometry, "Loaded window geometry");
+                Some(geometry)
+            }
             Err(error) => {
                 info!(%error, "Ignoring unreadable window geometry");
                 None
@@ -41,13 +49,24 @@ impl WindowGeometry {
             .filter(|s| s.iter().all(|v| v.is_finite()))
             .map(|s| {
                 [
-                    s[0].clamp(WINDOW_MIN_SIZE[0], 16_000.0),
-                    s[1].clamp(WINDOW_MIN_SIZE[1], 16_000.0),
+                    s[0].clamp(WINDOW_MIN_SIZE[0], WINDOW_MAX_RESTORE_SIZE[0]),
+                    s[1].clamp(WINDOW_MIN_SIZE[1], WINDOW_MAX_RESTORE_SIZE[1]),
                 ]
             });
-        self.position = self
-            .position
-            .filter(|p| p.iter().all(|v| v.is_finite() && v.abs() <= 32_000.0));
+        self.position = self.position.filter(|p| {
+            p.iter()
+                .all(|v| v.is_finite() && v.abs() <= WINDOW_MAX_RESTORE_COORDINATE)
+        });
+
+        // A maximized viewport without a remembered unmaximized size cannot be
+        // safely restored. This is common after a WSLg/X11 display disconnect:
+        // winit reports maximized=true but never supplies usable bounds. Fall
+        // back to the normal window size so the next launch remains visible.
+        if self.maximized && self.size.is_none() {
+            info!("Ignoring maximized window geometry without a usable saved size");
+            self.maximized = false;
+            self.size = Some(WINDOW_DEFAULT_SIZE);
+        }
         self
     }
 
@@ -103,5 +122,36 @@ impl WindowGeometry {
         // still-unpainted window and immediately `SW_HIDE` it again, which is
         // the white flash. It is applied after the first frame instead.
         builder
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WindowGeometry;
+
+    #[test]
+    fn maximized_geometry_without_bounds_falls_back_to_visible_window() {
+        let geometry = WindowGeometry {
+            maximized: true,
+            position: None,
+            size: None,
+        }
+        .sanitized();
+
+        assert!(!geometry.maximized);
+        assert_eq!(geometry.size, Some(super::WINDOW_DEFAULT_SIZE));
+    }
+
+    #[test]
+    fn geometry_bounds_are_clamped() {
+        let geometry = WindowGeometry {
+            maximized: false,
+            position: Some([20_000.0, f32::NAN]),
+            size: Some([50_000.0, 100.0]),
+        }
+        .sanitized();
+
+        assert_eq!(geometry.position, None);
+        assert_eq!(geometry.size, Some([8_192.0, 680.0]));
     }
 }

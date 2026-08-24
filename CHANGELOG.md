@@ -11,14 +11,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added a WGPU-native AI tab icon painted with egui primitives, plus compact
   colored icons across the signal-panel tabs without relying on emoji glyph
   coverage.
+- Added slim multi-radio profile tabs with independent radio, audio, decoder,
+  monitor, and control lifecycles; each configured profile can remain live
+  while another profile is active, with per-tab start/stop and status controls.
+- Added profile-scoped radio/audio device assignment, live device refresh, and
+  clear in-use labels so multiple radios can be configured without silently
+  sharing hardware.
 
 ### Changed
 - Migrated the desktop renderer to WGPU-only operation with explicit Vulkan,
-  DX12, Metal, and WGSL backend features; removed the Glow/GLES path and
-  documented the cross-platform renderer requirements.
+  DX12, Metal, GL, and WGSL backend features; removed the Glow path, added
+  logged hardware-aware backend selection and WSL fallback, and documented the
+  cross-platform renderer requirements.
 - Consolidated the radio, mode, status, volume, monitor, and scope controls
   into a responsive top banner with compact aligned sections and adaptive
   wrapping for smaller windows.
+- Reduced multi-radio rendering overhead by coalescing worker repaint requests
+  across profiles instead of redrawing independently for every audio chunk.
 - Refined AI, SSTV, automation, server, radio, and application-log UI labels
   to avoid unsupported Unicode glyphs while retaining compact visual cues.
 
@@ -32,6 +41,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Restored radio-aware Band filtering: known native Rigwright profiles now
   expose only their supported HF/6m or VHF/UHF bands, while unknown external
   connections remain unfiltered.
+- Made audio reads cancellation-aware so closing multiple live radio profiles
+  no longer accumulates the full hardware read timeout for every worker; added
+  shutdown-duration logging for regression diagnosis.
 
 ## [0.3.8] - 2026-08-23
 

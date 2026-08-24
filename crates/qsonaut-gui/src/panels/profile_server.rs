@@ -233,18 +233,18 @@ impl QsonautGuiApp {
                     }
                 });
             if self.selected_profile_name != previous_profile {
-                match load_operator_profile_named(&self.selected_profile_name) {
-                    Some(profile) => {
-                        self.apply_operator_profile(profile);
-                        if let Err(error) = select_operator_profile(&self.selected_profile_name) {
+                let target_profile = self.selected_profile_name.clone();
+                self.selected_profile_name = previous_profile;
+                match load_operator_profile_named(&target_profile) {
+                    Some(_) => {
+                        self.switch_radio_tab(&target_profile);
+                        if let Err(error) = select_operator_profile(&target_profile) {
                             self.profile_io_status = format!("Profile selection failed: {error}");
                         } else {
-                            self.profile_io_status =
-                                format!("Loaded profile ‘{}’", self.selected_profile_name);
+                            self.profile_io_status = format!("Activated tab ‘{target_profile}’");
                         }
                     }
                     None => {
-                        self.selected_profile_name = previous_profile;
                         self.profile_io_status = "Selected profile could not be loaded".to_string();
                     }
                 }
@@ -265,7 +265,34 @@ impl QsonautGuiApp {
                     }
                 }
             }
+            if ui
+                .small_button("Delete profile")
+                .on_hover_text("Delete this saved profile and stop its radio tab")
+                .clicked()
+            {
+                self.pending_profile_delete = Some(self.selected_profile_name.clone());
+            }
         });
+
+        if let Some(name) = self.pending_profile_delete.clone() {
+            ui.group(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "Delete profile ‘{name}’ and stop its radio tab? This removes the saved profile and releases its devices."
+                    ))
+                    .color(theme_warning(ui)),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Delete profile and tab").clicked() {
+                        self.pending_profile_delete = None;
+                        self.delete_operator_profile(&name);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.pending_profile_delete = None;
+                    }
+                });
+            });
+        }
 
         ui.horizontal_wrapped(|ui| {
             ui.add(
@@ -284,8 +311,10 @@ impl QsonautGuiApp {
                 } else {
                     match save_operator_profile_named(&name, &self.current_operator_profile()) {
                         Ok(()) => {
-                            self.selected_profile_name = name.clone();
+                            let previous_profile = self.selected_profile_name.clone();
                             self.available_profiles = list_operator_profiles();
+                            self.selected_profile_name = previous_profile;
+                            self.switch_radio_tab(&name);
                             self.new_profile_name.clear();
                             self.profile_io_status = format!("Created profile ‘{name}’");
                             self.profile_dirty = false;

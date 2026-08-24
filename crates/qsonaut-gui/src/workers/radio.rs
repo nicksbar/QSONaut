@@ -1,4 +1,5 @@
 use super::super::*;
+use super::request_gui_repaint;
 
 const RADIO_CORE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const RADIO_LEVEL_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -307,9 +308,7 @@ pub(crate) fn spawn_radio_worker(
                             s.last_error = None;
                             drop(s);
                             info!(bins = bins.len(), "Radio spectrum stream enabled");
-                            if let Some(ctx) = stream_repaint.get() {
-                                ctx.request_repaint();
-                            }
+                            request_gui_repaint(&stream_repaint);
                         }
                         Err(err) => {
                             let mut s = stream_state.lock().expect("ui state lock poisoned");
@@ -353,14 +352,9 @@ pub(crate) fn spawn_radio_worker(
                             cadence_rate, division_rate, dropped_sweeps_delta
                         );
                         drop(s);
-                        if let Some(ctx) = stream_repaint.get() {
-                            let elapsed = last_waterfall_repaint.elapsed();
-                            if elapsed >= waterfall_repaint_interval {
-                                last_waterfall_repaint = Instant::now();
-                                ctx.request_repaint();
-                            } else {
-                                ctx.request_repaint_after(waterfall_repaint_interval - elapsed);
-                            }
+                        if last_waterfall_repaint.elapsed() >= waterfall_repaint_interval {
+                            last_waterfall_repaint = Instant::now();
+                            request_gui_repaint(&stream_repaint);
                         }
                     }
                     Err(err) => {
@@ -1017,9 +1011,7 @@ pub(crate) fn spawn_radio_worker(
                 }
                 next_core_poll = Instant::now() + RADIO_CORE_POLL_INTERVAL;
                 next_level_poll = Instant::now() + RADIO_LEVEL_POLL_INTERVAL;
-                if let Some(ctx) = repaint_ctx.get() {
-                    ctx.request_repaint();
-                }
+                request_gui_repaint(&repaint_ctx);
             }
 
             let now = Instant::now();
@@ -1051,9 +1043,7 @@ pub(crate) fn spawn_radio_worker(
                 if poll_levels {
                     next_level_poll = Instant::now() + RADIO_LEVEL_POLL_INTERVAL;
                 }
-                if let Some(ctx) = repaint_ctx.get() {
-                    ctx.request_repaint();
-                }
+                request_gui_repaint(&repaint_ctx);
             }
         }
     })

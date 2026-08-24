@@ -5,7 +5,7 @@ use std::{
         mpsc::{self, Receiver, SyncSender, TryRecvError},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -311,6 +311,44 @@ impl AudioStream {
             self.pending.extend(block);
         }
         Ok(self.pending.drain(..requested_samples).collect())
+    }
+
+    /// Read a PCM chunk while remaining responsive to application shutdown.
+    ///
+    /// The ordinary read keeps its two-second hardware timeout. GUI workers
+    /// use this variant so multiple profile streams do not each add that full
+    /// timeout while being joined during exit.
+    pub fn read_chunk_until_stopped(
+        &mut self,
+        bytes_to_read: usize,
+        stop: &AtomicBool,
+    ) -> Result<Option<Vec<i16>>> {
+        let frame_bytes = 2 * self.requested_channels;
+        if !bytes_to_read.is_multiple_of(frame_bytes) {
+            bail!("PCM byte length is not an even multiple of the requested frame size");
+        }
+        let requested_samples = bytes_to_read / frame_bytes;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while self.pending.len() < requested_samples {
+            if stop.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
+            match self.errors_rx.try_recv() {
+                Ok(error) => bail!("audio input stream failed: {error}"),
+                Err(TryRecvError::Disconnected) | Err(TryRecvError::Empty) => {}
+            }
+            match self.samples_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(block) => self.pending.extend(block),
+                Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    bail!("timed out waiting for audio input")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    bail!("audio input stream disconnected")
+                }
+            }
+        }
+        Ok(Some(self.pending.drain(..requested_samples).collect()))
     }
 }
 
