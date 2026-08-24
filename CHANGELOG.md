@@ -11,12 +11,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added a WGPU-native AI tab icon painted with egui primitives, plus compact
   colored icons across the signal-panel tabs without relying on emoji glyph
   coverage.
-- Added slim multi-radio profile tabs with independent radio, audio, decoder,
-  monitor, and control lifecycles; each configured profile can remain live
-  while another profile is active, with per-tab start/stop and status controls.
+- Added a full multi-radio operating model: every profile tab owns independent
+  radio, audio, decoder, monitor, waterfall, and control state, and remains
+  live while another tab is active. Tabs can be started, stopped, switched,
+  and closed independently without reconnecting or reloading the other radios.
 - Added profile-scoped radio/audio device assignment, live device refresh, and
   clear in-use labels so multiple radios can be configured without silently
-  sharing hardware.
+  sharing hardware, including independent monitoring and failure recovery per
+  profile.
 
 ### Changed
 - Migrated the desktop renderer to WGPU-only operation with explicit Vulkan,

@@ -2854,15 +2854,18 @@ impl QsonautGuiApp {
         self.profile_io_status = format!("Radio tab ‘{name}’ closed; profile remains saved");
     }
 
-    fn radio_tab_status(&self, name: &str, active_snapshot: &GuiState) -> (char, Color32, String) {
+    fn radio_tab_status(
+        &self,
+        name: &str,
+        active_snapshot: &GuiState,
+    ) -> (char, Color32, String, String) {
         let (
             radio_enabled,
             audio_enabled,
             radio_status,
             audio_status,
             frequency_hz,
-            mode,
-            data_mode,
+            workspace_mode,
         ) = if name == self.selected_profile_name {
             (
                 self.config.radio.enabled,
@@ -2870,8 +2873,7 @@ impl QsonautGuiApp {
                 active_snapshot.radio_waterfall_status.clone(),
                 active_snapshot.audio_spectrum_status.clone(),
                 active_snapshot.frequency_hz,
-                active_snapshot.mode.clone(),
-                active_snapshot.data_mode,
+                active_snapshot.workspace_mode,
             )
         } else if let Some(session) = self.parked_radio_sessions.get(name) {
             match session.state.lock() {
@@ -2881,8 +2883,7 @@ impl QsonautGuiApp {
                     state.radio_waterfall_status.clone(),
                     state.audio_spectrum_status.clone(),
                     state.frequency_hz,
-                    state.mode.clone(),
-                    state.data_mode,
+                    state.workspace_mode,
                 ),
                 Err(_) => (
                     session.config.enabled,
@@ -2890,8 +2891,7 @@ impl QsonautGuiApp {
                     "UNAVAILABLE (state lock failed)".to_string(),
                     "UNAVAILABLE (state lock failed)".to_string(),
                     None,
-                    String::new(),
-                    None,
+                    WorkspaceMode::Ft8,
                 ),
             }
         } else {
@@ -2901,8 +2901,7 @@ impl QsonautGuiApp {
                 "UNAVAILABLE (tab not initialized)".to_string(),
                 "UNAVAILABLE (tab not initialized)".to_string(),
                 None,
-                String::new(),
-                None,
+                WorkspaceMode::Ft8,
             )
         };
         let radio_failed = radio_enabled
@@ -2913,41 +2912,38 @@ impl QsonautGuiApp {
             && (audio_status.starts_with("NO INPUT")
                 || audio_status.starts_with("ERROR")
                 || audio_status.starts_with("SESSION STOPPED"));
-        let frequency = frequency_hz
-            .map(|hz| format!("{:.6} MHz", hz as f64 / 1_000_000.0))
-            .unwrap_or_else(|| "frequency unavailable".to_string());
-        let mode = if mode.is_empty() {
-            "mode unavailable".to_string()
-        } else {
-            radio_mode_label(&mode, data_mode)
-        };
+        let band = frequency_hz
+            .map(band_for_frequency)
+            .filter(|band| !band.is_empty())
+            .unwrap_or("—");
+        let identity = format!("{band} · {}", workspace_mode.label());
         let radio_detail = if radio_failed {
-            "Radio: disconnected"
+            format!("Radio: {radio_status}")
         } else if radio_status.starts_with("CONNECTING") {
-            "Radio: connecting"
+            format!("Radio: {radio_status}")
         } else if radio_enabled {
-            "Radio: connected"
+            "Radio: connected".to_string()
         } else {
-            "Radio: off"
+            "Radio: off".to_string()
         };
         let audio_detail = if audio_failed {
-            "Audio: unavailable"
+            format!("Audio: {audio_status}")
         } else if audio_status == "INIT" {
-            "Audio: starting"
+            format!("Audio: {audio_status}")
         } else if audio_enabled {
-            "Audio: live RX"
+            "Audio: live RX".to_string()
         } else {
-            "Audio: off"
+            "Audio: off".to_string()
         };
-        let detail = format!("{frequency} · {mode} · {radio_detail} · {audio_detail}");
+        let detail = format!("{radio_detail} · {audio_detail}");
         if radio_failed || audio_failed {
-            ('!', Color32::from_rgb(255, 125, 105), detail)
+            ('!', Color32::from_rgb(255, 125, 105), identity, detail)
         } else if radio_status.starts_with("CONNECTING") || audio_status == "INIT" {
-            ('◌', Color32::from_rgb(255, 205, 105), detail)
+            ('◌', Color32::from_rgb(255, 205, 105), identity, detail)
         } else if !radio_enabled && !audio_enabled {
-            ('○', Color32::GRAY, detail)
+            ('○', Color32::GRAY, identity, detail)
         } else {
-            ('●', Color32::from_rgb(125, 225, 150), detail)
+            ('●', Color32::from_rgb(125, 225, 150), identity, detail)
         }
     }
 
@@ -4210,7 +4206,7 @@ impl QsonautGuiApp {
                 }
             });
             ui.separator();
-            ui.label(RichText::new("Mode").strong());
+            ui.label(RichText::new("Op mode").strong());
             for mode in HF_WORKSPACE_MODES {
                 let response = ui.add(
                     egui::Button::selectable(
@@ -4594,7 +4590,7 @@ impl eframe::App for QsonautGuiApp {
                             );
                             for name in radio_tabs {
                                 let active = name == self.selected_profile_name;
-                                let (indicator, indicator_color, status) =
+                                let (indicator, indicator_color, identity, status) =
                                     self.radio_tab_status(&name, &snapshot);
                                 let tab_fill = if active {
                                     Color32::from_rgb(24, 92, 116)
@@ -4613,7 +4609,7 @@ impl eframe::App for QsonautGuiApp {
                                     .inner_margin(egui::Margin::symmetric(5, 3))
                                     .show(ui, |ui| {
                                     ui.horizontal(|ui| {
-                                    let text = RichText::new(format!("{indicator} {name}"))
+                                    let text = RichText::new(format!("{indicator} {name} · {identity}"))
                                         .small()
                                         .strong()
                                         .color(if active {
