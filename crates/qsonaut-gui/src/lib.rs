@@ -1296,6 +1296,22 @@ fn native_radio_profile(
         .flatten()
 }
 
+fn radio_supports_band(
+    profile: Option<&qsonaut_radio::models::RadioModelProfile>,
+    band: &str,
+) -> bool {
+    let Some(profile) = profile else {
+        // Unknown/external radio connections must not be narrowed based on a
+        // guess. The driver/model can opt into precise filtering when known.
+        return true;
+    };
+
+    match band {
+        "2m" | "70cm" => profile.capabilities.vhf_uhf,
+        _ => profile.capabilities.hf,
+    }
+}
+
 fn format_swr_display(model: &str, normalized: Option<u8>) -> String {
     let Some(level) = normalized else {
         return "unavailable".to_string();
@@ -3532,7 +3548,16 @@ impl QsonautGuiApp {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Band").strong());
             let current_hz = snapshot.frequency_hz.unwrap_or(0);
+            let radio_profile = self
+                .config
+                .radio
+                .enabled
+                .then(|| native_radio_profile(&self.config.radio.backend, &self.config.radio.model))
+                .flatten();
             for &(label, frequency_hz) in workspace_band_plan(self.workspace_mode) {
+                if !radio_supports_band(radio_profile, label) {
+                    continue;
+                }
                 let on_band = current_hz.abs_diff(frequency_hz) < 200_000;
                 if ui
                     .selectable_label(on_band, label)
@@ -5256,6 +5281,27 @@ mod tests {
         );
         assert!(native_radio_profile("rigctld", "IC-7300").is_none());
         assert!(native_radio_profile("null", "IC-7300").is_none());
+    }
+
+    #[test]
+    fn band_visibility_follows_known_radio_capabilities() {
+        let hf = native_radio_profile("native", "IC-7300");
+        assert!(radio_supports_band(hf, "20m"));
+        assert!(!radio_supports_band(hf, "2m"));
+
+        let vhf_uhf = native_radio_profile("native", "IC-9700");
+        assert!(!radio_supports_band(vhf_uhf, "20m"));
+        assert!(radio_supports_band(vhf_uhf, "2m"));
+
+        let all_mode = native_radio_profile("native", "IC-705");
+        assert!(radio_supports_band(all_mode, "20m"));
+        assert!(radio_supports_band(all_mode, "2m"));
+    }
+
+    #[test]
+    fn unknown_radio_band_capabilities_remain_unfiltered() {
+        assert!(radio_supports_band(None, "20m"));
+        assert!(radio_supports_band(None, "2m"));
     }
 
     #[test]

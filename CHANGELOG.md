@@ -26,6 +26,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added WSL GPU re-exec diagnostics and clarified that an X11/WSLg clipboard
   connection reset can terminate the native event loop; the full failure
   chain is now retained in the diagnostic log.
+- Restored radio-aware Band filtering: known native Rigwright profiles now
+  expose only their supported HF/6m or VHF/UHF bands, while unknown external
+  connections remain unfiltered.
 
 ## [0.3.8] - 2026-08-23
 
