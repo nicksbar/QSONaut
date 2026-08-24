@@ -10,7 +10,9 @@ mod profile;
 mod server_integration;
 mod tx_audio;
 mod ui_format;
+mod ui_widgets;
 mod visuals;
+mod window_geometry;
 mod workers;
 
 use anyhow::{anyhow, Context, Result};
@@ -112,10 +114,15 @@ use tx_audio::{
     Ft8TxChatEntry, Ft8TxEvent, Ft8TxJob,
 };
 use ui_format::{format_signal_report, ft8_period_progress, qso_stage_label, utc_hhmmss_millis};
+use ui_widgets::{
+    draw_ai_icon, draw_speaker_icon, format_swr_display, native_radio_profile, radio_supports_band,
+    styled_selection_button, swr_chart_value,
+};
 use visuals::{
     audio_cursor_level, build_scope_waterfall_image, downsample_bins, fft_buffer_to_display_bins,
     scale_scope_levels,
 };
+use window_geometry::WindowGeometry;
 #[cfg(test)]
 use workers::decode::{
     prepare_early_digital_slot, prepare_early_ft8_slot, run_native_digital_decode,
@@ -1243,291 +1250,6 @@ pub(crate) fn status_color(ui: &egui::Ui, status: &str) -> Color32 {
         theme_accent(ui)
     } else {
         theme_muted(ui)
-    }
-}
-
-/// Paint the AI tab icon with egui primitives so it does not depend on an
-/// emoji or a platform font containing a particular Unicode glyph.
-fn draw_ai_icon(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
-    let stroke = egui::Stroke::new(1.4, color);
-    let center = rect.center();
-    let body = egui::Rect::from_center_size(center, egui::vec2(10.0, 9.0));
-    painter.rect_stroke(body, 2.0, stroke, egui::StrokeKind::Inside);
-    painter.circle_filled(egui::pos2(center.x - 2.5, center.y), 1.1, color);
-    painter.circle_filled(egui::pos2(center.x + 2.5, center.y), 1.1, color);
-    painter.line_segment(
-        [
-            egui::pos2(body.left() - 2.0, body.top() + 2.0),
-            egui::pos2(body.left(), body.top() + 2.0),
-        ],
-        stroke,
-    );
-    painter.line_segment(
-        [
-            egui::pos2(body.right(), body.top() + 2.0),
-            egui::pos2(body.right() + 2.0, body.top() + 2.0),
-        ],
-        stroke,
-    );
-    painter.line_segment(
-        [
-            egui::pos2(body.left() - 2.0, body.bottom() - 2.0),
-            egui::pos2(body.left(), body.bottom() - 2.0),
-        ],
-        stroke,
-    );
-    painter.line_segment(
-        [
-            egui::pos2(body.right(), body.bottom() - 2.0),
-            egui::pos2(body.right() + 2.0, body.bottom() - 2.0),
-        ],
-        stroke,
-    );
-}
-
-fn styled_selection_button(
-    ui: &mut egui::Ui,
-    label: &str,
-    selected: bool,
-    color: Color32,
-    enabled: bool,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(48.0, 27.0),
-        if enabled {
-            egui::Sense::click()
-        } else {
-            egui::Sense::hover()
-        },
-    );
-    let fill = if selected {
-        color.gamma_multiply(0.35)
-    } else if response.hovered() && enabled {
-        ui.visuals().widgets.hovered.bg_fill
-    } else {
-        ui.visuals().widgets.inactive.bg_fill
-    };
-    let stroke = if selected {
-        egui::Stroke::new(1.0, color)
-    } else {
-        egui::Stroke::new(1.0, color.gamma_multiply(0.45))
-    };
-    ui.painter().rect_filled(rect, 4.0, fill);
-    ui.painter()
-        .rect_stroke(rect, 4.0, stroke, egui::StrokeKind::Inside);
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        label,
-        egui::FontId::proportional(12.0),
-        if enabled {
-            color
-        } else {
-            color.gamma_multiply(0.45)
-        },
-    );
-    response
-}
-
-fn draw_speaker_icon(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
-    let center = rect.center();
-    painter.rect_filled(
-        egui::Rect::from_center_size(egui::pos2(center.x - 5.0, center.y), egui::vec2(4.0, 9.0)),
-        1.0,
-        color,
-    );
-    painter.add(egui::Shape::convex_polygon(
-        vec![
-            egui::pos2(center.x - 3.0, center.y - 5.0),
-            egui::pos2(center.x + 3.0, center.y - 9.0),
-            egui::pos2(center.x + 3.0, center.y + 9.0),
-            egui::pos2(center.x - 3.0, center.y + 5.0),
-        ],
-        color,
-        egui::Stroke::NONE,
-    ));
-    painter.line_segment(
-        [
-            egui::pos2(center.x + 6.0, center.y - 5.0),
-            egui::pos2(center.x + 9.0, center.y - 2.0),
-        ],
-        egui::Stroke::new(1.5, color),
-    );
-    painter.line_segment(
-        [
-            egui::pos2(center.x + 6.0, center.y + 5.0),
-            egui::pos2(center.x + 9.0, center.y + 2.0),
-        ],
-        egui::Stroke::new(1.5, color),
-    );
-}
-
-fn native_radio_profile(
-    backend: &str,
-    model: &str,
-) -> Option<&'static qsonaut_radio::models::RadioModelProfile> {
-    backend
-        .trim()
-        .eq_ignore_ascii_case("native")
-        .then(|| find_model(model))
-        .flatten()
-}
-
-fn radio_supports_band(
-    profile: Option<&qsonaut_radio::models::RadioModelProfile>,
-    band: &str,
-) -> bool {
-    let Some(profile) = profile else {
-        // Unknown/external radio connections must not be narrowed based on a
-        // guess. The driver/model can opt into precise filtering when known.
-        return true;
-    };
-
-    match band {
-        "2m" | "70cm" => profile.capabilities.vhf_uhf,
-        _ => profile.capabilities.hf,
-    }
-}
-
-fn format_swr_display(model: &str, normalized: Option<u8>) -> String {
-    let Some(level) = normalized else {
-        return "unavailable".to_string();
-    };
-    let meter_percent = (f32::from(level) * 100.0 / 255.0).round();
-    if model.eq_ignore_ascii_case("IC-7300") {
-        // The IC-7300 manual documents these CI-V meter anchors. Interpolate
-        // only between known points; do not invent a ratio above the documented
-        // 3.0:1 anchor.
-        let anchors = [(0_u8, 1.0_f32), (48, 1.5), (80, 2.0), (120, 3.0)];
-        if let Some(window) = anchors.windows(2).find(|window| level <= window[1].0) {
-            let (low_level, low_ratio) = window[0];
-            let (high_level, high_ratio) = window[1];
-            let fraction =
-                f32::from(level.saturating_sub(low_level)) / f32::from(high_level - low_level);
-            return format!(
-                "{:.2}:1 ({meter_percent:.0}% meter)",
-                low_ratio + fraction * (high_ratio - low_ratio)
-            );
-        }
-        return format!(">3.00:1 ({meter_percent:.0}% meter)");
-    }
-    format!("SWR meter {meter_percent:.0}%")
-}
-
-fn swr_chart_value(model: &str, normalized: u8) -> f32 {
-    if !model.eq_ignore_ascii_case("IC-7300") {
-        return f32::from(normalized) * 100.0 / 255.0;
-    }
-    let anchors = [(0_u8, 1.0_f32), (48, 1.5), (80, 2.0), (120, 3.0)];
-    if let Some(window) = anchors.windows(2).find(|window| normalized <= window[1].0) {
-        let (low_level, low_ratio) = window[0];
-        let (high_level, high_ratio) = window[1];
-        let fraction =
-            f32::from(normalized.saturating_sub(low_level)) / f32::from(high_level - low_level);
-        return low_ratio + fraction * (high_ratio - low_ratio);
-    }
-    3.0
-}
-
-/// Native window geometry restored by QSONaut instead of eframe. Applying it to
-/// the `ViewportBuilder` means winit configures the window once, while it is
-/// still hidden, instead of showing and re-hiding it for each late change.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-struct WindowGeometry {
-    #[serde(default)]
-    maximized: bool,
-    #[serde(default)]
-    position: Option<[f32; 2]>,
-    #[serde(default)]
-    size: Option<[f32; 2]>,
-}
-
-impl WindowGeometry {
-    fn path() -> PathBuf {
-        qsonaut_log::app_config_dir().join(WINDOW_GEOMETRY_FILE)
-    }
-
-    fn load() -> Option<Self> {
-        let raw = std::fs::read_to_string(Self::path()).ok()?;
-        match serde_json::from_str::<Self>(&raw) {
-            Ok(geometry) => Some(geometry.sanitized()),
-            Err(error) => {
-                info!(%error, "Ignoring unreadable window geometry");
-                None
-            }
-        }
-    }
-
-    /// A stale profile can carry a monitor that no longer exists or values from
-    /// a crashed session, which would otherwise open the window off-screen.
-    fn sanitized(mut self) -> Self {
-        self.size = self
-            .size
-            .filter(|s| s.iter().all(|v| v.is_finite()))
-            .map(|s| {
-                [
-                    s[0].clamp(WINDOW_MIN_SIZE[0], 16_000.0),
-                    s[1].clamp(WINDOW_MIN_SIZE[1], 16_000.0),
-                ]
-            });
-        self.position = self
-            .position
-            .filter(|p| p.iter().all(|v| v.is_finite() && v.abs() <= 32_000.0));
-        self
-    }
-
-    fn read(ctx: &egui::Context, previous: Option<Self>) -> Option<Self> {
-        ctx.input(|input| {
-            let viewport = input.viewport();
-            let maximized = viewport.maximized.unwrap_or(false);
-            // Restore bounds are meaningless while maximized, so keep the last
-            // known un-maximized rect instead of overwriting it.
-            if maximized {
-                let previous = previous.unwrap_or_default();
-                return Some(Self {
-                    maximized: true,
-                    position: previous.position,
-                    size: previous.size,
-                });
-            }
-            let position = viewport.outer_rect.map(|rect| [rect.min.x, rect.min.y])?;
-            let size = viewport
-                .inner_rect
-                .map(|rect| [rect.width(), rect.height()])?;
-            Some(Self {
-                maximized: false,
-                position: Some(position),
-                size: Some(size),
-            })
-        })
-    }
-
-    fn save(self) {
-        let path = Self::path();
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match serde_json::to_string_pretty(&self) {
-            Ok(json) => {
-                if let Err(error) = std::fs::write(&path, json) {
-                    info!(%error, path = %path.display(), "Failed to save window geometry");
-                }
-            }
-            Err(error) => info!(%error, "Failed to serialize window geometry"),
-        }
-    }
-
-    fn apply(self, mut builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
-        if let Some(size) = self.size {
-            builder = builder.with_inner_size(size);
-        }
-        if let Some(position) = self.position {
-            builder = builder.with_position(position);
-        }
-        // Maximized is deliberately not set here: winit would `SW_MAXIMIZE` the
-        // still-unpainted window and immediately `SW_HIDE` it again, which is
-        // the white flash. It is applied after the first frame instead.
-        builder
     }
 }
 
@@ -4791,30 +4513,6 @@ impl eframe::App for QsonautGuiApp {
                             }
                         });
                     });
-                    let radio_scope_supported = native_radio_profile(
-                        &self.config.radio.backend,
-                        &self.config.radio.model,
-                    )
-                    .is_some_and(|profile| profile.capabilities.spectrum);
-                    if radio_scope_supported {
-                        let radio_scope_detail = match self.radio_scope_view {
-                            RadioScopeView::Narrow => {
-                                format!("NARROW · {}", scope_span_label(self.radio_scope_span_code))
-                            }
-                            RadioScopeView::Overview => "ACTIVE BAND".to_string(),
-                        };
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(format!(
-                                    "Radio scope · {radio_scope_detail} · {}",
-                                    snapshot.radio_waterfall_status
-                                ))
-                                .size(12.0)
-                                .color(Color32::LIGHT_GREEN),
-                            )
-                            .truncate(),
-                        );
-                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let power_known = snapshot.radio_power_on.is_some();
                         let power_on = snapshot.radio_power_on.unwrap_or(false);

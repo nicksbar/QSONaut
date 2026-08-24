@@ -1072,6 +1072,21 @@ impl QsonautGuiApp {
         let supports_radio_scope =
             native_radio_profile(&self.config.radio.backend, &self.config.radio.model)
                 .is_some_and(|profile| profile.capabilities.spectrum);
+        if supports_radio_scope {
+            let radio_scope_detail = match self.radio_scope_view {
+                RadioScopeView::Narrow => {
+                    format!("NARROW · {}", scope_span_label(self.radio_scope_span_code))
+                }
+                RadioScopeView::Overview => "ACTIVE BAND".to_string(),
+            };
+            ui.label(
+                RichText::new(format!(
+                    "Radio scope · {radio_scope_detail} · {}",
+                    snapshot.radio_waterfall_status
+                ))
+                .color(Color32::LIGHT_GREEN),
+            );
+        }
         if ui
             .add_enabled(
                 supports_radio_scope,
