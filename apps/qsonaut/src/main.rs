@@ -196,8 +196,11 @@ fn main() {
 }
 
 fn real_main() -> Result<()> {
-    prepare_wsl_gui_environment()?;
     qsonaut_log::init("info")?;
+    // Initialize persistent logging before any platform-specific setup. A
+    // WSL graphics restart can fail before the GUI is constructed, and that
+    // failure still needs to be available in qsonaut.log.
+    prepare_wsl_gui_environment()?;
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -559,8 +562,15 @@ fn prepare_wsl_gui_environment() -> Result<()> {
             return Ok(());
         }
 
+        info!(
+            needs_driver,
+            needs_adapter,
+            gallium_driver = ?gallium,
+            "Preparing WSL GPU environment before GUI launch"
+        );
+
         let executable = std::env::current_exe().context("failed to locate QSONaut executable")?;
-        let mut command = Command::new(executable);
+        let mut command = Command::new(&executable);
         command.args(args.iter().skip(1));
         command.env("QSONAUT_GUI_ENV_READY", "1");
         if needs_driver {
@@ -569,6 +579,10 @@ fn prepare_wsl_gui_environment() -> Result<()> {
         if needs_adapter {
             command.env("MESA_D3D12_DEFAULT_ADAPTER_NAME", "AMD");
         }
+        info!(
+            executable = %executable.display(),
+            "Restarting QSONaut once with WSL GPU environment"
+        );
         let error = command.exec();
         Err(error).context("failed to restart QSONaut with WSL GPU rendering")
     }

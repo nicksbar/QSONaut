@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Added a WGPU-native AI tab icon painted with egui primitives, plus compact
+  colored icons across the signal-panel tabs without relying on emoji glyph
+  coverage.
+
+### Changed
+- Migrated the desktop renderer to WGPU-only operation with explicit Vulkan,
+  DX12, Metal, and WGSL backend features; removed the Glow/GLES path and
+  documented the cross-platform renderer requirements.
+- Refined AI, SSTV, automation, server, radio, and application-log UI labels
+  to avoid unsupported Unicode glyphs while retaining compact visual cues.
+
+### Fixed
+- Initialized persistent logging before WSL graphics preparation so platform
+  setup, WGPU startup, panic, and eframe launch failures are recorded in
+  `qsonaut.log`.
+- Added WSL GPU re-exec diagnostics and clarified that an X11/WSLg clipboard
+  connection reset can terminate the native event loop; the full failure
+  chain is now retained in the diagnostic log.
+
 ## [0.3.8] - 2026-08-23
 
 ### Added

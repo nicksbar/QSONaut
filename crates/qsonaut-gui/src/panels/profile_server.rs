@@ -621,7 +621,7 @@ impl QsonautGuiApp {
 
     pub(in super::super) fn draw_ai_panel(&mut self, ui: &mut egui::Ui) {
         self.poll_local_image_events();
-        ui.heading("🧠 AI Models");
+        ui.heading("AI Models");
         ui.label(
             RichText::new(
                 "Global model configuration for image generation and future AI-assisted activities.",

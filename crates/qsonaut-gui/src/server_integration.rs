@@ -76,7 +76,7 @@ impl QsonautGuiApp {
             return;
         };
         client.publish_log(serde_json::json!({
-            "event_id": null,
+            "event_id": self.server_active_event.as_ref().and_then(|(id, _)| Uuid::parse_str(id).ok()),
             "idempotency_key": log_idempotency_key(record.id),
             "callsign": record.callsign,
             "band": record.band,

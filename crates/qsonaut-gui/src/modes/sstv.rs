@@ -861,7 +861,7 @@ impl QsonautGuiApp {
                         });
                         ui.separator();
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new("🧠 AI IMAGE").strong());
+                            ui.label(RichText::new("AI IMAGE").strong());
                             ui.label(format!(
                                 "{} · {}",
                                 self.local_image_settings.provider.label(),
@@ -1030,11 +1030,18 @@ impl QsonautGuiApp {
                     if ui
                         .add_enabled(
                             has_frame && !self.digital_tx_active.load(Ordering::Acquire),
-                            egui::Button::new(if self.sstv_tx_armed {
-                                "🔓 SSTV TX ARMED"
-                            } else {
-                                "🔐 ARM SSTV TX"
-                            }),
+                            egui::Button::new(
+                                RichText::new(if self.sstv_tx_armed {
+                                    "🔓 SSTV TX ARMED"
+                                } else {
+                                    "🔐 ARM SSTV TX"
+                                })
+                                .color(if self.sstv_tx_armed {
+                                    Color32::from_rgb(255, 92, 48)
+                                } else {
+                                    theme_accent(ui)
+                                }),
+                            ),
                         )
                         .clicked()
                     {
@@ -1045,11 +1052,14 @@ impl QsonautGuiApp {
                             self.sstv_tx_armed
                                 && has_frame
                                 && !self.digital_tx_active.load(Ordering::Acquire),
-                            egui::Button::new(format!(
-                                "🔥 TRANSMIT {} · ~{:.0}s",
-                                self.sstv_tx_mode.name(),
-                                qsonaut_sstv::mode_duration_seconds(self.sstv_tx_mode),
-                            ))
+                            egui::Button::new(
+                                RichText::new(format!(
+                                    "🔥 TRANSMIT {} · ~{:.0}s",
+                                    self.sstv_tx_mode.name(),
+                                    qsonaut_sstv::mode_duration_seconds(self.sstv_tx_mode),
+                                ))
+                                .color(Color32::from_rgb(255, 218, 170)),
+                            )
                             .fill(Color32::from_rgb(145, 42, 34)),
                         )
                         .clicked()
@@ -1072,7 +1082,11 @@ impl QsonautGuiApp {
                         self.sstv_tx_armed = false;
                         self.stop_native_digital_tx();
                     }
-                    ui.label(RichText::new(&self.digital_tx_status).strong());
+                    ui.label(
+                        RichText::new(&self.digital_tx_status)
+                            .strong()
+                            .color(status_color(ui, &self.digital_tx_status)),
+                    );
                 });
             });
     }

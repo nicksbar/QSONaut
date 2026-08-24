@@ -34,7 +34,10 @@ toml = "0.8"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "wayland", "persistence"] }
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11", "persistence"] }
+# Native modern backends only: Vulkan (Linux/WSL), DX12 (Windows), Metal
+# (macOS). Keeping GLES disabled removes the legacy glow dependency entirely.
+wgpu = { version = "27", default-features = false, features = ["std", "vulkan", "dx12", "metal", "wgsl"] }
 rustfft = "6"
 cpal = "0.15"
 futures-util = "0.3"

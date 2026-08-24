@@ -44,9 +44,8 @@ Startup and runtime diagnostics are written to `logs/qsonaut.log` below that
 same platform app directory. For bug reports, especially startup failures,
 attach the log file captured from the affected machine.
 
-For graphics backend debugging, QSONaut accepts `QSONAUT_RENDERER=wgpu` or
-`QSONAUT_RENDERER=glow`. The chosen renderer is logged during startup and on
-the first rendered frame.
+QSONaut uses eframe's `wgpu` renderer. The selected renderer is logged during
+startup and on the first rendered frame; `QSONAUT_RENDERER` is no longer used.
 
 UI scale presets use a rebased baseline where the previous physical 75% size
 is now represented as 100%.

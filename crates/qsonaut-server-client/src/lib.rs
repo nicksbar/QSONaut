@@ -85,6 +85,30 @@ pub struct ConnectionStatus {
     pub active_event_count: usize,
     pub catalog_size: usize,
     pub last_error: Option<String>,
+    pub clubs: Vec<ServerClub>,
+    pub active_events: Vec<ServerEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ServerClub {
+    pub id: String,
+    pub name: String,
+    pub callsign: Option<String>,
+    #[serde(default)]
+    pub my_role: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ServerEvent {
+    pub id: String,
+    pub club_id: String,
+    pub name: String,
+    pub contest_name: String,
+    pub status: String,
+    pub starts_at: String,
+    pub ends_at: String,
+    pub club_name: String,
+    pub participant_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -519,24 +543,45 @@ fn receive(
         }
         ServerMessage::Snapshot {
             events,
+            clubs,
             contest_templates,
             channel_messages,
         } => {
-            let active_event_count = events
+            let active_events = events
                 .iter()
                 .filter(|event| event.status == "active")
-                .count();
+                .map(|event| ServerEvent {
+                    id: event.id.clone(),
+                    club_id: event.club_id.clone(),
+                    name: event.name.clone(),
+                    contest_name: event.contest_name.clone(),
+                    status: event.status.clone(),
+                    starts_at: event.starts_at.clone(),
+                    ends_at: event.ends_at.clone(),
+                    club_name: clubs
+                        .iter()
+                        .find(|club| club.id == event.club_id)
+                        .map(|club| club.name.clone())
+                        .unwrap_or_else(|| "associated club".to_owned()),
+                    participant_count: event.participant_count,
+                })
+                .collect::<Vec<_>>();
+            let active_event_count = active_events.len();
             let catalog_size = contest_templates.len();
             let message_count = channel_messages.len();
             let mut current = status.lock().expect("server status lock poisoned");
             current.active_event_count = active_event_count;
             current.catalog_size = catalog_size;
+            current.clubs = clubs;
+            current.active_events = active_events.clone();
+            let club_count = current.clubs.len();
             drop(current);
             push_automation_event(
                 automation_events,
                 "snapshot",
                 [
                     ("active_events", active_event_count.to_string()),
+                    ("clubs", club_count.to_string()),
                     ("catalog_size", catalog_size.to_string()),
                     ("message_count", message_count.to_string()),
                 ],
@@ -710,6 +755,8 @@ enum ServerMessage {
     },
     Snapshot {
         events: Vec<Event>,
+        #[serde(default)]
+        clubs: Vec<ServerClub>,
         contest_templates: Vec<Value>,
         channel_messages: Vec<ChannelMessage>,
     },
@@ -741,7 +788,14 @@ struct User {
 
 #[derive(Debug, Deserialize)]
 struct Event {
+    id: String,
+    club_id: String,
+    name: String,
+    contest_name: String,
     status: String,
+    starts_at: String,
+    ends_at: String,
+    participant_count: i64,
 }
 
 #[cfg(test)]

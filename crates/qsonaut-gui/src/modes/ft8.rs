@@ -380,7 +380,7 @@ impl QsonautGuiApp {
             };
             if ui
                 .add(
-                    egui::Button::new(RichText::new(auto_label).strong().color(Color32::WHITE))
+                    egui::Button::new(RichText::new(auto_label).strong().color(auto_stroke))
                         .fill(auto_fill)
                         .stroke(egui::Stroke::new(1.5_f32, auto_stroke)),
                 )
@@ -912,7 +912,7 @@ impl QsonautGuiApp {
             ui.label(
                 RichText::new(&self.ft8_seq_status)
                     .small()
-                    .color(Color32::GRAY),
+                    .color(status_color(ui, &self.ft8_seq_status)),
             );
         });
 

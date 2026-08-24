@@ -67,6 +67,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::error::TryRecvError;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 const QSONAUT_ICON_PNG: &[u8] = include_bytes!("../../../assets/branding/qsonaut-icon.png");
 
@@ -1105,6 +1106,10 @@ pub fn run_gui(config: AppConfig) -> Result<()> {
         "release"
     };
     info!(build_profile, "QSONaut GUI startup");
+    info!(
+        enabled_backends = ?wgpu::Instance::enabled_backend_features(),
+        "WGPU backend features compiled"
+    );
     if cfg!(debug_assertions) {
         info!(
             "Running DEBUG build: FT8 decode latency will be significantly higher than release; use --release for real-time ops"
@@ -1225,6 +1230,59 @@ pub(crate) fn theme_success(ui: &egui::Ui) -> Color32 {
     } else {
         Color32::from_rgb(21, 128, 61)
     }
+}
+
+pub(crate) fn status_color(ui: &egui::Ui, status: &str) -> Color32 {
+    if status.contains('🔥') {
+        Color32::from_rgb(255, 92, 48)
+    } else if status.contains('⚠') {
+        theme_warning(ui)
+    } else if status.contains('🏁') || status.contains('✅') {
+        theme_success(ui)
+    } else if status.contains('🔒') {
+        theme_accent(ui)
+    } else {
+        theme_muted(ui)
+    }
+}
+
+/// Paint the AI tab icon with egui primitives so it does not depend on an
+/// emoji or a platform font containing a particular Unicode glyph.
+fn draw_ai_icon(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
+    let stroke = egui::Stroke::new(1.4, color);
+    let center = rect.center();
+    let body = egui::Rect::from_center_size(center, egui::vec2(10.0, 9.0));
+    painter.rect_stroke(body, 2.0, stroke, egui::StrokeKind::Inside);
+    painter.circle_filled(egui::pos2(center.x - 2.5, center.y), 1.1, color);
+    painter.circle_filled(egui::pos2(center.x + 2.5, center.y), 1.1, color);
+    painter.line_segment(
+        [
+            egui::pos2(body.left() - 2.0, body.top() + 2.0),
+            egui::pos2(body.left(), body.top() + 2.0),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(body.right(), body.top() + 2.0),
+            egui::pos2(body.right() + 2.0, body.top() + 2.0),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(body.left() - 2.0, body.bottom() - 2.0),
+            egui::pos2(body.left(), body.bottom() - 2.0),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(body.right(), body.bottom() - 2.0),
+            egui::pos2(body.right() + 2.0, body.bottom() - 2.0),
+        ],
+        stroke,
+    );
 }
 
 fn native_radio_profile(
@@ -1487,18 +1545,8 @@ fn spawn_acceleration_probe(preference: ComputePreference) -> mpsc::Receiver<Acc
 }
 
 fn preferred_renderer() -> eframe::Renderer {
-    // QSONaut renders a 2D operator console. glow (OpenGL) is the lightest
-    // eframe backend and behaves identically on Windows, Linux, and WSL.
-    if let Some(raw) = std::env::var_os("QSONAUT_RENDERER") {
-        let raw = raw.to_string_lossy();
-        if !raw.eq_ignore_ascii_case("glow") {
-            info!(
-                requested = %raw,
-                "QSONAUT_RENDERER override ignored: only 'glow' is built in"
-            );
-        }
-    }
-    eframe::Renderer::Glow
+    // QSONaut uses eframe's modern cross-platform GPU backend everywhere.
+    eframe::Renderer::Wgpu
 }
 
 fn configure_unix_gui_environment() {
@@ -1764,6 +1812,8 @@ struct QsonautGuiApp {
     psk_max_pending: usize,
     psk_reporter: Option<Reporter>,
     server_client: Option<ServerClient>,
+    server_active_club: Option<(String, String)>,
+    server_active_event: Option<(String, String)>,
     server_instance_id: String,
     server_last_presence: Instant,
     brand_icon: TextureHandle,
@@ -1782,6 +1832,10 @@ impl QsonautGuiApp {
         stored_geometry: Option<WindowGeometry>,
     ) -> Self {
         let ctx = &cc.egui_ctx;
+        // Keep egui's bundled font fallback chain active. It includes the
+        // monochrome Noto Emoji and emoji icon fonts, making emoji rendering
+        // independent of the host OS font installation.
+        ctx.set_fonts(egui::FontDefinitions::default());
         let brand_image = ColorImage::from_rgba_unmultiplied(
             [app_icon.width as usize, app_icon.height as usize],
             &app_icon.rgba,
@@ -2446,6 +2500,8 @@ impl QsonautGuiApp {
             psk_max_pending,
             psk_reporter,
             server_client,
+            server_active_club: None,
+            server_active_event: None,
             server_instance_id,
             server_last_presence: Instant::now() - Duration::from_secs(60),
             brand_icon,
@@ -3159,7 +3215,7 @@ impl QsonautGuiApp {
                 "External ingress rejected: required metadata missing"
             );
             self.automation_status =
-                "🤖 External ingress blocked: source, author, and message are required".to_string();
+                "External ingress blocked: source, author, and message are required".to_string();
             return;
         }
 
@@ -3175,7 +3231,7 @@ impl QsonautGuiApp {
         });
         info!(source = %source, author = %author, channel = %if channel.is_empty() { "(unspecified)" } else { channel }, message_length = message.chars().count(), "External ingress accepted");
         self.automation_status =
-            format!("🤖 External message injected from {source} as {author}: {message}");
+            format!("External message injected from {source} as {author}: {message}");
         self.external_ingress_message.clear();
     }
 
@@ -3243,7 +3299,7 @@ impl QsonautGuiApp {
             .stroke(egui::Stroke::new(2.0_f32, border))
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.label(RichText::new(status).strong().size(17.0).color(Color32::WHITE));
+                    ui.label(RichText::new(status).strong().size(17.0).color(border));
                     ui.label(RichText::new(detail).small().color(Color32::LIGHT_GRAY));
                     ui.add_space(3.0);
                     if ui
@@ -3801,8 +3857,19 @@ impl eframe::App for QsonautGuiApp {
                         );
                     });
                     let selected_activity = self.activity;
+                    let server_context = self.server_client.as_ref().map(ServerClient::status);
+                    let activity_button_label = self
+                        .server_active_event
+                        .as_ref()
+                        .map(|(_, name)| format!("🏁 Contest · {name}"))
+                        .or_else(|| {
+                            self.server_active_club
+                                .as_ref()
+                                .map(|(_, name)| format!("🌐 {} · {name}", selected_activity.label()))
+                        })
+                        .unwrap_or_else(|| format!("📻 {}", selected_activity.label()));
                     ui.menu_button(
-                        RichText::new(selected_activity.label())
+                        RichText::new(activity_button_label)
                             .strong()
                             .color(Color32::from_rgb(255, 190, 105)),
                         |ui| {
@@ -3842,6 +3909,80 @@ impl eframe::App for QsonautGuiApp {
                                     }
                                 }
                             });
+                            if let Some(server_context) = &server_context {
+                                if !server_context.clubs.is_empty()
+                                    || !server_context.active_events.is_empty()
+                                {
+                                    ui.separator();
+                                    ui.label(
+                                        RichText::new("🌐 SERVER ACTIVITIES")
+                                            .strong()
+                                            .color(Color32::from_rgb(110, 220, 255)),
+                                    );
+                                    if !server_context.clubs.is_empty() {
+                                        ui.label(RichText::new("🌐 ACTIVE CLUB").small().strong());
+                                        for club in &server_context.clubs {
+                                            let selected = self
+                                                .server_active_club
+                                                .as_ref()
+                                                .is_some_and(|(id, _)| id == &club.id);
+                                            let label = club
+                                                .callsign
+                                                .as_deref()
+                                                .map(|callsign| format!("{} · {}", club.name, callsign))
+                                                .unwrap_or_else(|| club.name.clone());
+                                            if ui.selectable_label(selected, label).clicked() {
+                                                self.server_active_club =
+                                                    Some((club.id.clone(), club.name.clone()));
+                                                self.server_active_event = None;
+                                                ui.close();
+                                            }
+                                        }
+                                    }
+                                    if !server_context.active_events.is_empty() {
+                                        ui.label(RichText::new("🏁 ACTIVE CONTESTS").small().strong());
+                                        for contest in &server_context.active_events {
+                                            let selected = self
+                                                .server_active_event
+                                                .as_ref()
+                                                .is_some_and(|(id, _)| id == &contest.id);
+                                            let label = if contest.contest_name.is_empty() {
+                                                format!("{} · {}", contest.name, contest.club_name)
+                                            } else {
+                                                format!("{} · {} · {}", contest.name, contest.contest_name, contest.club_name)
+                                            };
+                                            ui.horizontal(|ui| {
+                                                if ui.selectable_label(selected, label).clicked() {
+                                                    self.activity = OperatingActivity::Contest;
+                                                    self.server_active_club = Some((
+                                                        contest.club_id.clone(),
+                                                        contest.club_name.clone(),
+                                                    ));
+                                                    self.server_active_event =
+                                                        Some((contest.id.clone(), contest.name.clone()));
+                                                    ui.close();
+                                                }
+                                                let starts = contest.starts_at.get(0..16).unwrap_or(&contest.starts_at).replace('T', " ");
+                                                let ends = contest.ends_at.get(0..16).unwrap_or(&contest.ends_at).replace('T', " ");
+                                                ui.label(
+                                                    RichText::new(format!("{starts} → {ends} · {} op", contest.participant_count))
+                                                        .small()
+                                                        .color(Color32::GRAY),
+                                                );
+                                            });
+                                        }
+                                    }
+                                    if self.server_active_club.is_some()
+                                        || self.server_active_event.is_some()
+                                    {
+                                        if ui.small_button("✕ CLEAR SERVER ACTIVITY").clicked() {
+                                            self.server_active_club = None;
+                                            self.server_active_event = None;
+                                            ui.close();
+                                        }
+                                    }
+                                }
+                            }
                             let profile = self.activity.profile();
                             let band_summary = if profile.bands.is_unrestricted() {
                                 "all core".to_string()
@@ -3933,9 +4074,9 @@ impl eframe::App for QsonautGuiApp {
                             let participating = self.activity == OperatingActivity::Contest
                                 && self.contest_enabled;
                             let label = if participating {
-                                "✓ SERVER CONTEST · PARTICIPATING".to_string()
+                                "✅ SERVER CONTEST · PARTICIPATING".to_string()
                             } else {
-                                format!("✓ SERVER CONTEST · {} ACTIVE", server_status.active_event_count)
+                                format!("✅ SERVER CONTEST · {} ACTIVE", server_status.active_event_count)
                             };
                             ui.label(
                                 RichText::new(label)
@@ -3950,7 +4091,7 @@ impl eframe::App for QsonautGuiApp {
                     }
                     let active_profile = self.active_radio_profile_name().unwrap_or("None");
                     ui.label(
-                        RichText::new(format!("🎛 {active_profile}"))
+                        RichText::new(format!("📻 {active_profile}"))
                             .small()
                             .color(if active_profile == "None" {
                                 Color32::GRAY
@@ -4738,27 +4879,103 @@ impl eframe::App for QsonautGuiApp {
                     self.draw_tx_safety_card(ui, &snapshot);
                     ui.add_space(6.0);
                     ui.horizontal_wrapped(|ui| {
-                        for (tab, label) in [
-                            (SignalPanelTab::Achievements, "ACHIEVEMENTS"),
-                            (SignalPanelTab::Profile, "PROFILE"),
-                            (SignalPanelTab::Contest, "CONTEST"),
-                            (SignalPanelTab::Reporting, "REPORTING"),
-                            (SignalPanelTab::Waterfall, "WATERFALL"),
-                            (SignalPanelTab::Settings, "SETTINGS"),
-                            (SignalPanelTab::Ai, "AI"),
-                            (SignalPanelTab::Server, "SERVER"),
-                            (SignalPanelTab::RadioTuning, "RADIO TUNING"),
-                            (SignalPanelTab::AppLog, "APP LOG"),
+                        for (tab, icon, label, icon_color) in [
+                            (
+                                SignalPanelTab::Achievements,
+                                "🏆",
+                                "ACHIEVEMENTS",
+                                Color32::from_rgb(255, 201, 92),
+                            ),
+                            (
+                                SignalPanelTab::Profile,
+                                "📻",
+                                "PROFILE",
+                                Color32::from_rgb(120, 225, 255),
+                            ),
+                            (
+                                SignalPanelTab::Contest,
+                                "🏁",
+                                "CONTEST",
+                                Color32::from_rgb(255, 151, 72),
+                            ),
+                            (
+                                SignalPanelTab::Reporting,
+                                "📡",
+                                "REPORTING",
+                                Color32::from_rgb(132, 228, 255),
+                            ),
+                            (
+                                SignalPanelTab::Waterfall,
+                                "📊",
+                                "WATERFALL",
+                                Color32::from_rgb(130, 230, 170),
+                            ),
+                            (
+                                SignalPanelTab::Settings,
+                                "⚙",
+                                "SETTINGS",
+                                Color32::from_rgb(190, 190, 205),
+                            ),
+                            (
+                                SignalPanelTab::Ai,
+                                "",
+                                "AI",
+                                Color32::from_rgb(205, 150, 255),
+                            ),
+                            (
+                                SignalPanelTab::Server,
+                                "🌐",
+                                "SERVER",
+                                Color32::from_rgb(110, 220, 255),
+                            ),
+                            (
+                                SignalPanelTab::RadioTuning,
+                                "📻",
+                                "RADIO TUNING",
+                                Color32::from_rgb(255, 190, 105),
+                            ),
+                            (
+                                SignalPanelTab::AppLog,
+                                "📋",
+                                "APP LOG",
+                                Color32::from_rgb(180, 190, 205),
+                            ),
                         ] {
                             let selected = self.signal_panel_tab == tab;
+                            let compact_ai_spacing = tab == SignalPanelTab::Ai;
+                            let previous_item_spacing = ui.spacing().item_spacing.x;
+                            if compact_ai_spacing {
+                                ui.spacing_mut().item_spacing.x = 2.0;
+                            }
+                            let icon_response = if tab == SignalPanelTab::Ai {
+                                let (icon_rect, response) = ui.allocate_exact_size(
+                                    egui::vec2(13.0, 18.0),
+                                    egui::Sense::click(),
+                                );
+                                draw_ai_icon(ui.painter(), icon_rect, icon_color);
+                                Some(response)
+                            } else {
+                                None
+                            };
+                            let tab_text = if icon.is_empty() {
+                                label.to_string()
+                            } else {
+                                format!("{icon} {label}")
+                            };
                             let text = if selected {
-                                RichText::new(label)
+                                RichText::new(tab_text)
                                     .strong()
                                     .color(Color32::from_rgb(120, 225, 255))
                             } else {
-                                RichText::new(label).color(Color32::GRAY)
+                                RichText::new(tab_text).color(icon_color)
                             };
-                            if ui.selectable_label(selected, text).clicked() {
+                            let text_clicked = ui.selectable_label(selected, text).clicked();
+                            if compact_ai_spacing {
+                                ui.spacing_mut().item_spacing.x = previous_item_spacing;
+                            }
+                            if text_clicked
+                                || icon_response.is_some_and(|response| response.clicked())
+                            {
                                 self.signal_panel_tab = tab;
                             }
                         }

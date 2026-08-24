@@ -9,6 +9,7 @@ authors.workspace = true
 ab_glyph = "0.2"
 anyhow.workspace = true
 eframe.workspace = true
+wgpu.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 rustfft.workspace = true
