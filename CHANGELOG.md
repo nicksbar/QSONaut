@@ -19,7 +19,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   charting, and application-log diagnostics.
 
 ### Changed
-- Updated the native radio integration to the published Rigwright `0.1.9`
+- Updated the native radio integration to the published Rigwright `0.1.10`
   release, including capability discovery, normalized meters, tuner controls,
   Icom scope support, and tolerant CI-V echo-back handling.
 - Redesigned the combined radio/audio waterfall deck: both waterfalls share

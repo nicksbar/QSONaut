@@ -3262,6 +3262,7 @@ dependencies = [
  "tokio",
  "toml 0.8.23",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3724,9 +3725,9 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rigwright"
-version = "0.1.9"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59ff2218db9a87f4557fb1bf063dfea905aef4027a622b84ebfa6db31d55ab12"
+checksum = "a092874cabb6a65adc731194ca9e85afb35f34908ce3dc25a2ce8ed06d0c3063"
 dependencies = [
  "anyhow",
  "async-trait",

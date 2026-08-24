@@ -14,6 +14,7 @@ tracing.workspace = true
 rustfft.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true
 toml.workspace = true
@@ -32,7 +33,7 @@ qsonaut-accelerate = { path = "../qsonaut-accelerate" }
 qsonaut-core = { path = "../qsonaut-core" }
 qsonaut-automation = { path = "../qsonaut-automation" }
 qsonaut-log = { path = "../qsonaut-log" }
-qsonaut-radio = { package = "rigwright", version = "0.1.9" }
+qsonaut-radio = { package = "rigwright", version = "0.1.10" }
 qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }
 qsonaut-server-client = { path = "../qsonaut-server-client" }
 qsonaut-sstv = { path = "../qsonaut-sstv" }

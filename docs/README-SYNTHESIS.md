@@ -25,7 +25,7 @@ Both repositories use Rust and share versioning conventions but maintain separat
 |-------|---------|---------|-------|
 | mfsk-core | DSP/decoding | 0.10.0 (unreleased) | Pinned upstream Git dependency |
 | cw-dit | Morse/CW DSP and streaming decoding (`cwdit-dsp`, `cwdit-morse`) | 0.1.0 | Pinned upstream Git dependency; MIT OR Apache-2.0 |
-| rigwright | CI-V radio HAL | 0.1.2 | Git dependency (https://github.com/nicksbar/rigwright) |
+| rigwright | Radio HAL and native drivers | 0.1.10 | crates.io (https://github.com/nicksbar/rigwright) |
 | eframe 0.33 | GUI framework | 0.33 | With wgpu, wayland, vulkan |
 | tokio 1 | Async runtime | 1 | Multi-threaded |
 | sqlx 0.8.6 | Server DB (server only) | 0.8.6 | PostgreSQL, migrations |
@@ -165,7 +165,7 @@ Management UI (Svelte)
 3. ❌ **Needs:** Explicit version for QSONaut Server
 4. ❌ **Needs:** Mention automation features
 5. ❌ **Needs:** Clarify server integration is opt-in, disabled by default
-6. ❌ **Needs:** Update rigwright dependency info
+6. ✅ **Updated:** Rigwright dependency information reflects the published v0.1.10 crate
 
 ### QSONaut-Server/README.md
 **Current issues:**
@@ -176,7 +176,7 @@ Management UI (Svelte)
 
 ### Cross-Repository Notes
 - Both repos use workspace versioning (v0.2.3 vs v0.1.0)
-- Client pins rigwright to GitHub tag v0.1.2
+- Client consumes the published rigwright v0.1.10 crate from crates.io
 - Server has no dependency on client code
 - Client uses a pinned Git dependency on mfsk-core; no sibling checkout is required
 
