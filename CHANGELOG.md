@@ -16,6 +16,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Migrated the desktop renderer to WGPU-only operation with explicit Vulkan,
   DX12, Metal, and WGSL backend features; removed the Glow/GLES path and
   documented the cross-platform renderer requirements.
+- Consolidated the radio, mode, status, volume, monitor, and scope controls
+  into a responsive top banner with compact aligned sections and adaptive
+  wrapping for smaller windows.
 - Refined AI, SSTV, automation, server, radio, and application-log UI labels
   to avoid unsupported Unicode glyphs while retaining compact visual cues.
 

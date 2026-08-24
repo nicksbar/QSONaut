@@ -1285,6 +1285,83 @@ fn draw_ai_icon(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
     );
 }
 
+fn styled_selection_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    selected: bool,
+    color: Color32,
+    enabled: bool,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(48.0, 27.0),
+        if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    let fill = if selected {
+        color.gamma_multiply(0.35)
+    } else if response.hovered() && enabled {
+        ui.visuals().widgets.hovered.bg_fill
+    } else {
+        ui.visuals().widgets.inactive.bg_fill
+    };
+    let stroke = if selected {
+        egui::Stroke::new(1.0, color)
+    } else {
+        egui::Stroke::new(1.0, color.gamma_multiply(0.45))
+    };
+    ui.painter().rect_filled(rect, 4.0, fill);
+    ui.painter()
+        .rect_stroke(rect, 4.0, stroke, egui::StrokeKind::Inside);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(12.0),
+        if enabled {
+            color
+        } else {
+            color.gamma_multiply(0.45)
+        },
+    );
+    response
+}
+
+fn draw_speaker_icon(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
+    let center = rect.center();
+    painter.rect_filled(
+        egui::Rect::from_center_size(egui::pos2(center.x - 5.0, center.y), egui::vec2(4.0, 9.0)),
+        1.0,
+        color,
+    );
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(center.x - 3.0, center.y - 5.0),
+            egui::pos2(center.x + 3.0, center.y - 9.0),
+            egui::pos2(center.x + 3.0, center.y + 9.0),
+            egui::pos2(center.x - 3.0, center.y + 5.0),
+        ],
+        color,
+        egui::Stroke::NONE,
+    ));
+    painter.line_segment(
+        [
+            egui::pos2(center.x + 6.0, center.y - 5.0),
+            egui::pos2(center.x + 9.0, center.y - 2.0),
+        ],
+        egui::Stroke::new(1.5, color),
+    );
+    painter.line_segment(
+        [
+            egui::pos2(center.x + 6.0, center.y + 5.0),
+            egui::pos2(center.x + 9.0, center.y + 2.0),
+        ],
+        egui::Stroke::new(1.5, color),
+    );
+}
+
 fn native_radio_profile(
     backend: &str,
     model: &str,
@@ -3479,35 +3556,41 @@ impl QsonautGuiApp {
 
     fn draw_banner_radio_controls(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         let supports_levels = snapshot.supported_controls.contains(&ControlId::AfGain);
-        let supports_filter = snapshot.supported_controls.contains(&ControlId::Filter);
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Radio").strong());
-            if ui.small_button("-1 kHz").clicked() {
-                self.send_command(GuiCommand::TuneDelta(-1_000));
-            }
-            if ui.small_button("+1 kHz").clicked() {
-                self.send_command(GuiCommand::TuneDelta(1_000));
-            }
-            if ui
-                .add_enabled(supports_levels, egui::Button::new("AF-").small())
-                .clicked()
-            {
-                self.send_command(GuiCommand::AfGainDelta(-5));
-            }
-            if ui
-                .add_enabled(supports_levels, egui::Button::new("AF+").small())
-                .clicked()
-            {
-                self.send_command(GuiCommand::AfGainDelta(5));
-            }
-            ui.separator();
-            ui.label(RichText::new("Mode").strong());
-            ui.label(RichText::new("HF / primary").strong());
-            for mode in HF_WORKSPACE_MODES {
+            ui.scope(|ui| {
+                ui.spacing_mut().item_spacing.x = 7.0;
+                ui.spacing_mut().button_padding.x = 4.0;
+                ui.label(RichText::new("Radio").strong());
+                if ui.small_button("-1 kHz").clicked() {
+                    self.send_command(GuiCommand::TuneDelta(-1_000));
+                }
+                if ui.small_button("+1 kHz").clicked() {
+                    self.send_command(GuiCommand::TuneDelta(1_000));
+                }
                 if ui
-                    .selectable_label(self.workspace_mode == mode, mode.label())
+                    .add_enabled(supports_levels, egui::Button::new("AF-").small())
                     .clicked()
                 {
+                    self.send_command(GuiCommand::AfGainDelta(-5));
+                }
+                if ui
+                    .add_enabled(supports_levels, egui::Button::new("AF+").small())
+                    .clicked()
+                {
+                    self.send_command(GuiCommand::AfGainDelta(5));
+                }
+            });
+            ui.separator();
+            ui.label(RichText::new("Mode").strong());
+            for mode in HF_WORKSPACE_MODES {
+                let response = ui.add(
+                    egui::Button::selectable(
+                        self.workspace_mode == mode,
+                        RichText::new(mode.label()).size(12.0),
+                    )
+                    .small(),
+                );
+                if response.clicked() {
                     self.workspace_mode = mode;
                     self.profile_dirty = true;
                     self.persist_profile("Mode saved to");
@@ -3518,17 +3601,15 @@ impl QsonautGuiApp {
                     }
                 }
             }
-            ui.separator();
-            ui.label(
-                RichText::new("Other / experimental")
-                    .strong()
-                    .color(Color32::GRAY),
-            );
             for mode in OTHER_WORKSPACE_MODES {
                 let enabled = !mode.is_uhf();
                 let response = ui.add_enabled(
                     enabled,
-                    egui::Button::selectable(self.workspace_mode == mode, mode.label()),
+                    egui::Button::selectable(
+                        self.workspace_mode == mode,
+                        RichText::new(mode.label()).size(12.0),
+                    )
+                    .small(),
                 );
                 if response.clicked() && enabled {
                     self.workspace_mode = mode;
@@ -3544,87 +3625,6 @@ impl QsonautGuiApp {
                     response.on_hover_text("Disabled: no UHF radio is configured for this station");
                 }
             }
-        });
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Band").strong());
-            let current_hz = snapshot.frequency_hz.unwrap_or(0);
-            let radio_profile = self
-                .config
-                .radio
-                .enabled
-                .then(|| native_radio_profile(&self.config.radio.backend, &self.config.radio.model))
-                .flatten();
-            for &(label, frequency_hz) in workspace_band_plan(self.workspace_mode) {
-                if !radio_supports_band(radio_profile, label) {
-                    continue;
-                }
-                let on_band = current_hz.abs_diff(frequency_hz) < 200_000;
-                if ui
-                    .selectable_label(on_band, label)
-                    .on_hover_text(format!("{:.6} MHz", frequency_hz as f64 / 1_000_000.0))
-                    .clicked()
-                {
-                    self.send_command(GuiCommand::ApplyWorkspace {
-                        mode: self.workspace_mode,
-                        frequency_hz,
-                    });
-                }
-            }
-            ui.separator();
-            ui.label(RichText::new("Filter").strong());
-            for filter in 1_u8..=3 {
-                if ui
-                    .add_enabled(
-                        supports_filter,
-                        egui::Button::new(format!("FIL{filter}"))
-                            .selected(snapshot.filter == Some(filter)),
-                    )
-                    .clicked()
-                {
-                    self.send_command(GuiCommand::SetFilter(filter));
-                }
-            }
-            ui.separator();
-            let radio_scope_supported =
-                native_radio_profile(&self.config.radio.backend, &self.config.radio.model)
-                    .is_some_and(|profile| profile.capabilities.spectrum);
-            ui.label(RichText::new("Radio scope").strong());
-            let radio_scope_detail = if !radio_scope_supported {
-                "unavailable".to_string()
-            } else {
-                let view = match self.radio_scope_view {
-                    RadioScopeView::Narrow => {
-                        format!("NARROW · {}", scope_span_label(self.radio_scope_span_code))
-                    }
-                    RadioScopeView::Overview => "ACTIVE BAND".to_string(),
-                };
-                format!("{view} · {}", snapshot.radio_waterfall_status)
-            };
-            ui.label(
-                RichText::new(radio_scope_detail)
-                    .small()
-                    .color(if radio_scope_supported {
-                        Color32::LIGHT_GREEN
-                    } else {
-                        Color32::GRAY
-                    }),
-            );
-            ui.separator();
-            let audio_bandwidth =
-                filter_bandwidth_hz(&snapshot.mode, snapshot.filter).min(AUDIO_MAX_FREQ_HZ);
-            let audio_filter = snapshot
-                .filter
-                .map(|filter| format!("FIL{filter}"))
-                .unwrap_or_else(|| "FIL?".to_string());
-            ui.label(RichText::new("Audio scope").strong());
-            ui.label(
-                RichText::new(format!(
-                    "RX/TX · 0–{audio_bandwidth} Hz · {} · {audio_filter}",
-                    snapshot.mode
-                ))
-                .small()
-                .color(Color32::LIGHT_BLUE),
-            );
         });
     }
 }
@@ -3845,16 +3845,23 @@ impl eframe::App for QsonautGuiApp {
 
         egui::TopBottomPanel::top("header")
             .resizable(false)
-            .min_height(112.0)
             .max_height(240.0)
             .show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
+                ui.scope(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(9.0, 5.0);
+                    ui.spacing_mut().button_padding = egui::vec2(8.0, 8.0);
+                    ui.style_mut().override_font_id = Some(egui::FontId::proportional(15.0));
+                    let visuals = ui.visuals_mut();
+                    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(8);
+                    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(8);
+                    visuals.widgets.active.corner_radius = egui::CornerRadius::same(8);
+                    ui.horizontal_wrapped(|ui| {
                     let spin_angle = self.logo_spin_until.map_or(0.0, |until| {
                         let remaining = until.saturating_duration_since(Instant::now());
                         (1.0 - remaining.as_secs_f32() / 0.7).clamp(0.0, 1.0)
                             * std::f32::consts::TAU
                     });
-                    let logo = egui::Image::new((self.brand_icon.id(), egui::vec2(46.0, 46.0)))
+                    let logo = egui::Image::new((self.brand_icon.id(), egui::vec2(56.0, 56.0)))
                         .corner_radius(8.0)
                         .rotate(spin_angle, egui::Vec2::splat(0.5))
                         .sense(egui::Sense::click());
@@ -3871,13 +3878,13 @@ impl eframe::App for QsonautGuiApp {
                         ui.label(
                             RichText::new("QSONaut")
                                 .strong()
-                                .size(24.0)
+                                .size(30.0)
                                 .color(Color32::from_rgb(109, 224, 255)),
                         );
                         ui.label(
                             RichText::new("AMATEUR RADIO MISSION CONTROL")
                                 .strong()
-                                .size(10.0)
+                                .size(11.0)
                             .color(Color32::from_rgb(255, 137, 108)),
                         );
                     });
@@ -4039,6 +4046,8 @@ impl eframe::App for QsonautGuiApp {
                         },
                     );
                     ui.separator();
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
                     let frequency = snapshot
                         .frequency_hz
                         .map(|hz| format!("{:.6} MHz", hz as f64 / 1_000_000.0))
@@ -4047,20 +4056,71 @@ impl eframe::App for QsonautGuiApp {
                         RichText::new(frequency)
                             .monospace()
                             .strong()
-                            .size(19.0)
+                            .size(25.0)
                             .color(if snapshot.frequency_hz.is_some() {
                                 Color32::from_rgb(120, 225, 255)
                             } else {
                                 theme_warning(ui)
                             }),
                     );
-                    if let Some(hz) = snapshot.frequency_hz {
-                        ui.label(
-                            RichText::new(band_for_frequency(hz))
-                                .strong()
-                                .color(Color32::from_rgb(220, 190, 100)),
-                        );
-                    }
+                    let radio_profile = self
+                        .config
+                        .radio
+                        .enabled
+                        .then(|| {
+                            native_radio_profile(
+                                &self.config.radio.backend,
+                                &self.config.radio.model,
+                            )
+                        })
+                        .flatten();
+                    let current_band = snapshot
+                        .frequency_hz
+                        .map(band_for_frequency)
+                        .filter(|band| !band.is_empty())
+                        .unwrap_or("—");
+                    ui.menu_button(
+                        RichText::new(current_band)
+                            .strong()
+                            .color(Color32::from_rgb(220, 190, 100)),
+                        |ui| {
+                            ui.label(RichText::new("AVAILABLE BANDS").strong());
+                            ui.separator();
+                            let current_hz = snapshot.frequency_hz.unwrap_or(0);
+                            let mut visible_bands = 0;
+                            ui.horizontal_wrapped(|ui| {
+                                for &(label, frequency_hz) in workspace_band_plan(self.workspace_mode) {
+                                    if !radio_supports_band(radio_profile, label) {
+                                        continue;
+                                    }
+                                    visible_bands += 1;
+                                    let selected = current_hz.abs_diff(frequency_hz) < 200_000;
+                                    if styled_selection_button(
+                                        ui,
+                                        label,
+                                        selected,
+                                        Color32::from_rgb(220, 190, 100),
+                                        true,
+                                    )
+                                    .on_hover_text(format!(
+                                        "{:.6} MHz",
+                                        frequency_hz as f64 / 1_000_000.0
+                                    ))
+                                    .clicked()
+                                    {
+                                        self.send_command(GuiCommand::ApplyWorkspace {
+                                            mode: self.workspace_mode,
+                                            frequency_hz,
+                                        });
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            if visible_bands == 0 {
+                                ui.label(RichText::new("No bands available for this mode").weak());
+                            }
+                        },
+                    );
                     ui.separator();
                     ui.label(
                         RichText::new(radio_mode_label(&snapshot.mode, snapshot.data_mode))
@@ -4068,146 +4128,145 @@ impl eframe::App for QsonautGuiApp {
                             .strong()
                             .color(Color32::WHITE),
                     );
-                    ui.label(
-                        RichText::new(
-                            snapshot
-                                .filter
-                                .map(|filter| format!("FIL{filter}"))
-                                .unwrap_or_else(|| "FIL?".to_string()),
-                        )
-                        .monospace()
-                        .color(Color32::GRAY),
+                    let supports_filter = snapshot.supported_controls.contains(&ControlId::Filter);
+                    let filter_label = snapshot
+                        .filter
+                        .map(|filter| format!("FIL{filter}"))
+                        .unwrap_or_else(|| "FIL?".to_string());
+                    ui.menu_button(
+                        RichText::new(filter_label).monospace().color(Color32::GRAY),
+                        |ui| {
+                            ui.label(RichText::new("FILTER").strong());
+                            ui.separator();
+                            for filter in 1_u8..=3 {
+                                if styled_selection_button(
+                                    ui,
+                                    &format!("FIL{filter}"),
+                                    snapshot.filter == Some(filter),
+                                    Color32::from_rgb(160, 205, 230),
+                                    supports_filter,
+                                )
+                                .clicked()
+                                {
+                                    self.send_command(GuiCommand::SetFilter(filter));
+                                    ui.close();
+                                }
+                            }
+                        },
                     );
-                    ui.label(
-                        RichText::new(self.workspace_mode.label())
-                            .strong()
-                            .color(Color32::LIGHT_BLUE),
-                    );
-                    let activity_profile = self.activity.profile();
-                    ui.label(
-                        RichText::new(activity_profile.tx_cq)
-                            .small()
-                            .monospace()
-                            .color(Color32::from_rgb(255, 190, 105)),
-                    )
-                    .on_hover_text("Activity TX starter; mode panels will consume this profile incrementally");
-                    if let Some(client) = &self.server_client {
-                        let server_status = client.status();
-                        let server_connected =
-                            server_status.state == ServerConnectionState::Connected;
-                        if server_connected && server_status.active_event_count > 0 {
-                            let participating = self.activity == OperatingActivity::Contest
-                                && self.contest_enabled;
-                            let label = if participating {
-                                "✅ SERVER CONTEST · PARTICIPATING".to_string()
-                            } else {
-                                format!("✅ SERVER CONTEST · {} ACTIVE", server_status.active_event_count)
-                            };
                             ui.label(
-                                RichText::new(label)
-                                    .small()
+                                RichText::new(self.workspace_mode.label())
                                     .strong()
-                                    .color(Color32::from_rgb(125, 225, 150)),
-                            )
-                            .on_hover_text(
-                                "Active events reported by QSONaut Server; contest participation is controlled by the contest workflow",
+                                    .color(Color32::LIGHT_BLUE),
                             );
-                        }
-                    }
-                    let active_profile = self.active_radio_profile_name().unwrap_or("None");
-                    ui.label(
-                        RichText::new(format!("📻 {active_profile}"))
-                            .small()
-                            .color(if active_profile == "None" {
-                                Color32::GRAY
-                            } else {
-                                Color32::from_rgb(255, 201, 92)
-                            }),
-                    )
-                    .on_hover_text(
-                        "Enabled radio tuning profile for this QSONaut mode; edit it in RADIO TUNING",
-                    );
+                            let activity_profile = self.activity.profile();
+                            ui.label(
+                                RichText::new(activity_profile.tx_cq)
+                                    .size(15.0)
+                                    .monospace()
+                                    .color(Color32::from_rgb(255, 190, 105)),
+                            );
+                            if let Some(client) = &self.server_client {
+                                let server_status = client.status();
+                                if server_status.state == ServerConnectionState::Connected
+                                    && server_status.active_event_count > 0
+                                {
+                                    let label = if self.activity == OperatingActivity::Contest
+                                        && self.contest_enabled
+                                    {
+                                        "✅ SERVER CONTEST · PARTICIPATING".to_string()
+                                    } else {
+                                        format!(
+                                            "✅ SERVER CONTEST · {} ACTIVE",
+                                            server_status.active_event_count
+                                        )
+                                    };
+                                    ui.label(
+                                        RichText::new(label)
+                                            .size(15.0)
+                                            .strong()
+                                            .color(Color32::from_rgb(125, 225, 150)),
+                                    );
+                                }
+                            }
+                            let active_profile = self.active_radio_profile_name().unwrap_or("None");
+                            ui.label(
+                                RichText::new(format!("📻 {active_profile}"))
+                                    .size(15.0)
+                                    .color(if active_profile == "None" {
+                                        Color32::GRAY
+                                    } else {
+                                        Color32::from_rgb(255, 201, 92)
+                                    }),
+                            );
+                    });
+                        self.draw_banner_radio_controls(ui, &snapshot);
+                    });
                     let radio_ready = snapshot.radio_power_on == Some(true)
                         && !snapshot.radio_power_command_pending;
                     let supports_control = |id| snapshot.supported_controls.contains(&id);
-                    let tuning_color = if !radio_ready {
-                        Color32::GRAY
-                    } else if [ControlId::AfGain, ControlId::RfGain, ControlId::RfPower]
-                        .iter()
-                        .all(|id| supports_control(*id))
-                    {
-                        Color32::LIGHT_BLUE
-                    } else {
-                        Color32::from_rgb(180, 180, 190)
-                    };
-                    let tuning_menu = ui.menu_button(
-                        RichText::new("RX/TX").small().monospace().color(tuning_color),
-                        |ui| {
+                    ui.scope(|ui| {
+                        ui.spacing_mut().button_padding.y = 4.0;
+                        ui.horizontal(|ui| {
+                            ui.separator();
                             ui.horizontal(|ui| {
-                                for (label, id, value, tooltip) in [
-                                    (
-                                        "AF",
-                                        ControlId::AfGain,
-                                        snapshot.af_gain,
-                                        "Audio receive gain",
-                                    ),
-                                    (
-                                        "RF",
-                                        ControlId::RfGain,
-                                        snapshot.rf_gain,
-                                        "RF receive gain",
-                                    ),
-                                    (
-                                        "SQ",
-                                        ControlId::Squelch,
-                                        snapshot.squelch,
-                                        "Squelch threshold",
-                                    ),
-                                    (
-                                        "TX",
-                                        ControlId::RfPower,
-                                        snapshot.rf_power,
-                                        "RF transmit power",
-                                    ),
-                                ] {
-                                    ui.vertical(|ui| {
-                                        ui.label(label);
-                                        let mut percent = value
-                                            .map(|raw| f32::from(raw) * 100.0 / 255.0)
-                                            .unwrap_or_default();
-                                        let response = ui.add_enabled(
-                                            supports_control(id) && radio_ready,
-                                            egui::Slider::new(&mut percent, 0.0..=100.0)
-                                                .step_by(1.0)
-                                                .vertical()
-                                                .show_value(false),
-                                        );
-                                        ui.label(format!("{percent:.0}%"));
-                                        if response.changed() && response.drag_stopped() {
-                                            let normalized = (percent.clamp(0.0, 100.0) * 255.0
-                                                / 100.0)
-                                                .round()
-                                                as u8;
-                                            self.send_command(GuiCommand::SetControl(
-                                                id,
-                                                ControlValue::U8(normalized),
-                                            ));
-                                        }
-                                        response.on_hover_text(if !supports_control(id) {
-                                            "This control is not supported by the loaded radio profile"
-                                        } else if !radio_ready {
-                                            "Unavailable while the radio is offline or waking"
-                                        } else {
-                                            tooltip
-                                        });
-                                    });
-                                }
+                        let speaker_color = if radio_ready {
+                            Color32::LIGHT_BLUE
+                        } else {
+                            Color32::GRAY
+                        };
+                        let (speaker_rect, speaker_response) = ui.allocate_exact_size(
+                            egui::vec2(22.0, 22.0),
+                            egui::Sense::hover(),
+                        );
+                        draw_speaker_icon(&ui.painter_at(speaker_rect), speaker_rect, speaker_color);
+                        speaker_response.on_hover_text("RX/TX volume controls");
                             });
-                        },
-                    );
-                    tuning_menu.response.on_hover_text(
-                        "Click for receive-gain and transmit-power controls; values are percentages",
-                    );
+                            for (label, id, value, tooltip) in [
+                        ("AF", ControlId::AfGain, snapshot.af_gain, "Audio receive gain"),
+                        ("RF", ControlId::RfGain, snapshot.rf_gain, "RF receive gain"),
+                        ("SQ", ControlId::Squelch, snapshot.squelch, "Squelch threshold"),
+                        ("TX", ControlId::RfPower, snapshot.rf_power, "RF transmit power"),
+                            ] {
+                        let color = if supports_control(id) && radio_ready {
+                            Color32::LIGHT_BLUE
+                        } else {
+                            Color32::GRAY
+                        };
+                        ui.menu_button(
+                            RichText::new(label).size(12.0).monospace().color(color),
+                            |ui| {
+                                let mut percent = value
+                                    .map(|raw| f32::from(raw) * 100.0 / 255.0)
+                                    .unwrap_or_default();
+                                let response = ui.add_enabled(
+                                    supports_control(id) && radio_ready,
+                                    egui::Slider::new(&mut percent, 0.0..=100.0)
+                                        .vertical()
+                                        .show_value(false),
+                                );
+                                ui.label(format!("{percent:.0}%"));
+                                if response.changed() && response.drag_stopped() {
+                                    let normalized = (percent.clamp(0.0, 100.0) * 255.0 / 100.0)
+                                        .round()
+                                        as u8;
+                                    self.send_command(GuiCommand::SetControl(
+                                        id,
+                                        ControlValue::U8(normalized),
+                                    ));
+                                }
+                                response.on_hover_text(if !supports_control(id) {
+                                    "This control is not supported by the loaded radio profile"
+                                } else if !radio_ready {
+                                    "Unavailable while the radio is offline or waking"
+                                } else {
+                                    tooltip
+                                });
+                            },
+                        );
+                            }
+                        });
+                    });
                     if supports_control(ControlId::Tuner) {
                         let tuner_color = if snapshot.tuner_status.is_some_and(|status| status.tuning) {
                             Color32::YELLOW
@@ -4732,6 +4791,30 @@ impl eframe::App for QsonautGuiApp {
                             }
                         });
                     });
+                    let radio_scope_supported = native_radio_profile(
+                        &self.config.radio.backend,
+                        &self.config.radio.model,
+                    )
+                    .is_some_and(|profile| profile.capabilities.spectrum);
+                    if radio_scope_supported {
+                        let radio_scope_detail = match self.radio_scope_view {
+                            RadioScopeView::Narrow => {
+                                format!("NARROW · {}", scope_span_label(self.radio_scope_span_code))
+                            }
+                            RadioScopeView::Overview => "ACTIVE BAND".to_string(),
+                        };
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!(
+                                    "Radio scope · {radio_scope_detail} · {}",
+                                    snapshot.radio_waterfall_status
+                                ))
+                                .size(12.0)
+                                .color(Color32::LIGHT_GREEN),
+                            )
+                            .truncate(),
+                        );
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let power_known = snapshot.radio_power_on.is_some();
                         let power_on = snapshot.radio_power_on.unwrap_or(false);
@@ -4792,9 +4875,8 @@ impl eframe::App for QsonautGuiApp {
                             .color(Color32::from_rgb(255, 210, 110)),
                         );
                     });
+                    });
                 });
-                ui.separator();
-                self.draw_banner_radio_controls(ui, &snapshot);
             });
 
         let supports_radio_scope =
