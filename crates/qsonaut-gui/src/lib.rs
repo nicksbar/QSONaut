@@ -4235,7 +4235,7 @@ impl QsonautGuiApp {
             ui.separator();
             ui.label("Original author");
             ui.label(RichText::new("N7UF").strong());
-            ui.label("Copyright © 2024–2026 N7UF and contributors");
+            ui.label("Copyright © 2026 N7UF and contributors");
             ui.label("Released under the MIT License.");
             ui.separator();
             ui.label(RichText::new("Contributors").strong());
