@@ -10,6 +10,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [0.3.9] - 2026-08-24
 
 ### Added
+- Updated `mfsk-core` to `0.10.1` (`62803e7`), including its JT9 sample-rate
+  constant cleanup and latest decoder/tooling compatibility updates. Upstream
+  reports no public API or decoder-behavior change in this patch release.
 - Added a lower-right radio-themed About panel with version, copyright,
   author, contributor/tester credits, GitHub, issue-reporting, and qsonaut.com
   links. Release credits can be supplied through repository Actions variables.
