@@ -137,7 +137,7 @@ pub(super) fn draw_radio_about_icon(painter: &egui::Painter, rect: egui::Rect, c
             egui::pos2(center.x, body.top()),
             egui::pos2(center.x + 4.0, center.y - 10.0),
         ],
-        egui::Stroke::new(1.5, color),
+        egui::Stroke::new(1.5_f32, color),
     );
     painter.circle_stroke(
         egui::pos2(center.x + 4.0, center.y - 10.0),

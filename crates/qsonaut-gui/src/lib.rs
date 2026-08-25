@@ -4649,10 +4649,7 @@ impl eframe::App for QsonautGuiApp {
             s.radio_scope_hold = self.radio_scope_hold;
             s.radio_scope_reference_tenths_db = self.radio_scope_reference_tenths_db;
             s.radio_scope_view = self.radio_scope_view;
-            (
-                s.ft8_pending.drain(..).collect::<Vec<_>>(),
-                s.ft8_last_decode_period,
-            )
+            (std::mem::take(&mut s.ft8_pending), s.ft8_last_decode_period)
         };
         let completed_decode_period =
             latest_decode_period.filter(|period| self.ft8_seen_decode_period != Some(*period));
@@ -6386,8 +6383,10 @@ mod tests {
 
     fn decode_pcm_samples(bytes: &[u8]) -> Vec<i16> {
         bytes
-            .chunks_exact(2)
-            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| i16::from_le_bytes(*chunk))
             .collect()
     }
 
