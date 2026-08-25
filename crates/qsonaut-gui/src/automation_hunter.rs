@@ -736,10 +736,8 @@ impl QsonautGuiApp {
                                 target,
                                 message,
                             } => {
-                                self.automation_status = format!(
-                                    "{}",
-                                    self.execute_automation_external_send(source, target, message)
-                                );
+                                self.automation_status =
+                                    self.execute_automation_external_send(source, target, message);
                             }
                             Action::ServerSync => {
                                 self.automation_status = if let Some(client) = &self.server_client {
@@ -768,16 +766,12 @@ impl QsonautGuiApp {
                                     };
                             }
                             Action::RadioCommand { command, value } => {
-                                self.automation_status = format!(
-                                    "{}",
-                                    self.execute_automation_radio_command(command, value)
-                                );
+                                self.automation_status =
+                                    self.execute_automation_radio_command(command, value);
                             }
                             Action::RequestTransmit { mode, message } => {
-                                self.automation_status = format!(
-                                    "{}",
-                                    self.execute_automation_transmit_request(mode, message)
-                                );
+                                self.automation_status =
+                                    self.execute_automation_transmit_request(mode, message);
                             }
                         }
                         let status = self.automation_status.to_ascii_lowercase();

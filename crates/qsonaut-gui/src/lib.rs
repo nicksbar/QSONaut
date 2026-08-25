@@ -3150,18 +3150,14 @@ impl QsonautGuiApp {
             .filter(|band| !band.is_empty())
             .unwrap_or("—");
         let identity = format!("{band} · {}", workspace_mode.label());
-        let radio_detail = if radio_failed {
-            format!("Radio: {radio_status}")
-        } else if radio_status.starts_with("CONNECTING") {
+        let radio_detail = if radio_failed || radio_status.starts_with("CONNECTING") {
             format!("Radio: {radio_status}")
         } else if radio_enabled {
             "Radio: connected".to_string()
         } else {
             "Radio: off".to_string()
         };
-        let audio_detail = if audio_failed {
-            format!("Audio: {audio_status}")
-        } else if audio_status == "INIT" {
+        let audio_detail = if audio_failed || audio_status == "INIT" {
             format!("Audio: {audio_status}")
         } else if audio_enabled {
             "Audio: live RX".to_string()

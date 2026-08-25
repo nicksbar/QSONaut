@@ -10,6 +10,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [0.3.9] - 2026-08-24
 
 ### Added
+- Added opt-in shared QSONaut Server log delivery with queued, retry-safe QSO
+  publication so temporary server failures do not block local logging.
 - Updated `mfsk-core` to `0.10.1` (`62803e7`), including its JT9 sample-rate
   constant cleanup and latest decoder/tooling compatibility updates. Upstream
   reports no public API or decoder-behavior change in this patch release.
@@ -33,6 +35,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   Digital Timing, Monitoring, and Waterfall tabs.
 
 ### Changed
+- Updated native radio integration to the published Rigwright `0.1.10`
+  release, including the current capability and meter/control behavior.
 - Migrated the desktop renderer to WGPU-only operation with explicit Vulkan,
   DX12, Metal, GL, and WGSL backend features; removed the Glow path, added
   logged hardware-aware backend selection and WSL fallback, and documented the
