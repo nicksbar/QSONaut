@@ -14,6 +14,7 @@ use super::{
 
 pub(super) const OPERATOR_PROFILE_FILE: &str = "profile.toml";
 pub(super) const OPERATOR_PROFILE_VERSION: u32 = 15;
+const RADIO_PROFILE_LIBRARY_FILE: &str = "radio-profiles.toml";
 const LEGACY_OPERATOR_PROFILE_FILE: &str = ".rigforge_profile.toml";
 const DEFAULT_PROFILE_NAME: &str = "Default";
 const OPERATOR_PROFILES_DIR: &str = "profiles";
@@ -169,7 +170,10 @@ pub(super) struct OperatorProfile {
     pub(super) hunter_alerts_enabled: bool,
     #[serde(default)]
     pub(super) hunter_custom_rules: Vec<CustomAchievementRule>,
-    #[serde(default)]
+    // Kept readable for one migration pass from pre-library profile files.
+    // Reusable radio definitions now live in the global radio profile library;
+    // only mode assignments remain profile-specific.
+    #[serde(default, skip_serializing)]
     pub(super) radio_profiles: Vec<RadioProfile>,
     #[serde(default)]
     pub(super) mode_radio_profile: std::collections::BTreeMap<String, String>,
@@ -202,6 +206,42 @@ pub(super) struct RadioProfile {
     pub(super) noise_reduction: Option<bool>,
     #[serde(default)]
     pub(super) agc: Option<u8>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct RadioProfileLibrary {
+    #[serde(default)]
+    profiles: Vec<RadioProfile>,
+}
+
+fn radio_profile_library_path() -> PathBuf {
+    app_config_dir().join(RADIO_PROFILE_LIBRARY_FILE)
+}
+
+pub(super) fn load_radio_profile_library() -> Vec<RadioProfile> {
+    let path = radio_profile_library_path();
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|source| toml::from_str::<RadioProfileLibrary>(&source).ok())
+        .map(|library| library.profiles)
+        .unwrap_or_default()
+}
+
+pub(super) fn save_radio_profile_library(profiles: &[RadioProfile]) -> Result<()> {
+    let path = radio_profile_library_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let library = RadioProfileLibrary {
+        profiles: profiles.to_vec(),
+    };
+    fs::write(&path, toml::to_string_pretty(&library)?)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 pub(super) fn default_gui_scale() -> f32 {

@@ -13,12 +13,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   coverage.
 - Added a full multi-radio operating model: every profile tab owns independent
   radio, audio, decoder, monitor, waterfall, and control state, and remains
-  live while another tab is active. Tabs can be started, stopped, switched,
-  and closed independently without reconnecting or reloading the other radios.
+  live while another tab is active. Tabs can be started, stopped, and switched
+  independently without reconnecting or reloading the other radios; a profile
+  always has a tab, and deleting the profile removes its tab.
 - Added profile-scoped radio/audio device assignment, live device refresh, and
   clear in-use labels so multiple radios can be configured without silently
   sharing hardware, including independent monitoring and failure recovery per
   profile.
+- Added a global reusable radio-tuning library with per-profile, per-mode
+  assignments and a profile-management drawer with direct Radio, Tuning,
+  Digital Timing, Monitoring, and Waterfall tabs.
 
 ### Changed
 - Migrated the desktop renderer to WGPU-only operation with explicit Vulkan,

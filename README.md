@@ -49,6 +49,10 @@ implementation-level status of radio controls, normalized meters, SWR/tuner
 workflows, digital modes, SSTV, station tools, server integration, automation,
 and deliberate gaps.
 
+For the settings split between application-wide station state, independent
+radio tabs, and shared radio-tuning definitions, see
+[Settings ownership](docs/settings-ownership.md).
+
 The primary development environment is Linux/WSL with USB audio and Icom CI-V.
 Windows and ARM build jobs exist, but a green build is not the same as hardware
 validation.

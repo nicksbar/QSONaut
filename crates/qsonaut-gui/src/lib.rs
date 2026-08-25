@@ -102,9 +102,10 @@ use profile::{
     default_psk_batch_interval_secs, default_psk_max_pending, default_psk_repeat_cache_secs,
     default_ptt_lead_ms, default_ptt_tail_ms, default_rx_tone_hz, default_tx_tone_hz,
     default_waterfall_deck_height, list_operator_profiles, load_operator_profile,
-    load_operator_profile_named, remove_operator_profile_named, save_operator_profile,
-    save_operator_profile_named, select_operator_profile, OperatorProfile, RadioProfile,
-    OPERATOR_PROFILE_FILE, OPERATOR_PROFILE_VERSION,
+    load_operator_profile_named, load_radio_profile_library, remove_operator_profile_named,
+    save_operator_profile, save_operator_profile_named, save_radio_profile_library,
+    select_operator_profile, OperatorProfile, RadioProfile, OPERATOR_PROFILE_FILE,
+    OPERATOR_PROFILE_VERSION,
 };
 #[cfg(test)]
 use tx_audio::FT8_TX_AUDIO_START_S;
@@ -166,15 +167,25 @@ const FT4_ADAPTIVE_OFFSET_LIMIT_S: f32 = 1.0;
 enum SignalPanelTab {
     #[default]
     Achievements,
-    Profile,
+    Station,
     Contest,
     Reporting,
-    Waterfall,
     Settings,
     Ai,
     Server,
     RadioTuning,
     AppLog,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ProfileDrawerTab {
+    #[default]
+    Profile,
+    Radio,
+    Tuning,
+    DigitalTiming,
+    Monitoring,
+    Waterfall,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1485,7 +1496,6 @@ struct QsonautGuiApp {
     radio_init_attempted: bool,
     radio_worker_handle: Option<std::thread::JoinHandle<()>>,
     parked_radio_sessions: HashMap<String, RadioSession>,
-    closed_radio_tabs: HashSet<String>,
     audio_worker_handle: Option<std::thread::JoinHandle<()>>,
     radio_waterfall_texture: Option<TextureHandle>,
     radio_waterfall_texture_revision: u64,
@@ -1684,6 +1694,8 @@ struct QsonautGuiApp {
     waterfall_deck_height: f32,
     waterfall_deck_resize_pending: bool,
     show_signal_panel: bool,
+    show_profile_drawer: bool,
+    profile_drawer_tab: ProfileDrawerTab,
     signal_panel_tab: SignalPanelTab,
     device_restart_required: bool,
     audio_restart_required: bool,
@@ -2035,7 +2047,7 @@ impl QsonautGuiApp {
         let mut hunter_acknowledged = HashSet::new();
         let mut hunter_alerts_enabled = true;
         let mut hunter_custom_rules = Vec::new();
-        let mut radio_profiles = Vec::new();
+        let mut radio_profiles = load_radio_profile_library();
         let mut mode_radio_profile = std::collections::BTreeMap::new();
         let mut workspace_mode = WorkspaceMode::Ft8;
         let profile_io_status: String;
@@ -2117,7 +2129,31 @@ impl QsonautGuiApp {
             hunter_acknowledged = p.hunter_acknowledged.into_iter().collect();
             hunter_alerts_enabled = p.hunter_alerts_enabled;
             hunter_custom_rules = p.hunter_custom_rules;
-            radio_profiles = p.radio_profiles;
+            if radio_profiles.is_empty() {
+                radio_profiles = p.radio_profiles.clone();
+                for name in list_operator_profiles() {
+                    if let Some(legacy_profile) = load_operator_profile_named(&name) {
+                        for candidate in legacy_profile.radio_profiles {
+                            if !radio_profiles
+                                .iter()
+                                .any(|profile| profile.name == candidate.name)
+                            {
+                                radio_profiles.push(candidate);
+                            }
+                        }
+                    }
+                }
+                if !radio_profiles.is_empty() {
+                    if let Err(error) = save_radio_profile_library(&radio_profiles) {
+                        warn!(%error, "Failed to migrate radio profiles to global library");
+                    } else {
+                        info!(
+                            count = radio_profiles.len(),
+                            "Migrated radio profiles to global library"
+                        );
+                    }
+                }
+            }
             mode_radio_profile = p.mode_radio_profile;
             workspace_mode =
                 parse_workspace_mode_token(&p.workspace_mode).unwrap_or(WorkspaceMode::Ft8);
@@ -2335,7 +2371,6 @@ impl QsonautGuiApp {
             radio_init_attempted: false,
             radio_worker_handle,
             parked_radio_sessions,
-            closed_radio_tabs: HashSet::new(),
             audio_worker_handle,
             radio_waterfall_texture: None,
             radio_waterfall_texture_revision: 0,
@@ -2531,6 +2566,8 @@ impl QsonautGuiApp {
             waterfall_deck_height,
             waterfall_deck_resize_pending: false,
             show_signal_panel: true,
+            show_profile_drawer: false,
+            profile_drawer_tab: ProfileDrawerTab::Profile,
             signal_panel_tab: SignalPanelTab::Achievements,
             device_restart_required: false,
             audio_restart_required: false,
@@ -2637,7 +2674,6 @@ impl QsonautGuiApp {
             .max(self.contest_serial_start)
             .max(1);
         self.contest_fake_split_offset_hz = profile.contest_fake_split_offset_hz.clamp(0, 2_000);
-        self.radio_profiles = profile.radio_profiles.clone();
         self.mode_radio_profile = profile.mode_radio_profile.clone();
 
         // Switching tabs never restores armed or in-flight transmit state.
@@ -2823,35 +2859,212 @@ impl QsonautGuiApp {
         }
     }
 
-    fn close_radio_tab(&mut self, name: &str) {
-        let open_tab_count = self
-            .available_profiles
-            .iter()
-            .filter(|profile| !self.closed_radio_tabs.contains(*profile))
-            .count();
-        if open_tab_count <= 1 {
-            self.profile_io_status = "The last radio tab cannot be closed".to_string();
-            return;
+    fn draw_activity_selector(&mut self, ui: &mut egui::Ui) {
+        let selected_activity = self.activity;
+        let server_context = self.server_client.as_ref().map(ServerClient::status);
+        let activity_button_label = self
+            .server_active_event
+            .as_ref()
+            .map(|(_, name)| format!("🏁 Contest · {name}"))
+            .or_else(|| {
+                self.server_active_club
+                    .as_ref()
+                    .map(|(_, name)| format!("🌐 {} · {name}", selected_activity.label()))
+            })
+            .unwrap_or_else(|| format!("📻 {}", selected_activity.label()));
+        let previous_interact_height = ui.spacing().interact_size.y;
+        ui.spacing_mut().interact_size.y = 64.0;
+        ui.menu_button(
+            RichText::new(activity_button_label)
+                .strong()
+                .color(Color32::from_rgb(255, 190, 105)),
+            |ui| {
+                ui.label(RichText::new("OPERATING ACTIVITY").strong());
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    for activity in OperatingActivity::ALL {
+                        let (rect, response) =
+                            ui.allocate_exact_size(egui::vec2(78.0, 52.0), egui::Sense::click());
+                        let fill = if selected_activity == activity {
+                            ui.visuals().selection.bg_fill
+                        } else if response.hovered() {
+                            ui.visuals().widgets.hovered.bg_fill
+                        } else {
+                            ui.visuals().widgets.inactive.bg_fill
+                        };
+                        ui.painter().rect_filled(rect, 4.0, fill);
+                        draw_activity_icon(
+                            ui.painter(),
+                            activity,
+                            rect.center_top() + egui::vec2(0.0, 14.0),
+                            ui.visuals().text_color(),
+                        );
+                        ui.painter().text(
+                            rect.center_bottom() - egui::vec2(0.0, 8.0),
+                            egui::Align2::CENTER_CENTER,
+                            activity.label(),
+                            egui::FontId::proportional(12.0),
+                            ui.visuals().text_color(),
+                        );
+                        if response.clicked() {
+                            info!(activity = %activity.label(), "Operating activity changed");
+                            self.activity = activity;
+                            ui.close();
+                        }
+                    }
+                });
+                if let Some(server_context) = &server_context {
+                    if !server_context.clubs.is_empty() || !server_context.active_events.is_empty()
+                    {
+                        ui.separator();
+                        ui.label(
+                            RichText::new("🌐 SERVER ACTIVITIES")
+                                .strong()
+                                .color(Color32::from_rgb(110, 220, 255)),
+                        );
+                        if !server_context.clubs.is_empty() {
+                            ui.label(RichText::new("🌐 ACTIVE CLUB").small().strong());
+                            for club in &server_context.clubs {
+                                let selected = self
+                                    .server_active_club
+                                    .as_ref()
+                                    .is_some_and(|(id, _)| id == &club.id);
+                                let label = club
+                                    .callsign
+                                    .as_deref()
+                                    .map(|callsign| format!("{} · {}", club.name, callsign))
+                                    .unwrap_or_else(|| club.name.clone());
+                                if ui.selectable_label(selected, label).clicked() {
+                                    self.server_active_club =
+                                        Some((club.id.clone(), club.name.clone()));
+                                    self.server_active_event = None;
+                                    ui.close();
+                                }
+                            }
+                        }
+                        if !server_context.active_events.is_empty() {
+                            ui.label(RichText::new("🏁 ACTIVE CONTESTS").small().strong());
+                            for contest in &server_context.active_events {
+                                let selected = self
+                                    .server_active_event
+                                    .as_ref()
+                                    .is_some_and(|(id, _)| id == &contest.id);
+                                let label = if contest.contest_name.is_empty() {
+                                    format!("{} · {}", contest.name, contest.club_name)
+                                } else {
+                                    format!(
+                                        "{} · {} · {}",
+                                        contest.name, contest.contest_name, contest.club_name
+                                    )
+                                };
+                                ui.horizontal(|ui| {
+                                    if ui.selectable_label(selected, label).clicked() {
+                                        self.activity = OperatingActivity::Contest;
+                                        self.server_active_club = Some((
+                                            contest.club_id.clone(),
+                                            contest.club_name.clone(),
+                                        ));
+                                        self.server_active_event =
+                                            Some((contest.id.clone(), contest.name.clone()));
+                                        ui.close();
+                                    }
+                                    let starts = contest
+                                        .starts_at
+                                        .get(0..16)
+                                        .unwrap_or(&contest.starts_at)
+                                        .replace('T', " ");
+                                    let ends = contest
+                                        .ends_at
+                                        .get(0..16)
+                                        .unwrap_or(&contest.ends_at)
+                                        .replace('T', " ");
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "{starts} → {ends} · {} op",
+                                            contest.participant_count
+                                        ))
+                                        .small()
+                                        .color(Color32::GRAY),
+                                    );
+                                });
+                            }
+                        }
+                        if (self.server_active_club.is_some() || self.server_active_event.is_some())
+                            && ui.small_button("✕ CLEAR SERVER ACTIVITY").clicked()
+                        {
+                            self.server_active_club = None;
+                            self.server_active_event = None;
+                            ui.close();
+                        }
+                    }
+                }
+                let profile = self.activity.profile();
+                let band_summary = if profile.bands.is_unrestricted() {
+                    "all core".to_string()
+                } else {
+                    profile.bands.labels().join(", ")
+                };
+                let mode_summary = if profile.modes.is_unrestricted() {
+                    "all core".to_string()
+                } else {
+                    profile
+                        .modes
+                        .modes()
+                        .iter()
+                        .map(|mode| mode.label())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                ui.separator();
+                ui.label(
+                    RichText::new(format!(
+                        "{}  ·  Bands {}  ·  Modes {}",
+                        profile.tx_cq, band_summary, mode_summary,
+                    ))
+                    .small()
+                    .color(Color32::GRAY),
+                );
+            },
+        );
+        ui.spacing_mut().interact_size.y = previous_interact_height;
+    }
+
+    fn draw_header_branding(&mut self, ui: &mut egui::Ui) {
+        let spin_angle = self.logo_spin_until.map_or(0.0, |until| {
+            let remaining = until.saturating_duration_since(Instant::now());
+            (1.0 - remaining.as_secs_f32() / 0.7).clamp(0.0, 1.0) * std::f32::consts::TAU
+        });
+        let logo = egui::Image::new((self.brand_icon.id(), egui::vec2(68.0, 68.0)))
+            .corner_radius(8.0)
+            .rotate(spin_angle, egui::Vec2::splat(0.5))
+            .sense(egui::Sense::click());
+        let logo_response = ui.add(logo);
+        if logo_response.clicked() {
+            self.handle_logo_click();
         }
-        let was_active = name == self.selected_profile_name;
-        if was_active {
-            let replacement = self
-                .available_profiles
-                .iter()
-                .find(|candidate| {
-                    candidate.as_str() != name && !self.closed_radio_tabs.contains(*candidate)
-                })
-                .cloned();
-            if let Some(replacement) = replacement {
-                self.switch_radio_tab(&replacement);
-            }
+        if self
+            .logo_spin_until
+            .is_some_and(|until| Instant::now() < until)
+        {
+            ui.ctx().request_repaint();
+        } else {
+            self.logo_spin_until = None;
         }
-        if let Some(session) = self.parked_radio_sessions.remove(name) {
-            stop_radio_session(session);
-        }
-        self.closed_radio_tabs.insert(name.to_string());
-        info!(profile = name, "Radio tab closed");
-        self.profile_io_status = format!("Radio tab ‘{name}’ closed; profile remains saved");
+        ui.vertical(|ui| {
+            ui.label(
+                RichText::new("QSONaut")
+                    .strong()
+                    .size(36.0)
+                    .color(Color32::from_rgb(109, 224, 255)),
+            );
+            ui.label(
+                RichText::new("AMATEUR RADIO MISSION CONTROL")
+                    .strong()
+                    .size(12.0)
+                    .color(Color32::from_rgb(255, 137, 108)),
+            );
+        });
+        self.draw_activity_selector(ui);
     }
 
     fn radio_tab_status(
@@ -3074,7 +3287,6 @@ impl QsonautGuiApp {
         if save_previous {
             self.persist_profile("Saved");
         }
-        self.closed_radio_tabs.remove(name);
         self.park_active_radio_session();
         self.selected_profile_name = name.to_string();
         self.config.radio = self.radio_config_for_profile(&profile);
@@ -3155,6 +3367,9 @@ impl QsonautGuiApp {
     }
 
     fn persist_profile(&mut self, status_prefix: &str) {
+        if let Err(error) = save_radio_profile_library(&self.radio_profiles) {
+            warn!(%error, "Radio profile library save failed");
+        }
         match save_operator_profile_named(
             &self.selected_profile_name,
             &self.current_operator_profile(),
@@ -3193,15 +3408,9 @@ impl QsonautGuiApp {
             self.config.radio.civ_address,
             self.config.radio.controller_civ_address,
         );
-        self.station_callsign = profile.callsign;
-        self.station_grid = profile.grid;
-        self.station_qth = profile.qth;
-        self.station_rig = profile.station_rig;
-        self.station_antenna = profile.station_antenna;
-        self.station_notes = profile.station_notes;
-        self.llm_prompt_context = profile.llm_prompt_context;
-        self.sstv_image_requirements = profile.sstv_image_requirements;
-        self.llm_model_notes = profile.llm_model_notes;
+        // Station identity and app-wide preferences remain owned by the
+        // current application session; switching radio profiles must not
+        // silently replace the operator or global UI/compute policy.
         self.ft8_follow_log = profile.follow_log;
         self.ft8_max_log_entries = profile.max_log_entries.clamp(80, 1000);
         self.ft8_deep_decode = profile.deep_decode;
@@ -3256,14 +3465,7 @@ impl QsonautGuiApp {
         self.hunter_acknowledged = profile.hunter_acknowledged.into_iter().collect();
         self.hunter_alerts_enabled = profile.hunter_alerts_enabled;
         self.hunter_custom_rules = profile.hunter_custom_rules;
-        self.radio_profiles = profile.radio_profiles;
         self.mode_radio_profile = profile.mode_radio_profile;
-        self.gui_scale = if profile.profile_version >= GUI_SCALE_PROFILE_VERSION {
-            profile.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
-        } else {
-            default_gui_scale()
-        };
-        self.compute_preference = profile.compute_preference;
         self.psk_reporter_enabled = profile.psk_reporter_enabled;
         self.psk_batch_interval_secs = profile.psk_batch_interval_secs.clamp(60, 3_600);
         self.psk_repeat_cache_secs = profile.psk_repeat_cache_secs.clamp(60, 3_600);
@@ -3377,8 +3579,6 @@ impl QsonautGuiApp {
         } else if let Some(session) = self.parked_radio_sessions.remove(name) {
             stop_radio_session(session);
         }
-        self.closed_radio_tabs.remove(name);
-
         self.available_profiles = list_operator_profiles();
         if self.selected_profile_name.eq_ignore_ascii_case(name) {
             self.selected_profile_name = replacement.clone();
@@ -3829,7 +4029,9 @@ impl QsonautGuiApp {
             hunter_acknowledged: self.hunter_acknowledged.iter().copied().collect(),
             hunter_alerts_enabled: self.hunter_alerts_enabled,
             hunter_custom_rules: self.hunter_custom_rules.clone(),
-            radio_profiles: self.radio_profiles.clone(),
+            // Reusable radio definitions are global; the profile only stores
+            // the per-mode assignment above.
+            radio_profiles: Vec::new(),
             mode_radio_profile: self.mode_radio_profile.clone(),
             workspace_mode: self.workspace_mode.label().to_string(),
         }
@@ -4557,9 +4759,10 @@ impl eframe::App for QsonautGuiApp {
         self.emit_radio_state_hook_if_changed(&snapshot);
         self.publish_server_presence(&snapshot);
 
-        egui::TopBottomPanel::top("header")
+        // New panel identity intentionally discards the legacy fixed-height
+        // state; this header is measured entirely from its current contents.
+        egui::TopBottomPanel::top("header_content_sized")
             .resizable(false)
-            .max_height(240.0)
             .show(ctx, |ui| {
                 ui.scope(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(9.0, 5.0);
@@ -4569,25 +4772,25 @@ impl eframe::App for QsonautGuiApp {
                     visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(8);
                     visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(8);
                     visuals.widgets.active.corner_radius = egui::CornerRadius::same(8);
-                    let radio_tabs = self
-                        .available_profiles
-                        .iter()
-                        .filter(|name| !self.closed_radio_tabs.contains(*name))
-                        .cloned()
-                        .collect::<Vec<_>>();
+                    let radio_tabs = self.available_profiles.clone();
+                    let mut activate_tab = None;
+                    let mut worker_action = None;
+                    let mut open_config = None;
+                    let mut section_divider_x = None;
+                    let header_row = ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 3.0;
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(420.0, 68.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| self.draw_header_branding(ui),
+                        );
+                        let (divider_marker, _) =
+                            ui.allocate_exact_size(egui::vec2(1.0, 1.0), egui::Sense::hover());
+                        section_divider_x = Some(divider_marker.center().x);
+                        ui.vertical(|ui| {
                     if !radio_tabs.is_empty() {
-                        let tab_count = radio_tabs.len();
-                        let mut activate_tab = None;
-                        let mut close_tab = None;
-                        let mut worker_action = None;
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 3.0;
-                            ui.label(
-                                RichText::new("RADIOS")
-                                    .small()
-                                    .strong()
-                                    .color(Color32::GRAY),
-                            );
                             for name in radio_tabs {
                                 let active = name == self.selected_profile_name;
                                 let (indicator, indicator_color, identity, status) =
@@ -4677,22 +4880,17 @@ impl eframe::App for QsonautGuiApp {
                                         ));
                                     }
                                     if ui
-                                        .add_enabled(
-                                            tab_count > 1,
-                                            egui::Button::new("×").small(),
-                                        )
-                                        .on_hover_text("Close this live radio tab")
+                                        .small_button("⚙")
+                                        .on_hover_text("Open this radio tab's configuration")
                                         .clicked()
                                     {
-                                        close_tab = Some(name.clone());
+                                        open_config = Some(name.clone());
                                     }
                                     });
                                 });
                             }
                         });
-                        if let Some(name) = close_tab {
-                            self.close_radio_tab(&name);
-                        } else if let Some((name, radio, running)) = worker_action {
+                        if let Some((name, radio, running)) = worker_action {
                             if radio {
                                 self.set_tab_radio_running(&name, running);
                             } else {
@@ -4700,200 +4898,34 @@ impl eframe::App for QsonautGuiApp {
                             }
                         } else if let Some(name) = activate_tab {
                             self.switch_radio_tab(&name);
-                        }
-                        ui.separator();
-                    }
-                    ui.horizontal_wrapped(|ui| {
-                    let spin_angle = self.logo_spin_until.map_or(0.0, |until| {
-                        let remaining = until.saturating_duration_since(Instant::now());
-                        (1.0 - remaining.as_secs_f32() / 0.7).clamp(0.0, 1.0)
-                            * std::f32::consts::TAU
-                    });
-                    let logo = egui::Image::new((self.brand_icon.id(), egui::vec2(56.0, 56.0)))
-                        .corner_radius(8.0)
-                        .rotate(spin_angle, egui::Vec2::splat(0.5))
-                        .sense(egui::Sense::click());
-                    let logo_response = ui.add(logo);
-                    if logo_response.clicked() {
-                        self.handle_logo_click();
-                    }
-                    if self.logo_spin_until.is_some_and(|until| Instant::now() < until) {
-                        ui.ctx().request_repaint();
-                    } else {
-                        self.logo_spin_until = None;
-                    }
-                    ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new("QSONaut")
-                                .strong()
-                                .size(30.0)
-                                .color(Color32::from_rgb(109, 224, 255)),
-                        );
-                        ui.label(
-                            RichText::new("AMATEUR RADIO MISSION CONTROL")
-                                .strong()
-                                .size(11.0)
-                            .color(Color32::from_rgb(255, 137, 108)),
-                        );
-                    });
-                    let selected_activity = self.activity;
-                    let server_context = self.server_client.as_ref().map(ServerClient::status);
-                    let activity_button_label = self
-                        .server_active_event
-                        .as_ref()
-                        .map(|(_, name)| format!("🏁 Contest · {name}"))
-                        .or_else(|| {
-                            self.server_active_club
-                                .as_ref()
-                                .map(|(_, name)| format!("🌐 {} · {name}", selected_activity.label()))
-                        })
-                        .unwrap_or_else(|| format!("📻 {}", selected_activity.label()));
-                    ui.menu_button(
-                        RichText::new(activity_button_label)
-                            .strong()
-                            .color(Color32::from_rgb(255, 190, 105)),
-                        |ui| {
-                            ui.label(RichText::new("OPERATING ACTIVITY").strong());
-                            ui.separator();
-                            ui.horizontal_wrapped(|ui| {
-                                for activity in OperatingActivity::ALL {
-                                    let (rect, response) = ui.allocate_exact_size(
-                                        egui::vec2(78.0, 52.0),
-                                        egui::Sense::click(),
-                                    );
-                                    let fill = if selected_activity == activity {
-                                        ui.visuals().selection.bg_fill
-                                    } else if response.hovered() {
-                                        ui.visuals().widgets.hovered.bg_fill
-                                    } else {
-                                        ui.visuals().widgets.inactive.bg_fill
-                                    };
-                                    ui.painter().rect_filled(rect, 4.0, fill);
-                                    draw_activity_icon(
-                                        ui.painter(),
-                                        activity,
-                                        rect.center_top() + egui::vec2(0.0, 14.0),
-                                        ui.visuals().text_color(),
-                                    );
-                                    ui.painter().text(
-                                        rect.center_bottom() - egui::vec2(0.0, 8.0),
-                                        egui::Align2::CENTER_CENTER,
-                                        activity.label(),
-                                        egui::FontId::proportional(12.0),
-                                        ui.visuals().text_color(),
-                                    );
-                                    if response.clicked() {
-                                        info!(activity = %activity.label(), "Operating activity changed");
-                                        self.activity = activity;
-                                        ui.close();
-                                    }
-                                }
-                            });
-                            if let Some(server_context) = &server_context {
-                                if !server_context.clubs.is_empty()
-                                    || !server_context.active_events.is_empty()
-                                {
-                                    ui.separator();
-                                    ui.label(
-                                        RichText::new("🌐 SERVER ACTIVITIES")
-                                            .strong()
-                                            .color(Color32::from_rgb(110, 220, 255)),
-                                    );
-                                    if !server_context.clubs.is_empty() {
-                                        ui.label(RichText::new("🌐 ACTIVE CLUB").small().strong());
-                                        for club in &server_context.clubs {
-                                            let selected = self
-                                                .server_active_club
-                                                .as_ref()
-                                                .is_some_and(|(id, _)| id == &club.id);
-                                            let label = club
-                                                .callsign
-                                                .as_deref()
-                                                .map(|callsign| format!("{} · {}", club.name, callsign))
-                                                .unwrap_or_else(|| club.name.clone());
-                                            if ui.selectable_label(selected, label).clicked() {
-                                                self.server_active_club =
-                                                    Some((club.id.clone(), club.name.clone()));
-                                                self.server_active_event = None;
-                                                ui.close();
-                                            }
-                                        }
-                                    }
-                                    if !server_context.active_events.is_empty() {
-                                        ui.label(RichText::new("🏁 ACTIVE CONTESTS").small().strong());
-                                        for contest in &server_context.active_events {
-                                            let selected = self
-                                                .server_active_event
-                                                .as_ref()
-                                                .is_some_and(|(id, _)| id == &contest.id);
-                                            let label = if contest.contest_name.is_empty() {
-                                                format!("{} · {}", contest.name, contest.club_name)
-                                            } else {
-                                                format!("{} · {} · {}", contest.name, contest.contest_name, contest.club_name)
-                                            };
-                                            ui.horizontal(|ui| {
-                                                if ui.selectable_label(selected, label).clicked() {
-                                                    self.activity = OperatingActivity::Contest;
-                                                    self.server_active_club = Some((
-                                                        contest.club_id.clone(),
-                                                        contest.club_name.clone(),
-                                                    ));
-                                                    self.server_active_event =
-                                                        Some((contest.id.clone(), contest.name.clone()));
-                                                    ui.close();
-                                                }
-                                                let starts = contest.starts_at.get(0..16).unwrap_or(&contest.starts_at).replace('T', " ");
-                                                let ends = contest.ends_at.get(0..16).unwrap_or(&contest.ends_at).replace('T', " ");
-                                                ui.label(
-                                                    RichText::new(format!("{starts} → {ends} · {} op", contest.participant_count))
-                                                        .small()
-                                                        .color(Color32::GRAY),
-                                                );
-                                            });
-                                        }
-                                    }
-                                    if self.server_active_club.is_some()
-                                        || self.server_active_event.is_some()
-                                    {
-                                        if ui.small_button("✕ CLEAR SERVER ACTIVITY").clicked() {
-                                            self.server_active_club = None;
-                                            self.server_active_event = None;
-                                            ui.close();
-                                        }
-                                    }
-                                }
+                        } else if let Some(name) = open_config {
+                            if name != self.selected_profile_name {
+                                self.switch_radio_tab(&name);
                             }
-                            let profile = self.activity.profile();
-                            let band_summary = if profile.bands.is_unrestricted() {
-                                "all core".to_string()
-                            } else {
-                                profile.bands.labels().join(", ")
-                            };
-                            let mode_summary = if profile.modes.is_unrestricted() {
-                                "all core".to_string()
-                            } else {
-                                profile
-                                    .modes
-                                    .modes()
-                                    .iter()
-                                    .map(|mode| mode.label())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            };
-                            ui.separator();
+                            self.show_profile_drawer = true;
+                        }
+                    } else {
+                        ui.horizontal(|ui| {
                             ui.label(
-                                RichText::new(format!(
-                                    "{}  ·  Bands {}  ·  Modes {}",
-                                    profile.tx_cq,
-                                    band_summary,
-                                    mode_summary,
-                                ))
-                                .small()
-                                .color(Color32::GRAY),
+                                RichText::new("RADIOS")
+                                    .small()
+                                    .strong()
+                                    .color(Color32::GRAY),
                             );
-                        },
+                        });
+                    }
+                    let row_divider_y = ui.cursor().top();
+                    let row_divider_left = ui.max_rect().left();
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(row_divider_left, row_divider_y),
+                            egui::pos2(ui.max_rect().right(), row_divider_y),
+                        ],
+                        ui.visuals().widgets.noninteractive.bg_stroke,
                     );
-                    ui.separator();
+                    ui.add_space(1.0);
+                    ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 3.0;
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
                     let frequency = snapshot
@@ -5700,6 +5732,17 @@ impl eframe::App for QsonautGuiApp {
                         );
                     });
                     });
+                        });
+                    });
+                    if let Some(divider_x) = section_divider_x {
+                        ui.painter().line_segment(
+                            [
+                                egui::pos2(divider_x, header_row.response.rect.top()),
+                                egui::pos2(divider_x, header_row.response.rect.bottom()),
+                            ],
+                            ui.visuals().widgets.noninteractive.bg_stroke,
+                        );
+                    }
                 });
             });
 
@@ -5818,9 +5861,9 @@ impl eframe::App for QsonautGuiApp {
                                 Color32::from_rgb(255, 201, 92),
                             ),
                             (
-                                SignalPanelTab::Profile,
-                                "📻",
-                                "PROFILE",
+                                SignalPanelTab::Station,
+                                "📡",
+                                "STATION",
                                 Color32::from_rgb(120, 225, 255),
                             ),
                             (
@@ -5834,12 +5877,6 @@ impl eframe::App for QsonautGuiApp {
                                 "📡",
                                 "REPORTING",
                                 Color32::from_rgb(132, 228, 255),
-                            ),
-                            (
-                                SignalPanelTab::Waterfall,
-                                "📊",
-                                "WATERFALL",
-                                Color32::from_rgb(130, 230, 170),
                             ),
                             (
                                 SignalPanelTab::Settings,
@@ -5922,13 +5959,12 @@ impl eframe::App for QsonautGuiApp {
                                 SignalPanelTab::Achievements => {
                                     self.draw_hunter_panel(ui, &snapshot)
                                 }
-                                SignalPanelTab::Profile => self.draw_profile_panel(ui),
+                                SignalPanelTab::Station => self.draw_station_panel(ui),
                                 SignalPanelTab::Contest => self.draw_contest_panel(ui),
                                 SignalPanelTab::Reporting => self.draw_reporting_panel(ui),
-                                SignalPanelTab::Waterfall => {
-                                    self.draw_waterfall_panel(ui, &snapshot)
+                                SignalPanelTab::Settings => {
+                                    self.draw_application_settings_panel(ui)
                                 }
-                                SignalPanelTab::Settings => self.draw_settings_panel(ui),
                                 SignalPanelTab::Ai => self.draw_ai_panel(ui),
                                 SignalPanelTab::Server => self.draw_server_panel(ui),
                                 SignalPanelTab::RadioTuning => {
@@ -5940,6 +5976,74 @@ impl eframe::App for QsonautGuiApp {
                             });
                     }
                 });
+        }
+
+        if self.show_profile_drawer {
+            let mut drawer_open = true;
+            egui::Window::new("⚙ Profile management")
+                .open(&mut drawer_open)
+                .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, 56.0))
+                .default_width(520.0)
+                .default_height(620.0)
+                .min_width(360.0)
+                .min_height(260.0)
+                .resizable(true)
+                .show(ctx, |ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "{} · {}",
+                            self.selected_profile_name,
+                            if self.profile_dirty {
+                                "unsaved changes"
+                            } else {
+                                "saved"
+                            }
+                        ))
+                        .small()
+                        .color(if self.profile_dirty {
+                            theme_warning(ui)
+                        } else {
+                            Color32::GRAY
+                        }),
+                    );
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        for (tab, label) in [
+                            (ProfileDrawerTab::Profile, "PROFILE"),
+                            (ProfileDrawerTab::Radio, "RADIO"),
+                            (ProfileDrawerTab::Tuning, "TUNING"),
+                            (ProfileDrawerTab::DigitalTiming, "DIGITAL TIMING"),
+                            (ProfileDrawerTab::Monitoring, "MONITORING"),
+                            (ProfileDrawerTab::Waterfall, "WATERFALL"),
+                        ] {
+                            if ui
+                                .selectable_label(self.profile_drawer_tab == tab, label)
+                                .clicked()
+                            {
+                                self.profile_drawer_tab = tab;
+                            }
+                        }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .id_salt("profile_management_drawer")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| match self.profile_drawer_tab {
+                            ProfileDrawerTab::Profile => self.draw_profile_panel(ui),
+                            ProfileDrawerTab::Radio => self.draw_radio_profile_settings(ui),
+                            ProfileDrawerTab::Tuning => self.draw_radio_profile_assignments(ui),
+                            ProfileDrawerTab::DigitalTiming => {
+                                self.draw_digital_timing_settings(ui)
+                            }
+                            ProfileDrawerTab::Monitoring => self.draw_monitoring_settings(ui),
+                            ProfileDrawerTab::Waterfall => {
+                                self.draw_waterfall_profile_panel(ui, &snapshot)
+                            }
+                        });
+                });
+            if !drawer_open {
+                self.show_profile_drawer = false;
+            }
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {

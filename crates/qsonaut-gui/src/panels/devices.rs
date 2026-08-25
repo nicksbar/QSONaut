@@ -116,7 +116,11 @@ impl QsonautGuiApp {
         info!("Audio worker restart queued");
     }
 
-    pub(in super::super) fn draw_device_settings(&mut self, ui: &mut egui::Ui) {
+    pub(in super::super) fn draw_device_settings(
+        &mut self,
+        ui: &mut egui::Ui,
+        include_monitor: bool,
+    ) {
         ui.horizontal(|ui| {
             ui.heading("Devices");
             if ui.small_button("Refresh").clicked() {
@@ -307,43 +311,48 @@ impl QsonautGuiApp {
                 });
                 ui.end_row();
 
-                ui.label("RX monitor output");
-                ui.horizontal(|ui| {
-                    egui::ComboBox::from_id_salt("settings_monitor_output_device")
-                        .selected_text(
-                            self.config
-                                .audio
-                                .monitor_output_device
-                                .as_deref()
-                                .or(self.config.audio.output_device.as_deref())
-                                .unwrap_or("Audio output device"),
-                        )
-                        .width((ui.available_width() - 34.0).max(180.0))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.config.audio.monitor_output_device,
-                                None,
-                                "Use audio output device",
-                            );
-                            for name in &output_devices {
-                                let label =
-                                    Self::device_choice_label(name, &monitor_users, "available");
+                if include_monitor {
+                    ui.label("RX monitor output");
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("settings_monitor_output_device")
+                            .selected_text(
+                                self.config
+                                    .audio
+                                    .monitor_output_device
+                                    .as_deref()
+                                    .or(self.config.audio.output_device.as_deref())
+                                    .unwrap_or("Audio output device"),
+                            )
+                            .width((ui.available_width() - 34.0).max(180.0))
+                            .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut self.config.audio.monitor_output_device,
-                                    Some(name.clone()),
-                                    label,
+                                    None,
+                                    "Use audio output device",
                                 );
-                            }
-                        });
-                    if ui
-                        .small_button("↻")
-                        .on_hover_text("Re-scan audio output devices")
-                        .clicked()
-                    {
-                        self.refresh_device_lists();
-                    }
-                });
-                ui.end_row();
+                                for name in &output_devices {
+                                    let label = Self::device_choice_label(
+                                        name,
+                                        &monitor_users,
+                                        "available",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.config.audio.monitor_output_device,
+                                        Some(name.clone()),
+                                        label,
+                                    );
+                                }
+                            });
+                        if ui
+                            .small_button("↻")
+                            .on_hover_text("Re-scan audio output devices")
+                            .clicked()
+                        {
+                            self.refresh_device_lists();
+                        }
+                    });
+                    ui.end_row();
+                }
 
                 ui.label("Radio / USB serial");
                 ui.horizontal(|ui| {
