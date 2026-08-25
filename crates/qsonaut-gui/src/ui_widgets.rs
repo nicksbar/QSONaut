@@ -6,7 +6,7 @@ use qsonaut_radio::models::find_model;
 /// Paint the AI tab icon with egui primitives so it does not depend on an
 /// emoji or a platform font containing a particular Unicode glyph.
 pub(super) fn draw_ai_icon(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
-    let stroke = egui::Stroke::new(1.4, color);
+    let stroke = egui::Stroke::new(1.4_f32, color);
     let center = rect.center();
     let body = egui::Rect::from_center_size(center, egui::vec2(10.0, 9.0));
     painter.rect_stroke(body, 2.0, stroke, egui::StrokeKind::Inside);
@@ -65,9 +65,9 @@ pub(super) fn styled_selection_button(
         ui.visuals().widgets.inactive.bg_fill
     };
     let stroke = if selected {
-        egui::Stroke::new(1.0, color)
+        egui::Stroke::new(1.0_f32, color)
     } else {
-        egui::Stroke::new(1.0, color.gamma_multiply(0.45))
+        egui::Stroke::new(1.0_f32, color.gamma_multiply(0.45))
     };
     ui.painter().rect_filled(rect, 4.0, fill);
     ui.painter()
@@ -108,14 +108,14 @@ pub(super) fn draw_speaker_icon(painter: &egui::Painter, rect: egui::Rect, color
             egui::pos2(center.x + 6.0, center.y - 5.0),
             egui::pos2(center.x + 9.0, center.y - 2.0),
         ],
-        egui::Stroke::new(1.5, color),
+        egui::Stroke::new(1.5_f32, color),
     );
     painter.line_segment(
         [
             egui::pos2(center.x + 6.0, center.y + 5.0),
             egui::pos2(center.x + 9.0, center.y + 2.0),
         ],
-        egui::Stroke::new(1.5, color),
+        egui::Stroke::new(1.5_f32, color),
     );
 }
 
@@ -128,7 +128,7 @@ pub(super) fn draw_radio_about_icon(painter: &egui::Painter, rect: egui::Rect, c
     painter.rect_stroke(
         body,
         2.0,
-        egui::Stroke::new(1.5, color),
+        egui::Stroke::new(1.5_f32, color),
         egui::StrokeKind::Inside,
     );
     painter.circle_filled(center, 2.0, color);
@@ -142,7 +142,7 @@ pub(super) fn draw_radio_about_icon(painter: &egui::Painter, rect: egui::Rect, c
     painter.circle_stroke(
         egui::pos2(center.x + 4.0, center.y - 10.0),
         1.5,
-        egui::Stroke::new(1.2, color),
+        egui::Stroke::new(1.2_f32, color),
     );
 }
 

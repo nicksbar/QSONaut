@@ -4765,7 +4765,7 @@ impl eframe::App for QsonautGuiApp {
                                 };
                                 egui::Frame::new()
                                     .fill(tab_fill)
-                                    .stroke(egui::Stroke::new(1.0, tab_stroke))
+                                    .stroke(egui::Stroke::new(1.0_f32, tab_stroke))
                                     .corner_radius(egui::CornerRadius::same(8))
                                     .inner_margin(egui::Margin::symmetric(5, 3))
                                     .show(ui, |ui| {
