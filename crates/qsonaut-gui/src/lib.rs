@@ -4221,6 +4221,36 @@ impl QsonautGuiApp {
         (decode_height, tx_height)
     }
 
+    fn draw_about_button(&self, ui: &mut egui::Ui) {
+        let (about_rect, about_button) =
+            ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
+        let about_color = Color32::from_rgb(120, 210, 235);
+        draw_radio_about_icon(&ui.painter_at(about_rect), about_rect, about_color);
+        let about_button = about_button.on_hover_text("About QSONaut");
+        egui::Popup::menu(&about_button).show(|ui| {
+            ui.set_min_width(300.0);
+            ui.heading("QSONaut");
+            ui.label("Amateur Radio Mission Control");
+            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+            ui.separator();
+            ui.label("Original author");
+            ui.label(RichText::new("N7UF").strong());
+            ui.label("Copyright © 2024–2026 N7UF and contributors");
+            ui.label("Released under the MIT License.");
+            ui.separator();
+            ui.label(RichText::new("Contributors").strong());
+            ui.label(qsonaut_contributors());
+            ui.label(RichText::new("Testers").strong());
+            ui.label(qsonaut_testers());
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
+                ui.hyperlink_to("GitHub", QSONAUT_GITHUB_URL);
+                ui.hyperlink_to("File an issue", QSONAUT_ISSUES_URL);
+                ui.hyperlink_to("qsonaut.com", QSONAUT_WEBSITE_URL);
+            });
+        });
+    }
+
     fn draw_connection_status(&self, ui: &mut egui::Ui, snapshot: &GuiState) {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Connections").strong());
@@ -4306,6 +4336,9 @@ impl QsonautGuiApp {
                 ui.label(RichText::new("PSK Reporter WAITING").color(theme_warning(ui)))
                     .on_hover_text("Set a real callsign and grid before reporting");
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.draw_about_button(ui);
+            });
         });
     }
 
@@ -5668,35 +5701,6 @@ impl eframe::App for QsonautGuiApp {
                         });
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let (about_rect, about_button) = ui.allocate_exact_size(
-                            egui::vec2(28.0, 28.0),
-                            egui::Sense::click(),
-                        );
-                        let about_color = Color32::from_rgb(120, 210, 235);
-                        draw_radio_about_icon(&ui.painter_at(about_rect), about_rect, about_color);
-                        let about_button = about_button.on_hover_text("About QSONaut");
-                        egui::Popup::menu(&about_button).show(|ui| {
-                            ui.set_min_width(300.0);
-                            ui.heading("QSONaut");
-                            ui.label("Amateur Radio Mission Control");
-                            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-                            ui.separator();
-                            ui.label("Original author");
-                            ui.label(RichText::new("N7UF").strong());
-                            ui.label("Copyright © 2024–2026 N7UF and contributors");
-                            ui.label("Released under the MIT License.");
-                            ui.separator();
-                            ui.label(RichText::new("Contributors").strong());
-                            ui.label(qsonaut_contributors());
-                            ui.label(RichText::new("Testers").strong());
-                            ui.label(qsonaut_testers());
-                            ui.separator();
-                            ui.horizontal_wrapped(|ui| {
-                                ui.hyperlink_to("GitHub", QSONAUT_GITHUB_URL);
-                                ui.hyperlink_to("File an issue", QSONAUT_ISSUES_URL);
-                                ui.hyperlink_to("qsonaut.com", QSONAUT_WEBSITE_URL);
-                            });
-                        });
                         let power_known = snapshot.radio_power_on.is_some();
                         let power_on = snapshot.radio_power_on.unwrap_or(false);
                         let (power_rect, power_button) = ui.allocate_exact_size(
