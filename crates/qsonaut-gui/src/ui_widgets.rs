@@ -119,6 +119,33 @@ pub(super) fn draw_speaker_icon(painter: &egui::Painter, rect: egui::Rect, color
     );
 }
 
+/// Paint a small radio/antenna mark for the About entry without relying on
+/// platform fonts or emoji glyph coverage.
+pub(super) fn draw_radio_about_icon(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
+    let center = rect.center();
+    let body =
+        egui::Rect::from_center_size(egui::pos2(center.x, center.y + 3.0), egui::vec2(13.0, 11.0));
+    painter.rect_stroke(
+        body,
+        2.0,
+        egui::Stroke::new(1.5, color),
+        egui::StrokeKind::Inside,
+    );
+    painter.circle_filled(center, 2.0, color);
+    painter.line_segment(
+        [
+            egui::pos2(center.x, body.top()),
+            egui::pos2(center.x + 4.0, center.y - 10.0),
+        ],
+        egui::Stroke::new(1.5, color),
+    );
+    painter.circle_stroke(
+        egui::pos2(center.x + 4.0, center.y - 10.0),
+        1.5,
+        egui::Stroke::new(1.2, color),
+    );
+}
+
 pub(super) fn native_radio_profile(
     backend: &str,
     model: &str,

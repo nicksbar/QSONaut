@@ -217,6 +217,15 @@ steps are especially useful. Tests and captured protocol fixtures are preferred
 over claims of compatibility. Please do not commit credentials, personal QSO
 logs, recordings, or proprietary manuals.
 
+### About credits
+
+The About panel credits the original author, plus optional contributors and
+testers. Release builds read the comma-separated repository Actions variables
+`QSONAUT_CONTRIBUTORS` and `QSONAUT_TESTERS`; unset or empty variables display
+`None listed`. Set them under the repository's **Settings → Secrets and
+variables → Actions → Variables** page so credit names or callsigns can be
+updated without changing source code.
+
 ## Acknowledgements
 
 QSONaut's WSJT-family decode and synthesis engine is powered by

@@ -8,6 +8,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- Added a lower-right radio-themed About panel with version, copyright,
+  author, contributor/tester credits, GitHub, issue-reporting, and qsonaut.com
+  links. Release credits can be supplied through repository Actions variables.
 - Added a WGPU-native AI tab icon painted with egui primitives, plus compact
   colored icons across the signal-panel tabs without relying on emoji glyph
   coverage.

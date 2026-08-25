@@ -72,6 +72,23 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 const QSONAUT_ICON_PNG: &[u8] = include_bytes!("../../../assets/branding/qsonaut-icon.png");
+const QSONAUT_GITHUB_URL: &str = "https://github.com/nicksbar/QSONaut";
+const QSONAUT_ISSUES_URL: &str = "https://github.com/nicksbar/QSONaut/issues";
+const QSONAUT_WEBSITE_URL: &str = "https://qsonaut.com";
+
+fn qsonaut_contributors() -> &'static str {
+    match option_env!("QSONAUT_CONTRIBUTORS") {
+        Some(value) if !value.trim().is_empty() => value,
+        _ => "None listed",
+    }
+}
+
+fn qsonaut_testers() -> &'static str {
+    match option_env!("QSONAUT_TESTERS") {
+        Some(value) if !value.trim().is_empty() => value,
+        _ => "None listed",
+    }
+}
 
 use activity::{draw_activity_icon, OperatingActivity};
 use automation_hunter::{
@@ -116,8 +133,8 @@ use tx_audio::{
 };
 use ui_format::{format_signal_report, ft8_period_progress, qso_stage_label, utc_hhmmss_millis};
 use ui_widgets::{
-    draw_ai_icon, draw_speaker_icon, format_swr_display, native_radio_profile, radio_supports_band,
-    styled_selection_button, swr_chart_value,
+    draw_ai_icon, draw_radio_about_icon, draw_speaker_icon, format_swr_display,
+    native_radio_profile, radio_supports_band, styled_selection_button, swr_chart_value,
 };
 use visuals::{
     audio_cursor_level, build_scope_waterfall_image, downsample_bins, fft_buffer_to_display_bins,
@@ -5651,6 +5668,35 @@ impl eframe::App for QsonautGuiApp {
                         });
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (about_rect, about_button) = ui.allocate_exact_size(
+                            egui::vec2(28.0, 28.0),
+                            egui::Sense::click(),
+                        );
+                        let about_color = Color32::from_rgb(120, 210, 235);
+                        draw_radio_about_icon(&ui.painter_at(about_rect), about_rect, about_color);
+                        let about_button = about_button.on_hover_text("About QSONaut");
+                        egui::Popup::menu(&about_button).show(|ui| {
+                            ui.set_min_width(300.0);
+                            ui.heading("QSONaut");
+                            ui.label("Amateur Radio Mission Control");
+                            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                            ui.separator();
+                            ui.label("Original author");
+                            ui.label(RichText::new("N7UF").strong());
+                            ui.label("Copyright © 2024–2026 N7UF and contributors");
+                            ui.label("Released under the MIT License.");
+                            ui.separator();
+                            ui.label(RichText::new("Contributors").strong());
+                            ui.label(qsonaut_contributors());
+                            ui.label(RichText::new("Testers").strong());
+                            ui.label(qsonaut_testers());
+                            ui.separator();
+                            ui.horizontal_wrapped(|ui| {
+                                ui.hyperlink_to("GitHub", QSONAUT_GITHUB_URL);
+                                ui.hyperlink_to("File an issue", QSONAUT_ISSUES_URL);
+                                ui.hyperlink_to("qsonaut.com", QSONAUT_WEBSITE_URL);
+                            });
+                        });
                         let power_known = snapshot.radio_power_on.is_some();
                         let power_on = snapshot.radio_power_on.unwrap_or(false);
                         let (power_rect, power_button) = ui.allocate_exact_size(
