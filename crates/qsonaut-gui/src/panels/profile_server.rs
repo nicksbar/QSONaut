@@ -222,57 +222,33 @@ impl QsonautGuiApp {
     }
 
     pub(in super::super) fn draw_profile_panel(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(8.0);
-        ui.label(RichText::new("Saved profiles").strong());
-        ui.horizontal_wrapped(|ui| {
-            let previous_profile = self.selected_profile_name.clone();
-            egui::ComboBox::from_id_salt("operator_profile_select")
-                .selected_text(&self.selected_profile_name)
-                .width(150.0)
-                .show_ui(ui, |ui| {
-                    for profile in &self.available_profiles {
-                        ui.selectable_value(
-                            &mut self.selected_profile_name,
-                            profile.clone(),
-                            profile,
-                        );
-                    }
-                });
-            if self.selected_profile_name != previous_profile {
-                let target_profile = self.selected_profile_name.clone();
-                self.selected_profile_name = previous_profile;
-                match load_operator_profile_named(&target_profile) {
-                    Some(_) => {
-                        self.switch_radio_tab(&target_profile);
-                        if let Err(error) = select_operator_profile(&target_profile) {
-                            self.profile_io_status = format!("Profile selection failed: {error}");
-                        } else {
-                            self.profile_io_status = format!("Activated tab ‘{target_profile}’");
-                        }
-                    }
-                    None => {
-                        self.profile_io_status = "Selected profile could not be loaded".to_string();
-                    }
-                }
+        ui.heading("Profile");
+        ui.separator();
+        ui.label(
+            RichText::new("Rename or delete this radio profile.")
+                .small()
+                .color(Color32::GRAY),
+        );
+        if self.new_profile_name.is_empty() {
+            self.new_profile_name = self.selected_profile_name.clone();
+        }
+        ui.horizontal(|ui| {
+            ui.label("Name");
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.new_profile_name)
+                    .desired_width(220.0)
+                    .hint_text("Profile name"),
+            );
+            if (response.lost_focus() || ui.input(|input| input.key_pressed(egui::Key::Enter)))
+                && self.new_profile_name.trim() != self.selected_profile_name
+            {
+                self.rename_selected_profile();
             }
-            if ui.small_button("Save").clicked() {
-                self.persist_profile("Saved");
-            }
-            if ui.small_button("Reload").clicked() {
-                match load_operator_profile_named(&self.selected_profile_name) {
-                    Some(profile) => {
-                        self.apply_operator_profile(profile);
-                        self.profile_io_status =
-                            format!("Reloaded profile ‘{}’", self.selected_profile_name);
-                    }
-                    None => {
-                        self.profile_io_status =
-                            format!("Profile ‘{}’ was not found", self.selected_profile_name);
-                    }
-                }
+            if ui.small_button("Rename").clicked() {
+                self.rename_selected_profile();
             }
             if ui
-                .small_button("Delete profile")
+                .small_button("Delete")
                 .on_hover_text("Delete this saved profile and stop its radio tab")
                 .clicked()
             {
@@ -300,38 +276,6 @@ impl QsonautGuiApp {
             });
         }
 
-        ui.horizontal_wrapped(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.new_profile_name)
-                    .desired_width(150.0)
-                    .hint_text("New profile name"),
-            );
-            if ui.button("Create new profile").clicked() {
-                let name = self.new_profile_name.trim().to_string();
-                let duplicate = self
-                    .available_profiles
-                    .iter()
-                    .any(|profile| profile.eq_ignore_ascii_case(&name));
-                if duplicate {
-                    self.profile_io_status = format!("Profile ‘{name}’ already exists");
-                } else {
-                    match save_operator_profile_named(&name, &self.current_operator_profile()) {
-                        Ok(()) => {
-                            let previous_profile = self.selected_profile_name.clone();
-                            self.available_profiles = list_operator_profiles();
-                            self.selected_profile_name = previous_profile;
-                            self.switch_radio_tab(&name);
-                            self.new_profile_name.clear();
-                            self.profile_io_status = format!("Created profile ‘{name}’");
-                            self.profile_dirty = false;
-                        }
-                        Err(error) => {
-                            self.profile_io_status = format!("Profile creation failed: {error}");
-                        }
-                    }
-                }
-            }
-        });
         ui.add_space(4.0);
         ui.label(
             RichText::new(&self.profile_io_status)

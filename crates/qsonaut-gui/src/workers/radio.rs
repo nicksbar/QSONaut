@@ -479,6 +479,18 @@ pub(crate) fn spawn_radio_worker(
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
+                    GuiCommand::SetRadioMode(mode) => {
+                        info!(mode = ?mode, "Radio mode command requested");
+                        match rt.block_on(Radio::set_mode(&radio, mode)) {
+                            Ok(()) => info!(mode = ?mode, "Radio mode command accepted"),
+                            Err(err) => {
+                                error!(mode = ?mode, error = %err, "Radio mode command failed");
+                                state.lock().expect("ui state lock poisoned").last_error =
+                                    Some(err.to_string());
+                            }
+                        }
+                        poll_radio_core_state(&rt, &radio, &state, true);
+                    }
                     GuiCommand::SetPtt(target) => {
                         info!(ptt = target, "Radio PTT command requested");
                         let result = rt

@@ -78,7 +78,7 @@ use automation_hunter::{
     AchievementKind, CustomAchievementRule, ExternalSendRecord, HunterAlert, HunterMetric,
 };
 use band_plan::{
-    band_for_frequency, workspace_band_plan, workspace_radio_preset,
+    band_for_frequency, band_picker_plan, workspace_band_plan, workspace_radio_preset,
     workspace_radio_preset_for_frequency, WorkspaceMode, HF_WORKSPACE_MODES, OTHER_WORKSPACE_MODES,
     WORKSPACE_MODES,
 };
@@ -1097,6 +1097,7 @@ enum GuiCommand {
     TuneDelta(i64),
     TuneTo(u64),
     CycleMode,
+    SetRadioMode(Mode),
     AfGainDelta(i16),
     ApplyWorkspace {
         mode: WorkspaceMode,
@@ -1667,6 +1668,7 @@ struct QsonautGuiApp {
     cw_tone_hz: u16,
     selected_profile_name: String,
     new_profile_name: String,
+    new_profile_tab_editing: bool,
     pending_profile_delete: Option<String>,
     available_profiles: Vec<String>,
     profile_io_status: String,
@@ -2539,6 +2541,7 @@ impl QsonautGuiApp {
             cw_tone_hz,
             selected_profile_name,
             new_profile_name: String::new(),
+            new_profile_tab_editing: false,
             pending_profile_delete: None,
             available_profiles,
             profile_io_status,
@@ -3388,165 +3391,73 @@ impl QsonautGuiApp {
         }
     }
 
-    fn apply_operator_profile(&mut self, profile: OperatorProfile) {
-        let previous_audio = (
-            self.config.audio.enabled,
-            self.config.audio.input_device.clone(),
-            self.config.audio.output_device.clone(),
-            self.config.audio.monitor_enabled,
-            self.config.audio.monitor_output_device.clone(),
-            self.config.audio.sample_rate_hz,
-            self.config.audio.channels,
-        );
-        let previous_radio = (
-            self.config.radio.enabled,
-            self.config.radio.serial_port.clone(),
-            self.config.radio.backend.clone(),
-            self.config.radio.endpoint.clone(),
-            self.config.radio.model.clone(),
-            self.config.radio.baud_rate,
-            self.config.radio.civ_address,
-            self.config.radio.controller_civ_address,
-        );
-        // Station identity and app-wide preferences remain owned by the
-        // current application session; switching radio profiles must not
-        // silently replace the operator or global UI/compute policy.
-        self.ft8_follow_log = profile.follow_log;
-        self.ft8_max_log_entries = profile.max_log_entries.clamp(80, 1000);
-        self.ft8_deep_decode = profile.deep_decode;
-        self.ft4_deep_decode = profile.ft4_deep_decode;
-        // Loading or switching profiles must never arm transmit automation.
-        self.ft4_autoseq = false;
-        self.ft4_auto_reply_policy = profile.ft4_auto_reply_policy;
-        self.ft4_cq_only_view = profile.ft4_cq_only_view;
-        self.ft4_follow_log = profile.ft4_follow_log;
-        self.ft4_max_log_entries = profile.ft4_max_log_entries.clamp(80, 300);
-        self.ft4_max_attempts = profile.ft4_max_attempts.clamp(1, 20);
-        self.ft4_stop_policy = AutoTxStopPolicy::Continuous;
-        // Loading or switching profiles must never arm transmit automation.
-        self.ft8_autoseq = false;
-        self.ft8_auto_reply_policy = profile.auto_reply_policy;
-        // Unattended CQ answering must be explicitly enabled for this run.
-        self.ft8_auto_answer_cq = false;
-        self.automation_unlocked = profile.automation_unlocked;
-        self.ft8_cq_only_view = profile.cq_only_view;
-        self.civ_spectrum_on = profile.civ_spectrum_on;
-        self.radio_scope_vbw_wide = profile.radio_scope_vbw_wide;
-        self.radio_scope_view = profile.radio_scope_view;
-        self.waterfall_theme = profile.waterfall_theme;
-        self.waterfall_deck_height = profile.waterfall_deck_height.clamp(170.0, 560.0);
-        self.ft8_stop_policy = AutoTxStopPolicy::Continuous;
-        self.ft8_max_attempts = profile.ft8_max_attempts.clamp(1, 20);
-        self.ft8_hold_tx_freq = profile.profile_version >= 3 && profile.hold_tx_freq;
-        self.rx_tone_hz = profile.rx_tone_hz;
-        self.tx_tone_hz = if self.ft8_hold_tx_freq {
-            profile.tx_tone_hz
-        } else {
-            profile.rx_tone_hz
-        };
-        self.ptt_lead_ms = profile.ptt_lead_ms.clamp(0, 500);
-        self.ptt_tail_ms = profile.ptt_tail_ms.clamp(0, 500);
-        self.cw_wpm = profile.cw_wpm.clamp(5, 40);
-        self.cw_tone_hz = profile.cw_tone_hz.clamp(200, 3_000);
-        self.contest_enabled = profile.contest_enabled;
-        self.contest_operating_mode = profile.contest_operating_mode;
-        self.contest_split_policy = profile.contest_split_policy;
-        self.contest_fox_hound_role = profile.contest_fox_hound_role;
-        self.contest_exchange_template = profile.contest_exchange_template;
-        self.contest_serial_start = profile.contest_serial_start.max(1);
-        self.contest_serial_step = profile.contest_serial_step.max(1);
-        self.contest_dupe_check = profile.contest_dupe_check;
-        self.contest_serial_current = profile
-            .contest_serial_current
-            .max(self.contest_serial_start)
-            .max(1);
-        self.contest_fake_split_offset_hz = profile.contest_fake_split_offset_hz.clamp(0, 2_000);
-        self.hunter_unlocked = profile.hunter_unlocked.into_iter().collect();
-        self.hunter_acknowledged = profile.hunter_acknowledged.into_iter().collect();
-        self.hunter_alerts_enabled = profile.hunter_alerts_enabled;
-        self.hunter_custom_rules = profile.hunter_custom_rules;
-        self.mode_radio_profile = profile.mode_radio_profile;
-        self.psk_reporter_enabled = profile.psk_reporter_enabled;
-        self.psk_batch_interval_secs = profile.psk_batch_interval_secs.clamp(60, 3_600);
-        self.psk_repeat_cache_secs = profile.psk_repeat_cache_secs.clamp(60, 3_600);
-        self.psk_max_pending = profile.psk_max_pending.clamp(1, 2_048);
-        if !profile.server_instance_id.is_empty() {
-            self.server_instance_id = profile.server_instance_id;
+    fn create_profile_from_tab_name(&mut self) {
+        let name = self.new_profile_name.trim().to_string();
+        if name.is_empty() {
+            self.profile_io_status = "Profile name cannot be empty".to_string();
+            return;
         }
-        if let Some(server) = profile.server {
-            self.config.server = server;
-            self.reconnect_server();
+        if self
+            .available_profiles
+            .iter()
+            .any(|profile| profile.eq_ignore_ascii_case(&name))
+        {
+            self.profile_io_status = format!("Profile ‘{name}’ already exists");
+            return;
         }
-        self.refresh_acceleration_report();
-        if profile.profile_version >= 3 {
-            self.config.audio.enabled = profile.audio_enabled;
-            self.config.audio.input_device = profile.audio_input_device;
-            self.config.audio.output_device = profile.audio_output_device;
-            self.config.audio.sample_rate_hz = profile.audio_sample_rate_hz;
-            self.config.audio.channels = profile.audio_channels;
-            if profile.profile_version >= AUDIO_MONITOR_PROFILE_VERSION {
-                self.config.audio.monitor_enabled = profile.audio_monitor_enabled;
-                self.config.audio.monitor_output_device = profile.audio_monitor_output_device;
-                self.config.audio.monitor_volume = profile.audio_monitor_volume.clamp(0.0, 2.0);
-                self.monitor_volume.store(
-                    self.config.audio.monitor_volume.to_bits(),
-                    Ordering::Relaxed,
-                );
+        match save_operator_profile_named(&name, &self.current_operator_profile()) {
+            Ok(()) => {
+                self.available_profiles = list_operator_profiles();
+                self.new_profile_name.clear();
+                self.new_profile_tab_editing = false;
+                self.switch_radio_tab(&name);
+                self.profile_io_status = format!("Created profile ‘{name}’");
+                self.profile_dirty = false;
             }
-            self.config.radio.enabled = profile.radio_enabled;
-            self.config.radio.serial_port = profile.radio_serial_port;
-            self.config.radio.backend = profile.radio_backend;
-            self.config.radio.endpoint = profile.radio_endpoint;
-            if profile.profile_version >= 8 {
-                self.config.radio.model = profile.radio_model;
-                self.config.radio.baud_rate = profile.radio_baud_rate;
-                self.config.radio.civ_address = profile.radio_civ_address;
-                self.config.radio.controller_civ_address = profile.radio_controller_civ_address;
+            Err(error) => {
+                self.profile_io_status = format!("Profile creation failed: {error}");
             }
         }
-        self.config.station.callsign = Some(self.station_callsign.clone());
-        self.config.station.grid = Some(self.station_grid.clone());
-        self.config.contest = ContestProfile {
-            enabled: self.contest_enabled,
-            operating_mode: self.contest_operating_mode,
-            split_policy: self.contest_split_policy,
-            fox_hound_role: self.contest_fox_hound_role,
-            exchange_template: if self.contest_exchange_template.trim().is_empty() {
-                None
-            } else {
-                Some(self.contest_exchange_template.trim().to_string())
+    }
+
+    fn rename_selected_profile(&mut self) {
+        let old_name = self.selected_profile_name.clone();
+        let new_name = self.new_profile_name.trim().to_string();
+        if new_name.is_empty() {
+            self.profile_io_status = "Profile name cannot be empty".to_string();
+            return;
+        }
+        if new_name.eq_ignore_ascii_case(&old_name) {
+            self.new_profile_name = old_name;
+            return;
+        }
+        if self
+            .available_profiles
+            .iter()
+            .any(|profile| profile.eq_ignore_ascii_case(&new_name))
+        {
+            self.profile_io_status = format!("Profile ‘{new_name}’ already exists");
+            return;
+        }
+        let profile = self.current_operator_profile();
+        match save_operator_profile_named(&new_name, &profile) {
+            Ok(()) => match remove_operator_profile_named(&old_name) {
+                Ok(()) => {
+                    let _ = select_operator_profile(&new_name);
+                    self.selected_profile_name = new_name.clone();
+                    self.available_profiles = list_operator_profiles();
+                    self.new_profile_name = new_name.clone();
+                    self.profile_dirty = false;
+                    self.profile_io_status = format!("Renamed profile to ‘{new_name}’");
+                }
+                Err(error) => {
+                    self.profile_io_status = format!("Old profile cleanup failed: {error}");
+                }
             },
-            serial_start: self.contest_serial_start,
-            serial_step: self.contest_serial_step,
-            dupe_check: self.contest_dupe_check,
-        };
-        self.restart_psk_reporter();
-        let current_audio = (
-            self.config.audio.enabled,
-            self.config.audio.input_device.clone(),
-            self.config.audio.output_device.clone(),
-            self.config.audio.monitor_enabled,
-            self.config.audio.monitor_output_device.clone(),
-            self.config.audio.sample_rate_hz,
-            self.config.audio.channels,
-        );
-        let current_radio = (
-            self.config.radio.enabled,
-            self.config.radio.serial_port.clone(),
-            self.config.radio.backend.clone(),
-            self.config.radio.endpoint.clone(),
-            self.config.radio.model.clone(),
-            self.config.radio.baud_rate,
-            self.config.radio.civ_address,
-            self.config.radio.controller_civ_address,
-        );
-        if current_audio != previous_audio {
-            self.restart_audio();
+            Err(error) => {
+                self.profile_io_status = format!("Profile rename failed: {error}");
+            }
         }
-        if current_radio != previous_radio {
-            self.reconnect_radio();
-        }
-        self.profile_dirty = false;
     }
 
     fn delete_operator_profile(&mut self, name: &str) {
@@ -4776,6 +4687,7 @@ impl eframe::App for QsonautGuiApp {
                     let mut activate_tab = None;
                     let mut worker_action = None;
                     let mut open_config = None;
+                    let mut commit_new_profile = false;
                     let mut section_divider_x = None;
                     let header_row = ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 3.0;
@@ -4889,6 +4801,22 @@ impl eframe::App for QsonautGuiApp {
                                     });
                                 });
                             }
+                            if self.new_profile_tab_editing {
+                                let response = ui.add(
+                                    egui::TextEdit::singleline(&mut self.new_profile_name)
+                                        .desired_width(150.0)
+                                        .hint_text("New profile name"),
+                                );
+                                commit_new_profile = response.lost_focus()
+                                    || ui.input(|input| input.key_pressed(egui::Key::Enter));
+                            } else if ui
+                                .small_button("+")
+                                .on_hover_text("Create a new radio profile")
+                                .clicked()
+                            {
+                                self.new_profile_name.clear();
+                                self.new_profile_tab_editing = true;
+                            }
                         });
                         if let Some((name, radio, running)) = worker_action {
                             if radio {
@@ -4967,25 +4895,38 @@ impl eframe::App for QsonautGuiApp {
                             ui.label(RichText::new("AVAILABLE BANDS").strong());
                             ui.separator();
                             let current_hz = snapshot.frequency_hz.unwrap_or(0);
+                            let activity_bands = self.activity.profile().bands.labels();
                             let mut visible_bands = 0;
                             ui.horizontal_wrapped(|ui| {
-                                for &(label, frequency_hz) in workspace_band_plan(self.workspace_mode) {
+                                for (label, frequency_hz) in band_picker_plan(self.workspace_mode) {
                                     if !radio_supports_band(radio_profile, label) {
                                         continue;
                                     }
                                     visible_bands += 1;
                                     let selected = current_hz.abs_diff(frequency_hz) < 200_000;
+                                    // Radio capability controls visibility; the
+                                    // operating activity controls availability.
+                                    // A mode's focused calling-frequency plan is
+                                    // not a band restriction. Never hide or
+                                    // disable a radio-supported band merely
+                                    // because the current mode has no preset.
+                                    let available_for_activity = activity_bands.contains(&label);
                                     if styled_selection_button(
                                         ui,
                                         label,
                                         selected,
                                         Color32::from_rgb(220, 190, 100),
-                                        true,
+                                        available_for_activity,
                                     )
-                                    .on_hover_text(format!(
-                                        "{:.6} MHz",
-                                        frequency_hz as f64 / 1_000_000.0
-                                    ))
+                                    .on_hover_text(if available_for_activity {
+                                        format!("{:.6} MHz", frequency_hz as f64 / 1_000_000.0)
+                                    } else {
+                                        format!(
+                                            "{:.6} MHz · unavailable for {}",
+                                            frequency_hz as f64 / 1_000_000.0,
+                                            self.activity.label()
+                                        )
+                                    })
                                     .clicked()
                                     {
                                         self.send_command(GuiCommand::ApplyWorkspace {
@@ -5002,11 +4943,40 @@ impl eframe::App for QsonautGuiApp {
                         },
                     );
                     ui.separator();
-                    ui.label(
-                        RichText::new(radio_mode_label(&snapshot.mode, snapshot.data_mode))
+                    let current_radio_mode = radio_mode_label(&snapshot.mode, snapshot.data_mode);
+                    ui.menu_button(
+                        RichText::new(current_radio_mode.clone())
                             .monospace()
                             .strong()
                             .color(Color32::WHITE),
+                        |ui| {
+                            ui.label(RichText::new("RADIO MODE").strong());
+                            ui.separator();
+                            for (mode, label) in [
+                                (Mode::Usb, "USB"),
+                                (Mode::Lsb, "LSB"),
+                                (Mode::Cw, "CW"),
+                                (Mode::Data, "USB-D"),
+                                (Mode::Am, "AM"),
+                                (Mode::Fm, "FM"),
+                                (Mode::Rtty, "RTTY"),
+                                (Mode::CwReverse, "CW-R"),
+                                (Mode::RttyReverse, "RTTY-R"),
+                            ] {
+                                if styled_selection_button(
+                                    ui,
+                                    label,
+                                    current_radio_mode == label,
+                                    Color32::from_rgb(190, 215, 235),
+                                    true,
+                                )
+                                .clicked()
+                                {
+                                    self.send_command(GuiCommand::SetRadioMode(mode));
+                                    ui.close();
+                                }
+                            }
+                        },
                     );
                     let supports_filter = snapshot.supported_controls.contains(&ControlId::Filter);
                     let filter_label = snapshot
@@ -5034,18 +5004,20 @@ impl eframe::App for QsonautGuiApp {
                             }
                         },
                     );
-                            ui.label(
-                                RichText::new(self.workspace_mode.label())
-                                    .strong()
-                                    .color(Color32::LIGHT_BLUE),
-                            );
+                            ui.add_space(6.0);
+                            ui.separator();
                             let activity_profile = self.activity.profile();
                             ui.label(
-                                RichText::new(activity_profile.tx_cq)
+                                RichText::new(format!("CALL · {}", activity_profile.tx_cq))
                                     .size(15.0)
                                     .monospace()
                                     .color(Color32::from_rgb(255, 190, 105)),
-                            );
+                            )
+                            .on_hover_text(format!(
+                                "Call behavior\nActivity: {}\nTransmit calling text: {}",
+                                self.activity.label(),
+                                activity_profile.tx_cq
+                            ));
                             if let Some(client) = &self.server_client {
                                 let server_status = client.status();
                                 if server_status.state == ServerConnectionState::Connected
@@ -5066,19 +5038,26 @@ impl eframe::App for QsonautGuiApp {
                                             .size(15.0)
                                             .strong()
                                             .color(Color32::from_rgb(125, 225, 150)),
-                                    );
+                                    )
+                                    .on_hover_text(format!(
+                                        "Server contest status\nConnected server events: {}\nThis indicator reflects shared contest activity.",
+                                        server_status.active_event_count
+                                    ));
                                 }
                             }
                             let active_profile = self.active_radio_profile_name().unwrap_or("None");
                             ui.label(
-                                RichText::new(format!("📻 {active_profile}"))
+                                RichText::new(format!("RADIO · {active_profile}"))
                                     .size(15.0)
                                     .color(if active_profile == "None" {
                                         Color32::GRAY
                                     } else {
                                         Color32::from_rgb(255, 201, 92)
                                     }),
-                            );
+                            )
+                            .on_hover_text(format!(
+                                "Active radio profile\n{active_profile}\nThis profile owns the radio connection and its per-radio settings."
+                            ));
                     });
                         self.draw_banner_radio_controls(ui, &snapshot);
                     });
@@ -5742,6 +5721,9 @@ impl eframe::App for QsonautGuiApp {
                             ],
                             ui.visuals().widgets.noninteractive.bg_stroke,
                         );
+                    }
+                    if commit_new_profile {
+                        self.create_profile_from_tab_name();
                     }
                 });
             });

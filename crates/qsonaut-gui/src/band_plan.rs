@@ -108,6 +108,27 @@ pub(super) const CORE_HF_BAND_LABELS: &[&str] = &[
 pub(super) const CORE_VHF_BAND_LABELS: &[&str] = &["2m", "70cm"];
 pub(super) const CORE_EMCOMM_BAND_LABELS: &[&str] = &["80m", "40m", "20m"];
 
+// The workspace plans intentionally contain only the most useful calling
+// frequencies for a mode.  The band picker is different: it is a radio
+// control and must expose every band the connected radio can operate on.
+// These are sensible mode-neutral fallback centers for bands that a mode's
+// focused plan does not happen to include.
+const BAND_PICKER_FALLBACKS: &[(&str, u64)] = &[
+    ("160m", 1_840_000),
+    ("80m", 3_573_000),
+    ("60m", 5_357_000),
+    ("40m", 7_074_000),
+    ("30m", 10_136_000),
+    ("20m", 14_074_000),
+    ("17m", 18_100_000),
+    ("15m", 21_074_000),
+    ("12m", 24_915_000),
+    ("10m", 28_074_000),
+    ("6m", 50_313_000),
+    ("2m", 144_174_000),
+    ("70cm", 432_174_000),
+];
+
 pub(super) fn band_for_frequency(frequency_hz: u64) -> &'static str {
     match frequency_hz {
         1_800_000..=2_000_000 => "160m",
@@ -142,6 +163,24 @@ pub(super) fn workspace_band_plan(mode: WorkspaceMode) -> &'static [(&'static st
         WorkspaceMode::Sstv => sstv::BAND_PLAN,
         WorkspaceMode::Fldigi => native::FLDIGI_BAND_PLAN,
     }
+}
+
+pub(super) fn band_picker_plan(mode: WorkspaceMode) -> Vec<(&'static str, u64)> {
+    CORE_BAND_LABELS
+        .iter()
+        .filter_map(|label| {
+            workspace_band_plan(mode)
+                .iter()
+                .find(|(plan_label, _)| plan_label == label)
+                .copied()
+                .or_else(|| {
+                    BAND_PICKER_FALLBACKS
+                        .iter()
+                        .find(|(fallback, _)| fallback == label)
+                        .copied()
+                })
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -214,6 +253,15 @@ mod tests {
                 .map(|(_, freq)| *freq),
             Some(14_095_600)
         );
+    }
+
+    #[test]
+    fn band_picker_includes_bands_missing_from_focused_mode_plan() {
+        let picker = band_picker_plan(WorkspaceMode::Ft8);
+        assert!(picker.iter().any(|(label, _)| *label == "160m"));
+        assert!(picker.iter().any(|(label, _)| *label == "60m"));
+        assert!(picker.iter().any(|(label, _)| *label == "17m"));
+        assert_eq!(picker.len(), CORE_BAND_LABELS.len());
     }
 
     #[test]
