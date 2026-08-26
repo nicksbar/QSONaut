@@ -890,8 +890,44 @@ pub(crate) fn spawn_radio_worker(
                                 info!(frequency_hz = frequency, "SWR sweep stop requested");
                                 break;
                             }
-                            match rt.block_on(radio.get_meter(MeterId::Swr)) {
-                                Ok(Some(value)) => {
+                            let mut sample = match rt.block_on(radio.get_meter(MeterId::Swr)) {
+                                Ok(value) => value,
+                                Err(error) => {
+                                    read_failures += 1;
+                                    warn!(frequency_hz = frequency, error = %error, "SWR sweep meter read failed");
+                                    None
+                                }
+                            };
+                            if let Err(error) = rt.block_on(radio.set_ptt(false)) {
+                                error!(frequency_hz = frequency, error = %error, "SWR sweep failed to unkey TX");
+                                state.lock().expect("ui state lock poisoned").last_error =
+                                    Some(format!("SWR sweep could not unkey TX: {error}"));
+                                break;
+                            }
+                            tx_keyed = false;
+                            state.lock().expect("ui state lock poisoned").ptt_on = false;
+                            info!(frequency_hz = frequency, "SWR sweep TX unkeyed");
+                            // Some IC-7300 firmware/USB paths update the SWR
+                            // register on the TX->RX transition. A keyed read
+                            // can therefore return a valid-looking zero even
+                            // while the front-panel meter is moving. Retry
+                            // that specific zero after unkeying so the plot
+                            // receives the latched measurement.
+                            if sample == Some(0) {
+                                thread::sleep(Duration::from_millis(100));
+                                if let Ok(Some(value)) = rt.block_on(radio.get_meter(MeterId::Swr))
+                                {
+                                    info!(
+                                        point = points + 1,
+                                        frequency_hz = frequency,
+                                        swr_level = value,
+                                        "SWR sweep post-TX sample"
+                                    );
+                                    sample = Some(value);
+                                }
+                            }
+                            match sample {
+                                Some(value) => {
                                     info!(
                                         point = points + 1,
                                         frequency_hz = frequency,
@@ -902,24 +938,11 @@ pub(crate) fn spawn_radio_worker(
                                     s.swr = Some(value);
                                     s.swr_sweep_points.push((frequency, value));
                                 }
-                                Ok(None) => {
+                                None => {
                                     read_failures += 1;
                                     warn!(frequency_hz = frequency, "SWR sweep meter unavailable");
                                 }
-                                Err(error) => {
-                                    read_failures += 1;
-                                    warn!(frequency_hz = frequency, error = %error, "SWR sweep meter read failed");
-                                }
                             }
-                            if let Err(error) = rt.block_on(radio.set_ptt(false)) {
-                                error!(frequency_hz = frequency, error = %error, "SWR sweep failed to unkey TX");
-                                state.lock().expect("ui state lock poisoned").last_error =
-                                    Some(format!("SWR sweep could not unkey TX: {error}"));
-                                break;
-                            }
-                            tx_keyed = false;
-                            state.lock().expect("ui state lock poisoned").ptt_on = false;
-                            info!(frequency_hz = frequency, "SWR sweep TX unkeyed");
                             frequency = frequency.saturating_add(step_hz);
                             points += 1;
                             if frequency == u64::MAX {
