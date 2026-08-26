@@ -11,7 +11,11 @@ waterfall or decoder contracts.
 The RX monitor and generated/TX audio use the reverse boundary. QSONaut opens
 the selected output at a supported native format, resamples from the canonical
 stream, and copies mono audio to every hardware output channel. Monitor queues
-remain bounded so a slow output cannot stall decoding.
+remain bounded so a slow output cannot stall decoding. Because input and monitor
+devices have independent physical clocks, the monitor starts after a short
+prebuffer and continuously adjusts its conversion ratio within a narrow bounded
+parts-per-million range. Buffer underruns trigger silence and automatic
+rebuffering without affecting the canonical decoder stream or TX timing.
 
 The **Audio output** device is used for transmitted/generated audio. The
 optional **RX monitor output** can be different and falls back to Audio output
@@ -110,6 +114,6 @@ Automated tests cover sample-format conversion, stereo downmixing, callback-
 independent band-limited resampling, canonical stream sizing, and output-rate
 conversion. Diagnostics record the negotiated input rate, channels, and sample
 format; a total open failure lists every attempted configuration. A final live
-check still needs real hardware: confirm waterfall activity, audible RX without
-drop reports, correct monitor volume, and unchanged decoding while monitoring
-is enabled.
+check still needs real hardware: confirm waterfall activity, stable long-running
+monitor buffer/ppm telemetry, audible RX without repeated underruns, correct
+monitor volume, and unchanged decoding while monitoring is enabled.

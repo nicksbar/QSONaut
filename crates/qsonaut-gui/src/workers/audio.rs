@@ -103,6 +103,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
             shared.audio_device_channels = None;
             shared.audio_device_sample_format = None;
             shared.audio_input_fallback_attempts.clear();
+            shared.audio_monitor_adjustment_ppm = 0;
+            shared.audio_monitor_buffered_ms = 0;
+            shared.audio_monitor_underruns = 0;
         }
         if !enabled {
             info!("Audio worker disabled by configuration");
@@ -256,6 +259,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut last_repaint = Instant::now() - repaint_interval;
         let mut monitor_runtime_error: Option<String> = None;
         let mut last_audio_read_error: Option<String> = None;
+        let mut last_monitor_clock_log = Instant::now() - Duration::from_secs(30);
 
         while !stop.load(Ordering::Relaxed) {
             let chunk_samples = {
@@ -276,6 +280,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                         let shared = state.lock().expect("ui state lock poisoned");
                         shared.workspace_mode != WorkspaceMode::Cw || !can_decode
                     };
+                    let mut monitor_clock_status = String::new();
                     if let Some(monitor) = &monitor {
                         monitor.set_volume(f32::from_bits(monitor_volume.load(Ordering::Relaxed)));
                         if monitor_raw_audio {
@@ -287,6 +292,33 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 dropped_chunks,
                                 "RX audio monitor dropped queued chunks"
                             );
+                        }
+                        let underruns = monitor.take_underruns();
+                        if underruns > 0 {
+                            tracing::warn!(
+                                underruns,
+                                buffered_ms = monitor.buffered_latency_ms(),
+                                adjustment_ppm = monitor.clock_adjustment_ppm(),
+                                "RX audio monitor clock buffer underrun; rebuffering"
+                            );
+                        }
+                        let adjustment_ppm = monitor.clock_adjustment_ppm();
+                        let buffered_ms = monitor.buffered_latency_ms();
+                        {
+                            let mut shared = state.lock().expect("ui state lock poisoned");
+                            shared.audio_monitor_adjustment_ppm = adjustment_ppm;
+                            shared.audio_monitor_buffered_ms = buffered_ms;
+                            shared.audio_monitor_underruns =
+                                shared.audio_monitor_underruns.saturating_add(underruns);
+                        }
+                        monitor_clock_status =
+                            format!(" · SYNC {adjustment_ppm:+} ppm · {buffered_ms} ms");
+                        if last_monitor_clock_log.elapsed() >= Duration::from_secs(30) {
+                            info!(
+                                adjustment_ppm,
+                                buffered_ms, "RX audio monitor clock synchronization"
+                            );
+                            last_monitor_clock_log = Instant::now();
                         }
                         if let Some(error) = monitor.take_error() {
                             tracing::error!(error = %error, "RX audio monitor failed during playback");
@@ -347,11 +379,11 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 .unwrap_or_else(|| {
                                     if resampling_input {
                                         format!(
-                                            "LIVE RX · RESAMPLED {} → {} Hz{monitor_status}",
+                                            "LIVE RX · RESAMPLED {} → {} Hz{monitor_status}{monitor_clock_status}",
                                             device_sample_rate_hz, sample_rate_hz
                                         )
                                     } else {
-                                        format!("LIVE RX{monitor_status}")
+                                        format!("LIVE RX{monitor_status}{monitor_clock_status}")
                                     }
                                 });
                         }

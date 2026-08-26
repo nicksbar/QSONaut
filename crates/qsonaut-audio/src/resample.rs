@@ -16,7 +16,10 @@ const SINC_PHASES: usize = 1_024;
 pub struct BandlimitedResampler {
     input_rate_hz: u32,
     output_rate_hz: u32,
-    source_position_numerator: u64,
+    source_position_q32: u64,
+    step_q32: u64,
+    rate_adjustment_ppm: i32,
+    adaptive: bool,
     source: VecDeque<f32>,
     kernels: Box<[[f32; SINC_TAPS]]>,
 }
@@ -30,17 +33,37 @@ impl BandlimitedResampler {
         Self {
             input_rate_hz,
             output_rate_hz,
-            source_position_numerator: SINC_HALF_TAPS as u64 * u64::from(output_rate_hz),
+            source_position_q32: (SINC_HALF_TAPS as u64) << 32,
+            step_q32: nominal_step_q32(input_rate_hz, output_rate_hz),
+            rate_adjustment_ppm: 0,
+            adaptive: false,
             source,
             kernels: build_sinc_kernels(cutoff),
         }
+    }
+
+    /// Adjust output cadence without resetting filter history. Positive values
+    /// produce slightly more samples and negative values produce fewer.
+    pub fn set_rate_adjustment_ppm(&mut self, ppm: i32) {
+        self.adaptive = true;
+        let ppm = ppm.clamp(-5_000, 5_000);
+        if self.rate_adjustment_ppm == ppm {
+            return;
+        }
+        self.rate_adjustment_ppm = ppm;
+        let adjusted_output = (1_000_000_i64 + i64::from(ppm)) as u128;
+        self.step_q32 = ((u128::from(self.input_rate_hz) << 32) * 1_000_000_u128
+            / (u128::from(self.output_rate_hz) * adjusted_output)) as u64;
     }
 
     pub fn process(&mut self, samples: &[f32]) -> Vec<f32> {
         if samples.is_empty() {
             return Vec::new();
         }
-        if self.input_rate_hz == self.output_rate_hz {
+        if self.input_rate_hz == self.output_rate_hz
+            && self.rate_adjustment_ppm == 0
+            && !self.adaptive
+        {
             return samples.to_vec();
         }
 
@@ -51,34 +74,34 @@ impl BandlimitedResampler {
                 .saturating_add(1),
         );
 
-        while (self.source_position_numerator / u64::from(self.output_rate_hz)) as usize
-            + (SINC_HALF_TAPS as usize)
+        while (self.source_position_q32 >> 32) as usize + (SINC_HALF_TAPS as usize)
             < self.source.len()
         {
-            let center = (self.source_position_numerator / u64::from(self.output_rate_hz)) as isize;
-            let fraction_numerator =
-                self.source_position_numerator % u64::from(self.output_rate_hz);
-            let phase = ((fraction_numerator * SINC_PHASES as u64
-                + u64::from(self.output_rate_hz) / 2)
-                / u64::from(self.output_rate_hz))
-            .min((SINC_PHASES - 1) as u64) as usize;
+            let center = (self.source_position_q32 >> 32) as isize;
+            let fraction_q32 = self.source_position_q32 & u64::from(u32::MAX);
+            let phase = ((fraction_q32 * SINC_PHASES as u64 + (1_u64 << 31)) >> 32)
+                .min((SINC_PHASES - 1) as u64) as usize;
             let mut value = 0.0_f32;
             for (tap, offset) in ((-SINC_HALF_TAPS + 1)..=SINC_HALF_TAPS).enumerate() {
                 let index = center + offset;
                 value += self.source[index as usize] * self.kernels[phase][tap];
             }
             output.push(value);
-            self.source_position_numerator += u64::from(self.input_rate_hz);
+            self.source_position_q32 += self.step_q32;
         }
 
-        let consumed = (self.source_position_numerator / u64::from(self.output_rate_hz)) as usize;
+        let consumed = (self.source_position_q32 >> 32) as usize;
         let consumed = consumed.saturating_sub(SINC_HALF_TAPS as usize);
         if consumed > 0 {
             self.source.drain(..consumed.min(self.source.len()));
-            self.source_position_numerator -= consumed as u64 * u64::from(self.output_rate_hz);
+            self.source_position_q32 -= (consumed as u64) << 32;
         }
         output
     }
+}
+
+fn nominal_step_q32(input_rate_hz: u32, output_rate_hz: u32) -> u64 {
+    ((u128::from(input_rate_hz) << 32) / u128::from(output_rate_hz)) as u64
 }
 
 fn build_sinc_kernels(cutoff: f64) -> Box<[[f32; SINC_TAPS]]> {
@@ -298,5 +321,25 @@ mod tests {
         let rms =
             (body.iter().map(|sample| sample * sample).sum::<f32>() / body.len() as f32).sqrt();
         assert!(rms < 0.05, "aliased out-of-band RMS was {rms}");
+    }
+
+    #[test]
+    fn rate_adjustment_changes_cadence_without_resetting_history() {
+        let input = vec![0.25; 48_000];
+        let mut faster = BandlimitedResampler::new(48_000, 48_000);
+        faster.set_rate_adjustment_ppm(1_000);
+        let faster_output = faster.process(&input);
+        let mut slower = BandlimitedResampler::new(48_000, 48_000);
+        slower.set_rate_adjustment_ppm(-1_000);
+        let slower_output = slower.process(&input);
+        assert!(faster_output.len() > slower_output.len());
+        assert!(faster_output
+            .iter()
+            .skip(100)
+            .all(|sample| sample.is_finite()));
+        assert!(slower_output
+            .iter()
+            .skip(100)
+            .all(|sample| sample.is_finite()));
     }
 }

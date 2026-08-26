@@ -21,6 +21,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   device configurations when a driver rejects an advertised format. Runtime
   status and diagnostics show the negotiated hardware format when conversion is
   active and retain all attempted formats when none can be opened.
+- Added adaptive RX-monitor clock synchronization with startup prebuffering,
+  bounded parts-per-million correction, automatic underrun rebuffering, and
+  long-session drift telemetry. Decoder and TX timing remain isolated from the
+  monitor device clock.
 
 ## [0.3.10] - 2026-08-25
 

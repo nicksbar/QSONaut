@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender, TryRecvError},
         Arc,
     },
@@ -19,6 +19,8 @@ pub mod resample;
 
 pub const CANONICAL_SAMPLE_RATE_HZ: u32 = 48_000;
 pub const CANONICAL_CHANNELS: u16 = 1;
+const MONITOR_TARGET_LATENCY_MS: u32 = 120;
+const MONITOR_MAX_ADJUSTMENT_PPM: i32 = 2_500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioDeviceKind {
@@ -48,8 +50,12 @@ pub struct AudioStream {
 pub struct AudioMonitor {
     samples_tx: SyncSender<Vec<f32>>,
     errors_rx: Receiver<String>,
-    dropped_chunks: Arc<std::sync::atomic::AtomicU64>,
-    resampler: std::sync::Mutex<(u32, BandlimitedResampler)>,
+    dropped_chunks: Arc<AtomicU64>,
+    underruns: Arc<AtomicU64>,
+    buffered_samples: Arc<AtomicUsize>,
+    primed: Arc<AtomicBool>,
+    clock_adjustment_ppm: Arc<AtomicI32>,
+    resampler: std::sync::Mutex<MonitorResamplerState>,
     volume: Arc<std::sync::atomic::AtomicU32>,
     input_sample_rate_hz: u32,
     output_sample_rate_hz: u32,
@@ -59,6 +65,32 @@ pub struct AudioMonitor {
     _stream: Stream,
 }
 
+struct MonitorResamplerState {
+    input_sample_rate_hz: u32,
+    resampler: BandlimitedResampler,
+    controller: MonitorClockController,
+}
+
+#[derive(Default)]
+struct MonitorClockController {
+    integral_ppm: f64,
+}
+
+impl MonitorClockController {
+    fn update(&mut self, buffered: usize, target: usize, elapsed_s: f64, primed: bool) -> i32 {
+        if !primed || target == 0 {
+            self.integral_ppm = 0.0;
+            return 0;
+        }
+        let error = (buffered as f64 - target as f64) / target as f64;
+        self.integral_ppm = (self.integral_ppm - error * 80.0 * elapsed_s).clamp(-1_000.0, 1_000.0);
+        (-error * 1_500.0 + self.integral_ppm).round().clamp(
+            f64::from(-MONITOR_MAX_ADJUSTMENT_PPM),
+            f64::from(MONITOR_MAX_ADJUSTMENT_PPM),
+        ) as i32
+    }
+}
+
 impl AudioMonitor {
     pub fn open(sample_rate_hz: u32, preferred_device_name: Option<&str>) -> Result<Self> {
         let host = cpal::default_host();
@@ -66,7 +98,11 @@ impl AudioMonitor {
         let (samples_tx, samples_rx) = mpsc::sync_channel::<Vec<f32>>(8);
         let samples_rx = Arc::new(std::sync::Mutex::new(samples_rx));
         let (errors_tx, errors_rx) = mpsc::channel::<String>();
-        let dropped_chunks = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let dropped_chunks = Arc::new(AtomicU64::new(0));
+        let underruns = Arc::new(AtomicU64::new(0));
+        let buffered_samples = Arc::new(AtomicUsize::new(0));
+        let primed = Arc::new(AtomicBool::new(false));
+        let clock_adjustment_ppm = Arc::new(AtomicI32::new(0));
         let pending = Arc::new(std::sync::Mutex::new(VecDeque::<f32>::new()));
         let candidates = config_candidates(&device, AudioDeviceKind::Output, sample_rate_hz, 1)?;
         let mut failures = Vec::new();
@@ -75,23 +111,43 @@ impl AudioMonitor {
             let config = supported.config();
             let output_sample_rate_hz = config.sample_rate.0;
             let channels = config.channels as usize;
+            let target_samples =
+                (output_sample_rate_hz as usize * MONITOR_TARGET_LATENCY_MS as usize / 1_000)
+                    .max(1);
 
             macro_rules! output_stream {
                 ($sample:ty) => {{
                     let pending = pending.clone();
                     let samples_rx = samples_rx.clone();
                     let errors_tx = errors_tx.clone();
+                    let buffered_samples = buffered_samples.clone();
+                    let primed = primed.clone();
+                    let underruns = underruns.clone();
                     device.build_output_stream(
                         &config,
                         move |data: &mut [$sample], _| {
                             if let Ok(mut queue) = pending.lock() {
                                 if let Ok(receiver) = samples_rx.lock() {
                                     while let Ok(chunk) = receiver.try_recv() {
+                                        buffered_samples.fetch_add(chunk.len(), Ordering::Relaxed);
                                         queue.extend(chunk);
                                     }
                                 }
+                                if !primed.load(Ordering::Relaxed)
+                                    && buffered_samples.load(Ordering::Relaxed) >= target_samples
+                                {
+                                    primed.store(true, Ordering::Release);
+                                }
                                 for frame in data.chunks_mut(channels) {
-                                    let value = queue.pop_front().unwrap_or_default();
+                                    let active = primed.load(Ordering::Acquire);
+                                    let value = active.then(|| queue.pop_front()).flatten();
+                                    if value.is_some() {
+                                        buffered_samples.fetch_sub(1, Ordering::Relaxed);
+                                    } else if active {
+                                        primed.store(false, Ordering::Release);
+                                        underruns.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                    let value = value.unwrap_or_default();
                                     frame.fill(<$sample>::from_sample(value));
                                 }
                             }
@@ -134,10 +190,15 @@ impl AudioMonitor {
                 samples_tx,
                 errors_rx,
                 dropped_chunks,
-                resampler: std::sync::Mutex::new((
-                    sample_rate_hz,
-                    BandlimitedResampler::new(sample_rate_hz, output_sample_rate_hz),
-                )),
+                underruns,
+                buffered_samples,
+                primed,
+                clock_adjustment_ppm,
+                resampler: std::sync::Mutex::new(MonitorResamplerState {
+                    input_sample_rate_hz: sample_rate_hz,
+                    resampler: BandlimitedResampler::new(sample_rate_hz, output_sample_rate_hz),
+                    controller: MonitorClockController::default(),
+                }),
                 volume: Arc::new(std::sync::atomic::AtomicU32::new(1.0_f32.to_bits())),
                 input_sample_rate_hz: sample_rate_hz,
                 output_sample_rate_hz,
@@ -183,16 +244,33 @@ impl AudioMonitor {
         let samples = self.resampler.lock().map_or_else(
             |_| Vec::new(),
             |mut state| {
-                if state.0 != sample_rate_hz {
-                    *state = (
-                        sample_rate_hz,
-                        BandlimitedResampler::new(sample_rate_hz, self.output_sample_rate_hz),
-                    );
+                if state.input_sample_rate_hz != sample_rate_hz {
+                    *state = MonitorResamplerState {
+                        input_sample_rate_hz: sample_rate_hz,
+                        resampler: BandlimitedResampler::new(
+                            sample_rate_hz,
+                            self.output_sample_rate_hz,
+                        ),
+                        controller: MonitorClockController::default(),
+                    };
                 }
-                state.1.process(&samples)
+                let target = (self.output_sample_rate_hz as usize
+                    * MONITOR_TARGET_LATENCY_MS as usize
+                    / 1_000)
+                    .max(1);
+                let adjustment = state.controller.update(
+                    self.buffered_samples.load(Ordering::Relaxed),
+                    target,
+                    samples.len() as f64 / f64::from(sample_rate_hz),
+                    self.primed.load(Ordering::Acquire),
+                );
+                self.clock_adjustment_ppm
+                    .store(adjustment, Ordering::Relaxed);
+                state.resampler.set_rate_adjustment_ppm(adjustment);
+                state.resampler.process(&samples)
             },
         );
-        if self.samples_tx.try_send(samples).is_err() {
+        if !samples.is_empty() && self.samples_tx.try_send(samples).is_err() {
             self.dropped_chunks.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -203,6 +281,19 @@ impl AudioMonitor {
 
     pub fn take_dropped_chunks(&self) -> u64 {
         self.dropped_chunks.swap(0, Ordering::Relaxed)
+    }
+
+    pub fn take_underruns(&self) -> u64 {
+        self.underruns.swap(0, Ordering::Relaxed)
+    }
+
+    pub fn clock_adjustment_ppm(&self) -> i32 {
+        self.clock_adjustment_ppm.load(Ordering::Relaxed)
+    }
+
+    pub fn buffered_latency_ms(&self) -> u32 {
+        ((self.buffered_samples.load(Ordering::Relaxed) as u64 * 1_000)
+            / u64::from(self.output_sample_rate_hz)) as u32
     }
 
     pub fn output_sample_rate_hz(&self) -> u32 {
@@ -781,5 +872,29 @@ mod tests {
         let service = AudioService::new(None, true);
         let error = service.open_stream(48_000, 2).err().unwrap();
         assert!(error.to_string().contains("one downmixed channel"));
+    }
+
+    #[test]
+    fn monitor_clock_controller_corrects_long_running_device_drift() {
+        let target = 5_760.0_f64;
+        let mut buffered = target;
+        let mut controller = MonitorClockController::default();
+        let source_drift_ppm = 200.0_f64;
+        let mut adjustment = 0_i32;
+        for _ in 0..360_000 {
+            adjustment = controller.update(buffered.max(0.0) as usize, target as usize, 0.1, true);
+            let produced = 4_800.0
+                * (1.0 + source_drift_ppm / 1_000_000.0)
+                * (1.0 + f64::from(adjustment) / 1_000_000.0);
+            buffered += produced - 4_800.0;
+        }
+        assert!((buffered - target).abs() < target * 0.05);
+        assert!((-260..=-140).contains(&adjustment));
+    }
+
+    #[test]
+    fn monitor_clock_controller_waits_until_output_is_primed() {
+        let mut controller = MonitorClockController::default();
+        assert_eq!(controller.update(0, 5_760, 0.1, false), 0);
     }
 }
