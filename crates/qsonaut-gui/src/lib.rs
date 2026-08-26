@@ -3,6 +3,7 @@ mod automation_hunter;
 mod band_plan;
 mod contest;
 mod decode_model;
+mod graphics;
 mod local_ai;
 mod modes;
 mod panels;
@@ -102,6 +103,10 @@ use band_plan::{
 use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
     DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, OperatorCallHit, PendingFt8Decode, PotaSpot,
+};
+pub use graphics::{
+    GraphicsAdapterInfo, GraphicsPowerPreference, GraphicsPreferences, GRAPHICS_ADAPTER_ENV,
+    GRAPHICS_POWER_ENV,
 };
 use local_ai::{
     LocalImageEvent, LocalImageProvider, LocalImageSettings, LocalModelInfo, LocalModelRole,
@@ -1135,7 +1140,7 @@ enum GuiCommand {
     Quit,
 }
 
-pub fn run_gui(config: AppConfig) -> Result<()> {
+pub fn run_gui(config: AppConfig) -> Result<Option<GraphicsPreferences>> {
     let build_profile = if cfg!(debug_assertions) {
         "debug"
     } else {
@@ -1188,13 +1193,24 @@ pub fn run_gui(config: AppConfig) -> Result<()> {
         .with_min_inner_size(WINDOW_MIN_SIZE)
         .with_title("QSONaut — Amateur Radio Mission Control")
         .with_icon(app_icon.clone())
-        .with_resizable(true);
+        .with_resizable(true)
+        // eframe also enforces this for WGPU, but keeping it explicit makes
+        // the startup visibility contract clear at the application boundary.
+        .with_visible(false);
     if let Some(geometry) = stored_geometry {
         viewport = geometry.apply(viewport);
     }
+    let graphics_preferences = GraphicsPreferences::from_environment();
+    let graphics_restart_request = Arc::new(Mutex::new(None));
+    info!(
+        power = graphics_preferences.power.label(),
+        requested_adapter = ?graphics_preferences.adapter,
+        "Applying graphics policy"
+    );
     let options = eframe::NativeOptions {
         viewport,
         renderer,
+        wgpu_options: graphics_preferences.wgpu_configuration(),
         // QSONaut restores geometry through the builder above so winit applies
         // it once, before the window is ever shown.
         persist_window: false,
@@ -1202,18 +1218,47 @@ pub fn run_gui(config: AppConfig) -> Result<()> {
     };
 
     let app_config = config.clone();
+    let app_graphics_preferences = graphics_preferences.clone();
+    let app_graphics_restart_request = Arc::clone(&graphics_restart_request);
     info!(title = "QSONaut", renderer = %renderer, "Calling eframe::run_native");
     let result = eframe::run_native(
         "QSONaut",
         options,
         Box::new(move |cc| {
             info!(renderer = %renderer, "eframe app creation callback entered");
+            let (active_graphics_adapter, available_graphics_adapters) = cc
+                .wgpu_render_state
+                .as_ref()
+                .map(|render_state| {
+                    let active = GraphicsAdapterInfo::from_wgpu(&render_state.adapter.get_info());
+                    let available = render_state
+                        .available_adapters
+                        .iter()
+                        .map(|adapter| GraphicsAdapterInfo::from_wgpu(&adapter.get_info()))
+                        .collect::<Vec<_>>();
+                    (Some(active), available)
+                })
+                .unwrap_or_default();
+            if let Some(active) = active_graphics_adapter.as_ref() {
+                info!(
+                    adapter = %active.name,
+                    backend = %active.backend,
+                    device_type = %active.device_type,
+                    driver = %active.driver,
+                    driver_info = %active.driver_info,
+                    "WGPU graphics adapter active"
+                );
+            }
             Ok(Box::new(QsonautGuiApp::new(
                 app_config.clone(),
                 cc,
                 &app_icon,
                 renderer,
                 stored_geometry,
+                app_graphics_preferences.clone(),
+                active_graphics_adapter,
+                available_graphics_adapters,
+                Arc::clone(&app_graphics_restart_request),
             )))
         }),
     );
@@ -1228,7 +1273,11 @@ pub fn run_gui(config: AppConfig) -> Result<()> {
         }
     }
 
-    Ok(())
+    let restart = graphics_restart_request
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    Ok(restart)
 }
 
 const WINDOW_GEOMETRY_FILE: &str = "window.json";
@@ -1719,6 +1768,11 @@ struct QsonautGuiApp {
     device_restart_required: bool,
     audio_restart_required: bool,
     gui_scale: f32,
+    graphics_active: GraphicsPreferences,
+    graphics_pending: GraphicsPreferences,
+    active_graphics_adapter: Option<GraphicsAdapterInfo>,
+    available_graphics_adapters: Vec<GraphicsAdapterInfo>,
+    graphics_restart_request: Arc<Mutex<Option<GraphicsPreferences>>>,
     compute_preference: ComputePreference,
     acceleration_report: AccelerationReport,
     acceleration_probe: Option<mpsc::Receiver<AccelerationReport>>,
@@ -1737,7 +1791,6 @@ struct QsonautGuiApp {
     first_frame_logged: bool,
     last_viewport_log: Option<String>,
     window_geometry: Option<WindowGeometry>,
-    pending_maximize: bool,
 }
 
 /// Runtime resources owned by an inactive radio tab. The active tab continues
@@ -1779,12 +1832,17 @@ struct TabViewState {
 }
 
 impl QsonautGuiApp {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         mut config: AppConfig,
         cc: &eframe::CreationContext<'_>,
         app_icon: &egui::IconData,
         selected_renderer: eframe::Renderer,
         stored_geometry: Option<WindowGeometry>,
+        graphics_preferences: GraphicsPreferences,
+        active_graphics_adapter: Option<GraphicsAdapterInfo>,
+        available_graphics_adapters: Vec<GraphicsAdapterInfo>,
+        graphics_restart_request: Arc<Mutex<Option<GraphicsPreferences>>>,
     ) -> Self {
         let ctx = &cc.egui_ctx;
         // Keep egui's bundled font fallback chain active. It includes the
@@ -2592,6 +2650,11 @@ impl QsonautGuiApp {
             device_restart_required: false,
             audio_restart_required: false,
             gui_scale,
+            graphics_active: graphics_preferences.clone(),
+            graphics_pending: graphics_preferences,
+            active_graphics_adapter,
+            available_graphics_adapters,
+            graphics_restart_request,
             compute_preference,
             acceleration_report,
             acceleration_probe,
@@ -2610,7 +2673,6 @@ impl QsonautGuiApp {
             first_frame_logged: false,
             last_viewport_log: None,
             window_geometry: stored_geometry,
-            pending_maximize: stored_geometry.is_some_and(|geometry| geometry.maximized),
         }
     }
 
@@ -4422,11 +4484,6 @@ impl eframe::App for QsonautGuiApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.pump_hamdb_lookup();
-        if self.pending_maximize {
-            self.pending_maximize = false;
-            info!("Requesting restored maximized viewport after first frame");
-            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
-        }
         if let Some(geometry) = WindowGeometry::read(ctx, self.window_geometry) {
             self.window_geometry = Some(geometry);
         }

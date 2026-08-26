@@ -11,7 +11,6 @@ anyhow.workspace = true
 clap.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-wgpu.workspace = true
 
 qsonaut-audio = { path = "../../crates/qsonaut-audio" }
 qsonaut-core = { path = "../../crates/qsonaut-core" }
@@ -20,7 +19,7 @@ qsonaut-radio = { package = "rigwright", version = "0.1.10" }
 qsonaut-gui = { path = "../../crates/qsonaut-gui" }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
 image = { version = "0.25", default-features = false, features = ["ico", "png"] }

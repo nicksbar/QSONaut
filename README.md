@@ -94,14 +94,20 @@ sudo apt-get install libasound2-plugins pulseaudio-utils
 See [Audio monitoring](docs/audio-monitoring.md) for native OS setup, WSL
 verification, device selection, and troubleshooting.
 
-For WSL systems where Mesa otherwise selects software rendering, this is the
-known-good launch pattern used during development:
+On WSLg systems with `/dev/dxg`, QSONaut supplies the Mesa D3D12 and WGPU GL
+defaults automatically while preserving explicit environment overrides. To
+force a particular Windows GPU through Mesa, use:
 
 ```bash
 GALLIUM_DRIVER=d3d12 \
 MESA_D3D12_DEFAULT_ADAPTER_NAME=AMD \
 cargo run --release -p qsonaut -- --gui
 ```
+
+The active rendering adapter and session-only power/GPU preferences are shown
+under **Settings > Graphics**. The default is **Low power / Auto**. Applying a
+change restarts only the GUI process; it does not write the choice to an
+operator profile.
 
 QSONaut also offers hardware discovery and lower-level radio commands. Audio
 devices are refreshed and selected in **Settings > Devices**:

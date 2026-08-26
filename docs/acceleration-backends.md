@@ -8,26 +8,38 @@ QSONaut treats acceleration as a measured backend choice, not a build-time promi
 
 - `AUTO`, `CPU`, and `GPU` operator preferences;
 - runtime CPU SIMD and logical-thread discovery;
-- real `wgpu` Vulkan adapter enumeration;
-- Linux/WSL GPU and NPU device exposure checks;
+- NVIDIA CUDA device discovery through `nvidia-smi`, including WSL projection;
+- Linux/WSL NPU device exposure checks;
 - per-stage decode timing and real-time slot-budget reporting;
 - a benchmark gate that requires matching output digests and a configurable minimum end-to-end speedup.
 
-Software Vulkan adapters such as llvmpipe, lavapipe, and SwiftShader are
-reported as CPU fallbacks and never count as an available GPU. On WSL,
-QSONaut also checks the Windows-projected NVIDIA runtime with `nvidia-smi`,
-so a CUDA-capable device remains visible even when Vulkan is software-only.
+GUI rendering adapters are not treated as proof of compute capability. On WSL,
+QSONaut checks the Windows-projected NVIDIA runtime with `nvidia-smi`, so CUDA
+compute discovery stays separate from the GPU that presents the desktop UI.
 
 The GUI publishes its selected backend to decode workers. FT8 currently records PCM preparation, protocol decoding, and result-unpacking stages. Other native modes record their protocol decode stage. Station Health shows the latest timing as a percentage of that mode's slot.
 
 ## WSL GUI rendering
 
-GUI rendering and decoder compute are separate acceleration paths. On WSL,
-QSONaut automatically requests Mesa's D3D12 Gallium renderer through
-`/dev/dxg` and prefers an AMD adapter for the desktop UI. This avoids
-llvmpipe's CPU software renderer and keeps the discrete NVIDIA GPU asleep for
-ordinary display work. Explicit `GALLIUM_DRIVER` and
-`MESA_D3D12_DEFAULT_ADAPTER_NAME` values are always preserved.
+GUI rendering and decoder compute are separate acceleration paths. QSONaut
+uses eframe's WGPU setup to create one graphics instance and select an adapter
+that can present to the real application window. The session default is low
+power with automatic adapter selection. **Settings > Graphics** displays the
+active and available adapters and can stage another policy or GPU for a GUI
+restart without persisting it. The requested adapter is validated against the
+real window surface during that restart.
+
+On WSLg with `/dev/dxg`, QSONaut defaults Mesa to its D3D12 Gallium driver and
+WGPU to GL. Native Linux keeps WGPU's Vulkan and GL fallback set. Explicit
+`WGPU_BACKEND`, `GALLIUM_DRIVER`, and `MESA_D3D12_DEFAULT_ADAPTER_NAME` values
+are preserved. Native Windows currently defaults to WGPU GL because the WGPU
+27 DX12 allocator conflicts with the Windows bindings required by the audio
+stack; Vulkan remains an explicit override.
+
+The adapter inventory is a startup snapshot. If a laptop disables a discrete
+or dock GPU while QSONaut is running, restart the GUI to rebuild the device and
+surface. If a previously selected GPU is absent during that restart, QSONaut
+falls back to a compatible adapter using the selected power policy.
 
 Automatic digital-mode waterfalls update at 10 rows per second. Texture
 uploads occur only after new waterfall data arrives or its visible bandwidth

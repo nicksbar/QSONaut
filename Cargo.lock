@@ -1618,18 +1618,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpu-allocator"
-version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c151a2a5ef800297b4e79efa4f4bec035c5f51d5ae587287c9b952bdf734cacd"
-dependencies = [
- "log",
- "presser",
- "thiserror 1.0.69",
- "windows 0.54.0",
-]
-
-[[package]]
 name = "gpu-descriptor"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3272,12 +3260,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "presser"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
-
-[[package]]
 name = "primal-check"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3363,7 +3345,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -3375,21 +3357,20 @@ dependencies = [
  "rigwright",
  "tokio",
  "tracing",
- "wgpu",
  "windows-sys 0.59.0",
  "winresource",
 ]
 
 [[package]]
 name = "qsonaut-accelerate"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "qsonaut-audio"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "anyhow",
  "cpal",
@@ -3398,7 +3379,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-automation"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -3407,7 +3388,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-core"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "anyhow",
  "dotenvy",
@@ -3418,7 +3399,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-gui"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3455,7 +3436,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-log"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -3468,14 +3449,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-pskreporter"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "qsonaut-server-client"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -3491,7 +3472,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-sstv"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "image",
  "komitoto-sstv",
@@ -3684,12 +3665,6 @@ checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
 dependencies = [
  "rand_core 0.10.1",
 ]
-
-[[package]]
-name = "range-alloc"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca45419789ae5a7899559e9512e58ca889e41f04f1f2445e9f4b290ceccd1d08"
 
 [[package]]
 name = "rav1e"
@@ -5569,7 +5544,6 @@ dependencies = [
  "android_system_properties",
  "arrayvec",
  "ash",
- "bit-set",
  "bitflags 2.13.1",
  "block",
  "bytemuck",
@@ -5579,7 +5553,6 @@ dependencies = [
  "glow",
  "glutin_wgl_sys",
  "gpu-alloc",
- "gpu-allocator",
  "gpu-descriptor",
  "hashbrown 0.16.1",
  "js-sys",
@@ -5591,13 +5564,11 @@ dependencies = [
  "naga",
  "ndk-sys 0.6.0+11769913",
  "objc",
- "once_cell",
  "ordered-float",
  "parking_lot",
  "portable-atomic",
  "portable-atomic-util",
  "profiling",
- "range-alloc",
  "raw-window-handle",
  "renderdoc-sys",
  "smallvec",
@@ -5606,7 +5577,6 @@ dependencies = [
  "web-sys",
  "wgpu-types",
  "windows 0.58.0",
- "windows-core 0.58.0",
 ]
 
 [[package]]
