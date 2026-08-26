@@ -33,7 +33,7 @@ graph TB
     subgraph External["External Services"]
         Q[mfsk-core 0.10.0 unreleased<br/>DSP/Decoding]
         U[cw-dit v0.1.0<br/>Morse/CW DSP]
-        R[rigwright v0.1.2<br/>CI-V Radio]
+        R[rigwright v0.1.10<br/>Radio HAL and drivers]
         S[PSK Reporter<br/>UDP]
         T[Discord/IRC<br/>Automation]
     end
@@ -100,7 +100,7 @@ graph LR
     accelerate[qsonaut-accelerate]
     mfsk[mfsk-core]
     cwdit[cw-dit<br/>cwdit-dsp + cwdit-morse]
-    rigwright[rigwright<br/>v0.1.2]
+    rigwright[rigwright<br/>v0.1.10]
     
     qsonaut -->|path| gui
     qsonaut -->|path| core
@@ -185,7 +185,7 @@ graph TB
 | QSONaut Client | 0.2.3 | Main feature branch |
 | QSONaut Server | 0.1.0 | Independent release |
 | mfsk-core | 0.10.0 (unreleased) | Git dependency; pinned upstream commit |
-| rigwright | 0.1.2 | Git tag |
+| rigwright | 0.1.10 | crates.io |
 | eframe | 0.33 | GUI framework |
 | tokio | 1.0 | Async runtime |
 | sqlx | 0.8.6 | Server DB |

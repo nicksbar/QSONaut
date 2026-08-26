@@ -1,6 +1,41 @@
 use super::super::*;
 
 impl QsonautGuiApp {
+    fn profile_device_users(
+        &self,
+        selector: impl Fn(&OperatorProfile) -> Option<&String>,
+        enabled: impl Fn(&OperatorProfile) -> bool,
+    ) -> HashMap<String, Vec<String>> {
+        let mut users = HashMap::new();
+        for name in &self.available_profiles {
+            let Some(profile) = load_operator_profile_named(name) else {
+                continue;
+            };
+            if enabled(&profile) {
+                if let Some(device) = selector(&profile) {
+                    users
+                        .entry(device.clone())
+                        .or_insert_with(Vec::new)
+                        .push(name.clone());
+                }
+            }
+        }
+        users
+    }
+
+    fn device_choice_label(
+        device: &str,
+        users: &HashMap<String, Vec<String>>,
+        fallback: &str,
+    ) -> String {
+        match users.get(device) {
+            Some(profiles) if !profiles.is_empty() => {
+                format!("{device} · used by {}", profiles.join(", "))
+            }
+            _ => format!("{device} · {fallback}"),
+        }
+    }
+
     pub(in super::super) fn reconnect_radio(&mut self) {
         info!(backend = %self.config.radio.backend, model = %self.config.radio.model, "Radio reconnect requested");
         if let Some(tx) = &self.command_tx {
@@ -34,6 +69,9 @@ impl QsonautGuiApp {
         ));
         self.radio_init_attempted = false;
         self.device_restart_required = false;
+        if self.config.audio.enabled && self.audio_worker_handle.is_none() {
+            self.restart_audio();
+        }
         info!(port = %self.config.radio.serial_port.as_deref().unwrap_or("auto"), "Radio reconnect initialization queued");
         let mut state = self.state.lock().expect("ui state lock poisoned");
         state.radio_waterfall_status = "CONNECTING…".to_string();
@@ -45,6 +83,14 @@ impl QsonautGuiApp {
         self.audio_worker_stop.store(true, Ordering::Relaxed);
         if let Some(handle) = self.audio_worker_handle.take() {
             let _ = handle.join();
+        }
+        if !self.config.audio.enabled {
+            if let Ok(mut state) = self.state.lock() {
+                state.audio_spectrum_status = "DISABLED".to_string();
+            }
+            self.audio_restart_required = false;
+            info!("Audio worker stopped by operator");
+            return;
         }
         self.audio_worker_stop = Arc::new(AtomicBool::new(false));
         self.audio_worker_handle = Some(spawn_audio_spectrum_worker(
@@ -70,11 +116,19 @@ impl QsonautGuiApp {
         info!("Audio worker restart queued");
     }
 
-    pub(in super::super) fn draw_device_settings(&mut self, ui: &mut egui::Ui) {
+    pub(in super::super) fn draw_device_settings(
+        &mut self,
+        ui: &mut egui::Ui,
+        include_monitor: bool,
+    ) {
         ui.horizontal(|ui| {
             ui.heading("Devices");
             if ui.small_button("Refresh").clicked() {
                 self.refresh_device_lists();
+            }
+            if self.device_scan.is_some() {
+                ui.spinner();
+                ui.label(RichText::new("Scanning…").small().color(theme_muted(ui)));
             }
             ui.label(
                 RichText::new(format!(
@@ -92,19 +146,45 @@ impl QsonautGuiApp {
         let output_devices = self.audio_output_devices.clone();
         let serial_ports = self.radio_serial_ports.clone();
         let old_input = self.config.audio.input_device.clone();
+        let old_audio_enabled = self.config.audio.enabled;
         let old_output = self.config.audio.output_device.clone();
         let old_port = self.config.radio.serial_port.clone();
+        let old_enabled = self.config.radio.enabled;
         let old_backend = self.config.radio.backend.clone();
         let old_endpoint = self.config.radio.endpoint.clone();
         let old_model = self.config.radio.model.clone();
         let old_baud = self.config.radio.baud_rate;
         let old_monitor = self.config.audio.monitor_enabled;
         let old_monitor_device = self.config.audio.monitor_output_device.clone();
+        let input_users = self.profile_device_users(
+            |profile| profile.audio_input_device.as_ref(),
+            |profile| profile.audio_enabled,
+        );
+        let output_users = self.profile_device_users(
+            |profile| profile.audio_output_device.as_ref(),
+            |profile| profile.audio_enabled,
+        );
+        let monitor_users = self.profile_device_users(
+            |profile| profile.audio_monitor_output_device.as_ref(),
+            |profile| profile.audio_enabled && profile.audio_monitor_enabled,
+        );
+        let serial_users = self.profile_device_users(
+            |profile| profile.radio_serial_port.as_ref(),
+            |profile| profile.radio_enabled,
+        );
 
         egui::Grid::new("device_settings_grid")
             .num_columns(2)
             .spacing([10.0, 6.0])
             .show(ui, |ui| {
+                ui.label("Radio connection");
+                ui.checkbox(&mut self.config.radio.enabled, "Enabled");
+                ui.end_row();
+
+                ui.label("Audio worker");
+                ui.checkbox(&mut self.config.audio.enabled, "Enabled");
+                ui.end_row();
+
                 ui.label("Radio backend");
                 egui::ComboBox::from_id_salt("radio_backend")
                     .selected_text(radio_backend_label(&self.config.radio.backend))
@@ -158,114 +238,167 @@ impl QsonautGuiApp {
                 }
 
                 ui.label("Audio input");
-                egui::ComboBox::from_id_salt("audio_input_device")
-                    .selected_text(
-                        self.config
-                            .audio
-                            .input_device
-                            .as_deref()
-                            .unwrap_or("System default"),
-                    )
-                    .width(ui.available_width().max(180.0))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut self.config.audio.input_device,
-                            None,
-                            "System default",
-                        );
-                        for name in &input_devices {
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("audio_input_device")
+                        .selected_text(
+                            self.config
+                                .audio
+                                .input_device
+                                .as_deref()
+                                .unwrap_or("System default"),
+                        )
+                        .width((ui.available_width() - 34.0).max(180.0))
+                        .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut self.config.audio.input_device,
-                                Some(name.clone()),
-                                name,
+                                None,
+                                "System default",
                             );
-                        }
-                    });
+                            for name in &input_devices {
+                                let label =
+                                    Self::device_choice_label(name, &input_users, "available");
+                                ui.selectable_value(
+                                    &mut self.config.audio.input_device,
+                                    Some(name.clone()),
+                                    label,
+                                );
+                            }
+                        });
+                    if ui
+                        .small_button("↻")
+                        .on_hover_text("Re-scan audio input devices")
+                        .clicked()
+                    {
+                        self.refresh_device_lists();
+                    }
+                });
                 ui.end_row();
 
                 ui.label("Audio output");
-                egui::ComboBox::from_id_salt("audio_output_device")
-                    .selected_text(
-                        self.config
-                            .audio
-                            .output_device
-                            .as_deref()
-                            .unwrap_or("System default"),
-                    )
-                    .width(ui.available_width().max(180.0))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut self.config.audio.output_device,
-                            None,
-                            "System default",
-                        );
-                        for name in &output_devices {
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("audio_output_device")
+                        .selected_text(
+                            self.config
+                                .audio
+                                .output_device
+                                .as_deref()
+                                .unwrap_or("System default"),
+                        )
+                        .width((ui.available_width() - 34.0).max(180.0))
+                        .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut self.config.audio.output_device,
-                                Some(name.clone()),
-                                name,
+                                None,
+                                "System default",
                             );
-                        }
-                    });
+                            for name in &output_devices {
+                                let label =
+                                    Self::device_choice_label(name, &output_users, "available");
+                                ui.selectable_value(
+                                    &mut self.config.audio.output_device,
+                                    Some(name.clone()),
+                                    label,
+                                );
+                            }
+                        });
+                    if ui
+                        .small_button("↻")
+                        .on_hover_text("Re-scan audio output devices")
+                        .clicked()
+                    {
+                        self.refresh_device_lists();
+                    }
+                });
                 ui.end_row();
 
-                ui.label("RX monitor output");
-                egui::ComboBox::from_id_salt("settings_monitor_output_device")
-                    .selected_text(
-                        self.config
-                            .audio
-                            .monitor_output_device
-                            .as_deref()
-                            .or(self.config.audio.output_device.as_deref())
-                            .unwrap_or("Audio output device"),
-                    )
-                    .width(ui.available_width().max(180.0))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut self.config.audio.monitor_output_device,
-                            None,
-                            "Use audio output device",
-                        );
-                        for name in &output_devices {
-                            ui.selectable_value(
-                                &mut self.config.audio.monitor_output_device,
-                                Some(name.clone()),
-                                name,
-                            );
+                if include_monitor {
+                    ui.label("RX monitor output");
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("settings_monitor_output_device")
+                            .selected_text(
+                                self.config
+                                    .audio
+                                    .monitor_output_device
+                                    .as_deref()
+                                    .or(self.config.audio.output_device.as_deref())
+                                    .unwrap_or("Audio output device"),
+                            )
+                            .width((ui.available_width() - 34.0).max(180.0))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.config.audio.monitor_output_device,
+                                    None,
+                                    "Use audio output device",
+                                );
+                                for name in &output_devices {
+                                    let label = Self::device_choice_label(
+                                        name,
+                                        &monitor_users,
+                                        "available",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.config.audio.monitor_output_device,
+                                        Some(name.clone()),
+                                        label,
+                                    );
+                                }
+                            });
+                        if ui
+                            .small_button("↻")
+                            .on_hover_text("Re-scan audio output devices")
+                            .clicked()
+                        {
+                            self.refresh_device_lists();
                         }
                     });
-                ui.end_row();
+                    ui.end_row();
+                }
 
                 ui.label("Radio / USB serial");
-                egui::ComboBox::from_id_salt("radio_serial_port")
-                    .selected_text(match self.config.radio.serial_port.as_deref() {
-                        Some(port) => self
-                            .radio_serial_port_labels
-                            .get(port)
-                            .map(String::as_str)
-                            .unwrap_or(port),
-                        None => "Auto detect",
-                    })
-                    .width(ui.available_width().max(180.0))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut self.config.radio.serial_port,
-                            None,
-                            "Auto detect",
-                        );
-                        for name in &serial_ports {
-                            let label = self
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("radio_serial_port")
+                        .selected_text(match self.config.radio.serial_port.as_deref() {
+                            Some(port) => self
                                 .radio_serial_port_labels
-                                .get(name)
+                                .get(port)
                                 .map(String::as_str)
-                                .unwrap_or(name.as_str());
+                                .unwrap_or(port),
+                            None => "Auto detect",
+                        })
+                        .width((ui.available_width() - 34.0).max(180.0))
+                        .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut self.config.radio.serial_port,
-                                Some(name.clone()),
-                                label,
+                                None,
+                                "Auto detect",
                             );
-                        }
-                    });
+                            for name in &serial_ports {
+                                let port_label = self
+                                    .radio_serial_port_labels
+                                    .get(name)
+                                    .map(String::as_str)
+                                    .unwrap_or(name.as_str());
+                                let label = match serial_users.get(name) {
+                                    Some(profiles) if !profiles.is_empty() => {
+                                        format!("{port_label} · used by {}", profiles.join(", "))
+                                    }
+                                    _ => format!("{port_label} · available"),
+                                };
+                                ui.selectable_value(
+                                    &mut self.config.radio.serial_port,
+                                    Some(name.clone()),
+                                    label,
+                                );
+                            }
+                        });
+                    if ui
+                        .small_button("↻")
+                        .on_hover_text("Re-scan radio and USB serial devices")
+                        .clicked()
+                    {
+                        self.refresh_device_lists();
+                    }
+                });
                 ui.end_row();
 
                 ui.label("CAT baud rate");
@@ -380,11 +513,13 @@ impl QsonautGuiApp {
             .color(theme_muted(ui)),
         );
 
-        let audio_changed = old_input != self.config.audio.input_device
+        let audio_changed = old_audio_enabled != self.config.audio.enabled
+            || old_input != self.config.audio.input_device
             || old_output != self.config.audio.output_device
             || old_monitor != self.config.audio.monitor_enabled
             || old_monitor_device != self.config.audio.monitor_output_device;
         let radio_changed = old_port != self.config.radio.serial_port
+            || old_enabled != self.config.radio.enabled
             || old_backend != self.config.radio.backend
             || old_endpoint != self.config.radio.endpoint
             || old_model != self.config.radio.model
@@ -421,6 +556,37 @@ impl QsonautGuiApp {
             );
         }
 
+        let audio_runtime_running = self.audio_worker_handle.is_some();
+        ui.horizontal(|ui| {
+            if audio_runtime_running {
+                if ui.button("Stop audio worker").clicked() {
+                    self.config.audio.enabled = false;
+                    self.profile_dirty = true;
+                    self.persist_profile("Audio worker stopped for");
+                    self.restart_audio();
+                }
+            } else if ui
+                .button(if self.config.audio.enabled {
+                    "Retry audio worker"
+                } else {
+                    "Start audio worker"
+                })
+                .clicked()
+            {
+                if !self.config.audio.enabled {
+                    self.config.audio.enabled = true;
+                    self.profile_dirty = true;
+                    self.persist_profile("Audio worker started for");
+                }
+                self.restart_audio();
+            }
+            ui.label(
+                RichText::new("Stops/releases the selected audio input and monitor output.")
+                    .small()
+                    .color(theme_muted(ui)),
+            );
+        });
+
         if self.device_restart_required {
             ui.add_space(4.0);
             if ui.button("Reconnect radio now").clicked() {
@@ -440,6 +606,38 @@ impl QsonautGuiApp {
                     .color(theme_warning(ui)),
             );
         }
+
+        let radio_runtime_running = self.command_tx.is_some()
+            || (!self.radio_init_attempted && self.radio_init_rx.is_some());
+        ui.horizontal(|ui| {
+            if radio_runtime_running {
+                if ui.button("Stop radio worker").clicked() {
+                    self.config.radio.enabled = false;
+                    self.profile_dirty = true;
+                    self.persist_profile("Radio worker stopped for");
+                    self.reconnect_radio();
+                }
+            } else if ui
+                .button(if self.config.radio.enabled {
+                    "Retry profile runtime"
+                } else {
+                    "Start radio worker"
+                })
+                .clicked()
+            {
+                if !self.config.radio.enabled {
+                    self.config.radio.enabled = true;
+                    self.profile_dirty = true;
+                    self.persist_profile("Radio worker started for");
+                }
+                self.reconnect_radio();
+            }
+            ui.label(
+                RichText::new("Releases or claims this profile’s radio connection.")
+                    .small()
+                    .color(theme_muted(ui)),
+            );
+        });
     }
 }
 

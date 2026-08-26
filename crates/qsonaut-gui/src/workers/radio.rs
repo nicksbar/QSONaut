@@ -1,9 +1,15 @@
 use super::super::*;
+use super::request_gui_repaint;
 
 const RADIO_CORE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const RADIO_LEVEL_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const RADIO_COMMAND_WAKE_INTERVAL: Duration = Duration::from_millis(50);
 const RADIO_SCOPE_READ_SLICE: Duration = Duration::from_millis(50);
+
+// The first radio core poll is instrumented at INFO level so a hardware startup
+// stall is visible in the normal application log without logging every 100 ms
+// poll forever.
+static FIRST_RADIO_CORE_POLL: AtomicBool = AtomicBool::new(true);
 
 const RADIO_CONTROL_IDS: &[ControlId] = &[
     ControlId::AfGain,
@@ -302,9 +308,7 @@ pub(crate) fn spawn_radio_worker(
                             s.last_error = None;
                             drop(s);
                             info!(bins = bins.len(), "Radio spectrum stream enabled");
-                            if let Some(ctx) = stream_repaint.get() {
-                                ctx.request_repaint();
-                            }
+                            request_gui_repaint(&stream_repaint);
                         }
                         Err(err) => {
                             let mut s = stream_state.lock().expect("ui state lock poisoned");
@@ -348,14 +352,9 @@ pub(crate) fn spawn_radio_worker(
                             cadence_rate, division_rate, dropped_sweeps_delta
                         );
                         drop(s);
-                        if let Some(ctx) = stream_repaint.get() {
-                            let elapsed = last_waterfall_repaint.elapsed();
-                            if elapsed >= waterfall_repaint_interval {
-                                last_waterfall_repaint = Instant::now();
-                                ctx.request_repaint();
-                            } else {
-                                ctx.request_repaint_after(waterfall_repaint_interval - elapsed);
-                            }
+                        if last_waterfall_repaint.elapsed() >= waterfall_repaint_interval {
+                            last_waterfall_repaint = Instant::now();
+                            request_gui_repaint(&stream_repaint);
                         }
                     }
                     Err(err) => {
@@ -375,7 +374,12 @@ pub(crate) fn spawn_radio_worker(
             }
         });
 
-        poll_radio_core_state(&rt, &radio, &state, true);
+        info!("Initial radio poll started");
+        // Establish only the essential frequency/mode state before entering
+        // the normal polling schedule. Optional level reads begin on the next
+        // scheduled poll and cannot delay startup.
+        poll_radio_core_state(&rt, &radio, &state, false);
+        info!("Initial radio poll completed");
         let mut next_core_poll = Instant::now() + RADIO_CORE_POLL_INTERVAL;
         let mut next_level_poll = Instant::now() + RADIO_LEVEL_POLL_INTERVAL;
         let mut radio_power_settle_until = Instant::now();
@@ -471,6 +475,18 @@ pub(crate) fn spawn_radio_worker(
                                 error!(mode = ?next, error = %err, "Radio mode cycle failed");
                                 let mut s = state.lock().expect("ui state lock poisoned");
                                 s.last_error = Some(err.to_string());
+                            }
+                        }
+                        poll_radio_core_state(&rt, &radio, &state, true);
+                    }
+                    GuiCommand::SetRadioMode(mode) => {
+                        info!(mode = ?mode, "Radio mode command requested");
+                        match rt.block_on(Radio::set_mode(&radio, mode)) {
+                            Ok(()) => info!(mode = ?mode, "Radio mode command accepted"),
+                            Err(err) => {
+                                error!(mode = ?mode, error = %err, "Radio mode command failed");
+                                state.lock().expect("ui state lock poisoned").last_error =
+                                    Some(err.to_string());
                             }
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
@@ -618,17 +634,42 @@ pub(crate) fn spawn_radio_worker(
                                 }
                             };
                             let mode_result = rt.block_on(Radio::set_mode(&radio, mode));
-                            if let Err(error) = frequency_result.and(mode_result) {
-                                error!(
-                                    workspace = %workspace_mode.label(),
-                                    frequency_hz,
-                                    error = %error,
-                                    "Radio workspace preset failed"
-                                );
-                                state.lock().expect("ui state lock poisoned").last_error =
-                                    Some(error.to_string());
-                            } else {
-                                info!(workspace = %workspace_mode.label(), frequency_hz, mode = ?preset.base_mode, data_mode = preset.data_mode, "Radio workspace preset accepted");
+                            match frequency_result.and(mode_result) {
+                                Ok(()) => {
+                                    // Reflect a successful write immediately. The follow-up
+                                    // CAT read is useful confirmation, but a compatible radio
+                                    // may briefly return an incomplete status frame after a
+                                    // mode change.
+                                    let mut s = state.lock().expect("ui state lock poisoned");
+                                    s.frequency_hz = Some(frequency_hz);
+                                    s.mode = match mode {
+                                        Mode::Usb => "USB",
+                                        Mode::Lsb => "LSB",
+                                        Mode::Cw => "CW",
+                                        Mode::Data => "DATA",
+                                        Mode::Am => "AM",
+                                        Mode::Fm => "FM",
+                                        Mode::Wfm => "WFM",
+                                        Mode::Rtty => "RTTY",
+                                        Mode::CwReverse => "CW-R",
+                                        Mode::RttyReverse => "RTTY-R",
+                                    }
+                                    .to_string();
+                                    s.data_mode = Some(mode == Mode::Data);
+                                    s.radio_power_on = Some(true);
+                                    s.last_error = None;
+                                    info!(workspace = %workspace_mode.label(), frequency_hz, mode = ?preset.base_mode, data_mode = preset.data_mode, "Radio workspace preset accepted");
+                                }
+                                Err(error) => {
+                                    error!(
+                                        workspace = %workspace_mode.label(),
+                                        frequency_hz,
+                                        error = %error,
+                                        "Radio workspace preset failed"
+                                    );
+                                    state.lock().expect("ui state lock poisoned").last_error =
+                                        Some(error.to_string());
+                                }
                             }
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
@@ -982,9 +1023,7 @@ pub(crate) fn spawn_radio_worker(
                 }
                 next_core_poll = Instant::now() + RADIO_CORE_POLL_INTERVAL;
                 next_level_poll = Instant::now() + RADIO_LEVEL_POLL_INTERVAL;
-                if let Some(ctx) = repaint_ctx.get() {
-                    ctx.request_repaint();
-                }
+                request_gui_repaint(&repaint_ctx);
             }
 
             let now = Instant::now();
@@ -1016,9 +1055,7 @@ pub(crate) fn spawn_radio_worker(
                 if poll_levels {
                     next_level_poll = Instant::now() + RADIO_LEVEL_POLL_INTERVAL;
                 }
-                if let Some(ctx) = repaint_ctx.get() {
-                    ctx.request_repaint();
-                }
+                request_gui_repaint(&repaint_ctx);
             }
         }
     })
@@ -1031,49 +1068,76 @@ fn poll_radio_core_state(
     poll_levels: bool,
 ) {
     if radio.as_icom().is_none() {
+        let instrument_poll = FIRST_RADIO_CORE_POLL.swap(false, Ordering::Relaxed);
+        if instrument_poll {
+            info!("Initial radio core frequency read started");
+        }
         let frequency = rt.block_on(radio.get_frequency_hz());
+        if instrument_poll {
+            info!(
+                ok = frequency.is_ok(),
+                "Initial radio core frequency read completed"
+            );
+            info!("Initial radio core mode read started");
+        }
         let mode = rt.block_on(radio.get_mode());
-        let mut s = state.lock().expect("ui state lock poisoned");
-        match (frequency, mode) {
-            (Ok(frequency_hz), Ok(mode)) => {
-                s.frequency_hz = Some(frequency_hz);
-                s.mode = match mode {
-                    Mode::Usb => "USB",
-                    Mode::Lsb => "LSB",
-                    Mode::Cw => "CW",
-                    Mode::Data => "DATA",
-                    Mode::Am => "AM",
-                    Mode::Fm => "FM",
-                    Mode::Wfm => "WFM",
-                    Mode::Rtty => "RTTY",
-                    Mode::CwReverse => "CW-R",
-                    Mode::RttyReverse => "RTTY-R",
-                }
-                .to_string();
-                s.data_mode = Some(mode == Mode::Data);
-                s.radio_power_on = Some(true);
-                s.radio_power_command_pending = false;
-                s.radio_power_settling = false;
-                s.radio_power_wake_deadline = None;
-                s.last_update = Some(Instant::now());
-                s.last_error = None;
-            }
-            (frequency, mode) => {
-                let wake_pending = s.radio_power_command_pending
-                    && s.radio_power_wake_deadline
-                        .is_some_and(|deadline| Instant::now() < deadline);
-                if !wake_pending {
-                    s.radio_power_on = Some(false);
+        if instrument_poll {
+            info!(ok = mode.is_ok(), "Initial radio core mode read completed");
+        }
+        {
+            let mut s = state.lock().expect("ui state lock poisoned");
+            match (frequency, mode) {
+                (Ok(frequency_hz), Ok(mode)) => {
+                    s.frequency_hz = Some(frequency_hz);
+                    s.mode = match mode {
+                        Mode::Usb => "USB",
+                        Mode::Lsb => "LSB",
+                        Mode::Cw => "CW",
+                        Mode::Data => "DATA",
+                        Mode::Am => "AM",
+                        Mode::Fm => "FM",
+                        Mode::Wfm => "WFM",
+                        Mode::Rtty => "RTTY",
+                        Mode::CwReverse => "CW-R",
+                        Mode::RttyReverse => "RTTY-R",
+                    }
+                    .to_string();
+                    s.data_mode = Some(mode == Mode::Data);
+                    s.radio_power_on = Some(true);
                     s.radio_power_command_pending = false;
+                    s.radio_power_settling = false;
                     s.radio_power_wake_deadline = None;
+                    s.last_update = Some(Instant::now());
+                    s.last_error = None;
                 }
-                s.last_error = Some(
-                    frequency
-                        .err()
-                        .or_else(|| mode.err())
-                        .expect("one CAT operation failed")
-                        .to_string(),
-                );
+                (frequency, mode) => {
+                    warn!(
+                        initial_poll = instrument_poll,
+                        frequency_error = ?frequency.as_ref().err(),
+                        mode_error = ?mode.as_ref().err(),
+                        "Radio core poll returned an error"
+                    );
+                    let was_ready = s.radio_power_on == Some(true);
+                    let wake_pending = s.radio_power_command_pending
+                        && s.radio_power_wake_deadline
+                            .is_some_and(|deadline| Instant::now() < deadline);
+                    // A single incomplete response immediately after a write is
+                    // not proof that the radio powered off. Keep an already-live
+                    // connection usable and let the next scheduled poll recover
+                    // the displayed state.
+                    if !wake_pending && !was_ready {
+                        s.radio_power_on = Some(false);
+                        s.radio_power_command_pending = false;
+                        s.radio_power_wake_deadline = None;
+                    }
+                    s.last_error = Some(
+                        frequency
+                            .err()
+                            .or_else(|| mode.err())
+                            .expect("one CAT operation failed")
+                            .to_string(),
+                    );
+                }
             }
         }
         if poll_levels {

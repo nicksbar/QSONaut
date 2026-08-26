@@ -50,6 +50,8 @@ impl QsonautGuiApp {
                 server_url: url.to_string(),
                 device_token: token.to_string(),
                 client_version: env!("CARGO_PKG_VERSION").to_string(),
+                queue_path: app_config_dir().join("server-log-queue.json"),
+                share_logs: self.config.server.share_logs,
             })
         });
         self.server_client = next_client;
@@ -74,7 +76,7 @@ impl QsonautGuiApp {
             return;
         };
         client.publish_log(serde_json::json!({
-            "event_id": null,
+            "event_id": self.server_active_event.as_ref().and_then(|(id, _)| Uuid::parse_str(id).ok()),
             "idempotency_key": log_idempotency_key(record.id),
             "callsign": record.callsign,
             "band": record.band,

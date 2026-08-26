@@ -13,7 +13,8 @@ use super::{
 };
 
 pub(super) const OPERATOR_PROFILE_FILE: &str = "profile.toml";
-pub(super) const OPERATOR_PROFILE_VERSION: u32 = 13;
+pub(super) const OPERATOR_PROFILE_VERSION: u32 = 15;
+const RADIO_PROFILE_LIBRARY_FILE: &str = "radio-profiles.toml";
 const LEGACY_OPERATOR_PROFILE_FILE: &str = ".rigforge_profile.toml";
 const DEFAULT_PROFILE_NAME: &str = "Default";
 const OPERATOR_PROFILES_DIR: &str = "profiles";
@@ -95,6 +96,8 @@ pub(super) struct OperatorProfile {
     pub(super) cw_tone_hz: u16,
     #[serde(default)]
     pub(super) audio_input_device: Option<String>,
+    #[serde(default = "default_audio_enabled")]
+    pub(super) audio_enabled: bool,
     #[serde(default)]
     pub(super) audio_output_device: Option<String>,
     #[serde(default)]
@@ -103,6 +106,12 @@ pub(super) struct OperatorProfile {
     pub(super) audio_monitor_output_device: Option<String>,
     #[serde(default = "default_audio_monitor_volume")]
     pub(super) audio_monitor_volume: f32,
+    #[serde(default = "default_audio_sample_rate_hz")]
+    pub(super) audio_sample_rate_hz: u32,
+    #[serde(default = "default_audio_channels")]
+    pub(super) audio_channels: u8,
+    #[serde(default = "default_radio_enabled")]
+    pub(super) radio_enabled: bool,
     #[serde(default)]
     pub(super) radio_serial_port: Option<String>,
     #[serde(default = "default_radio_backend")]
@@ -113,6 +122,10 @@ pub(super) struct OperatorProfile {
     pub(super) radio_model: String,
     #[serde(default = "default_radio_baud_rate")]
     pub(super) radio_baud_rate: u32,
+    #[serde(default = "default_radio_civ_address")]
+    pub(super) radio_civ_address: u8,
+    #[serde(default = "default_controller_civ_address")]
+    pub(super) radio_controller_civ_address: u8,
     #[serde(default = "default_gui_scale")]
     pub(super) gui_scale: f32,
     #[serde(default)]
@@ -157,7 +170,10 @@ pub(super) struct OperatorProfile {
     pub(super) hunter_alerts_enabled: bool,
     #[serde(default)]
     pub(super) hunter_custom_rules: Vec<CustomAchievementRule>,
-    #[serde(default)]
+    // Kept readable for one migration pass from pre-library profile files.
+    // Reusable radio definitions now live in the global radio profile library;
+    // only mode assignments remain profile-specific.
+    #[serde(default, skip_serializing)]
     pub(super) radio_profiles: Vec<RadioProfile>,
     #[serde(default)]
     pub(super) mode_radio_profile: std::collections::BTreeMap<String, String>,
@@ -190,6 +206,42 @@ pub(super) struct RadioProfile {
     pub(super) noise_reduction: Option<bool>,
     #[serde(default)]
     pub(super) agc: Option<u8>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct RadioProfileLibrary {
+    #[serde(default)]
+    profiles: Vec<RadioProfile>,
+}
+
+fn radio_profile_library_path() -> PathBuf {
+    app_config_dir().join(RADIO_PROFILE_LIBRARY_FILE)
+}
+
+pub(super) fn load_radio_profile_library() -> Vec<RadioProfile> {
+    let path = radio_profile_library_path();
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|source| toml::from_str::<RadioProfileLibrary>(&source).ok())
+        .map(|library| library.profiles)
+        .unwrap_or_default()
+}
+
+pub(super) fn save_radio_profile_library(profiles: &[RadioProfile]) -> Result<()> {
+    let path = radio_profile_library_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let library = RadioProfileLibrary {
+        profiles: profiles.to_vec(),
+    };
+    fs::write(&path, toml::to_string_pretty(&library)?)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 pub(super) fn default_gui_scale() -> f32 {
@@ -236,6 +288,18 @@ fn default_audio_monitor_volume() -> f32 {
     1.0
 }
 
+fn default_audio_enabled() -> bool {
+    true
+}
+
+fn default_audio_sample_rate_hz() -> u32 {
+    48_000
+}
+
+fn default_audio_channels() -> u8 {
+    1
+}
+
 pub(super) fn default_contest_serial_start() -> u32 {
     1
 }
@@ -266,6 +330,18 @@ fn default_radio_model() -> String {
 
 fn default_radio_baud_rate() -> u32 {
     115_200
+}
+
+fn default_radio_civ_address() -> u8 {
+    0x94
+}
+
+fn default_controller_civ_address() -> u8 {
+    0xE0
+}
+
+fn default_radio_enabled() -> bool {
+    true
 }
 
 fn default_radio_backend() -> String {
@@ -352,7 +428,10 @@ pub(super) fn select_operator_profile(name: &str) -> Result<()> {
 }
 
 pub(super) fn list_operator_profiles() -> Vec<String> {
-    let mut profiles = vec![DEFAULT_PROFILE_NAME.to_string()];
+    let mut profiles = Vec::new();
+    if operator_profile_path().is_file() {
+        profiles.push(DEFAULT_PROFILE_NAME.to_string());
+    }
     if let Ok(entries) = fs::read_dir(operator_profiles_dir()) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -405,6 +484,14 @@ pub(super) fn save_operator_profile_named(name: &str, profile: &OperatorProfile)
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
         fs::set_permissions(active_profile_path(), fs::Permissions::from_mode(0o600))?;
     }
+    Ok(())
+}
+
+pub(super) fn remove_operator_profile_named(name: &str) -> Result<()> {
+    let name = validate_profile_name(name)?;
+    let path = named_operator_profile_path(name)?;
+    anyhow::ensure!(path.is_file(), "profile ‘{name}’ does not exist");
+    fs::remove_file(path)?;
     Ok(())
 }
 

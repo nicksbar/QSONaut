@@ -14,7 +14,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.3.8"
+version = "0.3.9"
 edition = "2021"
 license = "MIT"
 authors = ["QSONaut Contributors"]
@@ -34,7 +34,13 @@ toml = "0.8"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "wayland", "persistence"] }
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11", "persistence"] }
+# Native modern backends only: Vulkan (Linux/WSL), DX12 (Windows), Metal
+# (macOS). Keeping GLES disabled removes the legacy glow dependency entirely.
+# Keep rendering on wgpu while also compiling its OpenGL backend. WSLg often
+# exposes hardware acceleration through Mesa's D3D12 OpenGL path even when
+# its Vulkan ICD falls back to llvmpipe.
+wgpu = { version = "27", default-features = false, features = ["std", "vulkan", "gles", "dx12", "metal", "wgsl"] }
 rustfft = "6"
 cpal = "0.15"
 futures-util = "0.3"

@@ -5,6 +5,64 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.3.9] - 2026-08-24
+
+### Added
+- Added opt-in shared QSONaut Server log delivery with queued, retry-safe QSO
+  publication so temporary server failures do not block local logging.
+- Updated `mfsk-core` to `0.10.1` (`62803e7`), including its JT9 sample-rate
+  constant cleanup and latest decoder/tooling compatibility updates. Upstream
+  reports no public API or decoder-behavior change in this patch release.
+- Added a lower-right radio-themed About panel with version, copyright,
+  author, contributor/tester credits, GitHub, issue-reporting, and qsonaut.com
+  links. Release credits can be supplied through repository Actions variables.
+- Added a WGPU-native AI tab icon painted with egui primitives, plus compact
+  colored icons across the signal-panel tabs without relying on emoji glyph
+  coverage.
+- Added a full multi-radio operating model: every profile tab owns independent
+  radio, audio, decoder, monitor, waterfall, and control state, and remains
+  live while another tab is active. Tabs can be started, stopped, and switched
+  independently without reconnecting or reloading the other radios; a profile
+  always has a tab, and deleting the profile removes its tab.
+- Added profile-scoped radio/audio device assignment, live device refresh, and
+  clear in-use labels so multiple radios can be configured without silently
+  sharing hardware, including independent monitoring and failure recovery per
+  profile.
+- Added a global reusable radio-tuning library with per-profile, per-mode
+  assignments and a profile-management drawer with direct Radio, Tuning,
+  Digital Timing, Monitoring, and Waterfall tabs.
+
+### Changed
+- Updated native radio integration to the published Rigwright `0.1.10`
+  release, including the current capability and meter/control behavior.
+- Migrated the desktop renderer to WGPU-only operation with explicit Vulkan,
+  DX12, Metal, GL, and WGSL backend features; removed the Glow path, added
+  logged hardware-aware backend selection and WSL fallback, and documented the
+  cross-platform renderer requirements.
+- Consolidated the radio, mode, status, volume, monitor, and scope controls
+  into a responsive top banner with compact aligned sections and adaptive
+  wrapping for smaller windows.
+- Reduced multi-radio rendering overhead by coalescing worker repaint requests
+  across profiles instead of redrawing independently for every audio chunk.
+- Refined AI, SSTV, automation, server, radio, and application-log UI labels
+  to avoid unsupported Unicode glyphs while retaining compact visual cues.
+
+### Fixed
+- Initialized persistent logging before WSL graphics preparation so platform
+  setup, WGPU startup, panic, and eframe launch failures are recorded in
+  `qsonaut.log`.
+- Added WSL GPU re-exec diagnostics and clarified that an X11/WSLg clipboard
+  connection reset can terminate the native event loop; the full failure
+  chain is now retained in the diagnostic log.
+- Restored radio-aware Band filtering: known native Rigwright profiles now
+  expose only their supported HF/6m or VHF/UHF bands, while unknown external
+  connections remain unfiltered.
+- Made audio reads cancellation-aware so closing multiple live radio profiles
+  no longer accumulates the full hardware read timeout for every worker; added
+  shutdown-duration logging for regression diagnosis.
+
 ## [0.3.8] - 2026-08-23
 
 ### Added
@@ -19,7 +77,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   charting, and application-log diagnostics.
 
 ### Changed
-- Updated the native radio integration to the published Rigwright `0.1.9`
+- Updated the native radio integration to the published Rigwright `0.1.10`
   release, including capability discovery, normalized meters, tuner controls,
   Icom scope support, and tolerant CI-V echo-back handling.
 - Redesigned the combined radio/audio waterfall deck: both waterfalls share

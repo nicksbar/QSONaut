@@ -65,10 +65,14 @@ fn edit_optional_u8(ui: &mut egui::Ui, value: &mut Option<u8>, min: u8, max: u8)
 }
 
 impl QsonautGuiApp {
-    pub(in super::super) fn draw_profile_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Operator Profile");
+    pub(in super::super) fn draw_station_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Station");
         ui.separator();
-
+        ui.label(
+            RichText::new("Operator identity and station details")
+                .small()
+                .color(Color32::GRAY),
+        );
         ui.horizontal(|ui| {
             ui.label(RichText::new("Call").strong());
             let changed = ui
@@ -152,7 +156,7 @@ impl QsonautGuiApp {
 
         ui.add_space(8.0);
         ui.label(RichText::new("Station and image-generation notes").strong());
-        ui.label("These details are saved with the selected operator profile and used to improve SSTV image prompts.");
+        ui.label("These details describe the station and are used to improve SSTV image prompts.");
 
         let mut station_details_changed = false;
         ui.label(RichText::new("Rig").strong());
@@ -215,88 +219,63 @@ impl QsonautGuiApp {
             self.profile_dirty = true;
             self.persist_profile("Station and LLM notes saved to");
         }
+    }
 
-        ui.add_space(8.0);
-        ui.label(RichText::new("Saved profiles").strong());
-        ui.horizontal_wrapped(|ui| {
-            let previous_profile = self.selected_profile_name.clone();
-            egui::ComboBox::from_id_salt("operator_profile_select")
-                .selected_text(&self.selected_profile_name)
-                .width(150.0)
-                .show_ui(ui, |ui| {
-                    for profile in &self.available_profiles {
-                        ui.selectable_value(
-                            &mut self.selected_profile_name,
-                            profile.clone(),
-                            profile,
-                        );
+    pub(in super::super) fn draw_profile_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Profile");
+        ui.separator();
+        ui.label(
+            RichText::new("Rename or delete this radio profile.")
+                .small()
+                .color(Color32::GRAY),
+        );
+        if self.new_profile_name.is_empty() {
+            self.new_profile_name = self.selected_profile_name.clone();
+        }
+        ui.horizontal(|ui| {
+            ui.label("Name");
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.new_profile_name)
+                    .desired_width(220.0)
+                    .hint_text("Profile name"),
+            );
+            if (response.lost_focus() || ui.input(|input| input.key_pressed(egui::Key::Enter)))
+                && self.new_profile_name.trim() != self.selected_profile_name
+            {
+                self.rename_selected_profile();
+            }
+            if ui.small_button("Rename").clicked() {
+                self.rename_selected_profile();
+            }
+            if ui
+                .small_button("Delete")
+                .on_hover_text("Delete this saved profile and stop its radio tab")
+                .clicked()
+            {
+                self.pending_profile_delete = Some(self.selected_profile_name.clone());
+            }
+        });
+
+        if let Some(name) = self.pending_profile_delete.clone() {
+            ui.group(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "Delete profile ‘{name}’ and stop its radio tab? This removes the saved profile and releases its devices."
+                    ))
+                    .color(theme_warning(ui)),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Delete profile and tab").clicked() {
+                        self.pending_profile_delete = None;
+                        self.delete_operator_profile(&name);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.pending_profile_delete = None;
                     }
                 });
-            if self.selected_profile_name != previous_profile {
-                match load_operator_profile_named(&self.selected_profile_name) {
-                    Some(profile) => {
-                        self.apply_operator_profile(profile);
-                        if let Err(error) = select_operator_profile(&self.selected_profile_name) {
-                            self.profile_io_status = format!("Profile selection failed: {error}");
-                        } else {
-                            self.profile_io_status =
-                                format!("Loaded profile ‘{}’", self.selected_profile_name);
-                        }
-                    }
-                    None => {
-                        self.selected_profile_name = previous_profile;
-                        self.profile_io_status = "Selected profile could not be loaded".to_string();
-                    }
-                }
-            }
-            if ui.small_button("Save").clicked() {
-                self.persist_profile("Saved");
-            }
-            if ui.small_button("Reload").clicked() {
-                match load_operator_profile_named(&self.selected_profile_name) {
-                    Some(profile) => {
-                        self.apply_operator_profile(profile);
-                        self.profile_io_status =
-                            format!("Reloaded profile ‘{}’", self.selected_profile_name);
-                    }
-                    None => {
-                        self.profile_io_status =
-                            format!("Profile ‘{}’ was not found", self.selected_profile_name);
-                    }
-                }
-            }
-        });
+            });
+        }
 
-        ui.horizontal_wrapped(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.new_profile_name)
-                    .desired_width(150.0)
-                    .hint_text("New profile name"),
-            );
-            if ui.button("Create new profile").clicked() {
-                let name = self.new_profile_name.trim().to_string();
-                let duplicate = self
-                    .available_profiles
-                    .iter()
-                    .any(|profile| profile.eq_ignore_ascii_case(&name));
-                if duplicate {
-                    self.profile_io_status = format!("Profile ‘{name}’ already exists");
-                } else {
-                    match save_operator_profile_named(&name, &self.current_operator_profile()) {
-                        Ok(()) => {
-                            self.selected_profile_name = name.clone();
-                            self.available_profiles = list_operator_profiles();
-                            self.new_profile_name.clear();
-                            self.profile_io_status = format!("Created profile ‘{name}’");
-                            self.profile_dirty = false;
-                        }
-                        Err(error) => {
-                            self.profile_io_status = format!("Profile creation failed: {error}");
-                        }
-                    }
-                }
-            }
-        });
         ui.add_space(4.0);
         ui.label(
             RichText::new(&self.profile_io_status)
@@ -621,7 +600,7 @@ impl QsonautGuiApp {
 
     pub(in super::super) fn draw_ai_panel(&mut self, ui: &mut egui::Ui) {
         self.poll_local_image_events();
-        ui.heading("🧠 AI Models");
+        ui.heading("AI Models");
         ui.label(
             RichText::new(
                 "Global model configuration for image generation and future AI-assisted activities.",
@@ -756,9 +735,14 @@ impl QsonautGuiApp {
         });
     }
 
-    pub(in super::super) fn draw_settings_panel(&mut self, ui: &mut egui::Ui) {
+    pub(in super::super) fn draw_application_settings_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("Settings");
         ui.separator();
+        ui.label(
+            RichText::new("Application-wide preferences")
+                .small()
+                .color(Color32::GRAY),
+        );
         let previous_scale = self.gui_scale;
         egui::ComboBox::from_id_salt("gui_scale")
             .selected_text(format!("UI {:.0}%", gui_scale_percent(self.gui_scale)))
@@ -801,64 +785,132 @@ impl QsonautGuiApp {
             .small()
             .color(Color32::GRAY),
         );
-        ui.add_space(8.0);
-        ui.label(RichText::new("Digital TX timing").strong());
+    }
+
+    pub(in super::super) fn draw_radio_profile_settings(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Radio profile settings");
+        ui.separator();
+        self.draw_device_settings(ui, false);
+    }
+
+    pub(in super::super) fn draw_radio_profile_assignments(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Tuning assignments");
+        ui.separator();
         ui.label(
-            RichText::new("Profiles apply only to supported controls and are safe to reapply.")
-                .small()
-                .color(Color32::GRAY),
+            RichText::new(
+                "Choose a reusable global Radio Tuning definition for each mode in this radio profile.",
+            )
+            .small()
+            .color(Color32::GRAY),
         );
-        let profile_names = self
-            .radio_profiles
-            .iter()
-            .map(|profile| profile.name.clone())
-            .collect::<Vec<_>>();
+        let mut changed = false;
         for mode in ["FT8", "FT4", "CW", "Other"] {
+            let current = self
+                .mode_radio_profile
+                .get(mode)
+                .cloned()
+                .unwrap_or_default();
+            let mut selected = current.clone();
             ui.horizontal(|ui| {
-                ui.label(format!("{mode} default"));
-                let selected = self
-                    .mode_radio_profile
-                    .get(mode)
-                    .cloned()
-                    .unwrap_or_else(|| "None".to_string());
-                egui::ComboBox::from_id_salt(format!("radio_profile_default_{mode}"))
-                    .selected_text(selected)
+                ui.label(mode);
+                egui::ComboBox::from_id_salt(format!("profile_radio_assignment_{mode}"))
+                    .selected_text(if selected.is_empty() {
+                        "None"
+                    } else {
+                        selected.as_str()
+                    })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            self.mode_radio_profile.entry(mode.to_string()).or_default(),
-                            String::new(),
-                            "None",
-                        );
-                        for name in &profile_names {
-                            ui.selectable_value(
-                                self.mode_radio_profile.entry(mode.to_string()).or_default(),
-                                name.clone(),
-                                name,
-                            );
+                        ui.selectable_value(&mut selected, String::new(), "None");
+                        for profile in &self.radio_profiles {
+                            ui.selectable_value(&mut selected, profile.name.clone(), &profile.name);
                         }
                     });
             });
+            if selected != current {
+                self.mode_radio_profile.insert(mode.to_string(), selected);
+                changed = true;
+            }
         }
-        if ui.button("Save current radio state as profile").clicked() {
-            self.radio_profiles.push(RadioProfile {
-                name: format!("Profile {}", self.radio_profiles.len() + 1),
-                mode: Some(self.workspace_mode.label().to_string()),
-                data_mode: None,
-                filter: None,
-                af_gain: None,
-                rf_gain: None,
-                rf_power: None,
-                preamp: None,
-                attenuator: None,
-                noise_blank: None,
-                noise_reduction: None,
-                agc: None,
-            });
+        if self.radio_profiles.is_empty() {
+            ui.label(
+                RichText::new(
+                    "No global radio definitions exist yet. Create them in Radio Tuning.",
+                )
+                .small()
+                .color(Color32::GRAY),
+            );
+        }
+        if changed {
             self.profile_dirty = true;
-            self.persist_profile("Radio profile saved to");
+            self.persist_profile("Radio tuning assignments saved to");
         }
+    }
+
+    pub(in super::super) fn draw_monitoring_settings(&mut self, ui: &mut egui::Ui) {
+        ui.heading("RX monitoring");
         ui.label(
-            RichText::new("Applied before and after FT8/FT4 audio transmission.")
+            RichText::new("Choose the profile-specific output. Enable, disable, and adjust RX monitor volume from the app toolbar.")
+                .small()
+                .color(Color32::GRAY),
+        );
+        let old_output = self.config.audio.monitor_output_device.clone();
+        ui.horizontal(|ui| {
+            ui.label("Output");
+            egui::ComboBox::from_id_salt("profile_monitor_output_device")
+                .selected_text(
+                    self.config
+                        .audio
+                        .monitor_output_device
+                        .as_deref()
+                        .or(self.config.audio.output_device.as_deref())
+                        .unwrap_or("Use audio output device"),
+                )
+                .width((ui.available_width() - 34.0).max(180.0))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.config.audio.monitor_output_device,
+                        None,
+                        "Use audio output device",
+                    );
+                    for device in &self.audio_output_devices {
+                        ui.selectable_value(
+                            &mut self.config.audio.monitor_output_device,
+                            Some(device.clone()),
+                            device,
+                        );
+                    }
+                });
+            if ui
+                .small_button("↻")
+                .on_hover_text("Re-scan audio output devices")
+                .clicked()
+            {
+                self.refresh_device_lists();
+            }
+        });
+        if old_output != self.config.audio.monitor_output_device {
+            self.audio_restart_required = true;
+            self.profile_dirty = true;
+            self.persist_profile("RX monitor settings saved to");
+        }
+        if self.audio_restart_required {
+            if ui.button("Restart audio now").clicked() {
+                self.restart_audio();
+            }
+            ui.label(
+                RichText::new("Restart audio to apply monitor device changes.")
+                    .small()
+                    .color(theme_warning(ui)),
+            );
+        }
+    }
+
+    pub(in super::super) fn draw_digital_timing_settings(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("Digital TX timing").strong());
+        ui.label(
+            RichText::new(
+                "Timing is applied to the selected radio profile. Manage reusable radio control profiles in Radio Tuning.",
+            )
                 .small()
                 .color(Color32::GRAY),
         );
@@ -884,8 +936,6 @@ impl QsonautGuiApp {
             self.profile_dirty = true;
             self.persist_profile("PTT timing saved to");
         }
-        ui.add_space(8.0);
-        self.draw_device_settings(ui);
     }
 
     pub(in super::super) fn draw_radio_tuning_panel(
@@ -896,7 +946,7 @@ impl QsonautGuiApp {
         ui.heading("Radio Tuning Profiles");
         ui.separator();
         ui.label(
-            RichText::new("Save reusable radio settings, edit stored controls, apply them to the selected radio, and assign defaults per QSONaut mode.")
+            RichText::new("Manage reusable radio settings globally, then assign them per QSONaut mode for this radio tab.")
                 .small()
                 .color(Color32::GRAY),
         );
@@ -1034,26 +1084,6 @@ impl QsonautGuiApp {
             }
         }
 
-        ui.separator();
-        ui.label(RichText::new("Mode defaults").strong());
-        for mode in ["FT8", "FT4", "CW", "Other"] {
-            ui.horizontal(|ui| {
-                ui.label(mode);
-                let value = self.mode_radio_profile.entry(mode.to_string()).or_default();
-                egui::ComboBox::from_id_salt(format!("radio_tuning_default_{mode}"))
-                    .selected_text(if value.is_empty() {
-                        "None"
-                    } else {
-                        value.as_str()
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(value, String::new(), "None");
-                        for profile in &self.radio_profiles {
-                            ui.selectable_value(value, profile.name.clone(), &profile.name);
-                        }
-                    });
-            });
-        }
         if self.radio_profiles.is_empty() {
             ui.label(
                 RichText::new("No profiles yet. Enter a name and save the current radio state.")
@@ -1062,7 +1092,7 @@ impl QsonautGuiApp {
         }
     }
 
-    pub(in super::super) fn draw_waterfall_panel(
+    pub(in super::super) fn draw_waterfall_profile_panel(
         &mut self,
         ui: &mut egui::Ui,
         snapshot: &GuiState,
@@ -1072,12 +1102,25 @@ impl QsonautGuiApp {
         let supports_radio_scope =
             native_radio_profile(&self.config.radio.backend, &self.config.radio.model)
                 .is_some_and(|profile| profile.capabilities.spectrum);
-        if ui
-            .add_enabled(
-                supports_radio_scope,
-                egui::Checkbox::new(&mut self.civ_spectrum_on, "Show radio scope waterfall"),
-            )
-            .changed()
+        if supports_radio_scope {
+            let radio_scope_detail = match self.radio_scope_view {
+                RadioScopeView::Narrow => {
+                    format!("NARROW · {}", scope_span_label(self.radio_scope_span_code))
+                }
+                RadioScopeView::Overview => "ACTIVE BAND".to_string(),
+            };
+            ui.label(
+                RichText::new(format!(
+                    "Radio scope · {radio_scope_detail} · {}",
+                    snapshot.radio_waterfall_status
+                ))
+                .color(Color32::LIGHT_GREEN),
+            );
+        }
+        if supports_radio_scope
+            && ui
+                .checkbox(&mut self.civ_spectrum_on, "Show radio scope waterfall")
+                .changed()
         {
             self.profile_dirty = true;
             self.persist_profile("Auto-saved");
@@ -1132,81 +1175,83 @@ impl QsonautGuiApp {
             }
         });
 
-        ui.add_space(6.0);
-        ui.label(RichText::new("Radio scope only").strong());
-        let mut scope_view_changed = false;
-        ui.horizontal_wrapped(|ui| {
-            scope_view_changed |= ui
-                .selectable_value(
-                    &mut self.radio_scope_view,
-                    RadioScopeView::Narrow,
-                    "Narrow passband",
+        if supports_radio_scope {
+            ui.add_space(6.0);
+            ui.label(RichText::new("Radio scope only").strong());
+            let mut scope_view_changed = false;
+            ui.horizontal_wrapped(|ui| {
+                scope_view_changed |= ui
+                    .selectable_value(
+                        &mut self.radio_scope_view,
+                        RadioScopeView::Narrow,
+                        "Narrow passband",
+                    )
+                    .changed();
+                scope_view_changed |= ui
+                    .selectable_value(
+                        &mut self.radio_scope_view,
+                        RadioScopeView::Overview,
+                        "Active band overview",
+                    )
+                    .changed();
+            });
+            if scope_view_changed {
+                self.profile_dirty = true;
+                self.persist_profile("Auto-saved");
+            }
+            ui.add(
+                egui::Slider::new(&mut self.radio_scope_contrast, 0.7..=3.0)
+                    .text("Intensity")
+                    .clamping(egui::SliderClamping::Always),
+            );
+            ui.checkbox(
+                &mut self.radio_scope_lock_if_to_filter,
+                "Match span to selected FIL",
+            );
+            let vbw_changed = ui
+                .checkbox(&mut self.radio_scope_vbw_wide, "Wide VBW")
+                .on_hover_text(
+                    "Wide VBW smooths the radio scope display by averaging more video bandwidth. "
+                        .to_string()
+                        + "Leave it off for a sharper waterfall and faster response.",
                 )
                 .changed();
-            scope_view_changed |= ui
-                .selectable_value(
-                    &mut self.radio_scope_view,
-                    RadioScopeView::Overview,
-                    "Active band overview",
-                )
-                .changed();
-        });
-        if scope_view_changed {
-            self.profile_dirty = true;
-            self.persist_profile("Auto-saved");
+            if vbw_changed {
+                self.profile_dirty = true;
+                self.persist_profile("Auto-saved");
+            }
+            if self.radio_scope_lock_if_to_filter {
+                self.radio_scope_span_code = scope_span_for_filter(&snapshot.mode, snapshot.filter);
+                ui.small(format!(
+                    "Automatic span: {}",
+                    scope_span_label(self.radio_scope_span_code)
+                ));
+            } else {
+                egui::ComboBox::from_id_salt("radio_scope_span_settings")
+                    .selected_text(scope_span_label(self.radio_scope_span_code))
+                    .show_ui(ui, |ui| {
+                        for (code, label) in [
+                            (0_u8, "±2.5 kHz"),
+                            (1_u8, "±5 kHz"),
+                            (2_u8, "±10 kHz"),
+                            (3_u8, "±25 kHz"),
+                            (4_u8, "±50 kHz"),
+                            (5_u8, "±100 kHz"),
+                            (6_u8, "±250 kHz"),
+                            (7_u8, "±500 kHz"),
+                        ] {
+                            ui.selectable_value(&mut self.radio_scope_span_code, code, label);
+                        }
+                    });
+            }
+            ui.checkbox(&mut self.radio_scope_hold, "Hold radio scope");
+            ui.add(
+                egui::Slider::new(&mut self.radio_scope_reference_tenths_db, -200..=200)
+                    .step_by(5.0)
+                    .custom_formatter(|value, _| format!("{:.1} dB", value / 10.0))
+                    .text("Reference"),
+            );
         }
-        ui.add(
-            egui::Slider::new(&mut self.radio_scope_contrast, 0.7..=3.0)
-                .text("Intensity")
-                .clamping(egui::SliderClamping::Always),
-        );
-        ui.checkbox(
-            &mut self.radio_scope_lock_if_to_filter,
-            "Match span to selected FIL",
-        );
-        let vbw_changed = ui
-            .checkbox(&mut self.radio_scope_vbw_wide, "Wide VBW")
-            .on_hover_text(
-                "Wide VBW smooths the radio scope display by averaging more video bandwidth. "
-                    .to_string()
-                    + "Leave it off for a sharper waterfall and faster response.",
-            )
-            .changed();
-        if vbw_changed {
-            self.profile_dirty = true;
-            self.persist_profile("Auto-saved");
-        }
-        if self.radio_scope_lock_if_to_filter {
-            self.radio_scope_span_code = scope_span_for_filter(&snapshot.mode, snapshot.filter);
-            ui.small(format!(
-                "Automatic span: {}",
-                scope_span_label(self.radio_scope_span_code)
-            ));
-        } else {
-            egui::ComboBox::from_id_salt("radio_scope_span_settings")
-                .selected_text(scope_span_label(self.radio_scope_span_code))
-                .show_ui(ui, |ui| {
-                    for (code, label) in [
-                        (0_u8, "±2.5 kHz"),
-                        (1_u8, "±5 kHz"),
-                        (2_u8, "±10 kHz"),
-                        (3_u8, "±25 kHz"),
-                        (4_u8, "±50 kHz"),
-                        (5_u8, "±100 kHz"),
-                        (6_u8, "±250 kHz"),
-                        (7_u8, "±500 kHz"),
-                    ] {
-                        ui.selectable_value(&mut self.radio_scope_span_code, code, label);
-                    }
-                });
-        }
-        ui.checkbox(&mut self.radio_scope_hold, "Hold radio scope");
-        ui.add(
-            egui::Slider::new(&mut self.radio_scope_reference_tenths_db, -200..=200)
-                .step_by(5.0)
-                .custom_formatter(|value, _| format!("{:.1} dB", value / 10.0))
-                .text("Reference"),
-        );
         ui.add_space(6.0);
         ui.label(RichText::new("Audio waterfall only").strong());
         ui.label(

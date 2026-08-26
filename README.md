@@ -49,6 +49,10 @@ implementation-level status of radio controls, normalized meters, SWR/tuner
 workflows, digital modes, SSTV, station tools, server integration, automation,
 and deliberate gaps.
 
+For the settings split between application-wide station state, independent
+radio tabs, and shared radio-tuning definitions, see
+[Settings ownership](docs/settings-ownership.md).
+
 The primary development environment is Linux/WSL with USB audio and Icom CI-V.
 Windows and ARM build jobs exist, but a green build is not the same as hardware
 validation.
@@ -148,8 +152,8 @@ redacted 24 KiB tail; logs are never uploaded continuously.
 If QSONaut fails to open a window or crashes during startup, attach that log
 file to the issue report.
 
-QSONaut renders through eframe's `glow` (OpenGL) backend on every platform. The
-selected renderer is recorded in `qsonaut.log`.
+QSONaut renders through eframe's `wgpu` backend on every platform. The selected
+renderer is recorded in `qsonaut.log`.
 
 UI scale now uses a rebased baseline: the physical size that previously looked
 like 75% is now the 100% preset.
@@ -212,6 +216,15 @@ Bug reports with platform, radio, audio device, logs, and exact reproduction
 steps are especially useful. Tests and captured protocol fixtures are preferred
 over claims of compatibility. Please do not commit credentials, personal QSO
 logs, recordings, or proprietary manuals.
+
+### About credits
+
+The About panel credits the original author, plus optional contributors and
+testers. Release builds read the comma-separated repository Actions variables
+`QSONAUT_CONTRIBUTORS` and `QSONAUT_TESTERS`; unset or empty variables display
+`None listed`. Set them under the repository's **Settings → Secrets and
+variables → Actions → Variables** page so credit names or callsigns can be
+updated without changing source code.
 
 ## Acknowledgements
 

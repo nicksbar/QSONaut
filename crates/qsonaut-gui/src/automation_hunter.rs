@@ -715,18 +715,18 @@ impl QsonautGuiApp {
                             } => {
                                 let accent = accent.as_deref().unwrap_or("default");
                                 self.automation_status =
-                                    format!("🤖 {title} — {body} (accent: {accent})");
+                                    format!("{title} — {body} (accent: {accent})");
                             }
                             Action::SetCompose { mode, message } => {
                                 let normalized_mode = mode.trim().to_ascii_uppercase();
                                 if normalized_mode == "FT8" {
                                     self.ft8_compose = message.clone();
                                     self.automation_status =
-                                        "🤖 Automation prepared FT8 compose text".to_string();
+                                        "Automation prepared FT8 compose text".to_string();
                                 } else {
                                     self.digital_compose = message.clone();
                                     self.automation_status = format!(
-                                        "🤖 Automation prepared {} compose text",
+                                        "Automation prepared {} compose text",
                                         normalized_mode
                                     );
                                 }
@@ -736,50 +736,42 @@ impl QsonautGuiApp {
                                 target,
                                 message,
                             } => {
-                                self.automation_status = format!(
-                                    "🤖 {}",
-                                    self.execute_automation_external_send(source, target, message)
-                                );
+                                self.automation_status =
+                                    self.execute_automation_external_send(source, target, message);
                             }
                             Action::ServerSync => {
                                 self.automation_status = if let Some(client) = &self.server_client {
                                     client.request_sync();
-                                    "🤖 Requested QSONaut Server sync".to_string()
+                                    "Requested QSONaut Server sync".to_string()
                                 } else {
-                                    "🤖 Server sync unavailable: no configured connection"
-                                        .to_string()
+                                    "Server sync unavailable: no configured connection".to_string()
                                 };
                             }
                             Action::ServerSendMessage { channel, message } => {
-                                self.automation_status = if channel.trim().is_empty()
-                                    || message.trim().is_empty()
-                                {
-                                    "🤖 Server publish rejected: channel and message are required"
-                                        .to_string()
-                                } else if channel.chars().count() > 80
-                                    || message.chars().count() > 2_000
-                                {
-                                    "🤖 Server publish rejected: message exceeds server limits"
-                                        .to_string()
-                                } else if let Some(client) = &self.server_client {
-                                    client.publish_channel_message(channel, message);
-                                    format!("🤖 Published automation message to #{channel}")
-                                } else {
-                                    "🤖 Server publish unavailable: no configured connection"
-                                        .to_string()
-                                };
+                                self.automation_status =
+                                    if channel.trim().is_empty() || message.trim().is_empty() {
+                                        "Server publish rejected: channel and message are required"
+                                            .to_string()
+                                    } else if channel.chars().count() > 80
+                                        || message.chars().count() > 2_000
+                                    {
+                                        "Server publish rejected: message exceeds server limits"
+                                            .to_string()
+                                    } else if let Some(client) = &self.server_client {
+                                        client.publish_channel_message(channel, message);
+                                        format!("Published automation message to #{channel}")
+                                    } else {
+                                        "Server publish unavailable: no configured connection"
+                                            .to_string()
+                                    };
                             }
                             Action::RadioCommand { command, value } => {
-                                self.automation_status = format!(
-                                    "🤖 {}",
-                                    self.execute_automation_radio_command(command, value)
-                                );
+                                self.automation_status =
+                                    self.execute_automation_radio_command(command, value);
                             }
                             Action::RequestTransmit { mode, message } => {
-                                self.automation_status = format!(
-                                    "🤖 {}",
-                                    self.execute_automation_transmit_request(mode, message)
-                                );
+                                self.automation_status =
+                                    self.execute_automation_transmit_request(mode, message);
                             }
                         }
                         let status = self.automation_status.to_ascii_lowercase();
@@ -796,24 +788,24 @@ impl QsonautGuiApp {
                     if !report.denied.is_empty() {
                         warn!(event = %event.source, denied = report.denied.len(), "Automation actions denied");
                         self.automation_status = format!(
-                            "🤖 Automation denied {} action(s) (capability not granted/requested)",
+                            "Automation denied {} action(s) (capability not granted/requested)",
                             report.denied.len()
                         );
                     }
                     if let Some(error) = report.errors.first() {
-                        self.automation_status = format!("🤖 Automation component error: {error}");
+                        self.automation_status = format!("Automation component error: {error}");
                     }
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Lagged(skipped)) => {
                     warn!(skipped, "Automation event stream lagged");
                     self.automation_status =
-                        format!("🤖 Automation event stream lagged; skipped {skipped} event(s)");
+                        format!("Automation event stream lagged; skipped {skipped} event(s)");
                 }
                 Err(TryRecvError::Closed) => {
                     error!("Automation event stream closed");
                     self.automation_status =
-                        "🤖 Automation event stream closed; restart required".to_string();
+                        "Automation event stream closed; restart required".to_string();
                     break;
                 }
             }

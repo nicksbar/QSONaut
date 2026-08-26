@@ -79,7 +79,7 @@ impl QsonautGuiApp {
             self.digital_tx_status = status;
             self.hunter_dupe_blocks = self.hunter_dupe_blocks.saturating_add(1);
             self.push_hunter_alert(
-                "🛡️ Dupe avoided",
+                "🛡 Dupe avoided",
                 format!("{target_call} on {band} {}", mode.label()),
                 Color32::from_rgb(255, 170, 75),
             );
