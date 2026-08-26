@@ -1575,8 +1575,11 @@ struct QsonautGuiApp {
     hamdb_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
     hamdb_profile_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
     pota_spots: Vec<PotaSpot>,
-    pota_lookup_rx: Option<mpsc::Receiver<Vec<PotaSpot>>>,
+    pota_lookup_rx: Option<mpsc::Receiver<Result<Vec<PotaSpot>, String>>>,
     pota_last_lookup: Instant,
+    pota_history: VecDeque<(Instant, usize)>,
+    pota_last_updated: Option<Instant>,
+    pota_last_error: Option<String>,
     radio_init_attempted: bool,
     radio_worker_handle: Option<std::thread::JoinHandle<()>>,
     parked_radio_sessions: HashMap<String, RadioSession>,
@@ -1794,6 +1797,7 @@ struct QsonautGuiApp {
     acceleration_report: AccelerationReport,
     acceleration_probe: Option<mpsc::Receiver<AccelerationReport>>,
     psk_reporter_enabled: bool,
+    pota_enabled: bool,
     psk_batch_interval_secs: u64,
     psk_repeat_cache_secs: u64,
     psk_max_pending: usize,
@@ -2122,6 +2126,7 @@ impl QsonautGuiApp {
         let mut gui_scale = default_gui_scale();
         let mut compute_preference = ComputePreference::Auto;
         let mut psk_reporter_enabled = false;
+        let mut pota_enabled = true;
         let mut psk_batch_interval_secs = default_psk_batch_interval_secs();
         let mut psk_repeat_cache_secs = default_psk_repeat_cache_secs();
         let mut psk_max_pending = default_psk_max_pending();
@@ -2202,6 +2207,7 @@ impl QsonautGuiApp {
             };
             compute_preference = p.compute_preference;
             psk_reporter_enabled = p.psk_reporter_enabled;
+            pota_enabled = p.pota_enabled;
             psk_batch_interval_secs = p.psk_batch_interval_secs.clamp(60, 3_600);
             psk_repeat_cache_secs = p.psk_repeat_cache_secs.clamp(60, 3_600);
             psk_max_pending = p.psk_max_pending.clamp(1, 2_048);
@@ -2328,6 +2334,7 @@ impl QsonautGuiApp {
                 gui_scale,
                 compute_preference,
                 psk_reporter_enabled,
+                pota_enabled,
                 psk_batch_interval_secs,
                 psk_repeat_cache_secs,
                 psk_max_pending,
@@ -2462,6 +2469,9 @@ impl QsonautGuiApp {
             pota_spots: Vec::new(),
             pota_lookup_rx: None,
             pota_last_lookup: Instant::now() - Duration::from_secs(60),
+            pota_history: VecDeque::new(),
+            pota_last_updated: None,
+            pota_last_error: None,
             logo_clicks: VecDeque::new(),
             logo_spin_until: None,
             radio_init_attempted: false,
@@ -2678,6 +2688,7 @@ impl QsonautGuiApp {
             acceleration_report,
             acceleration_probe,
             psk_reporter_enabled,
+            pota_enabled,
             psk_batch_interval_secs,
             psk_repeat_cache_secs,
             psk_max_pending,
@@ -3712,10 +3723,35 @@ impl QsonautGuiApp {
     }
 
     fn pump_pota_spots(&mut self) {
+        if !self.pota_enabled {
+            return;
+        }
         if let Some(rx) = &self.pota_lookup_rx {
             if let Ok(spots) = rx.try_recv() {
-                info!(count = spots.len(), "POTA activator spots refreshed");
-                self.pota_spots = spots;
+                match spots {
+                    Ok(spots) => {
+                        let activators = spots
+                            .iter()
+                            .map(|spot| spot.activator.as_str())
+                            .collect::<HashSet<_>>()
+                            .len();
+                        info!(
+                            spots = spots.len(),
+                            activators, "POTA activator spots refreshed"
+                        );
+                        self.pota_spots = spots;
+                        self.pota_last_updated = Some(Instant::now());
+                        self.pota_last_error = None;
+                        self.pota_history.push_back((Instant::now(), activators));
+                        while self.pota_history.len() > 60 {
+                            self.pota_history.pop_front();
+                        }
+                    }
+                    Err(error) => {
+                        warn!(error = %error, "POTA activator spot lookup failed");
+                        self.pota_last_error = Some(error);
+                    }
+                }
                 self.pota_lookup_rx = None;
             }
         }
@@ -3729,30 +3765,42 @@ impl QsonautGuiApp {
         let (tx, rx) = mpsc::channel();
         self.pota_lookup_rx = Some(rx);
         thread::spawn(move || {
-            let spots = reqwest::blocking::Client::builder()
+            let result = reqwest::blocking::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
-                .ok()
+                .map_err(|error| error.to_string())
                 .and_then(|client| {
                     client
                         .get("https://api.pota.app/spot/activator")
                         .send()
-                        .ok()
+                        .map_err(|error| error.to_string())
                 })
-                .and_then(|response| response.json::<Vec<PotaApiSpot>>().ok())
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|spot| {
-                    Some(PotaSpot {
-                        activator: spot.activator?.trim().to_ascii_uppercase(),
-                        reference: spot.reference?.trim().to_string(),
-                        name: spot.name?.trim().to_string(),
-                        frequency_hz: spot.frequency?.parse::<f64>().ok()?.round() as u64 * 1_000,
-                        mode: spot.mode?.trim().to_ascii_uppercase(),
-                    })
+                .and_then(|response| {
+                    response
+                        .error_for_status()
+                        .map_err(|error| error.to_string())
                 })
-                .collect();
-            let _ = tx.send(spots);
+                .and_then(|response| {
+                    response
+                        .json::<Vec<PotaApiSpot>>()
+                        .map_err(|error| error.to_string())
+                })
+                .map(|spots| {
+                    spots
+                        .into_iter()
+                        .filter_map(|spot| {
+                            Some(PotaSpot {
+                                activator: spot.activator?.trim().to_ascii_uppercase(),
+                                reference: spot.reference?.trim().to_string(),
+                                name: spot.name?.trim().to_string(),
+                                frequency_hz: spot.frequency?.parse::<f64>().ok()?.round() as u64
+                                    * 1_000,
+                                mode: spot.mode?.trim().to_ascii_uppercase(),
+                            })
+                        })
+                        .collect()
+                });
+            let _ = tx.send(result);
         });
     }
 
@@ -4013,6 +4061,7 @@ impl QsonautGuiApp {
             gui_scale: self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX),
             compute_preference: self.compute_preference,
             psk_reporter_enabled: self.psk_reporter_enabled,
+            pota_enabled: self.pota_enabled,
             psk_batch_interval_secs: self.psk_batch_interval_secs.clamp(60, 3_600),
             psk_repeat_cache_secs: self.psk_repeat_cache_secs.clamp(60, 3_600),
             psk_max_pending: self.psk_max_pending.clamp(1, 2_048),
@@ -4328,7 +4377,7 @@ impl QsonautGuiApp {
         });
     }
 
-    fn draw_connection_status(&self, ui: &mut egui::Ui, snapshot: &GuiState) {
+    fn draw_connection_status(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Connections").strong());
             ui.separator();
@@ -4413,6 +4462,24 @@ impl QsonautGuiApp {
                 ui.label(RichText::new("PSK Reporter WAITING").color(theme_warning(ui)))
                     .on_hover_text("Set a real callsign and grid before reporting");
             }
+            ui.separator();
+            let pota_activators = self
+                .pota_spots
+                .iter()
+                .map(|spot| spot.activator.as_str())
+                .collect::<HashSet<_>>()
+                .len();
+            let pota_label = if !self.pota_enabled {
+                "🌲 POTA OFF".to_string()
+            } else if self.pota_lookup_rx.is_some() {
+                "🌲 POTA …".to_string()
+            } else {
+                format!("🌲 POTA {pota_activators}")
+            };
+            let pota_button = ui
+                .selectable_label(self.pota_enabled && self.pota_spots.len() > 0, pota_label)
+                .on_hover_text("Show live POTA activator statistics and spots");
+            egui::Popup::menu(&pota_button).show(|ui| self.draw_pota_panel(ui));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 self.draw_about_button(ui);
             });

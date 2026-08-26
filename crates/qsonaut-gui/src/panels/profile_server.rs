@@ -539,6 +539,33 @@ impl QsonautGuiApp {
         }
 
         ui.add_space(8.0);
+        let pota_changed = ui
+            .checkbox(&mut self.pota_enabled, "🌲 Query live POTA activator spots")
+            .on_hover_text("Opt-in: periodically reads the public POTA activator spot feed")
+            .changed();
+        if pota_changed {
+            self.pota_last_error = None;
+            if self.pota_enabled {
+                self.pota_last_lookup = Instant::now() - Duration::from_secs(30);
+                info!("POTA activator spot querying enabled");
+            } else {
+                self.pota_lookup_rx = None;
+                info!("POTA activator spot querying disabled");
+            }
+            self.profile_dirty = true;
+            self.persist_profile("POTA querying preference saved to");
+        }
+        ui.label(
+            RichText::new(if self.pota_enabled {
+                "POTA data is queried about every 30 seconds and shown from the bottom toolbar."
+            } else {
+                "POTA querying is disabled; no POTA data will be requested."
+            })
+            .small()
+            .color(Color32::GRAY),
+        );
+
+        ui.add_space(8.0);
         ui.label(RichText::new("Submission rules").strong());
         ui.label(
             RichText::new(

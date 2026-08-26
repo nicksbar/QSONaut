@@ -132,6 +132,8 @@ pub(super) struct OperatorProfile {
     pub(super) compute_preference: ComputePreference,
     #[serde(default)]
     pub(super) psk_reporter_enabled: bool,
+    #[serde(default = "default_true")]
+    pub(super) pota_enabled: bool,
     #[serde(default = "default_psk_batch_interval_secs")]
     pub(super) psk_batch_interval_secs: u64,
     #[serde(default = "default_psk_repeat_cache_secs")]

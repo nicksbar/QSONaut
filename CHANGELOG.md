@@ -12,6 +12,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 - Replaced the editable CAT baud-rate control with a radio-aware selection list
   constrained to the rates supported by the selected Rigwright model profile.
+- Added an explicit POTA live-data preference in the Reporting panel, plus a
+  bottom-toolbar POTA panel with activator history, current spots, and
+  click-to-tune spot navigation.
 
 ### Fixed
 - Allowed audio inputs that do not expose the configured 48 kHz capture rate to
