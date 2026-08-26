@@ -126,7 +126,7 @@ fn draw_pota_history_graph(ui: &mut egui::Ui, history: &VecDeque<(Instant, usize
     painter.rect_stroke(
         rect,
         3.0,
-        egui::Stroke::new(1.0, grid_color),
+        egui::Stroke::new(1.0_f32, grid_color),
         egui::StrokeKind::Inside,
     );
     if history.is_empty() {
@@ -164,7 +164,7 @@ fn draw_pota_history_graph(ui: &mut egui::Ui, history: &VecDeque<(Instant, usize
         .collect::<Vec<_>>();
     painter.add(egui::Shape::line(
         points,
-        egui::Stroke::new(2.0, Color32::from_rgb(110, 220, 150)),
+        egui::Stroke::new(2.0_f32, Color32::from_rgb(110, 220, 150)),
     ));
     painter.text(
         egui::pos2(left, top),

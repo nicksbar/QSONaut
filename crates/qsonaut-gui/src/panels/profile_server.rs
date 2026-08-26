@@ -772,11 +772,15 @@ impl QsonautGuiApp {
         );
         let previous_scale = self.gui_scale;
         egui::ComboBox::from_id_salt("gui_scale")
-            .selected_text(format!("UI {:.0}%", gui_scale_percent(self.gui_scale)))
+            .selected_text(format!(
+                "UI {:.0}%",
+                platform_gui_scale_percent(self.gui_scale)
+            ))
             .width(90.0)
             .show_ui(ui, |ui| {
-                for percent in [75_u32, 85, 100, 110, 125] {
-                    let scale = gui_scale_from_percent(percent);
+                let percentages = [50_u32, 60, 75, 85, 100, 110, 125, 150, 175];
+                for percent in percentages {
+                    let scale = platform_gui_scale_from_percent(percent);
                     ui.selectable_value(&mut self.gui_scale, scale, format!("{percent}%"));
                 }
             });

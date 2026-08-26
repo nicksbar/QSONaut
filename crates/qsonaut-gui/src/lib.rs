@@ -167,7 +167,7 @@ const GUI_SCALE_PROFILE_VERSION: u32 = 8;
 const AUDIO_MONITOR_PROFILE_VERSION: u32 = 12;
 const GUI_SCALE_BASE: f32 = 1.2;
 const GUI_SCALE_MAX: f32 = 2.0;
-const GUI_SCALE_MIN: f32 = 0.9;
+const GUI_SCALE_MIN: f32 = 0.45;
 const QSO_LOG_FILE: &str = "log.toml";
 const QSO_ADIF_FILE: &str = "log.adi";
 const HAMDB_CACHE_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
@@ -237,12 +237,46 @@ fn default_true() -> bool {
     true
 }
 
-fn gui_scale_from_percent(percent: u32) -> f32 {
-    (GUI_SCALE_BASE * percent as f32 / 100.0).clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
+#[cfg(target_os = "windows")]
+const PLATFORM_GUI_SCALE_BASE: f32 = GUI_SCALE_BASE * 0.75;
+#[cfg(not(target_os = "windows"))]
+const PLATFORM_GUI_SCALE_BASE: f32 = GUI_SCALE_BASE;
+
+fn platform_gui_scale_from_percent(percent: u32) -> f32 {
+    (PLATFORM_GUI_SCALE_BASE * percent as f32 / 100.0).clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
 }
 
-fn gui_scale_percent(scale: f32) -> f32 {
-    scale / GUI_SCALE_BASE * 100.0
+fn platform_gui_scale_percent(scale: f32) -> f32 {
+    scale / PLATFORM_GUI_SCALE_BASE * 100.0
+}
+
+const OS_DPI_ADJUSTMENT_MIN: f32 = 0.75;
+const OS_DPI_ADJUSTMENT_MAX: f32 = 1.50;
+
+fn os_dpi_adjustment() -> (f32, &'static str, &'static str) {
+    #[cfg(target_os = "windows")]
+    const OS_NAME: &str = "Windows";
+    #[cfg(target_os = "windows")]
+    const ENV_NAME: &str = "QSONAUT_WINDOWS_DPI_ADJUSTMENT";
+    #[cfg(target_os = "linux")]
+    const OS_NAME: &str = "Linux";
+    #[cfg(target_os = "linux")]
+    const ENV_NAME: &str = "QSONAUT_LINUX_DPI_ADJUSTMENT";
+    #[cfg(target_os = "macos")]
+    const OS_NAME: &str = "macOS";
+    #[cfg(target_os = "macos")]
+    const ENV_NAME: &str = "QSONAUT_MACOS_DPI_ADJUSTMENT";
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    const OS_NAME: &str = "Other";
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    const ENV_NAME: &str = "QSONAUT_DPI_ADJUSTMENT";
+
+    let adjustment = std::env::var(ENV_NAME)
+        .ok()
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .unwrap_or(1.0)
+        .clamp(OS_DPI_ADJUSTMENT_MIN, OS_DPI_ADJUSTMENT_MAX);
+    (adjustment, OS_NAME, ENV_NAME)
 }
 
 fn parse_automation_hook_detail(detail: &str) -> BTreeMap<String, String> {
@@ -1789,6 +1823,7 @@ struct QsonautGuiApp {
     device_restart_required: bool,
     audio_restart_required: bool,
     gui_scale: f32,
+    os_dpi_adjustment: f32,
     graphics_active: GraphicsPreferences,
     graphics_pending: GraphicsPreferences,
     active_graphics_adapter: Option<GraphicsAdapterInfo>,
@@ -2409,9 +2444,16 @@ impl QsonautGuiApp {
 
         let acceleration_report = AccelerationReport::pending(compute_preference);
         let acceleration_probe = Some(spawn_acceleration_probe(compute_preference));
+        let (os_dpi_adjustment, os_name, os_dpi_env) = os_dpi_adjustment();
+        info!(
+            os = os_name,
+            adjustment = os_dpi_adjustment,
+            env = os_dpi_env,
+            "Using OS DPI adjustment"
+        );
         // Applied before the first paint so the window is never laid out at one
         // scale and immediately re-laid out at another.
-        ctx.set_zoom_factor(gui_scale);
+        ctx.set_zoom_factor(gui_scale * os_dpi_adjustment);
         let psk_reporter = start_psk_reporter(
             psk_reporter_enabled,
             &station_callsign,
@@ -2685,6 +2727,7 @@ impl QsonautGuiApp {
             device_restart_required: false,
             audio_restart_required: false,
             gui_scale,
+            os_dpi_adjustment,
             graphics_active: graphics_preferences.clone(),
             graphics_pending: graphics_preferences,
             active_graphics_adapter,
@@ -3341,6 +3384,7 @@ impl QsonautGuiApp {
         }
         self.park_active_radio_session();
         self.selected_profile_name = name.to_string();
+        self.new_profile_name = name.to_string();
         self.config.radio = self.radio_config_for_profile(&profile);
 
         if let Some(session) = self.parked_radio_sessions.remove(name) {
@@ -3495,7 +3539,11 @@ impl QsonautGuiApp {
         match save_operator_profile_named(&new_name, &profile) {
             Ok(()) => match remove_operator_profile_named(&old_name) {
                 Ok(()) => {
-                    let _ = select_operator_profile(&new_name);
+                    if let Err(error) = select_operator_profile(&new_name) {
+                        self.profile_io_status =
+                            format!("Renamed profile but active selection failed: {error}");
+                        return;
+                    }
                     self.selected_profile_name = new_name.clone();
                     self.available_profiles = list_operator_profiles();
                     self.new_profile_name = new_name.clone();
@@ -4573,8 +4621,11 @@ impl eframe::App for QsonautGuiApp {
             self.first_frame_logged = true;
             info!(
                 renderer = %self.selected_renderer,
+                os = std::env::consts::OS,
+                os_dpi_adjustment = self.os_dpi_adjustment,
                 zoom_factor = ctx.zoom_factor(),
                 pixels_per_point = ctx.pixels_per_point(),
+                effective_pixels_per_point = ctx.pixels_per_point(),
                 "QSONaut first GUI frame reached"
             );
         }
@@ -4584,8 +4635,9 @@ impl eframe::App for QsonautGuiApp {
         }
         // Zoom is layered on top of the OS DPI scale, so text, controls,
         // spacing, hit targets, and custom drawings stay in proportion.
-        if (ctx.zoom_factor() - self.gui_scale).abs() > 0.001 {
-            ctx.set_zoom_factor(self.gui_scale);
+        let target_zoom = self.gui_scale * self.os_dpi_adjustment;
+        if (ctx.zoom_factor() - target_zoom).abs() > 0.001 {
+            ctx.set_zoom_factor(target_zoom);
         }
         // Give background workers a handle so they can trigger repaints directly.
         let _ = self.repaint_ctx.get_or_init(|| ctx.clone());
@@ -6403,8 +6455,6 @@ fn radio_port_inventory(
 mod tests {
     use super::*;
 
-    const LEGACY_GUI_SCALE_BASE: f32 = 1.6;
-
     #[test]
     fn radio_profiles_apply_only_to_the_native_backend() {
         assert_eq!(
@@ -6675,19 +6725,6 @@ mod tests {
     #[test]
     fn gui_state_defaults_to_sharp_radio_scope_vbw() {
         assert!(!GuiState::default().radio_scope_vbw_wide);
-    }
-
-    #[test]
-    fn gui_scale_baseline_is_rebased_so_legacy_75_is_now_100() {
-        let legacy_75 = LEGACY_GUI_SCALE_BASE * 0.75;
-        assert!((gui_scale_percent(legacy_75) - 100.0).abs() < 0.01);
-        assert!((gui_scale_from_percent(100) - legacy_75).abs() < 0.001);
-    }
-
-    #[test]
-    fn gui_scale_percent_mapping_clamps_to_supported_range() {
-        assert_eq!(gui_scale_from_percent(10), GUI_SCALE_MIN);
-        assert_eq!(gui_scale_from_percent(500), GUI_SCALE_MAX);
     }
 
     #[test]

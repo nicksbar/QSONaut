@@ -164,6 +164,16 @@ renderer is recorded in `qsonaut.log`.
 UI scale now uses a rebased baseline: the physical size that previously looked
 like 75% is now the 100% preset.
 
+QSONaut respects the OS-provided DPI scale. Windows presets use the physical
+baseline that previously appeared as 75% on this desktop, so that baseline is
+labelled 100% on Windows; Linux keeps the existing preset labels. For other
+platform-specific display quirks, the final application zoom can be tuned with
+a multiplier from `0.75` to `1.50` (default `1.0`): `QSONAUT_WINDOWS_DPI_ADJUSTMENT`,
+`QSONAUT_LINUX_DPI_ADJUSTMENT`, or `QSONAUT_MACOS_DPI_ADJUSTMENT`. Startup logs
+record the selected OS, adjustment, raw DPI, application zoom, and effective
+scale. All platforms provide the shared `50, 60, 75, 85, 100, 110, 125, 150,
+175%` scale choices.
+
 Reception data stays local unless you explicitly enable PSK Reporter. External
 automation source declarations reference environment-variable names rather
 than embedding Discord or IRC credentials.
