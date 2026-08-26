@@ -1570,6 +1570,8 @@ struct QsonautGuiApp {
     swr_sweep_abort: Arc<AtomicBool>,
     audio_worker_stop: Arc<AtomicBool>,
     radio_init_rx: Option<mpsc::Receiver<Option<ConfiguredRadio>>>,
+    cat_test_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    cat_test_status: Option<Result<String, String>>,
     hamdb_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
     hamdb_profile_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
     pota_spots: Vec<PotaSpot>,
@@ -2453,6 +2455,8 @@ impl QsonautGuiApp {
             swr_sweep_abort,
             audio_worker_stop,
             radio_init_rx,
+            cat_test_rx: None,
+            cat_test_status: None,
             hamdb_lookup_rx: None,
             hamdb_profile_lookup_rx: None,
             pota_spots: Vec::new(),
@@ -4499,6 +4503,19 @@ impl eframe::App for QsonautGuiApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.pump_hamdb_lookup();
+        if let Some(rx) = &self.cat_test_rx {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.cat_test_status = Some(result);
+                    self.cat_test_rx = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.cat_test_status = Some(Err("CAT test worker stopped unexpectedly".into()));
+                    self.cat_test_rx = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
         if let Some(geometry) = WindowGeometry::read(ctx, self.window_geometry) {
             self.window_geometry = Some(geometry);
         }
