@@ -75,6 +75,7 @@ pub(crate) fn spawn_radio_worker(
     display_tuning: Arc<Mutex<DisplayTuning>>,
     rx: mpsc::Receiver<GuiCommand>,
     repaint_ctx: Arc<OnceLock<egui::Context>>,
+    ptt_allowed: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     thread::spawn(move || {
         {
@@ -492,6 +493,10 @@ pub(crate) fn spawn_radio_worker(
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::SetPtt(target) => {
+                        if target && !ptt_allowed.load(Ordering::Acquire) {
+                            warn!("Radio PTT command blocked while profile is inactive");
+                            continue;
+                        }
                         info!(ptt = target, "Radio PTT command requested");
                         let result = rt
                             .block_on(radio.set_ptt(target))
@@ -512,6 +517,13 @@ pub(crate) fn spawn_radio_worker(
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::SetPttWithAck(target, ack_tx) => {
+                        if target && !ptt_allowed.load(Ordering::Acquire) {
+                            let _ = ack_tx
+                                .send(Err("PTT is disabled while this radio profile is inactive"
+                                    .to_string()));
+                            warn!("Radio PTT command blocked while profile is inactive");
+                            continue;
+                        }
                         info!(
                             ptt = target,
                             "Radio PTT command requested with acknowledgement"

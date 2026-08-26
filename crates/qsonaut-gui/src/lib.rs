@@ -1669,6 +1669,7 @@ struct QsonautGuiApp {
     ft8_pending_manual_reply: Option<PendingManualFt8Reply>,
     ft8_tx_abort: Arc<AtomicBool>,
     ft8_tx_active: Arc<AtomicBool>,
+    ptt_allowed: Arc<AtomicBool>,
     ft8_tx_event_tx: mpsc::Sender<Ft8TxEvent>,
     ft8_tx_event_rx: mpsc::Receiver<Ft8TxEvent>,
     ft8_last_tx_was_cq: bool,
@@ -1814,9 +1815,10 @@ struct QsonautGuiApp {
     window_geometry: Option<WindowGeometry>,
 }
 
-/// Runtime resources owned by an inactive radio tab. The active tab continues
-/// to use the legacy fields above so the rest of the UI can remain focused on
-/// the selected radio; parked sessions keep their workers and telemetry alive.
+// Runtime resources owned by a radio tab. The selected tab controls the UI,
+// while every tab keeps its workers and telemetry alive. Inactive tabs are
+// prevented from asserting PTT unless the unattended automation unlock is in
+// effect.
 struct RadioSession {
     profile: OperatorProfile,
     view_state: TabViewState,
@@ -1831,6 +1833,7 @@ struct RadioSession {
     monitor_volume: Arc<AtomicU32>,
     ft8_tx_active: Arc<AtomicBool>,
     digital_tx_active: Arc<AtomicBool>,
+    ptt_allowed: Arc<AtomicBool>,
     init_rx: Option<mpsc::Receiver<Option<ConfiguredRadio>>>,
     init_attempted: bool,
     worker_handle: Option<std::thread::JoinHandle<()>>,
@@ -1954,9 +1957,8 @@ impl QsonautGuiApp {
 
         let (command_tx, radio_worker_handle) = (None, None);
 
-        // Every saved profile owns a complete runtime. Inactive tabs keep
-        // their radio, audio, decode state, and controls alive; selecting a tab
-        // only swaps which runtime the UI presents.
+        // Every saved profile owns a live runtime. Inactive tabs continue
+        // receiving and decoding, but their PTT path is disabled.
         let mut parked_radio_sessions = HashMap::new();
         for profile_name in &available_profiles {
             if profile_name == &selected_profile_name {
@@ -2005,6 +2007,7 @@ impl QsonautGuiApp {
             ));
             let session_ft8_tx_active = Arc::new(AtomicBool::new(false));
             let session_digital_tx_active = Arc::new(AtomicBool::new(false));
+            let session_ptt_allowed = Arc::new(AtomicBool::new(false));
             let session_audio_worker_handle = Some(spawn_audio_spectrum_worker(
                 session_state.clone(),
                 session_audio_worker_stop.clone(),
@@ -2045,6 +2048,7 @@ impl QsonautGuiApp {
                     monitor_volume: session_monitor_volume,
                     ft8_tx_active: session_ft8_tx_active,
                     digital_tx_active: session_digital_tx_active,
+                    ptt_allowed: session_ptt_allowed,
                     init_rx,
                     init_attempted: false,
                     worker_handle: None,
@@ -2054,6 +2058,7 @@ impl QsonautGuiApp {
         }
 
         let ft8_tx_active = Arc::new(AtomicBool::new(false));
+        let ptt_allowed = Arc::new(AtomicBool::new(true));
         let digital_tx_active = Arc::new(AtomicBool::new(false));
         let monitor_volume = Arc::new(AtomicU32::new(config.audio.monitor_volume.to_bits()));
         let audio_worker_handle = Some(spawn_audio_spectrum_worker(
@@ -2560,6 +2565,7 @@ impl QsonautGuiApp {
             ft8_pending_manual_reply: None,
             ft8_tx_abort: Arc::new(AtomicBool::new(false)),
             ft8_tx_active,
+            ptt_allowed,
             ft8_tx_event_tx,
             ft8_tx_event_rx,
             ft8_last_tx_was_cq: false,
@@ -2818,15 +2824,17 @@ impl QsonautGuiApp {
             monitor_volume: self.monitor_volume.clone(),
             ft8_tx_active: self.ft8_tx_active.clone(),
             digital_tx_active: self.digital_tx_active.clone(),
+            ptt_allowed: self.ptt_allowed.clone(),
             init_rx: self.radio_init_rx.take(),
             init_attempted: self.radio_init_attempted,
             worker_handle: self.radio_worker_handle.take(),
             audio_worker_handle: self.audio_worker_handle.take(),
         };
+        session.ptt_allowed.store(false, Ordering::Release);
         if let Some(previous) = self.parked_radio_sessions.insert(name, session) {
             stop_radio_session(previous);
         }
-        info!(profile = %self.selected_profile_name, "Profile runtime moved to background without stopping workers");
+        info!(profile = %self.selected_profile_name, "Profile runtime moved to background with PTT disabled");
     }
 
     fn start_active_radio_session(&mut self) {
@@ -2859,70 +2867,34 @@ impl QsonautGuiApp {
     fn pump_parked_radio_sessions(&mut self) {
         let repaint_ctx = self.repaint_ctx.clone();
         for (name, session) in &mut self.parked_radio_sessions {
-            let audio_finished = session
+            if session
                 .audio_worker_handle
                 .as_ref()
-                .is_some_and(std::thread::JoinHandle::is_finished);
-            if audio_finished {
+                .is_some_and(std::thread::JoinHandle::is_finished)
+            {
                 if let Some(handle) = session.audio_worker_handle.take() {
                     let _ = handle.join();
                 }
-                warn!(profile = name, "Profile audio worker stopped");
-                if session.audio_config.enabled
-                    && !session.audio_worker_stop.load(Ordering::Relaxed)
-                {
-                    session.worker_stop.store(true, Ordering::Relaxed);
-                    if let Some(tx) = &session.command_tx {
-                        let _ = tx.send(GuiCommand::Quit);
-                    }
-                    if let Some(handle) = session.worker_handle.take() {
-                        let _ = handle.join();
-                    }
-                    session.command_tx = None;
-                    session.init_rx = None;
-                    session.init_attempted = true;
-                    if let Ok(mut state) = session.state.lock() {
-                        state.radio_waterfall_status =
-                            "SESSION STOPPED (audio worker failed)".to_string();
-                    }
-                    warn!(
-                        profile = name,
-                        "Profile runtime stopped after audio failure"
-                    );
-                    continue;
+                if let Ok(mut state) = session.state.lock() {
+                    state.audio_spectrum_status = "STOPPED (audio worker failed)".to_string();
                 }
+                warn!(profile = name, "Profile audio worker stopped");
             }
-            let radio_finished = session
+            if session
                 .worker_handle
                 .as_ref()
-                .is_some_and(std::thread::JoinHandle::is_finished);
-            if radio_finished {
+                .is_some_and(std::thread::JoinHandle::is_finished)
+            {
                 if let Some(handle) = session.worker_handle.take() {
                     let _ = handle.join();
                 }
                 session.command_tx = None;
-                warn!(profile = name, "Profile radio worker stopped");
-                if session.config.enabled && !session.worker_stop.load(Ordering::Relaxed) {
-                    session.audio_worker_stop.store(true, Ordering::Relaxed);
-                    if let Some(handle) = session.audio_worker_handle.take() {
-                        let _ = handle.join();
-                    }
-                    if let Ok(mut state) = session.state.lock() {
-                        state.radio_waterfall_status =
-                            "SESSION STOPPED (radio worker failed)".to_string();
-                    }
-                    warn!(
-                        profile = name,
-                        "Profile runtime stopped after radio failure"
-                    );
-                    continue;
+                if let Ok(mut state) = session.state.lock() {
+                    state.radio_waterfall_status = "STOPPED (radio worker failed)".to_string();
                 }
+                warn!(profile = name, "Profile radio worker stopped");
             }
-            if session.init_attempted {
-                continue;
-            }
-            if !session.config.enabled {
-                session.init_attempted = true;
+            if session.init_attempted || !session.config.enabled {
                 continue;
             }
             let Some(rx) = &session.init_rx else { continue };
@@ -2930,7 +2902,7 @@ impl QsonautGuiApp {
                 Ok(Some(radio)) => {
                     session.init_attempted = true;
                     let (tx, command_rx) = mpsc::channel::<GuiCommand>();
-                    let handle = workers::radio::spawn_radio_worker(
+                    session.worker_handle = Some(workers::radio::spawn_radio_worker(
                         radio,
                         session.state.clone(),
                         session.worker_stop.clone(),
@@ -2938,32 +2910,20 @@ impl QsonautGuiApp {
                         session.display_tuning.clone(),
                         command_rx,
                         repaint_ctx.clone(),
-                    );
+                        session.ptt_allowed.clone(),
+                    ));
                     session.command_tx = Some(tx);
-                    session.worker_handle = Some(handle);
-                    info!(profile = name, "Started parked radio worker");
+                    info!(
+                        profile = name,
+                        "Started inactive radio worker with PTT disabled"
+                    );
                 }
                 Ok(None) | Err(mpsc::TryRecvError::Disconnected) => {
                     session.init_attempted = true;
                     session.init_rx = None;
-                    session.audio_worker_stop.store(true, Ordering::Relaxed);
-                    if let Some(handle) = session.audio_worker_handle.take() {
-                        let _ = handle.join();
-                    }
-                    if let Ok(mut state) = session.state.lock() {
-                        state.radio_waterfall_status =
-                            "UNAVAILABLE (connection failed)".to_string();
-                        state.last_error = Some(format!(
-                            "Failed to initialize radio backend '{}' (model '{}', endpoint '{}', serial port '{}')",
-                            session.config.backend,
-                            session.config.model,
-                            session.config.endpoint,
-                            session.config.serial_port.as_deref().unwrap_or("auto"),
-                        ));
-                    }
                     warn!(
                         profile = name,
-                        "Profile radio initialization failed; session stopped"
+                        "Inactive profile radio initialization failed"
                     );
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
@@ -3378,6 +3338,100 @@ impl QsonautGuiApp {
         );
     }
 
+    fn set_tab_workers_running(&mut self, name: &str, running: bool) {
+        if name == self.selected_profile_name {
+            self.config.radio.enabled = running;
+            self.config.audio.enabled = running;
+            self.ptt_allowed.store(running, Ordering::Release);
+            self.profile_dirty = true;
+            self.persist_profile(if running {
+                "Radio and audio workers started for"
+            } else {
+                "Radio and audio workers stopped for"
+            });
+            if running {
+                self.reconnect_radio();
+                self.restart_audio();
+            } else {
+                self.radio_worker_stop.store(true, Ordering::Relaxed);
+                self.audio_worker_stop.store(true, Ordering::Relaxed);
+                if let Some(tx) = &self.command_tx {
+                    let _ = tx.send(GuiCommand::Quit);
+                }
+                if let Some(handle) = self.radio_worker_handle.take() {
+                    let _ = handle.join();
+                }
+                if let Some(handle) = self.audio_worker_handle.take() {
+                    let _ = handle.join();
+                }
+                self.command_tx = None;
+                if let Ok(mut state) = self.state.lock() {
+                    state.radio_waterfall_status = "STOPPED (by operator)".to_string();
+                    state.audio_spectrum_status = "STOPPED (by operator)".to_string();
+                }
+            }
+            return;
+        }
+        let Some(session) = self.parked_radio_sessions.get_mut(name) else {
+            return;
+        };
+        session.config.enabled = running;
+        session.audio_config.enabled = running;
+        session.profile.radio_enabled = running;
+        session.profile.audio_enabled = running;
+        if running {
+            session.worker_stop = Arc::new(AtomicBool::new(false));
+            session.audio_worker_stop = Arc::new(AtomicBool::new(false));
+            let port = session.config.serial_port.clone().unwrap_or_default();
+            session.init_rx = Some(spawn_radio_init(
+                session.config.backend.clone(),
+                session.config.model.clone(),
+                port,
+                session.config.endpoint.clone(),
+                session.config.baud_rate,
+                session.config.controller_civ_address,
+                session.config.civ_address,
+            ));
+            session.init_attempted = false;
+            if session.audio_worker_handle.is_none() {
+                session.audio_worker_handle = Some(spawn_audio_spectrum_worker(
+                    session.state.clone(),
+                    session.audio_worker_stop.clone(),
+                    session.ft8_tx_active.clone(),
+                    session.digital_tx_active.clone(),
+                    true,
+                    session.audio_config.sample_rate_hz,
+                    session.audio_config.channels,
+                    session.audio_config.input_device.clone(),
+                    session.audio_config.monitor_enabled,
+                    session
+                        .audio_config
+                        .monitor_output_device
+                        .clone()
+                        .or_else(|| session.audio_config.output_device.clone()),
+                    session.monitor_volume.clone(),
+                    self.repaint_ctx.clone(),
+                    session.display_tuning.clone(),
+                ));
+            }
+        } else {
+            session.worker_stop.store(true, Ordering::Relaxed);
+            session.audio_worker_stop.store(true, Ordering::Relaxed);
+            if let Some(tx) = &session.command_tx {
+                let _ = tx.send(GuiCommand::Quit);
+            }
+            if let Some(handle) = session.worker_handle.take() {
+                let _ = handle.join();
+            }
+            if let Some(handle) = session.audio_worker_handle.take() {
+                let _ = handle.join();
+            }
+            session.command_tx = None;
+            session.init_rx = None;
+        }
+        let _ = save_operator_profile_named(name, &session.profile);
+    }
+
     fn switch_radio_tab(&mut self, name: &str) {
         self.switch_radio_tab_with_save(name, true);
     }
@@ -3412,11 +3466,13 @@ impl QsonautGuiApp {
             self.display_tuning = session.display_tuning;
             self.monitor_volume = session.monitor_volume;
             self.ft8_tx_active = session.ft8_tx_active;
+            self.ptt_allowed = session.ptt_allowed;
             self.digital_tx_active = session.digital_tx_active;
             self.radio_init_rx = session.init_rx;
             self.radio_init_attempted = session.init_attempted;
             self.radio_worker_handle = session.worker_handle;
             self.audio_worker_handle = session.audio_worker_handle;
+            self.ptt_allowed.store(true, Ordering::Release);
             self.apply_tab_preferences(&session_profile);
             self.restore_tab_view_state(session_view);
             info!(
@@ -3437,6 +3493,7 @@ impl QsonautGuiApp {
             self.monitor_volume =
                 Arc::new(AtomicU32::new(self.config.audio.monitor_volume.to_bits()));
             self.ft8_tx_active = Arc::new(AtomicBool::new(false));
+            self.ptt_allowed = Arc::new(AtomicBool::new(true));
             self.digital_tx_active = Arc::new(AtomicBool::new(false));
             self.start_active_radio_session();
             self.audio_worker_handle = Some(spawn_audio_spectrum_worker(
@@ -4156,6 +4213,9 @@ impl QsonautGuiApp {
         if self.logo_clicks.len() >= 10 {
             self.logo_clicks.clear();
             self.automation_unlocked = true;
+            for session in self.parked_radio_sessions.values() {
+                session.ptt_allowed.store(true, Ordering::Release);
+            }
             self.logo_spin_until = Some(now + Duration::from_millis(700));
             self.profile_dirty = true;
             self.persist_profile("Automation controls unlocked");
@@ -4667,8 +4727,7 @@ impl eframe::App for QsonautGuiApp {
             }
         }
 
-        // Poll every parked tab as well as the selected tab. Switching tabs
-        // changes presentation only; it does not pause the radio worker.
+        // Keep inactive tabs receiving/decoding; only their PTT path is gated.
         self.pump_parked_radio_sessions();
 
         let active_audio_finished = self
@@ -4680,22 +4739,8 @@ impl eframe::App for QsonautGuiApp {
                 let _ = handle.join();
             }
             warn!(profile = %self.selected_profile_name, "Active profile audio worker stopped");
-            if self.config.audio.enabled && !self.audio_worker_stop.load(Ordering::Relaxed) {
-                self.radio_worker_stop.store(true, Ordering::Relaxed);
-                if let Some(tx) = &self.command_tx {
-                    let _ = tx.send(GuiCommand::Quit);
-                }
-                if let Some(handle) = self.radio_worker_handle.take() {
-                    let _ = handle.join();
-                }
-                self.command_tx = None;
-                self.radio_init_rx = None;
-                self.radio_init_attempted = true;
-                if let Ok(mut state) = self.state.lock() {
-                    state.radio_waterfall_status =
-                        "SESSION STOPPED (audio worker failed)".to_string();
-                }
-                warn!(profile = %self.selected_profile_name, "Active profile runtime stopped after audio failure");
+            if let Ok(mut state) = self.state.lock() {
+                state.audio_spectrum_status = "STOPPED (audio worker failed)".to_string();
             }
         }
         let active_radio_finished = self
@@ -4708,16 +4753,8 @@ impl eframe::App for QsonautGuiApp {
             }
             self.command_tx = None;
             warn!(profile = %self.selected_profile_name, "Active profile radio worker stopped");
-            if self.config.radio.enabled && !self.radio_worker_stop.load(Ordering::Relaxed) {
-                self.audio_worker_stop.store(true, Ordering::Relaxed);
-                if let Some(handle) = self.audio_worker_handle.take() {
-                    let _ = handle.join();
-                }
-                if let Ok(mut state) = self.state.lock() {
-                    state.radio_waterfall_status =
-                        "SESSION STOPPED (radio worker failed)".to_string();
-                }
-                warn!(profile = %self.selected_profile_name, "Active profile runtime stopped after radio failure");
+            if let Ok(mut state) = self.state.lock() {
+                state.radio_waterfall_status = "STOPPED (radio worker failed)".to_string();
             }
         }
 
@@ -4751,6 +4788,7 @@ impl eframe::App for QsonautGuiApp {
                             self.display_tuning.clone(),
                             rx,
                             self.repaint_ctx.clone(),
+                            self.ptt_allowed.clone(),
                         );
                         self.command_tx = Some(tx);
                         self.radio_worker_handle = Some(handle);
@@ -4759,10 +4797,8 @@ impl eframe::App for QsonautGuiApp {
                         // Radio initialization failed
                         self.radio_init_attempted = true;
                         self.radio_init_rx = None;
-                        self.audio_worker_stop.store(true, Ordering::Relaxed);
-                        if let Some(handle) = self.audio_worker_handle.take() {
-                            let _ = handle.join();
-                        }
+                        // Radio initialization failure is isolated to this
+                        // profile. Its audio worker remains independent.
                         {
                             let mut s = self.state.lock().expect("ui state lock poisoned");
                             s.radio_waterfall_status =
@@ -4781,10 +4817,8 @@ impl eframe::App for QsonautGuiApp {
                         // Thread panicked or dropped
                         self.radio_init_attempted = true;
                         self.radio_init_rx = None;
-                        self.audio_worker_stop.store(true, Ordering::Relaxed);
-                        if let Some(handle) = self.audio_worker_handle.take() {
-                            let _ = handle.join();
-                        }
+                        // Radio initialization failure is isolated to this
+                        // profile. Its audio worker remains independent.
                         {
                             let mut s = self.state.lock().expect("ui state lock poisoned");
                             s.radio_waterfall_status =
@@ -4977,35 +5011,26 @@ impl eframe::App for QsonautGuiApp {
                                                 session.audio_worker_handle.is_some()
                                             })
                                     };
-                                    if ui
-                                        .small_button(if radio_running { "■R" } else { "▶R" })
-                                        .on_hover_text(if radio_running {
-                                            "Stop this profile's radio worker"
+                                    let workers_running = radio_running && audio_running;
+                                    let worker_label = if workers_running { "■" } else { "▶" };
+                                    let worker_hint = if workers_running {
+                                        "Stop this profile's radio and audio workers"
+                                    } else {
+                                        "Start this profile's radio and audio workers"
+                                    };
+                                    let worker_button = egui::Button::new(worker_label).fill(
+                                        if workers_running {
+                                            Color32::from_rgb(126, 25, 39)
                                         } else {
-                                            "Start this profile's radio worker"
-                                        })
+                                            Color32::from_rgb(30, 105, 74)
+                                        },
+                                    );
+                                    if ui
+                                        .add(worker_button)
+                                        .on_hover_text(worker_hint)
                                         .clicked()
                                     {
-                                        worker_action = Some((
-                                            name.clone(),
-                                            true,
-                                            !radio_running,
-                                        ));
-                                    }
-                                    if ui
-                                        .small_button(if audio_running { "■A" } else { "▶A" })
-                                        .on_hover_text(if audio_running {
-                                            "Stop this profile's audio worker"
-                                        } else {
-                                            "Start this profile's audio worker"
-                                        })
-                                        .clicked()
-                                    {
-                                        worker_action = Some((
-                                            name.clone(),
-                                            false,
-                                            !audio_running,
-                                        ));
+                                        worker_action = Some((name.clone(), !workers_running));
                                     }
                                     if ui
                                         .small_button("⚙")
@@ -5034,12 +5059,8 @@ impl eframe::App for QsonautGuiApp {
                                 self.new_profile_tab_editing = true;
                             }
                         });
-                        if let Some((name, radio, running)) = worker_action {
-                            if radio {
-                                self.set_tab_radio_running(&name, running);
-                            } else {
-                                self.set_tab_audio_running(&name, running);
-                            }
+                        if let Some((name, running)) = worker_action {
+                            self.set_tab_workers_running(&name, running);
                         } else if let Some(name) = activate_tab {
                             self.switch_radio_tab(&name);
                         } else if let Some(name) = open_config {
