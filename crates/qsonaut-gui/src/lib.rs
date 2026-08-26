@@ -3727,32 +3727,50 @@ impl QsonautGuiApp {
             return;
         }
         if let Some(rx) = &self.pota_lookup_rx {
-            if let Ok(spots) = rx.try_recv() {
-                match spots {
-                    Ok(spots) => {
-                        let activators = spots
-                            .iter()
-                            .map(|spot| spot.activator.as_str())
-                            .collect::<HashSet<_>>()
-                            .len();
-                        info!(
-                            spots = spots.len(),
-                            activators, "POTA activator spots refreshed"
-                        );
-                        self.pota_spots = spots;
-                        self.pota_last_updated = Some(Instant::now());
-                        self.pota_last_error = None;
-                        self.pota_history.push_back((Instant::now(), activators));
-                        while self.pota_history.len() > 60 {
-                            self.pota_history.pop_front();
+            match rx.try_recv() {
+                Ok(spots) => {
+                    match spots {
+                        Ok(spots) => {
+                            let activators = spots
+                                .iter()
+                                .map(|spot| spot.activator.as_str())
+                                .collect::<HashSet<_>>()
+                                .len();
+                            info!(
+                                spots = spots.len(),
+                                activators,
+                                elapsed_ms = self.pota_last_lookup.elapsed().as_millis() as u64,
+                                "POTA activator spots refreshed"
+                            );
+                            self.pota_spots = spots;
+                            self.pota_last_updated = Some(Instant::now());
+                            self.pota_last_error = None;
+                            self.pota_history.push_back((Instant::now(), activators));
+                            while self.pota_history.len() > 60 {
+                                self.pota_history.pop_front();
+                            }
+                        }
+                        Err(error) => {
+                            warn!(
+                                error = %error,
+                                elapsed_ms = self.pota_last_lookup.elapsed().as_millis() as u64,
+                                "POTA activator spot lookup failed"
+                            );
+                            self.pota_last_error = Some(error);
                         }
                     }
-                    Err(error) => {
-                        warn!(error = %error, "POTA activator spot lookup failed");
-                        self.pota_last_error = Some(error);
-                    }
+                    self.pota_lookup_rx = None;
                 }
-                self.pota_lookup_rx = None;
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    let error = "POTA lookup worker disconnected before returning a result";
+                    warn!(
+                        elapsed_ms = self.pota_last_lookup.elapsed().as_millis() as u64,
+                        "POTA activator spot lookup worker disconnected"
+                    );
+                    self.pota_last_error = Some(error.to_string());
+                    self.pota_lookup_rx = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
             }
         }
         if self.pota_lookup_rx.is_some()

@@ -17,6 +17,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   click-to-tune spot navigation.
 
 ### Fixed
+- Hardened POTA live-data polling so a failed lookup worker cannot leave
+  querying permanently stuck; refresh logs now include lookup duration and
+  parsed spot/activator counts.
 - Allowed audio inputs that do not expose the configured 48 kHz capture rate to
   open at their closest supported rate and resample continuously into QSONaut's
   canonical 48 kHz mono floating-point spectrum and decoder pipeline using a
