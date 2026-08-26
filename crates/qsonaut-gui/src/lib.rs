@@ -4411,58 +4411,6 @@ impl QsonautGuiApp {
             ui.separator();
             ui.label(RichText::new(server_label).color(server_color));
             ui.separator();
-            for label in ["IRC", "Discord"] {
-                ui.label(RichText::new(format!("{label} NOT IMPLEMENTED")).color(Color32::GRAY));
-                ui.separator();
-            }
-            ui.label(
-                RichText::new(format!("Compute {}", self.acceleration_report.summary()))
-                    .color(Color32::from_rgb(180, 150, 255)),
-            )
-            .on_hover_text(self.acceleration_report.hardware_detail());
-            if let Some(error) = &snapshot.last_error {
-                ui.separator();
-                ui.label(RichText::new("⚠ NEEDS ATTENTION").color(theme_warning(ui)))
-                    .on_hover_text(error);
-            }
-            ui.separator();
-            ui.label(RichText::new("Reporting").strong());
-            if !self.psk_reporter_enabled {
-                ui.label(RichText::new("PSK Reporter OFF").color(Color32::GRAY))
-                    .on_hover_text(
-                        "Enable in the Reporting panel to batch decoded stations to PSK Reporter",
-                    );
-            } else if let Some(reporter) = &self.psk_reporter {
-                let status = reporter.status();
-                let (label, color) = if status.last_error.is_some() {
-                    ("PSK Reporter ERROR".to_string(), Color32::from_rgb(255, 110, 100))
-                } else if !status.active {
-                    ("PSK Reporter STOPPED".to_string(), theme_warning(ui))
-                } else {
-                    (
-                        format!("PSK Reporter {} queued · {} sent", status.queued, status.sent),
-                        Color32::LIGHT_GREEN,
-                    )
-                };
-                ui.label(RichText::new(label).color(color)).on_hover_text(
-                    status
-                        .last_error
-                        .as_deref()
-                        .map(|error| format!("network error: {error}"))
-                        .unwrap_or_else(|| {
-                            format!(
-                                "Batching every ~{} s · same callsign re-reported after {} s · {} max pending",
-                                self.psk_batch_interval_secs,
-                                self.psk_repeat_cache_secs,
-                                self.psk_max_pending
-                            )
-                        }),
-                );
-            } else {
-                ui.label(RichText::new("PSK Reporter WAITING").color(theme_warning(ui)))
-                    .on_hover_text("Set a real callsign and grid before reporting");
-            }
-            ui.separator();
             let pota_activators = self
                 .pota_spots
                 .iter()
@@ -4480,6 +4428,57 @@ impl QsonautGuiApp {
                 .selectable_label(self.pota_enabled && self.pota_spots.len() > 0, pota_label)
                 .on_hover_text("Show live POTA activator statistics and spots");
             egui::Popup::menu(&pota_button).show(|ui| self.draw_pota_panel(ui));
+            ui.separator();
+            if !self.psk_reporter_enabled {
+                ui.label(RichText::new("PSK OFF").color(Color32::GRAY))
+                    .on_hover_text(
+                        "Enable in the Reporting panel to batch decoded stations to PSK Reporter",
+                    );
+            } else if let Some(reporter) = &self.psk_reporter {
+                let status = reporter.status();
+                let (label, color) = if status.last_error.is_some() {
+                    ("PSK ERROR".to_string(), Color32::from_rgb(255, 110, 100))
+                } else if !status.active {
+                    ("PSK STOPPED".to_string(), theme_warning(ui))
+                } else {
+                    (
+                        format!("PSK {}q · {} sent", status.queued, status.sent),
+                        Color32::LIGHT_GREEN,
+                    )
+                };
+                ui.label(RichText::new(label).color(color)).on_hover_text(
+                    status
+                        .last_error
+                        .as_deref()
+                        .map(|error| format!("network error: {error}"))
+                        .unwrap_or_else(|| {
+                            format!(
+                                "PSK Reporter batching every ~{} s · same callsign re-reported after {} s · {} max pending",
+                                self.psk_batch_interval_secs,
+                                self.psk_repeat_cache_secs,
+                                self.psk_max_pending
+                            )
+                        }),
+                );
+            } else {
+                ui.label(RichText::new("PSK WAITING").color(theme_warning(ui)))
+                    .on_hover_text("Set a real callsign and grid before reporting");
+            }
+            ui.separator();
+            ui.label(
+                RichText::new(format!("Compute {}", self.acceleration_report.summary()))
+                    .color(Color32::from_rgb(180, 150, 255)),
+            )
+            .on_hover_text(self.acceleration_report.hardware_detail());
+            ui.separator();
+            for label in ["IRC", "Discord"] {
+                ui.label(RichText::new(format!("{label} N/A")).color(Color32::GRAY));
+                ui.separator();
+            }
+            if let Some(error) = &snapshot.last_error {
+                ui.label(RichText::new("⚠ NEEDS ATTENTION").color(theme_warning(ui)))
+                    .on_hover_text(error);
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 self.draw_about_button(ui);
             });
