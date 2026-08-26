@@ -16,6 +16,7 @@ Examples:
 
 - station identity: callsign, grid, QTH, station notes, antenna, and rig notes
 - UI scale and compute-backend preference
+- session-only graphics power and GPU preference
 - application logging and other desktop presentation policy
 
 These values are edited from the Station or Settings areas. They are not
@@ -57,6 +58,7 @@ Radio-definition creation, editing, deletion, and mode assignment belong in
 | --- | --- | --- |
 | Station identity and station notes | Application session | Active profile file for current compatibility and restart persistence |
 | UI scale and compute preference | Application session | Active profile file; never reapplied during radio-tab switching |
+| Graphics power and GPU preference | Application session | Not persisted; applied by a GUI process restart |
 | Radio connection and audio devices | Radio tab | `profile.toml` or `profiles/<name>.toml` |
 | Digital timing and contest state | Radio tab | Selected operator-profile file |
 | Waterfall theme and profile scope settings | Radio tab | Selected operator-profile file |

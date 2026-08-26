@@ -118,9 +118,12 @@ impl WindowGeometry {
         if let Some(position) = self.position {
             builder = builder.with_position(position);
         }
-        // Maximized is deliberately not set here: winit would `SW_MAXIMIZE` the
-        // still-unpainted window and immediately `SW_HIDE` it again, which is
-        // the white flash. It is applied after the first frame instead.
+        // eframe creates WGPU windows hidden until the first painted frame.
+        // Apply maximization as part of that hidden initial configuration so
+        // Windows does not show a restored-size window and then resize it.
+        if self.maximized {
+            builder = builder.with_maximized(true);
+        }
         builder
     }
 }

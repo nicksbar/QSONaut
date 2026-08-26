@@ -758,6 +758,101 @@ impl QsonautGuiApp {
             self.persist_profile("Auto-saved");
         }
         ui.add_space(8.0);
+        ui.label(RichText::new("Graphics").strong());
+        ui.label(
+            RichText::new(
+                "Session-only rendering policy. Changes restart the GUI and are not saved to your profile.",
+            )
+            .small()
+            .color(Color32::GRAY),
+        );
+        egui::Grid::new("graphics_settings_grid")
+            .num_columns(2)
+            .spacing([12.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Power policy");
+                egui::ComboBox::from_id_salt("graphics_power_preference")
+                    .selected_text(self.graphics_pending.power.label())
+                    .show_ui(ui, |ui| {
+                        for preference in GraphicsPowerPreference::ALL {
+                            ui.selectable_value(
+                                &mut self.graphics_pending.power,
+                                preference,
+                                preference.label(),
+                            );
+                        }
+                    });
+                ui.end_row();
+
+                ui.label("GPU");
+                let selected_adapter = self
+                    .graphics_pending
+                    .adapter
+                    .as_ref()
+                    .and_then(|selector| {
+                        self.available_graphics_adapters
+                            .iter()
+                            .find(|adapter| &adapter.selector == selector)
+                    })
+                    .map(GraphicsAdapterInfo::label)
+                    .unwrap_or_else(|| {
+                        self.graphics_pending
+                            .adapter
+                            .as_ref()
+                            .map(|adapter| format!("Unavailable: {adapter}"))
+                            .unwrap_or_else(|| "Auto (recommended)".to_string())
+                    });
+                egui::ComboBox::from_id_salt("graphics_adapter")
+                    .selected_text(selected_adapter)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.graphics_pending.adapter,
+                            None,
+                            "Auto (recommended)",
+                        );
+                        for adapter in &self.available_graphics_adapters {
+                            ui.selectable_value(
+                                &mut self.graphics_pending.adapter,
+                                Some(adapter.selector.clone()),
+                                adapter.label(),
+                            );
+                        }
+                    });
+                ui.end_row();
+            });
+
+        if let Some(adapter) = self.active_graphics_adapter.as_ref() {
+            ui.label(
+                RichText::new(format!(
+                    "Active: {} · driver {} {}",
+                    adapter.label(),
+                    adapter.driver,
+                    adapter.driver_info
+                ))
+                .small()
+                .color(Color32::GRAY),
+            );
+        }
+        ui.label(
+            RichText::new(
+                "GPU availability is captured at launch. If a dock or discrete GPU is disconnected, restart to refresh; an unavailable explicit choice falls back to the selected power policy.",
+            )
+            .small()
+            .color(Color32::GRAY),
+        );
+        let graphics_changed = self.graphics_pending != self.graphics_active;
+        if ui
+            .add_enabled(graphics_changed, egui::Button::new("APPLY & RESTART GUI"))
+            .clicked()
+        {
+            let preferences = self.graphics_pending.clone();
+            *self
+                .graphics_restart_request
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(preferences);
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        ui.add_space(8.0);
         ui.label(RichText::new("Compute").strong());
         let previous_compute = self.compute_preference;
         egui::ComboBox::from_id_salt("compute_preference")

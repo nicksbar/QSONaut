@@ -8,13 +8,13 @@ use std::{path::PathBuf, time::Duration};
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use qsonaut_core::AppConfig;
-use qsonaut_gui::run_gui;
+use qsonaut_gui::{run_gui, GraphicsPreferences, GRAPHICS_ADAPTER_ENV, GRAPHICS_POWER_ENV};
 use qsonaut_log::log_file_path;
 use qsonaut_radio::{
     drivers::open_model_with_radio_address, enumerate_serial_ports, ControlId, ControlValue,
     IcomCiVRadio, Mode, Radio,
 };
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliMode {
@@ -196,11 +196,9 @@ fn main() {
 }
 
 fn real_main() -> Result<()> {
+    wait_for_graphics_restart_parent();
     qsonaut_log::init("info")?;
-    // Initialize persistent logging before any platform-specific setup. A
-    // WSL graphics restart can fail before the GUI is constructed, and that
-    // failure still needs to be available in qsonaut.log.
-    prepare_wsl_gui_environment()?;
+    configure_graphics_environment();
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -462,9 +460,17 @@ async fn async_main() -> Result<()> {
             "GUI launch requested"
         );
 
-        run_gui(config.clone()).context(
+        let graphics_restart = run_gui(config.clone()).context(
             "GUI launch failed. Confirm a working desktop graphics session and attach qsonaut.log when filing an issue.",
         )?;
+        if let Some(preferences) = graphics_restart {
+            restart_gui_with_graphics(&preferences)?;
+            info!(
+                power = preferences.power.label(),
+                adapter = ?preferences.adapter,
+                "QSONaut GUI restart staged for graphics change"
+            );
+        }
         info!("QSONaut GUI closed");
         return Ok(());
     }
@@ -527,156 +533,99 @@ fn show_fatal_dialog(title: &str, message: &str) {
     eprintln!("{title}: {message}");
 }
 
-fn choose_wgpu_backend() {
-    if let Some(explicit) = std::env::var_os("WGPU_BACKEND") {
-        info!(backend = ?explicit, "Using operator-selected WGPU backend");
-        return;
-    }
-
-    let enabled = wgpu::Instance::enabled_backend_features();
-    let mut candidates = Vec::new();
-    for (backend, environment_name) in [
-        (wgpu::Backends::VULKAN, "vulkan"),
-        (wgpu::Backends::DX12, "dx12"),
-        (wgpu::Backends::METAL, "metal"),
-        (wgpu::Backends::GL, "opengl"),
-    ] {
-        if !enabled.contains(backend) {
-            continue;
-        }
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: backend,
-            ..Default::default()
-        });
-        for adapter in instance.enumerate_adapters(backend) {
-            let adapter = adapter.get_info();
-            let device_score = match adapter.device_type {
-                wgpu::DeviceType::DiscreteGpu => 500,
-                wgpu::DeviceType::IntegratedGpu => 400,
-                wgpu::DeviceType::VirtualGpu => 300,
-                wgpu::DeviceType::Other => 200,
-                wgpu::DeviceType::Cpu => 0,
-            };
-            let backend_score = if cfg!(target_os = "windows") {
-                if backend == wgpu::Backends::DX12 {
-                    30
-                } else if backend == wgpu::Backends::VULKAN {
-                    20
-                } else {
-                    10
-                }
-            } else if cfg!(target_os = "macos") {
-                if backend == wgpu::Backends::METAL {
-                    30
-                } else {
-                    10
-                }
-            } else if backend == wgpu::Backends::VULKAN {
-                30
-            } else if backend == wgpu::Backends::GL {
-                20
-            } else {
-                10
-            };
-            let score = device_score + backend_score;
-            info!(
-                backend = environment_name,
-                adapter = %adapter.name,
-                device_type = ?adapter.device_type,
-                driver = %adapter.driver,
-                driver_info = %adapter.driver_info,
-                score,
-                "WGPU adapter candidate detected"
-            );
-            candidates.push((score, environment_name, adapter));
-        }
-    }
-
-    if let Some((score, backend, adapter)) = candidates.into_iter().max_by_key(|entry| entry.0) {
-        std::env::set_var("WGPU_BACKEND", backend);
-        if adapter.device_type == wgpu::DeviceType::Cpu {
-            warn!(
-                backend,
-                adapter = %adapter.name,
-                driver = %adapter.driver,
-                "Only a software WGPU adapter was detected; GUI CPU usage may be high"
-            );
-        } else {
-            info!(
-                backend,
-                adapter = %adapter.name,
-                device_type = ?adapter.device_type,
-                score,
-                "Selected best available WGPU backend"
-            );
-        }
-    } else {
-        warn!(
-            ?enabled,
-            "No WGPU adapters were detected during startup probe"
-        );
-    }
-}
-
-/// Mesa reads its renderer selection during process startup. Under WSL, set
-/// the D3D12 policy and re-exec once before probing adapters. Explicit operator
-/// backend and adapter choices remain untouched.
-fn prepare_wsl_gui_environment() -> Result<()> {
+/// Establish only platform defaults before eframe creates the one real WGPU
+/// instance and surface. Explicit operator environment choices always win.
+fn configure_graphics_environment() {
     #[cfg(target_os = "linux")]
     {
-        use std::os::unix::process::CommandExt;
-        use std::process::Command;
-
         let args = std::env::args_os().collect::<Vec<_>>();
         let wants_gui = args.len() == 1 || args.iter().skip(1).any(|arg| arg == "--gui");
         if !wants_gui {
-            return Ok(());
+            return;
         }
 
         let is_wsl = std::fs::read_to_string("/proc/version")
             .map(|version| version.to_ascii_lowercase().contains("microsoft"))
             .unwrap_or(false);
-        let d3d12_driver = PathBuf::from("/usr/lib/x86_64-linux-gnu/dri/d3d12_dri.so").exists();
-        let accelerated_wsl = is_wsl && PathBuf::from("/dev/dxg").exists() && d3d12_driver;
-        if !accelerated_wsl {
-            choose_wgpu_backend();
-            return Ok(());
+        if is_wsl && PathBuf::from("/dev/dxg").exists() {
+            if std::env::var_os("GALLIUM_DRIVER").is_none() {
+                std::env::set_var("GALLIUM_DRIVER", "d3d12");
+            }
+            if std::env::var_os("WGPU_BACKEND").is_none() {
+                std::env::set_var("WGPU_BACKEND", "gl");
+            }
+            info!("Using WSLg Mesa D3D12 graphics defaults");
         }
-
-        let gallium = std::env::var_os("GALLIUM_DRIVER");
-        let needs_driver = gallium.is_none();
-        let environment_ready = std::env::var_os("QSONAUT_GUI_ENV_READY").is_some();
-        if environment_ready || !needs_driver {
-            choose_wgpu_backend();
-            return Ok(());
-        }
-
-        info!(
-            needs_driver,
-            gallium_driver = ?gallium,
-            "Preparing WSL GPU environment before GUI launch"
-        );
-
-        let executable = std::env::current_exe().context("failed to locate QSONaut executable")?;
-        let mut command = Command::new(&executable);
-        command.args(args.iter().skip(1));
-        command.env("QSONAUT_GUI_ENV_READY", "1");
-        if needs_driver {
-            command.env("GALLIUM_DRIVER", "d3d12");
-        }
-        info!(
-            executable = %executable.display(),
-            "Restarting QSONaut once with WSL GPU environment"
-        );
-        let error = command.exec();
-        Err(error).context("failed to restart QSONaut with WSL GPU rendering")
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        choose_wgpu_backend();
-        Ok(())
+        #[cfg(target_os = "windows")]
+        if std::env::var_os("WGPU_BACKEND").is_none() {
+            // Windows systems with switchable AMD/NVIDIA graphics commonly
+            // expose implicit Vulkan layers that can crash during instance
+            // startup. GLES remains a WGPU backend and uses the host GPU, but
+            // avoids that loader/layer path. Vulkan remains opt-in for users
+            // who set WGPU_BACKEND explicitly.
+            std::env::set_var("WGPU_BACKEND", "gl");
+            info!(backend = "gl", "Using stable Windows WGPU backend default");
+        }
     }
+}
+
+const GRAPHICS_RESTART_PARENT_ENV: &str = "QSONAUT_GRAPHICS_RESTART_PARENT";
+
+fn restart_gui_with_graphics(preferences: &GraphicsPreferences) -> Result<()> {
+    let executable = std::env::current_exe().context("failed to locate QSONaut executable")?;
+    let mut command = std::process::Command::new(&executable);
+    command.args(std::env::args_os().skip(1));
+    command.env(GRAPHICS_RESTART_PARENT_ENV, std::process::id().to_string());
+    command.env(GRAPHICS_POWER_ENV, preferences.power.env_value());
+    match preferences.adapter.as_deref() {
+        Some(adapter) => command.env(GRAPHICS_ADAPTER_ENV, adapter),
+        None => command.env_remove(GRAPHICS_ADAPTER_ENV),
+    };
+    command
+        .spawn()
+        .with_context(|| format!("failed to restart {}", executable.display()))?;
+    Ok(())
+}
+
+fn wait_for_graphics_restart_parent() {
+    let Some(parent_pid) = std::env::var(GRAPHICS_RESTART_PARENT_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+    else {
+        return;
+    };
+    std::env::remove_var(GRAPHICS_RESTART_PARENT_ENV);
+
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows_sys::Win32::Foundation::{CloseHandle, WAIT_FAILED};
+        use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, INFINITE};
+
+        const SYNCHRONIZE_ACCESS: u32 = 0x0010_0000;
+        let parent = OpenProcess(SYNCHRONIZE_ACCESS, 0, parent_pid);
+        if !parent.is_null() {
+            if WaitForSingleObject(parent, INFINITE) == WAIT_FAILED {
+                eprintln!("QSONaut graphics restart could not wait for the prior process");
+            }
+            CloseHandle(parent);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let parent_proc = PathBuf::from(format!("/proc/{parent_pid}"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while parent_proc.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    std::thread::sleep(Duration::from_millis(500));
 }
 
 fn parse_hex_bytes(input: &str) -> Result<Vec<u8>> {

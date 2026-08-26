@@ -7,6 +7,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-08-25
+
+### Added
+- Added session-only Graphics settings that show the active and available WGPU
+  adapters, default to a low-power policy, and allow a surface-compatible GPU
+  preference to be applied through a clean GUI restart.
+
+### Changed
+- Replaced pre-window GPU/backend probing with eframe's standard single-instance
+  WGPU setup. Adapter selection now uses the real presentation surface, preserves
+  explicit environment overrides, and falls back by power policy when a selected
+  laptop or dock GPU is no longer available.
+- Kept native Linux on WGPU's Vulkan/GL fallback set, made WSLg's Mesa D3D12 path
+  deterministic without re-executing before adapter discovery, and retained GL
+  as the stable native Windows default while the current DX12 dependency conflict
+  remains unresolved.
+
+### Removed
+- Removed the temporary WGPU instance enumeration, custom backend scoring, WSL
+  driver-path assumption, and graphics-environment re-exec introduced in 0.3.9.
+
 ## [0.3.9] - 2026-08-24
 
 ### Added
