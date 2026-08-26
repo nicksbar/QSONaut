@@ -16,8 +16,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 - Allowed audio inputs that do not expose the configured 48 kHz capture rate to
   open at their closest supported rate and resample continuously into QSONaut's
-  48 kHz spectrum and decoder pipeline. Runtime status and diagnostics now show
-  the negotiated hardware rate when conversion is active.
+  canonical 48 kHz mono floating-point spectrum and decoder pipeline using a
+  band-limited converter. Input, monitor, and TX output now retry ranked native
+  device configurations when a driver rejects an advertised format. Runtime
+  status and diagnostics show the negotiated hardware format when conversion is
+  active and retain all attempted formats when none can be opened.
 
 ## [0.3.10] - 2026-08-25
 

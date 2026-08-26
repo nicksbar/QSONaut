@@ -13,8 +13,12 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Device, Sample, SampleFormat, SampleRate, Stream, StreamError, SupportedStreamConfig,
 };
+use resample::{resample_f32, BandlimitedResampler};
 
 pub mod resample;
+
+pub const CANONICAL_SAMPLE_RATE_HZ: u32 = 48_000;
+pub const CANONICAL_CHANNELS: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioDeviceKind {
@@ -30,143 +34,123 @@ pub struct AudioService {
 
 pub struct AudioStream {
     _stream: Stream,
-    samples_rx: Receiver<Vec<i16>>,
+    samples_rx: Receiver<Vec<f32>>,
     errors_rx: Receiver<String>,
-    pending: VecDeque<i16>,
+    pending: VecDeque<f32>,
     requested_channels: usize,
     device_sample_rate_hz: u32,
     output_sample_rate_hz: u32,
+    device_channels: u16,
+    device_sample_format: SampleFormat,
+    fallback_attempts: Vec<String>,
 }
 
 pub struct AudioMonitor {
-    samples_tx: SyncSender<Vec<i16>>,
+    samples_tx: SyncSender<Vec<f32>>,
     errors_rx: Receiver<String>,
     dropped_chunks: Arc<std::sync::atomic::AtomicU64>,
-    resampler: std::sync::Mutex<MonitorResampler>,
+    resampler: std::sync::Mutex<(u32, BandlimitedResampler)>,
     volume: Arc<std::sync::atomic::AtomicU32>,
     input_sample_rate_hz: u32,
-    _stream: Stream,
-}
-
-struct MonitorResampler {
-    input_sample_rate_hz: u32,
     output_sample_rate_hz: u32,
-    source_position: f64,
-    source: VecDeque<i16>,
-}
-
-type CaptureResampler = MonitorResampler;
-
-impl MonitorResampler {
-    fn new(input_sample_rate_hz: u32, output_sample_rate_hz: u32) -> Self {
-        Self {
-            input_sample_rate_hz,
-            output_sample_rate_hz,
-            source_position: 0.0,
-            source: VecDeque::new(),
-        }
-    }
-
-    fn process(&mut self, samples: &[i16]) -> Vec<i16> {
-        if samples.is_empty() || self.input_sample_rate_hz == self.output_sample_rate_hz {
-            return samples.to_vec();
-        }
-        let step = self.input_sample_rate_hz as f64 / self.output_sample_rate_hz as f64;
-        self.source.extend(samples.iter().copied());
-        let mut output = Vec::new();
-        while self.source_position + 1.0 < self.source.len() as f64 {
-            let left = self.source_position.floor() as usize;
-            let right = left + 1;
-            let fraction = (self.source_position - left as f64) as f32;
-            output.push(
-                (self.source[left] as f32 * (1.0 - fraction) + self.source[right] as f32 * fraction)
-                    .round()
-                    .clamp(i16::MIN as f32, i16::MAX as f32) as i16,
-            );
-            self.source_position += step;
-        }
-        let consumed = self.source_position.floor() as usize;
-        if consumed > 0 {
-            self.source
-                .drain(..consumed.min(self.source.len().saturating_sub(1)));
-            self.source_position -= consumed as f64;
-        }
-        output
-    }
-
-    fn set_input_sample_rate(&mut self, input_sample_rate_hz: u32) {
-        if self.input_sample_rate_hz != input_sample_rate_hz {
-            self.input_sample_rate_hz = input_sample_rate_hz;
-            self.source_position = 0.0;
-            self.source.clear();
-        }
-    }
+    output_channels: u16,
+    output_sample_format: SampleFormat,
+    fallback_attempts: Vec<String>,
+    _stream: Stream,
 }
 
 impl AudioMonitor {
     pub fn open(sample_rate_hz: u32, preferred_device_name: Option<&str>) -> Result<Self> {
         let host = cpal::default_host();
         let device = select_device(&host, AudioDeviceKind::Output, preferred_device_name)?;
-        let supported = select_config(&device, AudioDeviceKind::Output, sample_rate_hz, 1)
-            .or_else(|_| device.default_output_config().map_err(anyhow::Error::from))?;
-        let config = supported.config();
-        let output_sample_rate_hz = config.sample_rate.0;
-        let channels = config.channels as usize;
-        let (samples_tx, samples_rx) = mpsc::sync_channel::<Vec<i16>>(8);
+        let (samples_tx, samples_rx) = mpsc::sync_channel::<Vec<f32>>(8);
+        let samples_rx = Arc::new(std::sync::Mutex::new(samples_rx));
         let (errors_tx, errors_rx) = mpsc::channel::<String>();
         let dropped_chunks = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let pending = Arc::new(std::sync::Mutex::new(VecDeque::<i16>::new()));
+        let pending = Arc::new(std::sync::Mutex::new(VecDeque::<f32>::new()));
+        let candidates = config_candidates(&device, AudioDeviceKind::Output, sample_rate_hz, 1)?;
+        let mut failures = Vec::new();
+        for supported in candidates {
+            let label = config_label(&supported);
+            let config = supported.config();
+            let output_sample_rate_hz = config.sample_rate.0;
+            let channels = config.channels as usize;
 
-        macro_rules! output_stream {
-            ($sample:ty) => {{
-                let pending = pending.clone();
-                let errors_tx = errors_tx.clone();
-                device.build_output_stream(
-                    &config,
-                    move |data: &mut [$sample], _| {
-                        if let Ok(mut queue) = pending.lock() {
-                            while let Ok(chunk) = samples_rx.try_recv() {
-                                queue.extend(chunk);
+            macro_rules! output_stream {
+                ($sample:ty) => {{
+                    let pending = pending.clone();
+                    let samples_rx = samples_rx.clone();
+                    let errors_tx = errors_tx.clone();
+                    device.build_output_stream(
+                        &config,
+                        move |data: &mut [$sample], _| {
+                            if let Ok(mut queue) = pending.lock() {
+                                if let Ok(receiver) = samples_rx.lock() {
+                                    while let Ok(chunk) = receiver.try_recv() {
+                                        queue.extend(chunk);
+                                    }
+                                }
+                                for frame in data.chunks_mut(channels) {
+                                    let value = queue.pop_front().unwrap_or_default();
+                                    frame.fill(<$sample>::from_sample(value));
+                                }
                             }
-                            for frame in data.chunks_mut(channels) {
-                                let value = queue.pop_front().unwrap_or_default();
-                                frame.fill(<$sample>::from_sample(value));
-                            }
-                        }
-                    },
-                    move |error: StreamError| {
-                        let _ = errors_tx.send(error.to_string());
-                    },
-                    None,
-                )?
-            }};
-        }
-        let stream = match supported.sample_format() {
-            SampleFormat::I8 => output_stream!(i8),
-            SampleFormat::I16 => output_stream!(i16),
-            SampleFormat::I32 => output_stream!(i32),
-            SampleFormat::I64 => output_stream!(i64),
-            SampleFormat::U8 => output_stream!(u8),
-            SampleFormat::U16 => output_stream!(u16),
-            SampleFormat::U32 => output_stream!(u32),
-            SampleFormat::U64 => output_stream!(u64),
-            SampleFormat::F32 => output_stream!(f32),
-            SampleFormat::F64 => output_stream!(f64),
-            format => bail!("unsupported output sample format: {format:?}"),
-        };
-        stream.play().context("failed to start audio monitor")?;
-        Ok(Self {
-            samples_tx,
-            errors_rx,
-            dropped_chunks,
-            resampler: std::sync::Mutex::new(MonitorResampler::new(
-                sample_rate_hz,
+                        },
+                        move |error: StreamError| {
+                            let _ = errors_tx.send(error.to_string());
+                        },
+                        None,
+                    )
+                }};
+            }
+            let built = match supported.sample_format() {
+                SampleFormat::I8 => output_stream!(i8),
+                SampleFormat::I16 => output_stream!(i16),
+                SampleFormat::I32 => output_stream!(i32),
+                SampleFormat::I64 => output_stream!(i64),
+                SampleFormat::U8 => output_stream!(u8),
+                SampleFormat::U16 => output_stream!(u16),
+                SampleFormat::U32 => output_stream!(u32),
+                SampleFormat::U64 => output_stream!(u64),
+                SampleFormat::F32 => output_stream!(f32),
+                SampleFormat::F64 => output_stream!(f64),
+                format => {
+                    failures.push(format!("{label}: unsupported format {format:?}"));
+                    continue;
+                }
+            };
+            let stream = match built {
+                Ok(stream) => stream,
+                Err(error) => {
+                    failures.push(format!("{label}: open failed: {error}"));
+                    continue;
+                }
+            };
+            if let Err(error) = stream.play() {
+                failures.push(format!("{label}: start failed: {error}"));
+                continue;
+            }
+            return Ok(Self {
+                samples_tx,
+                errors_rx,
+                dropped_chunks,
+                resampler: std::sync::Mutex::new((
+                    sample_rate_hz,
+                    BandlimitedResampler::new(sample_rate_hz, output_sample_rate_hz),
+                )),
+                volume: Arc::new(std::sync::atomic::AtomicU32::new(1.0_f32.to_bits())),
+                input_sample_rate_hz: sample_rate_hz,
                 output_sample_rate_hz,
-            )),
-            volume: Arc::new(std::sync::atomic::AtomicU32::new(1.0_f32.to_bits())),
-            input_sample_rate_hz: sample_rate_hz,
-            _stream: stream,
-        })
+                output_channels: config.channels,
+                output_sample_format: supported.sample_format(),
+                fallback_attempts: failures,
+                _stream: stream,
+            });
+        }
+        bail!(
+            "unable to open any output audio configuration: {}",
+            failures.join("; ")
+        )
     }
 
     pub fn set_volume(&self, volume: f32) {
@@ -179,16 +163,33 @@ impl AudioMonitor {
     }
 
     pub fn push_at_sample_rate(&self, samples: &[i16], sample_rate_hz: u32) {
+        let samples = samples
+            .iter()
+            .map(|sample| *sample as f32 / i16::MAX as f32)
+            .collect::<Vec<_>>();
+        self.push_f32_at_sample_rate(&samples, sample_rate_hz);
+    }
+
+    pub fn push_f32(&self, samples: &[f32]) {
+        self.push_f32_at_sample_rate(samples, self.input_sample_rate_hz);
+    }
+
+    pub fn push_f32_at_sample_rate(&self, samples: &[f32], sample_rate_hz: u32) {
         let volume = f32::from_bits(self.volume.load(Ordering::Relaxed));
         let samples = samples
             .iter()
-            .map(|sample| (*sample as f32 * volume).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+            .map(|sample| (*sample * volume).clamp(-1.0, 1.0))
             .collect::<Vec<_>>();
         let samples = self.resampler.lock().map_or_else(
             |_| Vec::new(),
-            |mut resampler| {
-                resampler.set_input_sample_rate(sample_rate_hz);
-                resampler.process(&samples)
+            |mut state| {
+                if state.0 != sample_rate_hz {
+                    *state = (
+                        sample_rate_hz,
+                        BandlimitedResampler::new(sample_rate_hz, self.output_sample_rate_hz),
+                    );
+                }
+                state.1.process(&samples)
             },
         );
         if self.samples_tx.try_send(samples).is_err() {
@@ -202,6 +203,22 @@ impl AudioMonitor {
 
     pub fn take_dropped_chunks(&self) -> u64 {
         self.dropped_chunks.swap(0, Ordering::Relaxed)
+    }
+
+    pub fn output_sample_rate_hz(&self) -> u32 {
+        self.output_sample_rate_hz
+    }
+
+    pub fn output_channels(&self) -> u16 {
+        self.output_channels
+    }
+
+    pub fn output_sample_format(&self) -> SampleFormat {
+        self.output_sample_format
+    }
+
+    pub fn fallback_attempts(&self) -> &[String] {
+        &self.fallback_attempts
     }
 }
 
@@ -241,66 +258,89 @@ impl AudioService {
             AudioDeviceKind::Input,
             self.preferred_device_name.as_deref(),
         )?;
-        let supported = select_config(&device, AudioDeviceKind::Input, sample_rate_hz, channels)?;
-        let stream_config = supported.config();
-        let device_sample_rate_hz = stream_config.sample_rate.0;
-        let device_channels = stream_config.channels as usize;
-        let (samples_tx, samples_rx) = mpsc::sync_channel::<Vec<i16>>(32);
-        let (errors_tx, errors_rx) = mpsc::channel::<String>();
-        let error_callback = move |error: StreamError| {
-            let _ = errors_tx.send(error.to_string());
-        };
+        let candidates =
+            config_candidates(&device, AudioDeviceKind::Input, sample_rate_hz, channels)?;
+        let mut failures = Vec::new();
+        for supported in candidates {
+            let label = config_label(&supported);
+            let stream_config = supported.config();
+            let device_sample_rate_hz = stream_config.sample_rate.0;
+            let device_channels = stream_config.channels as usize;
+            let (samples_tx, samples_rx) = mpsc::sync_channel::<Vec<f32>>(32);
+            let (errors_tx, errors_rx) = mpsc::channel::<String>();
 
-        macro_rules! input_stream {
-            ($sample:ty) => {{
-                let tx = samples_tx.clone();
-                let mut resampler = CaptureResampler::new(device_sample_rate_hz, sample_rate_hz);
-                device.build_input_stream(
-                    &stream_config,
-                    move |data: &[$sample], _| {
-                        let converted = data
-                            .iter()
-                            .copied()
-                            .map(i16::from_sample)
-                            .collect::<Vec<_>>();
-                        let downmixed = downmix_i16(&converted, device_channels);
-                        let resampled = resampler.process(&downmixed);
-                        if !resampled.is_empty() {
-                            let _ = tx.try_send(resampled);
-                        }
-                    },
-                    error_callback,
-                    None,
-                )?
-            }};
+            macro_rules! input_stream {
+                ($sample:ty) => {{
+                    let tx = samples_tx.clone();
+                    let errors_tx = errors_tx.clone();
+                    let mut resampler =
+                        BandlimitedResampler::new(device_sample_rate_hz, sample_rate_hz);
+                    device.build_input_stream(
+                        &stream_config,
+                        move |data: &[$sample], _| {
+                            let converted = data
+                                .iter()
+                                .copied()
+                                .map(f32::from_sample)
+                                .collect::<Vec<_>>();
+                            let downmixed = downmix_f32(&converted, device_channels);
+                            let resampled = resampler.process(&downmixed);
+                            if !resampled.is_empty() {
+                                let _ = tx.try_send(resampled);
+                            }
+                        },
+                        move |error: StreamError| {
+                            let _ = errors_tx.send(error.to_string());
+                        },
+                        None,
+                    )
+                }};
+            }
+
+            let built = match supported.sample_format() {
+                SampleFormat::I8 => input_stream!(i8),
+                SampleFormat::I16 => input_stream!(i16),
+                SampleFormat::I32 => input_stream!(i32),
+                SampleFormat::I64 => input_stream!(i64),
+                SampleFormat::U8 => input_stream!(u8),
+                SampleFormat::U16 => input_stream!(u16),
+                SampleFormat::U32 => input_stream!(u32),
+                SampleFormat::U64 => input_stream!(u64),
+                SampleFormat::F32 => input_stream!(f32),
+                SampleFormat::F64 => input_stream!(f64),
+                format => {
+                    failures.push(format!("{label}: unsupported format {format:?}"));
+                    continue;
+                }
+            };
+            let stream = match built {
+                Ok(stream) => stream,
+                Err(error) => {
+                    failures.push(format!("{label}: open failed: {error}"));
+                    continue;
+                }
+            };
+            if let Err(error) = stream.play() {
+                failures.push(format!("{label}: start failed: {error}"));
+                continue;
+            }
+            return Ok(AudioStream {
+                _stream: stream,
+                samples_rx,
+                errors_rx,
+                pending: VecDeque::new(),
+                requested_channels: 1,
+                device_sample_rate_hz,
+                output_sample_rate_hz: sample_rate_hz,
+                device_channels: stream_config.channels,
+                device_sample_format: supported.sample_format(),
+                fallback_attempts: failures,
+            });
         }
-
-        let stream = match supported.sample_format() {
-            SampleFormat::I8 => input_stream!(i8),
-            SampleFormat::I16 => input_stream!(i16),
-            SampleFormat::I32 => input_stream!(i32),
-            SampleFormat::I64 => input_stream!(i64),
-            SampleFormat::U8 => input_stream!(u8),
-            SampleFormat::U16 => input_stream!(u16),
-            SampleFormat::U32 => input_stream!(u32),
-            SampleFormat::U64 => input_stream!(u64),
-            SampleFormat::F32 => input_stream!(f32),
-            SampleFormat::F64 => input_stream!(f64),
-            format => bail!("unsupported input sample format: {format:?}"),
-        };
-        stream
-            .play()
-            .context("failed to start audio input stream")?;
-
-        Ok(AudioStream {
-            _stream: stream,
-            samples_rx,
-            errors_rx,
-            pending: VecDeque::new(),
-            requested_channels: 1,
-            device_sample_rate_hz,
-            output_sample_rate_hz: sample_rate_hz,
-        })
+        bail!(
+            "unable to open any input audio configuration: {}",
+            failures.join("; ")
+        )
     }
 }
 
@@ -311,6 +351,18 @@ impl AudioStream {
 
     pub fn output_sample_rate_hz(&self) -> u32 {
         self.output_sample_rate_hz
+    }
+
+    pub fn device_channels(&self) -> u16 {
+        self.device_channels
+    }
+
+    pub fn device_sample_format(&self) -> SampleFormat {
+        self.device_sample_format
+    }
+
+    pub fn fallback_attempts(&self) -> &[String] {
+        &self.fallback_attempts
     }
 
     pub fn read_chunk(&mut self, bytes_to_read: usize) -> Result<Vec<i16>> {
@@ -330,7 +382,11 @@ impl AudioStream {
                 .context("timed out waiting for audio input")?;
             self.pending.extend(block);
         }
-        Ok(self.pending.drain(..requested_samples).collect())
+        Ok(self
+            .pending
+            .drain(..requested_samples)
+            .map(f32_to_i16)
+            .collect())
     }
 
     /// Read a PCM chunk while remaining responsive to application shutdown.
@@ -368,6 +424,39 @@ impl AudioStream {
                 }
             }
         }
+        Ok(Some(
+            self.pending
+                .drain(..requested_samples)
+                .map(f32_to_i16)
+                .collect(),
+        ))
+    }
+
+    pub fn read_frames_f32_until_stopped(
+        &mut self,
+        requested_samples: usize,
+        stop: &AtomicBool,
+    ) -> Result<Option<Vec<f32>>> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while self.pending.len() < requested_samples {
+            if stop.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
+            match self.errors_rx.try_recv() {
+                Ok(error) => bail!("audio input stream failed: {error}"),
+                Err(TryRecvError::Disconnected) | Err(TryRecvError::Empty) => {}
+            }
+            match self.samples_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(block) => self.pending.extend(block),
+                Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    bail!("timed out waiting for audio input")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    bail!("audio input stream disconnected")
+                }
+            }
+        }
         Ok(Some(self.pending.drain(..requested_samples).collect()))
     }
 }
@@ -380,69 +469,96 @@ pub fn play_pcm_blocking(
 ) -> Result<()> {
     let host = cpal::default_host();
     let device = select_device(&host, AudioDeviceKind::Output, preferred_device_name)?;
-    let supported = select_config(&device, AudioDeviceKind::Output, sample_rate_hz, 1)
-        .or_else(|_| device.default_output_config().map_err(anyhow::Error::from))?;
-    let config = supported.config();
-    let channels = config.channels as usize;
-    let pcm = Arc::new(resample_linear_i16(
-        pcm,
-        sample_rate_hz,
-        config.sample_rate.0,
-    ));
-    let cursor = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let (done_tx, done_rx) = mpsc::sync_channel::<()>(1);
-    let (error_tx, error_rx) = mpsc::channel::<String>();
-    let error_callback = move |error: StreamError| {
-        let _ = error_tx.send(error.to_string());
-    };
+    let source_pcm = pcm
+        .iter()
+        .map(|sample| *sample as f32 / i16::MAX as f32)
+        .collect::<Vec<_>>();
+    let candidates = config_candidates(&device, AudioDeviceKind::Output, sample_rate_hz, 1)?;
+    let mut failures = Vec::new();
+    let mut active = None;
+    for supported in candidates {
+        let label = config_label(&supported);
+        let config = supported.config();
+        let channels = config.channels as usize;
+        let pcm = Arc::new(resample_f32(
+            &source_pcm,
+            sample_rate_hz,
+            config.sample_rate.0,
+        ));
+        let cursor = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (done_tx, done_rx) = mpsc::sync_channel::<()>(1);
+        let (error_tx, error_rx) = mpsc::channel::<String>();
 
-    macro_rules! output_stream {
-        ($sample:ty) => {{
-            let pcm = pcm.clone();
-            let cursor = cursor.clone();
-            let done_tx = done_tx.clone();
-            device.build_output_stream(
-                &config,
-                move |data: &mut [$sample], _| {
-                    let start = cursor.load(Ordering::Relaxed);
-                    let mut source_index = start;
-                    for frame in data.chunks_mut(channels) {
-                        let value = pcm.get(source_index).copied();
-                        let rendered = value
-                            .map(<$sample>::from_sample)
-                            .unwrap_or(<$sample as Sample>::EQUILIBRIUM);
-                        frame.fill(rendered);
-                        if value.is_some() {
-                            source_index += 1;
+        macro_rules! output_stream {
+            ($sample:ty) => {{
+                let pcm = pcm.clone();
+                let cursor = cursor.clone();
+                let done_tx = done_tx.clone();
+                let error_tx = error_tx.clone();
+                device.build_output_stream(
+                    &config,
+                    move |data: &mut [$sample], _| {
+                        let start = cursor.load(Ordering::Relaxed);
+                        let mut source_index = start;
+                        for frame in data.chunks_mut(channels) {
+                            let value = pcm.get(source_index).copied();
+                            let rendered = value
+                                .map(<$sample>::from_sample)
+                                .unwrap_or(<$sample as Sample>::EQUILIBRIUM);
+                            frame.fill(rendered);
+                            if value.is_some() {
+                                source_index += 1;
+                            }
                         }
-                    }
-                    cursor.store(source_index, Ordering::Release);
-                    if source_index >= pcm.len() {
-                        let _ = done_tx.try_send(());
-                    }
-                },
-                error_callback,
-                None,
-            )?
-        }};
-    }
+                        cursor.store(source_index, Ordering::Release);
+                        if source_index >= pcm.len() {
+                            let _ = done_tx.try_send(());
+                        }
+                    },
+                    move |error: StreamError| {
+                        let _ = error_tx.send(error.to_string());
+                    },
+                    None,
+                )
+            }};
+        }
 
-    let stream = match supported.sample_format() {
-        SampleFormat::I8 => output_stream!(i8),
-        SampleFormat::I16 => output_stream!(i16),
-        SampleFormat::I32 => output_stream!(i32),
-        SampleFormat::I64 => output_stream!(i64),
-        SampleFormat::U8 => output_stream!(u8),
-        SampleFormat::U16 => output_stream!(u16),
-        SampleFormat::U32 => output_stream!(u32),
-        SampleFormat::U64 => output_stream!(u64),
-        SampleFormat::F32 => output_stream!(f32),
-        SampleFormat::F64 => output_stream!(f64),
-        format => bail!("unsupported output sample format: {format:?}"),
+        let built = match supported.sample_format() {
+            SampleFormat::I8 => output_stream!(i8),
+            SampleFormat::I16 => output_stream!(i16),
+            SampleFormat::I32 => output_stream!(i32),
+            SampleFormat::I64 => output_stream!(i64),
+            SampleFormat::U8 => output_stream!(u8),
+            SampleFormat::U16 => output_stream!(u16),
+            SampleFormat::U32 => output_stream!(u32),
+            SampleFormat::U64 => output_stream!(u64),
+            SampleFormat::F32 => output_stream!(f32),
+            SampleFormat::F64 => output_stream!(f64),
+            format => {
+                failures.push(format!("{label}: unsupported format {format:?}"));
+                continue;
+            }
+        };
+        let stream = match built {
+            Ok(stream) => stream,
+            Err(error) => {
+                failures.push(format!("{label}: open failed: {error}"));
+                continue;
+            }
+        };
+        if let Err(error) = stream.play() {
+            failures.push(format!("{label}: start failed: {error}"));
+            continue;
+        }
+        active = Some((stream, done_rx, error_rx));
+        break;
+    }
+    let Some((_stream, done_rx, error_rx)) = active else {
+        bail!(
+            "unable to open any output audio configuration: {}",
+            failures.join("; ")
+        );
     };
-    stream
-        .play()
-        .context("failed to start audio output stream")?;
 
     loop {
         if abort.load(Ordering::Acquire) {
@@ -541,40 +657,66 @@ fn wslg_pulse_available() -> bool {
     false
 }
 
-fn select_config(
+fn config_candidates(
     device: &Device,
     kind: AudioDeviceKind,
     sample_rate_hz: u32,
     requested_channels: u16,
-) -> Result<SupportedStreamConfig> {
+) -> Result<Vec<SupportedStreamConfig>> {
     let ranges = match kind {
         AudioDeviceKind::Input => device.supported_input_configs()?.collect::<Vec<_>>(),
         AudioDeviceKind::Output => device.supported_output_configs()?.collect::<Vec<_>>(),
     };
-    ranges
-        .iter()
-        .min_by_key(|range| {
-            let selected_rate =
-                sample_rate_hz.clamp(range.min_sample_rate().0, range.max_sample_rate().0);
-            (
-                selected_rate.abs_diff(sample_rate_hz),
-                range.channels().abs_diff(requested_channels),
-                sample_format_preference(range.sample_format()),
-            )
-        })
-        .map(|range| {
-            let selected_rate = SampleRate(
-                sample_rate_hz.clamp(range.min_sample_rate().0, range.max_sample_rate().0),
-            );
-            (*range).with_sample_rate(selected_rate)
-        })
-        .with_context(|| {
-            format!(
-                "{} audio device does not expose a usable stream configuration near {} Hz",
-                kind_label(kind),
-                sample_rate_hz
-            )
-        })
+    const COMMON_RATES: &[u32] = &[
+        48_000, 44_100, 96_000, 88_200, 32_000, 24_000, 22_050, 16_000, 12_000, 8_000,
+    ];
+    let mut candidates = Vec::new();
+    for range in &ranges {
+        let mut rates = vec![
+            sample_rate_hz.clamp(range.min_sample_rate().0, range.max_sample_rate().0),
+            range.min_sample_rate().0,
+            range.max_sample_rate().0,
+        ];
+        rates.extend(COMMON_RATES.iter().copied().filter(|rate| {
+            range.min_sample_rate().0 <= *rate && *rate <= range.max_sample_rate().0
+        }));
+        rates.sort_unstable();
+        rates.dedup();
+        candidates.extend(
+            rates
+                .into_iter()
+                .map(|rate| (*range).with_sample_rate(SampleRate(rate))),
+        );
+    }
+    if let Ok(default) = match kind {
+        AudioDeviceKind::Input => device.default_input_config(),
+        AudioDeviceKind::Output => device.default_output_config(),
+    } {
+        candidates.push(default);
+    }
+    candidates.sort_by_key(|config| {
+        (
+            u8::from(config.sample_rate().0 < 24_000),
+            config.sample_rate().0.abs_diff(sample_rate_hz),
+            config.channels().abs_diff(requested_channels),
+            sample_format_preference(config.sample_format()),
+        )
+    });
+    candidates.dedup_by(|left, right| {
+        left.sample_rate() == right.sample_rate()
+            && left.channels() == right.channels()
+            && left.sample_format() == right.sample_format()
+    });
+    Ok(candidates)
+}
+
+fn config_label(config: &SupportedStreamConfig) -> String {
+    format!(
+        "{} Hz, {} channel(s), {:?}",
+        config.sample_rate().0,
+        config.channels(),
+        config.sample_format()
+    )
 }
 
 fn sample_format_preference(format: SampleFormat) -> u8 {
@@ -600,34 +742,17 @@ fn kind_label(kind: AudioDeviceKind) -> &'static str {
     }
 }
 
-fn downmix_i16(data: &[i16], channels: usize) -> Vec<i16> {
+fn downmix_f32(data: &[f32], channels: usize) -> Vec<f32> {
     if channels == 0 {
         return Vec::new();
     }
     data.chunks_exact(channels)
-        .map(|frame| {
-            let sum = frame.iter().map(|sample| i32::from(*sample)).sum::<i32>();
-            (sum / channels as i32) as i16
-        })
+        .map(|frame| frame.iter().sum::<f32>() / channels as f32)
         .collect()
 }
 
-fn resample_linear_i16(samples: &[i16], source_rate: u32, output_rate: u32) -> Vec<i16> {
-    if samples.is_empty() || source_rate == output_rate || source_rate == 0 || output_rate == 0 {
-        return samples.to_vec();
-    }
-    let output_len = ((samples.len() as u64 * output_rate as u64) / source_rate as u64) as usize;
-    let rate_ratio = source_rate as f64 / output_rate as f64;
-    (0..output_len)
-        .map(|index| {
-            let source_position = index as f64 * rate_ratio;
-            let left = source_position.floor() as usize;
-            let right = (left + 1).min(samples.len() - 1);
-            let fraction = (source_position - left as f64) as f32;
-            let value = samples[left] as f32 * (1.0 - fraction) + samples[right] as f32 * fraction;
-            value.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
-        })
-        .collect()
+fn f32_to_i16(sample: f32) -> i16 {
+    (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
 }
 
 #[cfg(test)]
@@ -635,54 +760,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn monitor_resampler_preserves_chunk_boundary_continuity() {
-        let mut chunked = MonitorResampler::new(48_000, 44_100);
-        let first = chunked.process(&(0..480).map(|value| value * 10).collect::<Vec<_>>());
-        let second = chunked.process(&(480..960).map(|value| value * 10).collect::<Vec<_>>());
-        let mut combined = first;
-        combined.extend(second);
-
-        let expected = resample_linear_i16(
-            &(0..960).map(|value| value * 10).collect::<Vec<_>>(),
-            48_000,
-            44_100,
-        );
-        assert!((combined.len() as isize - expected.len() as isize).abs() <= 1);
-        assert_eq!(&combined[..100], &expected[..100]);
-    }
-
-    #[test]
     fn downmixes_stereo_without_clipping() {
-        assert_eq!(
-            downmix_i16(&[i16::MAX, i16::MAX, i16::MIN, i16::MIN], 2),
-            vec![i16::MAX, i16::MIN]
-        );
-    }
-
-    #[test]
-    fn capture_resampler_preserves_chunk_boundary_continuity() {
-        let mut chunked = CaptureResampler::new(44_100, 48_000);
-        let first = chunked.process(&(0..441).map(|value| value * 10).collect::<Vec<_>>());
-        let second = chunked.process(&(441..882).map(|value| value * 10).collect::<Vec<_>>());
-        let mut combined = first;
-        combined.extend(second);
-
-        let expected = resample_linear_i16(
-            &(0..882).map(|value| value * 10).collect::<Vec<_>>(),
-            44_100,
-            48_000,
-        );
-        assert!((combined.len() as isize - expected.len() as isize).abs() <= 1);
-        assert_eq!(&combined[..100], &expected[..100]);
-    }
-
-    #[test]
-    fn resamples_output_to_the_device_rate() {
-        assert_eq!(resample_linear_i16(&[0, 1000, 2000], 3, 6).len(), 6);
-        assert_eq!(
-            resample_linear_i16(&[0, 1000, 2000], 3, 3),
-            vec![0, 1000, 2000]
-        );
+        assert_eq!(downmix_f32(&[1.0, 1.0, -1.0, -1.0], 2), vec![1.0, -1.0]);
     }
 
     #[test]
