@@ -1832,6 +1832,7 @@ struct TabViewState {
 }
 
 impl QsonautGuiApp {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         mut config: AppConfig,
         cc: &eframe::CreationContext<'_>,
