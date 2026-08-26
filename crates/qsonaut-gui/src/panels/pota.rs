@@ -86,7 +86,6 @@ impl QsonautGuiApp {
     }
 
     fn tune_to_pota_spot(&mut self, spot: &PotaSpot) {
-        self.activity = OperatingActivity::Pota;
         let mode = parse_workspace_mode_token(&spot.mode);
         if let Some(mode) = mode {
             self.workspace_mode = mode;
