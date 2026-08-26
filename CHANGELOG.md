@@ -15,6 +15,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added an explicit POTA live-data preference in the Reporting panel, plus a
   bottom-toolbar POTA panel with activator history, current spots, and
   click-to-tune spot navigation.
+- Consolidated each radio tab's radio and audio worker controls into one compact,
+  colored start/stop control.
 
 ### Fixed
 - Hardened POTA live-data polling so a failed lookup worker cannot leave
@@ -31,6 +33,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   bounded parts-per-million correction, automatic underrun rebuffering, and
   long-session drift telemetry. Decoder and TX timing remain isolated from the
   monitor device clock.
+- Kept radio and audio worker failures isolated to their owning profile without
+  automatically restarting failed workers; inactive profiles continue receiving
+  while their PTT path remains locked unless unattended operation is unlocked.
+- Restored WSLg's GPU-backed Mesa D3D12/OpenGL default after Vulkan selected the
+  llvmpipe software adapter, and documented the native Wayland default.
 
 ## [0.3.10] - 2026-08-25
 

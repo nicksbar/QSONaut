@@ -3228,116 +3228,6 @@ impl QsonautGuiApp {
         }
     }
 
-    fn set_tab_audio_running(&mut self, name: &str, running: bool) {
-        if name == self.selected_profile_name {
-            self.config.audio.enabled = running;
-            self.profile_dirty = true;
-            self.persist_profile(if running {
-                "Audio worker started for"
-            } else {
-                "Audio worker stopped for"
-            });
-            self.restart_audio();
-            return;
-        }
-        let Some(session) = self.parked_radio_sessions.get_mut(name) else {
-            return;
-        };
-        session.audio_config.enabled = running;
-        session.profile.audio_enabled = running;
-        if !running {
-            session.audio_worker_stop.store(true, Ordering::Relaxed);
-            if let Some(handle) = session.audio_worker_handle.take() {
-                let _ = handle.join();
-            }
-            if let Ok(mut state) = session.state.lock() {
-                state.audio_spectrum_status = "DISABLED".to_string();
-            }
-        } else if session.audio_worker_handle.is_none() {
-            session.audio_worker_stop = Arc::new(AtomicBool::new(false));
-            session.audio_worker_handle = Some(spawn_audio_spectrum_worker(
-                session.state.clone(),
-                session.audio_worker_stop.clone(),
-                session.ft8_tx_active.clone(),
-                session.digital_tx_active.clone(),
-                session.audio_config.enabled,
-                session.audio_config.sample_rate_hz,
-                session.audio_config.channels,
-                session.audio_config.input_device.clone(),
-                session.audio_config.monitor_enabled,
-                session
-                    .audio_config
-                    .monitor_output_device
-                    .clone()
-                    .or_else(|| session.audio_config.output_device.clone()),
-                session.monitor_volume.clone(),
-                self.repaint_ctx.clone(),
-                session.display_tuning.clone(),
-            ));
-        }
-        let _ = save_operator_profile_named(name, &session.profile);
-        info!(
-            profile = name,
-            running, "Parked profile audio worker state changed"
-        );
-    }
-
-    fn set_tab_radio_running(&mut self, name: &str, running: bool) {
-        if name == self.selected_profile_name {
-            self.config.radio.enabled = running;
-            self.profile_dirty = true;
-            self.persist_profile(if running {
-                "Radio worker started for"
-            } else {
-                "Radio worker stopped for"
-            });
-            self.reconnect_radio();
-            return;
-        }
-        let Some(session) = self.parked_radio_sessions.get_mut(name) else {
-            return;
-        };
-        session.config.enabled = running;
-        session.profile.radio_enabled = running;
-        if !running {
-            if let Some(tx) = &session.command_tx {
-                let _ = tx.send(GuiCommand::Quit);
-            }
-            session.worker_stop.store(true, Ordering::Relaxed);
-            if let Some(handle) = session.worker_handle.take() {
-                let _ = handle.join();
-            }
-            session.command_tx = None;
-            session.init_rx = None;
-            session.init_attempted = true;
-            if let Ok(mut state) = session.state.lock() {
-                state.radio_waterfall_status = "UNAVAILABLE (radio stopped)".to_string();
-            }
-        } else if session.command_tx.is_none() && session.worker_handle.is_none() {
-            session.worker_stop = Arc::new(AtomicBool::new(false));
-            let port = session.config.serial_port.clone().unwrap_or_default();
-            session.init_rx = Some(spawn_radio_init(
-                session.config.backend.clone(),
-                session.config.model.clone(),
-                port,
-                session.config.endpoint.clone(),
-                session.config.baud_rate,
-                session.config.controller_civ_address,
-                session.config.civ_address,
-            ));
-            session.init_attempted = false;
-            if let Ok(mut state) = session.state.lock() {
-                state.radio_waterfall_status = "CONNECTING…".to_string();
-                state.last_error = None;
-            }
-        }
-        let _ = save_operator_profile_named(name, &session.profile);
-        info!(
-            profile = name,
-            running, "Parked profile radio worker state changed"
-        );
-    }
-
     fn set_tab_workers_running(&mut self, name: &str, running: bool) {
         if name == self.selected_profile_name {
             self.config.radio.enabled = running;
@@ -5018,13 +4908,13 @@ impl eframe::App for QsonautGuiApp {
                                     } else {
                                         "Start this profile's radio and audio workers"
                                     };
-                                    let worker_button = egui::Button::new(worker_label).fill(
-                                        if workers_running {
-                                            Color32::from_rgb(126, 25, 39)
-                                        } else {
-                                            Color32::from_rgb(30, 105, 74)
-                                        },
-                                    );
+                                    let worker_button = egui::Button::new(worker_label)
+                                    .small()
+                                    .fill(if workers_running {
+                                        Color32::from_rgb(126, 25, 39)
+                                    } else {
+                                        Color32::from_rgb(30, 105, 74)
+                                    });
                                     if ui
                                         .add(worker_button)
                                         .on_hover_text(worker_hint)
