@@ -114,9 +114,15 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 return;
             }
         };
+        let device_sample_rate_hz = stream.device_sample_rate_hz();
+        let resampling_input = device_sample_rate_hz != stream.output_sample_rate_hz();
         info!(
             sample_rate_hz,
-            channels, monitor_enabled, "Audio input worker started"
+            device_sample_rate_hz,
+            resampling_input,
+            channels,
+            monitor_enabled,
+            "Audio input worker started"
         );
         let (monitor, monitor_status) = if monitor_enabled {
             match qsonaut_audio::AudioMonitor::open(
@@ -299,7 +305,16 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             s.audio_spectrum_status = monitor_runtime_error
                                 .as_deref()
                                 .map(|error| format!("LIVE RX · MONITOR ERROR ({error})"))
-                                .unwrap_or_else(|| format!("LIVE RX{monitor_status}"));
+                                .unwrap_or_else(|| {
+                                    if resampling_input {
+                                        format!(
+                                            "LIVE RX · RESAMPLED {} → {} Hz{monitor_status}",
+                                            device_sample_rate_hz, sample_rate_hz
+                                        )
+                                    } else {
+                                        format!("LIVE RX{monitor_status}")
+                                    }
+                                });
                         }
                         s.audio_level_dbfs = Some(20.0 * rms.max(1e-9).log10());
                         s.audio_clip_percent = clip_percent;

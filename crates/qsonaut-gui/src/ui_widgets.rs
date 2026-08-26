@@ -3,6 +3,11 @@ use eframe::egui::Color32;
 
 use qsonaut_radio::models::find_model;
 
+const ICOM_BAUD_RATES: &[u32] = &[4_800, 9_600, 19_200, 38_400, 57_600, 115_200];
+const GENERIC_YAESU_BAUD_RATES: &[u32] = &[4_800, 9_600, 19_200, 38_400];
+const GENERIC_CLASSIC_YAESU_BAUD_RATES: &[u32] = &[4_800, 9_600, 38_400];
+const GENERIC_KENWOOD_BAUD_RATES: &[u32] = &[4_800, 9_600, 19_200, 38_400, 57_600, 115_200];
+
 /// Paint the AI tab icon with egui primitives so it does not depend on an
 /// emoji or a platform font containing a particular Unicode glyph.
 pub(super) fn draw_ai_icon(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
@@ -157,6 +162,33 @@ pub(super) fn native_radio_profile(
         .flatten()
 }
 
+pub(super) fn radio_baud_rates(model: &str) -> &'static [u32] {
+    use qsonaut_radio::{
+        kenwood::profile as kenwood,
+        models::Protocol,
+        yaesu::{legacy_profile as yaesu_legacy, profile as yaesu},
+        KenwoodCatModel, YaesuCatModel, YaesuLegacyModel,
+    };
+
+    let Some(profile) = find_model(model) else {
+        return GENERIC_KENWOOD_BAUD_RATES;
+    };
+    match profile.protocol {
+        Protocol::IcomCiV { .. } => ICOM_BAUD_RATES,
+        Protocol::YaesuCat => YaesuCatModel::from_model_name(profile.model)
+            .map(yaesu::profile_for_model)
+            .map_or(GENERIC_YAESU_BAUD_RATES, |profile| profile.baud_rates),
+        Protocol::YaesuLegacyCat => YaesuLegacyModel::from_model_name(profile.model)
+            .map(yaesu_legacy::profile_for_model)
+            .map_or(GENERIC_CLASSIC_YAESU_BAUD_RATES, |profile| {
+                profile.baud_rates
+            }),
+        Protocol::KenwoodCat => KenwoodCatModel::from_model_name(profile.model)
+            .map(kenwood::profile_for_model)
+            .map_or(GENERIC_KENWOOD_BAUD_RATES, |profile| profile.baud_rates),
+    }
+}
+
 pub(super) fn radio_supports_band(
     profile: Option<&qsonaut_radio::models::RadioModelProfile>,
     band: &str,
@@ -211,4 +243,18 @@ pub(super) fn swr_chart_value(model: &str, normalized: u8) -> f32 {
         return low_ratio + fraction * (high_ratio - low_ratio);
     }
     3.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::radio_baud_rates;
+
+    #[test]
+    fn baud_rates_follow_the_selected_radio_profile() {
+        assert_eq!(radio_baud_rates("FTDX10"), &[4_800, 9_600, 19_200, 38_400]);
+        assert!(radio_baud_rates("FT-710").contains(&115_200));
+        assert_eq!(radio_baud_rates("FT-857D"), &[4_800, 9_600, 38_400]);
+        assert!(!radio_baud_rates("TS-2000").contains(&115_200));
+        assert!(radio_baud_rates("IC-7300").contains(&115_200));
+    }
 }

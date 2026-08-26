@@ -402,11 +402,25 @@ impl QsonautGuiApp {
                 ui.end_row();
 
                 ui.label("CAT baud rate");
-                ui.add(
-                    egui::DragValue::new(&mut self.config.radio.baud_rate)
-                        .range(1_200..=230_400)
-                        .speed(1_200),
-                );
+                let baud_rates = radio_baud_rates(&self.config.radio.model);
+                if !baud_rates.contains(&self.config.radio.baud_rate) {
+                    self.config.radio.baud_rate = find_model(&self.config.radio.model)
+                        .map(|profile| profile.preferred_baud_rate())
+                        .filter(|baud| baud_rates.contains(baud))
+                        .unwrap_or(baud_rates[0]);
+                }
+                egui::ComboBox::from_id_salt("radio_baud_rate")
+                    .selected_text(self.config.radio.baud_rate.to_string())
+                    .width(ui.available_width().max(180.0))
+                    .show_ui(ui, |ui| {
+                        for baud_rate in baud_rates {
+                            ui.selectable_value(
+                                &mut self.config.radio.baud_rate,
+                                *baud_rate,
+                                baud_rate.to_string(),
+                            );
+                        }
+                    });
                 ui.end_row();
             });
 

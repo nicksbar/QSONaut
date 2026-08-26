@@ -7,6 +7,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.11] - 2026-08-26
+
+### Changed
+- Replaced the editable CAT baud-rate control with a radio-aware selection list
+  constrained to the rates supported by the selected Rigwright model profile.
+
+### Fixed
+- Allowed audio inputs that do not expose the configured 48 kHz capture rate to
+  open at their closest supported rate and resample continuously into QSONaut's
+  48 kHz spectrum and decoder pipeline. Runtime status and diagnostics now show
+  the negotiated hardware rate when conversion is active.
+
 ## [0.3.10] - 2026-08-25
 
 ### Added

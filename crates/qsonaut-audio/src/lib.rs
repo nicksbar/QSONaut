@@ -34,6 +34,8 @@ pub struct AudioStream {
     errors_rx: Receiver<String>,
     pending: VecDeque<i16>,
     requested_channels: usize,
+    device_sample_rate_hz: u32,
+    output_sample_rate_hz: u32,
 }
 
 pub struct AudioMonitor {
@@ -52,6 +54,8 @@ struct MonitorResampler {
     source_position: f64,
     source: VecDeque<i16>,
 }
+
+type CaptureResampler = MonitorResampler;
 
 impl MonitorResampler {
     fn new(input_sample_rate_hz: u32, output_sample_rate_hz: u32) -> Self {
@@ -239,6 +243,7 @@ impl AudioService {
         )?;
         let supported = select_config(&device, AudioDeviceKind::Input, sample_rate_hz, channels)?;
         let stream_config = supported.config();
+        let device_sample_rate_hz = stream_config.sample_rate.0;
         let device_channels = stream_config.channels as usize;
         let (samples_tx, samples_rx) = mpsc::sync_channel::<Vec<i16>>(32);
         let (errors_tx, errors_rx) = mpsc::channel::<String>();
@@ -249,6 +254,7 @@ impl AudioService {
         macro_rules! input_stream {
             ($sample:ty) => {{
                 let tx = samples_tx.clone();
+                let mut resampler = CaptureResampler::new(device_sample_rate_hz, sample_rate_hz);
                 device.build_input_stream(
                     &stream_config,
                     move |data: &[$sample], _| {
@@ -257,7 +263,11 @@ impl AudioService {
                             .copied()
                             .map(i16::from_sample)
                             .collect::<Vec<_>>();
-                        send_downmixed_i16(&converted, device_channels, &tx);
+                        let downmixed = downmix_i16(&converted, device_channels);
+                        let resampled = resampler.process(&downmixed);
+                        if !resampled.is_empty() {
+                            let _ = tx.try_send(resampled);
+                        }
                     },
                     error_callback,
                     None,
@@ -288,11 +298,21 @@ impl AudioService {
             errors_rx,
             pending: VecDeque::new(),
             requested_channels: 1,
+            device_sample_rate_hz,
+            output_sample_rate_hz: sample_rate_hz,
         })
     }
 }
 
 impl AudioStream {
+    pub fn device_sample_rate_hz(&self) -> u32 {
+        self.device_sample_rate_hz
+    }
+
+    pub fn output_sample_rate_hz(&self) -> u32 {
+        self.output_sample_rate_hz
+    }
+
     pub fn read_chunk(&mut self, bytes_to_read: usize) -> Result<Vec<i16>> {
         let frame_bytes = 2 * self.requested_channels;
         if !bytes_to_read.is_multiple_of(frame_bytes) {
@@ -531,22 +551,26 @@ fn select_config(
         AudioDeviceKind::Input => device.supported_input_configs()?.collect::<Vec<_>>(),
         AudioDeviceKind::Output => device.supported_output_configs()?.collect::<Vec<_>>(),
     };
-    let requested_rate = SampleRate(sample_rate_hz);
     ranges
         .iter()
-        .filter(|range| {
-            range.min_sample_rate() <= requested_rate && range.max_sample_rate() >= requested_rate
-        })
         .min_by_key(|range| {
+            let selected_rate =
+                sample_rate_hz.clamp(range.min_sample_rate().0, range.max_sample_rate().0);
             (
+                selected_rate.abs_diff(sample_rate_hz),
                 range.channels().abs_diff(requested_channels),
                 sample_format_preference(range.sample_format()),
             )
         })
-        .map(|range| (*range).with_sample_rate(requested_rate))
+        .map(|range| {
+            let selected_rate = SampleRate(
+                sample_rate_hz.clamp(range.min_sample_rate().0, range.max_sample_rate().0),
+            );
+            (*range).with_sample_rate(selected_rate)
+        })
         .with_context(|| {
             format!(
-                "{} audio device does not support {} Hz",
+                "{} audio device does not expose a usable stream configuration near {} Hz",
                 kind_label(kind),
                 sample_rate_hz
             )
@@ -576,18 +600,16 @@ fn kind_label(kind: AudioDeviceKind) -> &'static str {
     }
 }
 
-fn send_downmixed_i16(data: &[i16], channels: usize, sender: &SyncSender<Vec<i16>>) {
+fn downmix_i16(data: &[i16], channels: usize) -> Vec<i16> {
     if channels == 0 {
-        return;
+        return Vec::new();
     }
-    let output = data
-        .chunks_exact(channels)
+    data.chunks_exact(channels)
         .map(|frame| {
             let sum = frame.iter().map(|sample| i32::from(*sample)).sum::<i32>();
             (sum / channels as i32) as i16
         })
-        .collect::<Vec<_>>();
-    let _ = sender.try_send(output);
+        .collect()
 }
 
 fn resample_linear_i16(samples: &[i16], source_rate: u32, output_rate: u32) -> Vec<i16> {
@@ -631,9 +653,27 @@ mod tests {
 
     #[test]
     fn downmixes_stereo_without_clipping() {
-        let (tx, rx) = mpsc::sync_channel(1);
-        send_downmixed_i16(&[i16::MAX, i16::MAX, i16::MIN, i16::MIN], 2, &tx);
-        assert_eq!(rx.recv().unwrap(), vec![i16::MAX, i16::MIN]);
+        assert_eq!(
+            downmix_i16(&[i16::MAX, i16::MAX, i16::MIN, i16::MIN], 2),
+            vec![i16::MAX, i16::MIN]
+        );
+    }
+
+    #[test]
+    fn capture_resampler_preserves_chunk_boundary_continuity() {
+        let mut chunked = CaptureResampler::new(44_100, 48_000);
+        let first = chunked.process(&(0..441).map(|value| value * 10).collect::<Vec<_>>());
+        let second = chunked.process(&(441..882).map(|value| value * 10).collect::<Vec<_>>());
+        let mut combined = first;
+        combined.extend(second);
+
+        let expected = resample_linear_i16(
+            &(0..882).map(|value| value * 10).collect::<Vec<_>>(),
+            44_100,
+            48_000,
+        );
+        assert!((combined.len() as isize - expected.len() as isize).abs() <= 1);
+        assert_eq!(&combined[..100], &expected[..100]);
     }
 
     #[test]

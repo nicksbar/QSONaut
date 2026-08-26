@@ -139,7 +139,8 @@ use tx_audio::{
 use ui_format::{format_signal_report, ft8_period_progress, qso_stage_label, utc_hhmmss_millis};
 use ui_widgets::{
     draw_ai_icon, draw_radio_about_icon, draw_speaker_icon, format_swr_display,
-    native_radio_profile, radio_supports_band, styled_selection_button, swr_chart_value,
+    native_radio_profile, radio_baud_rates, radio_supports_band, styled_selection_button,
+    swr_chart_value,
 };
 use visuals::{
     audio_cursor_level, build_scope_waterfall_image, downsample_bins, fft_buffer_to_display_bins,
