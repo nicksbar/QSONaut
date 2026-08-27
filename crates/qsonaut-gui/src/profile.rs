@@ -9,11 +9,12 @@ use serde::{Deserialize, Serialize};
 use super::{
     default_true,
     modes::exchange::{AutoReplyPolicy, DEFAULT_PTT_LEAD_SECONDS, MAX_ATTEMPTS_PER_EXCHANGE},
-    AchievementKind, CustomAchievementRule, RadioScopeView, WaterfallTheme, GUI_SCALE_BASE,
+    AchievementKind, CustomAchievementRule, RadioScopeView, WaterfallSpeed, WaterfallTheme,
+    GUI_SCALE_BASE,
 };
 
 pub(super) const OPERATOR_PROFILE_FILE: &str = "profile.toml";
-pub(super) const OPERATOR_PROFILE_VERSION: u32 = 15;
+pub(super) const OPERATOR_PROFILE_VERSION: u32 = 16;
 const RADIO_PROFILE_LIBRARY_FILE: &str = "radio-profiles.toml";
 const LEGACY_OPERATOR_PROFILE_FILE: &str = ".rigforge_profile.toml";
 const DEFAULT_PROFILE_NAME: &str = "Default";
@@ -74,6 +75,10 @@ pub(super) struct OperatorProfile {
     pub(super) radio_scope_view: RadioScopeView,
     #[serde(default)]
     pub(super) waterfall_theme: WaterfallTheme,
+    #[serde(default = "default_waterfall_auto_visual")]
+    pub(super) waterfall_auto_visual: bool,
+    #[serde(default = "default_waterfall_speed")]
+    pub(super) waterfall_speed: WaterfallSpeed,
     #[serde(default = "default_waterfall_deck_height")]
     pub(super) waterfall_deck_height: f32,
     #[serde(default)]
@@ -256,6 +261,14 @@ fn default_workspace_mode() -> String {
 
 pub(super) fn default_waterfall_deck_height() -> f32 {
     320.0
+}
+
+pub(super) fn default_waterfall_auto_visual() -> bool {
+    true
+}
+
+pub(super) fn default_waterfall_speed() -> WaterfallSpeed {
+    WaterfallSpeed::Mid
 }
 
 pub(super) fn default_rx_tone_hz() -> u32 {

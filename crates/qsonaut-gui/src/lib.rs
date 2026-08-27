@@ -8,6 +8,7 @@ mod local_ai;
 mod modes;
 mod panels;
 mod profile;
+mod radio_faq;
 mod server_integration;
 mod tx_audio;
 mod ui_format;
@@ -129,6 +130,7 @@ use profile::{
     select_operator_profile, OperatorProfile, RadioProfile, OPERATOR_PROFILE_FILE,
     OPERATOR_PROFILE_VERSION,
 };
+use radio_faq::{help_for_model, render_document};
 #[cfg(test)]
 use tx_audio::FT8_TX_AUDIO_START_S;
 use tx_audio::{
@@ -209,6 +211,12 @@ enum ProfileDrawerTab {
     DigitalTiming,
     Monitoring,
     Waterfall,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RadioHelpDocument {
+    Manufacturer,
+    Model,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -769,11 +777,21 @@ fn qso_timestamp(record: &QsoRecord) -> Option<String> {
     ))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum WaterfallSpeed {
     Slow,
     Mid,
     Fast,
+}
+
+impl WaterfallSpeed {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Slow => "Slow · ~4.5 rows/s",
+            Self::Mid => "Mid · ~8 rows/s",
+            Self::Fast => "Fast · ~20 rows/s",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1818,6 +1836,12 @@ struct QsonautGuiApp {
     waterfall_deck_resize_pending: bool,
     show_signal_panel: bool,
     show_profile_drawer: bool,
+    profile_drawer_anchor: Option<egui::Pos2>,
+    radio_faq_window_open: bool,
+    radio_guide_window_open: bool,
+    radio_faq_document: RadioHelpDocument,
+    radio_guide_document: RadioHelpDocument,
+    radio_help_window_model: String,
     profile_drawer_tab: ProfileDrawerTab,
     signal_panel_tab: SignalPanelTab,
     device_restart_required: bool,
@@ -2345,6 +2369,8 @@ impl QsonautGuiApp {
                 radio_scope_vbw_wide,
                 radio_scope_view,
                 waterfall_theme,
+                waterfall_auto_visual: true,
+                waterfall_speed: WaterfallSpeed::Mid,
                 waterfall_deck_height,
                 halt_after_tx: false,
                 ft8_max_attempts,
@@ -2722,6 +2748,12 @@ impl QsonautGuiApp {
             waterfall_deck_resize_pending: false,
             show_signal_panel: true,
             show_profile_drawer: false,
+            profile_drawer_anchor: None,
+            radio_faq_window_open: false,
+            radio_guide_window_open: false,
+            radio_faq_document: RadioHelpDocument::Model,
+            radio_guide_document: RadioHelpDocument::Model,
+            radio_help_window_model: String::new(),
             profile_drawer_tab: ProfileDrawerTab::Profile,
             signal_panel_tab: SignalPanelTab::Achievements,
             device_restart_required: false,
@@ -2812,6 +2844,10 @@ impl QsonautGuiApp {
         self.radio_scope_view = profile.radio_scope_view;
         self.waterfall_theme = profile.waterfall_theme;
         self.waterfall_deck_height = profile.waterfall_deck_height.clamp(170.0, 560.0);
+        if let Ok(mut tuning) = self.display_tuning.lock() {
+            tuning.auto_visual = profile.waterfall_auto_visual;
+            tuning.waterfall_speed = profile.waterfall_speed;
+        }
         self.rx_tone_hz = profile.rx_tone_hz;
         self.tx_tone_hz = if self.ft8_hold_tx_freq {
             profile.tx_tone_hz
@@ -4014,6 +4050,10 @@ impl QsonautGuiApp {
     }
 
     fn current_operator_profile(&self) -> OperatorProfile {
+        let display_tuning = self
+            .display_tuning
+            .lock()
+            .expect("display tuning lock poisoned");
         OperatorProfile {
             profile_version: OPERATOR_PROFILE_VERSION,
             callsign: self.station_callsign_or_default().to_string(),
@@ -4044,6 +4084,8 @@ impl QsonautGuiApp {
             radio_scope_vbw_wide: self.radio_scope_vbw_wide,
             radio_scope_view: self.radio_scope_view,
             waterfall_theme: self.waterfall_theme,
+            waterfall_auto_visual: display_tuning.auto_visual,
+            waterfall_speed: display_tuning.waterfall_speed,
             waterfall_deck_height: self.waterfall_deck_height,
             // This control is deliberately one-shot and is not restored on launch.
             halt_after_tx: false,
@@ -4974,12 +5016,15 @@ impl eframe::App for QsonautGuiApp {
                                     {
                                         worker_action = Some((name.clone(), !workers_running));
                                     }
-                                    if ui
+                                    let settings_response = ui
                                         .small_button("⚙")
-                                        .on_hover_text("Open this radio tab's configuration")
-                                        .clicked()
-                                    {
-                                        open_config = Some(name.clone());
+                                        .on_hover_text("Open this radio tab's configuration");
+                                    if settings_response.clicked() {
+                                        open_config = Some((
+                                            name.clone(),
+                                            settings_response.rect.left_bottom()
+                                                + egui::vec2(0.0, 4.0),
+                                        ));
                                     }
                                     });
                                 });
@@ -5005,10 +5050,11 @@ impl eframe::App for QsonautGuiApp {
                             self.set_tab_workers_running(&name, running);
                         } else if let Some(name) = activate_tab {
                             self.switch_radio_tab(&name);
-                        } else if let Some(name) = open_config {
+                        } else if let Some((name, anchor)) = open_config {
                             if name != self.selected_profile_name {
                                 self.switch_radio_tab(&name);
                             }
+                            self.profile_drawer_anchor = Some(anchor);
                             self.show_profile_drawer = true;
                         }
                     } else {
@@ -6141,70 +6187,121 @@ impl eframe::App for QsonautGuiApp {
 
         if self.show_profile_drawer {
             let mut drawer_open = true;
-            egui::Window::new("⚙ Profile management")
+            let drawer_anchor = self.profile_drawer_anchor.take();
+            let mut drawer = egui::Window::new("⚙ Profile management")
                 .open(&mut drawer_open)
-                .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, 56.0))
-                .default_width(520.0)
-                .default_height(620.0)
+                .default_width(460.0)
+                .default_height(560.0)
                 .min_width(360.0)
                 .min_height(260.0)
+                .max_width(560.0)
+                .max_height(760.0)
                 .resizable(true)
-                .show(ctx, |ui| {
-                    ui.label(
-                        RichText::new(format!(
-                            "{} · {}",
-                            self.selected_profile_name,
-                            if self.profile_dirty {
-                                "unsaved changes"
-                            } else {
-                                "saved"
-                            }
-                        ))
-                        .small()
-                        .color(if self.profile_dirty {
-                            theme_warning(ui)
+                .movable(true);
+            if let Some(anchor) = drawer_anchor {
+                drawer = drawer.current_pos(anchor);
+            }
+            drawer.show(ctx, |ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "{} · {}",
+                        self.selected_profile_name,
+                        if self.profile_dirty {
+                            "unsaved changes"
                         } else {
-                            Color32::GRAY
-                        }),
-                    );
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        for (tab, label) in [
-                            (ProfileDrawerTab::Profile, "PROFILE"),
-                            (ProfileDrawerTab::Radio, "RADIO"),
-                            (ProfileDrawerTab::Tuning, "TUNING"),
-                            (ProfileDrawerTab::DigitalTiming, "DIGITAL TIMING"),
-                            (ProfileDrawerTab::Monitoring, "MONITORING"),
-                            (ProfileDrawerTab::Waterfall, "WATERFALL"),
-                        ] {
-                            if ui
-                                .selectable_label(self.profile_drawer_tab == tab, label)
-                                .clicked()
-                            {
-                                self.profile_drawer_tab = tab;
-                            }
+                            "saved"
+                        }
+                    ))
+                    .small()
+                    .color(if self.profile_dirty {
+                        theme_warning(ui)
+                    } else {
+                        Color32::GRAY
+                    }),
+                );
+                ui.separator();
+                ui.horizontal(|ui| {
+                    for (tab, label) in [
+                        (ProfileDrawerTab::Profile, "PROFILE"),
+                        (ProfileDrawerTab::Radio, "RADIO"),
+                        (ProfileDrawerTab::Tuning, "TUNING"),
+                        (ProfileDrawerTab::DigitalTiming, "DIGITAL TIMING"),
+                        (ProfileDrawerTab::Monitoring, "MONITORING"),
+                        (ProfileDrawerTab::Waterfall, "WATERFALL"),
+                    ] {
+                        if ui
+                            .selectable_label(self.profile_drawer_tab == tab, label)
+                            .clicked()
+                        {
+                            self.profile_drawer_tab = tab;
+                        }
+                    }
+                });
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .id_salt("profile_management_drawer")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match self.profile_drawer_tab {
+                        ProfileDrawerTab::Profile => self.draw_profile_panel(ui),
+                        ProfileDrawerTab::Radio => self.draw_radio_profile_settings(ui),
+                        ProfileDrawerTab::Tuning => self.draw_radio_profile_assignments(ui),
+                        ProfileDrawerTab::DigitalTiming => self.draw_digital_timing_settings(ui),
+                        ProfileDrawerTab::Monitoring => self.draw_monitoring_settings(ui),
+                        ProfileDrawerTab::Waterfall => {
+                            self.draw_waterfall_profile_panel(ui, &snapshot)
                         }
                     });
-                    ui.separator();
-                    egui::ScrollArea::vertical()
-                        .id_salt("profile_management_drawer")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| match self.profile_drawer_tab {
-                            ProfileDrawerTab::Profile => self.draw_profile_panel(ui),
-                            ProfileDrawerTab::Radio => self.draw_radio_profile_settings(ui),
-                            ProfileDrawerTab::Tuning => self.draw_radio_profile_assignments(ui),
-                            ProfileDrawerTab::DigitalTiming => {
-                                self.draw_digital_timing_settings(ui)
-                            }
-                            ProfileDrawerTab::Monitoring => self.draw_monitoring_settings(ui),
-                            ProfileDrawerTab::Waterfall => {
-                                self.draw_waterfall_profile_panel(ui, &snapshot)
-                            }
-                        });
-                });
+            });
             if !drawer_open {
                 self.show_profile_drawer = false;
             }
+        }
+
+        if self.radio_faq_window_open || self.radio_guide_window_open {
+            let help = help_for_model(&self.radio_help_window_model);
+            let mut faq_open = self.radio_faq_window_open;
+            let (faq_title, faq_document) = match self.radio_faq_document {
+                RadioHelpDocument::Manufacturer => ("Manufacturer FAQ", help.manufacturer_faq),
+                RadioHelpDocument::Model => ("Model FAQ", help.model_faq),
+            };
+            egui::Window::new(format!("{} — {}", help.title, faq_title))
+                .open(&mut faq_open)
+                .default_width(620.0)
+                .default_height(560.0)
+                .min_width(360.0)
+                .min_height(240.0)
+                .resizable(true)
+                .movable(true)
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            render_document(ui, faq_document);
+                        });
+                });
+            self.radio_faq_window_open = faq_open;
+
+            let mut guide_open = self.radio_guide_window_open;
+            let (guide_title, guide_document) = match self.radio_guide_document {
+                RadioHelpDocument::Manufacturer => ("Manufacturer Guide", help.manufacturer_guide),
+                RadioHelpDocument::Model => ("Model Guide", help.model_guide),
+            };
+            egui::Window::new(format!("{} — {}", help.title, guide_title))
+                .open(&mut guide_open)
+                .default_width(620.0)
+                .default_height(560.0)
+                .min_width(360.0)
+                .min_height(240.0)
+                .resizable(true)
+                .movable(true)
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            render_document(ui, guide_document);
+                        });
+                });
+            self.radio_guide_window_open = guide_open;
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -6300,7 +6397,7 @@ fn effective_visual_profile(tuning: &DisplayTuning, mode: &str) -> (u64, u8) {
         return match tuning.waterfall_speed {
             WaterfallSpeed::Slow => (220, 2),
             WaterfallSpeed::Mid => (120, 1),
-            WaterfallSpeed::Fast => (35, 0),
+            WaterfallSpeed::Fast => (50, 0),
         };
     }
 
@@ -6314,7 +6411,7 @@ fn effective_visual_profile(tuning: &DisplayTuning, mode: &str) -> (u64, u8) {
     {
         // A dense, fast waterfall makes short digital signals easier to tune
         // and preserves the radio's native scope cadence.
-        (35, 0)
+        (50, 0)
     } else if m.contains("FM") {
         (120, 1)
     } else {
@@ -6639,8 +6736,22 @@ mod tests {
     #[test]
     fn automatic_digital_visuals_use_the_fast_radio_scope_cadence() {
         let tuning = DisplayTuning::default();
-        assert_eq!(effective_visual_profile(&tuning, "USB-D"), (35, 0));
-        assert_eq!(effective_visual_profile(&tuning, "FT8"), (35, 0));
+        assert_eq!(effective_visual_profile(&tuning, "USB-D"), (50, 0));
+        assert_eq!(effective_visual_profile(&tuning, "FT8"), (50, 0));
+    }
+
+    #[test]
+    fn manual_waterfall_speeds_match_ic7300_scope_values() {
+        let mut tuning = DisplayTuning {
+            auto_visual: false,
+            ..DisplayTuning::default()
+        };
+        tuning.waterfall_speed = WaterfallSpeed::Slow;
+        assert_eq!(effective_visual_profile(&tuning, "FT8"), (220, 2));
+        tuning.waterfall_speed = WaterfallSpeed::Mid;
+        assert_eq!(effective_visual_profile(&tuning, "FT8"), (120, 1));
+        tuning.waterfall_speed = WaterfallSpeed::Fast;
+        assert_eq!(effective_visual_profile(&tuning, "FT8"), (50, 0));
     }
 
     #[test]

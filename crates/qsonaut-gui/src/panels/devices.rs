@@ -344,7 +344,44 @@ impl QsonautGuiApp {
                         });
                     ui.end_row();
                 }
+            });
 
+        if self.config.radio.backend.eq_ignore_ascii_case("native") {
+            let help = help_for_model(&self.config.radio.model);
+            ui.add_space(4.0);
+            ui.group(|ui| {
+                ui.label(RichText::new(format!("Recommended setup · {}", help.title)).strong());
+                ui.add(egui::Label::new(help.blurb).wrap());
+                ui.horizontal(|ui| {
+                    if ui.link("Model FAQ").clicked() {
+                        self.radio_help_window_model = self.config.radio.model.clone();
+                        self.radio_faq_document = RadioHelpDocument::Model;
+                        self.radio_faq_window_open = true;
+                    }
+                    if ui.link("Manufacturer FAQ").clicked() {
+                        self.radio_help_window_model = self.config.radio.model.clone();
+                        self.radio_faq_document = RadioHelpDocument::Manufacturer;
+                        self.radio_faq_window_open = true;
+                    }
+                    if ui.link("Model Guide").clicked() {
+                        self.radio_help_window_model = self.config.radio.model.clone();
+                        self.radio_guide_document = RadioHelpDocument::Model;
+                        self.radio_guide_window_open = true;
+                    }
+                    if ui.link("Manufacturer Guide").clicked() {
+                        self.radio_help_window_model = self.config.radio.model.clone();
+                        self.radio_guide_document = RadioHelpDocument::Manufacturer;
+                        self.radio_guide_window_open = true;
+                    }
+                });
+            });
+            ui.add_space(4.0);
+        }
+
+        egui::Grid::new("device_audio_serial_grid")
+            .num_columns(2)
+            .spacing([10.0, 6.0])
+            .show(ui, |ui| {
                 ui.label("Audio input");
                 ui.horizontal(|ui| {
                     egui::ComboBox::from_id_salt("audio_input_device")
