@@ -24,7 +24,7 @@ Rust desktop app.
 <p align="center">
   <img src="assets/main-screen.png" alt="QSONaut radio-console interface with station identity redacted">
   <br>
-  <em>QSONaut radio console on Linux/WSL. The station identity in the overview banner is redacted.</em>
+  <em>QSONaut radio console on Linux/WSL. The station identity is redacted and visible callsign suffixes are blurred.</em>
 </p>
 
 <p align="center">
