@@ -539,6 +539,33 @@ impl QsonautGuiApp {
         }
 
         ui.add_space(8.0);
+        let pota_changed = ui
+            .checkbox(&mut self.pota_enabled, "🌲 Query live POTA activator spots")
+            .on_hover_text("Opt-in: periodically reads the public POTA activator spot feed")
+            .changed();
+        if pota_changed {
+            self.pota_last_error = None;
+            if self.pota_enabled {
+                self.pota_last_lookup = Instant::now() - Duration::from_secs(30);
+                info!("POTA activator spot querying enabled");
+            } else {
+                self.pota_lookup_rx = None;
+                info!("POTA activator spot querying disabled");
+            }
+            self.profile_dirty = true;
+            self.persist_profile("POTA querying preference saved to");
+        }
+        ui.label(
+            RichText::new(if self.pota_enabled {
+                "POTA data is queried about every 30 seconds and shown from the bottom toolbar."
+            } else {
+                "POTA querying is disabled; no POTA data will be requested."
+            })
+            .small()
+            .color(Color32::GRAY),
+        );
+
+        ui.add_space(8.0);
         ui.label(RichText::new("Submission rules").strong());
         ui.label(
             RichText::new(
@@ -745,11 +772,15 @@ impl QsonautGuiApp {
         );
         let previous_scale = self.gui_scale;
         egui::ComboBox::from_id_salt("gui_scale")
-            .selected_text(format!("UI {:.0}%", gui_scale_percent(self.gui_scale)))
+            .selected_text(format!(
+                "UI {:.0}%",
+                platform_gui_scale_percent(self.gui_scale)
+            ))
             .width(90.0)
             .show_ui(ui, |ui| {
-                for percent in [75_u32, 85, 100, 110, 125] {
-                    let scale = gui_scale_from_percent(percent);
+                let percentages = [50_u32, 60, 75, 85, 100, 110, 125, 150, 175];
+                for percent in percentages {
+                    let scale = platform_gui_scale_from_percent(percent);
                     ui.selectable_value(&mut self.gui_scale, scale, format!("{percent}%"));
                 }
             });

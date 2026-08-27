@@ -6,7 +6,7 @@ use super::decode::{
 };
 use super::request_gui_repaint;
 use hound::{SampleFormat, WavSpec, WavWriter};
-use qsonaut_audio::resample::Decimator;
+use qsonaut_audio::{resample::Decimator, CANONICAL_CHANNELS, CANONICAL_SAMPLE_RATE_HZ};
 use serde_json::json;
 use std::fs::File;
 use std::io::BufWriter;
@@ -97,6 +97,16 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
     display_tuning: Arc<Mutex<DisplayTuning>>,
 ) -> std::thread::JoinHandle<()> {
     thread::spawn(move || {
+        {
+            let mut shared = state.lock().expect("ui state lock poisoned");
+            shared.audio_device_sample_rate_hz = None;
+            shared.audio_device_channels = None;
+            shared.audio_device_sample_format = None;
+            shared.audio_input_fallback_attempts.clear();
+            shared.audio_monitor_adjustment_ppm = 0;
+            shared.audio_monitor_buffered_ms = 0;
+            shared.audio_monitor_underruns = 0;
+        }
         if !enabled {
             info!("Audio worker disabled by configuration");
             let mut s = state.lock().expect("ui state lock poisoned");
@@ -104,26 +114,68 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
             return;
         }
 
+        let configured_sample_rate_hz = sample_rate_hz;
+        let sample_rate_hz = CANONICAL_SAMPLE_RATE_HZ;
+        if configured_sample_rate_hz != sample_rate_hz || u16::from(channels) != CANONICAL_CHANNELS
+        {
+            info!(
+                configured_sample_rate_hz,
+                configured_channels = channels,
+                canonical_sample_rate_hz = sample_rate_hz,
+                canonical_channels = CANONICAL_CHANNELS,
+                "Normalizing configured audio processing format"
+            );
+        }
         let audio_service = AudioService::new(preferred_device, true);
-        let mut stream = match audio_service.open_stream(sample_rate_hz, channels as u16) {
+        let mut stream = match audio_service.open_stream(sample_rate_hz, CANONICAL_CHANNELS) {
             Ok(stream) => stream,
             Err(err) => {
-                tracing::error!(sample_rate_hz, channels, error = %err, "Audio input stream failed to open");
+                tracing::error!(sample_rate_hz, channels = CANONICAL_CHANNELS, error = %err, "Audio input stream failed to open");
                 let mut s = state.lock().expect("ui state lock poisoned");
                 s.audio_spectrum_status = format!("NO INPUT ({err})");
                 return;
             }
         };
+        let device_sample_rate_hz = stream.device_sample_rate_hz();
+        let device_channels = stream.device_channels();
+        let device_sample_format = format!("{:?}", stream.device_sample_format());
+        let resampling_input = device_sample_rate_hz != stream.output_sample_rate_hz();
         info!(
-            sample_rate_hz,
-            channels, monitor_enabled, "Audio input worker started"
+            canonical_sample_rate_hz = sample_rate_hz,
+            device_sample_rate_hz,
+            device_channels = stream.device_channels(),
+            device_sample_format = ?stream.device_sample_format(),
+            resampling_input,
+            monitor_enabled,
+            "Audio input worker started"
         );
+        for attempt in stream.fallback_attempts() {
+            warn!(attempt, "Audio input configuration fallback");
+        }
+        {
+            let mut shared = state.lock().expect("ui state lock poisoned");
+            shared.audio_device_sample_rate_hz = Some(device_sample_rate_hz);
+            shared.audio_device_channels = Some(device_channels);
+            shared.audio_device_sample_format = Some(device_sample_format);
+            shared.audio_input_fallback_attempts = stream.fallback_attempts().to_vec();
+        }
         let (monitor, monitor_status) = if monitor_enabled {
             match qsonaut_audio::AudioMonitor::open(
                 sample_rate_hz,
                 monitor_output_device.as_deref(),
             ) {
-                Ok(monitor) => (Some(monitor), " · MONITOR ACTIVE".to_string()),
+                Ok(monitor) => {
+                    info!(
+                        output_sample_rate_hz = monitor.output_sample_rate_hz(),
+                        output_channels = monitor.output_channels(),
+                        output_sample_format = ?monitor.output_sample_format(),
+                        "Audio monitor output opened"
+                    );
+                    for attempt in monitor.fallback_attempts() {
+                        warn!(attempt, "Audio monitor configuration fallback");
+                    }
+                    (Some(monitor), " · MONITOR ACTIVE".to_string())
+                }
                 Err(err) => {
                     let message = format!(" · MONITOR ERROR ({err})");
                     tracing::error!(error = %err, "failed to start RX audio monitor");
@@ -207,6 +259,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut last_repaint = Instant::now() - repaint_interval;
         let mut monitor_runtime_error: Option<String> = None;
         let mut last_audio_read_error: Option<String> = None;
+        let mut last_monitor_clock_log = Instant::now() - Duration::from_secs(30);
 
         while !stop.load(Ordering::Relaxed) {
             let chunk_samples = {
@@ -218,8 +271,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 let interval_ms = effective_visual_profile(&t, &mode).0;
                 ((sample_rate_hz as u64 * interval_ms / 1_000) as usize).max(256)
             };
-            let chunk_bytes = (chunk_samples * 2).max(512);
-            match stream.read_chunk_until_stopped(chunk_bytes, &stop) {
+            match stream.read_frames_f32_until_stopped(chunk_samples, &stop) {
                 Ok(Some(samples)) => {
                     if last_audio_read_error.take().is_some() {
                         info!("Audio input stream recovered");
@@ -228,10 +280,11 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                         let shared = state.lock().expect("ui state lock poisoned");
                         shared.workspace_mode != WorkspaceMode::Cw || !can_decode
                     };
+                    let mut monitor_clock_status = String::new();
                     if let Some(monitor) = &monitor {
                         monitor.set_volume(f32::from_bits(monitor_volume.load(Ordering::Relaxed)));
                         if monitor_raw_audio {
-                            monitor.push(&samples);
+                            monitor.push_f32(&samples);
                         }
                         let dropped_chunks = monitor.take_dropped_chunks();
                         if dropped_chunks > 0 {
@@ -240,15 +293,39 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 "RX audio monitor dropped queued chunks"
                             );
                         }
+                        let underruns = monitor.take_underruns();
+                        if underruns > 0 {
+                            tracing::warn!(
+                                underruns,
+                                buffered_ms = monitor.buffered_latency_ms(),
+                                adjustment_ppm = monitor.clock_adjustment_ppm(),
+                                "RX audio monitor clock buffer underrun; rebuffering"
+                            );
+                        }
+                        let adjustment_ppm = monitor.clock_adjustment_ppm();
+                        let buffered_ms = monitor.buffered_latency_ms();
+                        {
+                            let mut shared = state.lock().expect("ui state lock poisoned");
+                            shared.audio_monitor_adjustment_ppm = adjustment_ppm;
+                            shared.audio_monitor_buffered_ms = buffered_ms;
+                            shared.audio_monitor_underruns =
+                                shared.audio_monitor_underruns.saturating_add(underruns);
+                        }
+                        monitor_clock_status =
+                            format!(" · SYNC {adjustment_ppm:+} ppm · {buffered_ms} ms");
+                        if last_monitor_clock_log.elapsed() >= Duration::from_secs(30) {
+                            info!(
+                                adjustment_ppm,
+                                buffered_ms, "RX audio monitor clock synchronization"
+                            );
+                            last_monitor_clock_log = Instant::now();
+                        }
                         if let Some(error) = monitor.take_error() {
                             tracing::error!(error = %error, "RX audio monitor failed during playback");
                             monitor_runtime_error = Some(error);
                         }
                     }
-                    let samples_f32: Vec<f32> = samples
-                        .iter()
-                        .map(|&s| s as f32 / i16::MAX as f32)
-                        .collect();
+                    let samples_f32 = samples;
                     let rms = if samples_f32.is_empty() {
                         0.0
                     } else {
@@ -299,7 +376,16 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             s.audio_spectrum_status = monitor_runtime_error
                                 .as_deref()
                                 .map(|error| format!("LIVE RX · MONITOR ERROR ({error})"))
-                                .unwrap_or_else(|| format!("LIVE RX{monitor_status}"));
+                                .unwrap_or_else(|| {
+                                    if resampling_input {
+                                        format!(
+                                            "LIVE RX · RESAMPLED {} → {} Hz{monitor_status}{monitor_clock_status}",
+                                            device_sample_rate_hz, sample_rate_hz
+                                        )
+                                    } else {
+                                        format!("LIVE RX{monitor_status}{monitor_clock_status}")
+                                    }
+                                });
                         }
                         s.audio_level_dbfs = Some(20.0 * rms.max(1e-9).log10());
                         s.audio_clip_percent = clip_percent;
@@ -967,13 +1053,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             if let Some(decoder) = cw_stream_decoder.as_mut() {
                                 let (events, channel_audio) = decoder.push_samples_with_audio(&ds);
                                 if let Some(monitor) = &monitor {
-                                    let channel_audio = channel_audio
-                                        .iter()
-                                        .map(|sample| {
-                                            (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
-                                        })
-                                        .collect::<Vec<_>>();
-                                    monitor.push_at_sample_rate(&channel_audio, 12_000);
+                                    monitor.push_f32_at_sample_rate(&channel_audio, 12_000);
                                 }
                                 for event in events {
                                     let text = match event {

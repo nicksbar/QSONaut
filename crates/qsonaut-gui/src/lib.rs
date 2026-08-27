@@ -139,7 +139,8 @@ use tx_audio::{
 use ui_format::{format_signal_report, ft8_period_progress, qso_stage_label, utc_hhmmss_millis};
 use ui_widgets::{
     draw_ai_icon, draw_radio_about_icon, draw_speaker_icon, format_swr_display,
-    native_radio_profile, radio_supports_band, styled_selection_button, swr_chart_value,
+    native_radio_profile, radio_baud_rates, radio_supports_band, styled_selection_button,
+    swr_chart_value,
 };
 use visuals::{
     audio_cursor_level, build_scope_waterfall_image, downsample_bins, fft_buffer_to_display_bins,
@@ -166,7 +167,7 @@ const GUI_SCALE_PROFILE_VERSION: u32 = 8;
 const AUDIO_MONITOR_PROFILE_VERSION: u32 = 12;
 const GUI_SCALE_BASE: f32 = 1.2;
 const GUI_SCALE_MAX: f32 = 2.0;
-const GUI_SCALE_MIN: f32 = 0.9;
+const GUI_SCALE_MIN: f32 = 0.45;
 const QSO_LOG_FILE: &str = "log.toml";
 const QSO_ADIF_FILE: &str = "log.adi";
 const HAMDB_CACHE_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
@@ -236,12 +237,46 @@ fn default_true() -> bool {
     true
 }
 
-fn gui_scale_from_percent(percent: u32) -> f32 {
-    (GUI_SCALE_BASE * percent as f32 / 100.0).clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
+#[cfg(target_os = "windows")]
+const PLATFORM_GUI_SCALE_BASE: f32 = GUI_SCALE_BASE * 0.75;
+#[cfg(not(target_os = "windows"))]
+const PLATFORM_GUI_SCALE_BASE: f32 = GUI_SCALE_BASE;
+
+fn platform_gui_scale_from_percent(percent: u32) -> f32 {
+    (PLATFORM_GUI_SCALE_BASE * percent as f32 / 100.0).clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
 }
 
-fn gui_scale_percent(scale: f32) -> f32 {
-    scale / GUI_SCALE_BASE * 100.0
+fn platform_gui_scale_percent(scale: f32) -> f32 {
+    scale / PLATFORM_GUI_SCALE_BASE * 100.0
+}
+
+const OS_DPI_ADJUSTMENT_MIN: f32 = 0.75;
+const OS_DPI_ADJUSTMENT_MAX: f32 = 1.50;
+
+fn os_dpi_adjustment() -> (f32, &'static str, &'static str) {
+    #[cfg(target_os = "windows")]
+    const OS_NAME: &str = "Windows";
+    #[cfg(target_os = "windows")]
+    const ENV_NAME: &str = "QSONAUT_WINDOWS_DPI_ADJUSTMENT";
+    #[cfg(target_os = "linux")]
+    const OS_NAME: &str = "Linux";
+    #[cfg(target_os = "linux")]
+    const ENV_NAME: &str = "QSONAUT_LINUX_DPI_ADJUSTMENT";
+    #[cfg(target_os = "macos")]
+    const OS_NAME: &str = "macOS";
+    #[cfg(target_os = "macos")]
+    const ENV_NAME: &str = "QSONAUT_MACOS_DPI_ADJUSTMENT";
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    const OS_NAME: &str = "Other";
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    const ENV_NAME: &str = "QSONAUT_DPI_ADJUSTMENT";
+
+    let adjustment = std::env::var(ENV_NAME)
+        .ok()
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .unwrap_or(1.0)
+        .clamp(OS_DPI_ADJUSTMENT_MIN, OS_DPI_ADJUSTMENT_MAX);
+    (adjustment, OS_NAME, ENV_NAME)
 }
 
 fn parse_automation_hook_detail(detail: &str) -> BTreeMap<String, String> {
@@ -961,6 +996,13 @@ struct GuiState {
     radio_scope_reference_tenths_db: i16,
     radio_scope_view: RadioScopeView,
     audio_spectrum_status: String,
+    audio_device_sample_rate_hz: Option<u32>,
+    audio_device_channels: Option<u16>,
+    audio_device_sample_format: Option<String>,
+    audio_input_fallback_attempts: Vec<String>,
+    audio_monitor_adjustment_ppm: i32,
+    audio_monitor_buffered_ms: u32,
+    audio_monitor_underruns: u64,
     audio_waterfall_rows: VecDeque<Vec<u8>>,
     audio_waterfall_revision: u64,
     audio_level_dbfs: Option<f32>,
@@ -1065,6 +1107,13 @@ impl Default for GuiState {
             radio_scope_reference_tenths_db: 0,
             radio_scope_view: RadioScopeView::Narrow,
             audio_spectrum_status: "INIT".to_string(),
+            audio_device_sample_rate_hz: None,
+            audio_device_channels: None,
+            audio_device_sample_format: None,
+            audio_input_fallback_attempts: Vec::new(),
+            audio_monitor_adjustment_ppm: 0,
+            audio_monitor_buffered_ms: 0,
+            audio_monitor_underruns: 0,
             audio_waterfall_rows: VecDeque::with_capacity(AUDIO_WF_HEIGHT),
             audio_waterfall_revision: 0,
             audio_level_dbfs: None,
@@ -1555,11 +1604,16 @@ struct QsonautGuiApp {
     swr_sweep_abort: Arc<AtomicBool>,
     audio_worker_stop: Arc<AtomicBool>,
     radio_init_rx: Option<mpsc::Receiver<Option<ConfiguredRadio>>>,
+    cat_test_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    cat_test_status: Option<Result<String, String>>,
     hamdb_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
     hamdb_profile_lookup_rx: Option<mpsc::Receiver<Option<HamDbCacheEntry>>>,
     pota_spots: Vec<PotaSpot>,
-    pota_lookup_rx: Option<mpsc::Receiver<Vec<PotaSpot>>>,
+    pota_lookup_rx: Option<mpsc::Receiver<Result<Vec<PotaSpot>, String>>>,
     pota_last_lookup: Instant,
+    pota_history: VecDeque<(Instant, usize)>,
+    pota_last_updated: Option<Instant>,
+    pota_last_error: Option<String>,
     radio_init_attempted: bool,
     radio_worker_handle: Option<std::thread::JoinHandle<()>>,
     parked_radio_sessions: HashMap<String, RadioSession>,
@@ -1649,6 +1703,7 @@ struct QsonautGuiApp {
     ft8_pending_manual_reply: Option<PendingManualFt8Reply>,
     ft8_tx_abort: Arc<AtomicBool>,
     ft8_tx_active: Arc<AtomicBool>,
+    ptt_allowed: Arc<AtomicBool>,
     ft8_tx_event_tx: mpsc::Sender<Ft8TxEvent>,
     ft8_tx_event_rx: mpsc::Receiver<Ft8TxEvent>,
     ft8_last_tx_was_cq: bool,
@@ -1768,6 +1823,7 @@ struct QsonautGuiApp {
     device_restart_required: bool,
     audio_restart_required: bool,
     gui_scale: f32,
+    os_dpi_adjustment: f32,
     graphics_active: GraphicsPreferences,
     graphics_pending: GraphicsPreferences,
     active_graphics_adapter: Option<GraphicsAdapterInfo>,
@@ -1777,6 +1833,7 @@ struct QsonautGuiApp {
     acceleration_report: AccelerationReport,
     acceleration_probe: Option<mpsc::Receiver<AccelerationReport>>,
     psk_reporter_enabled: bool,
+    pota_enabled: bool,
     psk_batch_interval_secs: u64,
     psk_repeat_cache_secs: u64,
     psk_max_pending: usize,
@@ -1793,9 +1850,10 @@ struct QsonautGuiApp {
     window_geometry: Option<WindowGeometry>,
 }
 
-/// Runtime resources owned by an inactive radio tab. The active tab continues
-/// to use the legacy fields above so the rest of the UI can remain focused on
-/// the selected radio; parked sessions keep their workers and telemetry alive.
+// Runtime resources owned by a radio tab. The selected tab controls the UI,
+// while every tab keeps its workers and telemetry alive. Inactive tabs are
+// prevented from asserting PTT unless the unattended automation unlock is in
+// effect.
 struct RadioSession {
     profile: OperatorProfile,
     view_state: TabViewState,
@@ -1810,6 +1868,7 @@ struct RadioSession {
     monitor_volume: Arc<AtomicU32>,
     ft8_tx_active: Arc<AtomicBool>,
     digital_tx_active: Arc<AtomicBool>,
+    ptt_allowed: Arc<AtomicBool>,
     init_rx: Option<mpsc::Receiver<Option<ConfiguredRadio>>>,
     init_attempted: bool,
     worker_handle: Option<std::thread::JoinHandle<()>>,
@@ -1933,9 +1992,8 @@ impl QsonautGuiApp {
 
         let (command_tx, radio_worker_handle) = (None, None);
 
-        // Every saved profile owns a complete runtime. Inactive tabs keep
-        // their radio, audio, decode state, and controls alive; selecting a tab
-        // only swaps which runtime the UI presents.
+        // Every saved profile owns a live runtime. Inactive tabs continue
+        // receiving and decoding, but their PTT path is disabled.
         let mut parked_radio_sessions = HashMap::new();
         for profile_name in &available_profiles {
             if profile_name == &selected_profile_name {
@@ -1984,6 +2042,7 @@ impl QsonautGuiApp {
             ));
             let session_ft8_tx_active = Arc::new(AtomicBool::new(false));
             let session_digital_tx_active = Arc::new(AtomicBool::new(false));
+            let session_ptt_allowed = Arc::new(AtomicBool::new(false));
             let session_audio_worker_handle = Some(spawn_audio_spectrum_worker(
                 session_state.clone(),
                 session_audio_worker_stop.clone(),
@@ -2024,6 +2083,7 @@ impl QsonautGuiApp {
                     monitor_volume: session_monitor_volume,
                     ft8_tx_active: session_ft8_tx_active,
                     digital_tx_active: session_digital_tx_active,
+                    ptt_allowed: session_ptt_allowed,
                     init_rx,
                     init_attempted: false,
                     worker_handle: None,
@@ -2033,6 +2093,7 @@ impl QsonautGuiApp {
         }
 
         let ft8_tx_active = Arc::new(AtomicBool::new(false));
+        let ptt_allowed = Arc::new(AtomicBool::new(true));
         let digital_tx_active = Arc::new(AtomicBool::new(false));
         let monitor_volume = Arc::new(AtomicU32::new(config.audio.monitor_volume.to_bits()));
         let audio_worker_handle = Some(spawn_audio_spectrum_worker(
@@ -2105,6 +2166,7 @@ impl QsonautGuiApp {
         let mut gui_scale = default_gui_scale();
         let mut compute_preference = ComputePreference::Auto;
         let mut psk_reporter_enabled = false;
+        let mut pota_enabled = true;
         let mut psk_batch_interval_secs = default_psk_batch_interval_secs();
         let mut psk_repeat_cache_secs = default_psk_repeat_cache_secs();
         let mut psk_max_pending = default_psk_max_pending();
@@ -2185,6 +2247,7 @@ impl QsonautGuiApp {
             };
             compute_preference = p.compute_preference;
             psk_reporter_enabled = p.psk_reporter_enabled;
+            pota_enabled = p.pota_enabled;
             psk_batch_interval_secs = p.psk_batch_interval_secs.clamp(60, 3_600);
             psk_repeat_cache_secs = p.psk_repeat_cache_secs.clamp(60, 3_600);
             psk_max_pending = p.psk_max_pending.clamp(1, 2_048);
@@ -2311,6 +2374,7 @@ impl QsonautGuiApp {
                 gui_scale,
                 compute_preference,
                 psk_reporter_enabled,
+                pota_enabled,
                 psk_batch_interval_secs,
                 psk_repeat_cache_secs,
                 psk_max_pending,
@@ -2380,9 +2444,16 @@ impl QsonautGuiApp {
 
         let acceleration_report = AccelerationReport::pending(compute_preference);
         let acceleration_probe = Some(spawn_acceleration_probe(compute_preference));
+        let (os_dpi_adjustment, os_name, os_dpi_env) = os_dpi_adjustment();
+        info!(
+            os = os_name,
+            adjustment = os_dpi_adjustment,
+            env = os_dpi_env,
+            "Using OS DPI adjustment"
+        );
         // Applied before the first paint so the window is never laid out at one
         // scale and immediately re-laid out at another.
-        ctx.set_zoom_factor(gui_scale);
+        ctx.set_zoom_factor(gui_scale * os_dpi_adjustment);
         let psk_reporter = start_psk_reporter(
             psk_reporter_enabled,
             &station_callsign,
@@ -2438,11 +2509,16 @@ impl QsonautGuiApp {
             swr_sweep_abort,
             audio_worker_stop,
             radio_init_rx,
+            cat_test_rx: None,
+            cat_test_status: None,
             hamdb_lookup_rx: None,
             hamdb_profile_lookup_rx: None,
             pota_spots: Vec::new(),
             pota_lookup_rx: None,
             pota_last_lookup: Instant::now() - Duration::from_secs(60),
+            pota_history: VecDeque::new(),
+            pota_last_updated: None,
+            pota_last_error: None,
             logo_clicks: VecDeque::new(),
             logo_spin_until: None,
             radio_init_attempted: false,
@@ -2531,6 +2607,7 @@ impl QsonautGuiApp {
             ft8_pending_manual_reply: None,
             ft8_tx_abort: Arc::new(AtomicBool::new(false)),
             ft8_tx_active,
+            ptt_allowed,
             ft8_tx_event_tx,
             ft8_tx_event_rx,
             ft8_last_tx_was_cq: false,
@@ -2650,6 +2727,7 @@ impl QsonautGuiApp {
             device_restart_required: false,
             audio_restart_required: false,
             gui_scale,
+            os_dpi_adjustment,
             graphics_active: graphics_preferences.clone(),
             graphics_pending: graphics_preferences,
             active_graphics_adapter,
@@ -2659,6 +2737,7 @@ impl QsonautGuiApp {
             acceleration_report,
             acceleration_probe,
             psk_reporter_enabled,
+            pota_enabled,
             psk_batch_interval_secs,
             psk_repeat_cache_secs,
             psk_max_pending,
@@ -2788,15 +2867,17 @@ impl QsonautGuiApp {
             monitor_volume: self.monitor_volume.clone(),
             ft8_tx_active: self.ft8_tx_active.clone(),
             digital_tx_active: self.digital_tx_active.clone(),
+            ptt_allowed: self.ptt_allowed.clone(),
             init_rx: self.radio_init_rx.take(),
             init_attempted: self.radio_init_attempted,
             worker_handle: self.radio_worker_handle.take(),
             audio_worker_handle: self.audio_worker_handle.take(),
         };
+        session.ptt_allowed.store(false, Ordering::Release);
         if let Some(previous) = self.parked_radio_sessions.insert(name, session) {
             stop_radio_session(previous);
         }
-        info!(profile = %self.selected_profile_name, "Profile runtime moved to background without stopping workers");
+        info!(profile = %self.selected_profile_name, "Profile runtime moved to background with PTT disabled");
     }
 
     fn start_active_radio_session(&mut self) {
@@ -2829,70 +2910,34 @@ impl QsonautGuiApp {
     fn pump_parked_radio_sessions(&mut self) {
         let repaint_ctx = self.repaint_ctx.clone();
         for (name, session) in &mut self.parked_radio_sessions {
-            let audio_finished = session
+            if session
                 .audio_worker_handle
                 .as_ref()
-                .is_some_and(std::thread::JoinHandle::is_finished);
-            if audio_finished {
+                .is_some_and(std::thread::JoinHandle::is_finished)
+            {
                 if let Some(handle) = session.audio_worker_handle.take() {
                     let _ = handle.join();
                 }
-                warn!(profile = name, "Profile audio worker stopped");
-                if session.audio_config.enabled
-                    && !session.audio_worker_stop.load(Ordering::Relaxed)
-                {
-                    session.worker_stop.store(true, Ordering::Relaxed);
-                    if let Some(tx) = &session.command_tx {
-                        let _ = tx.send(GuiCommand::Quit);
-                    }
-                    if let Some(handle) = session.worker_handle.take() {
-                        let _ = handle.join();
-                    }
-                    session.command_tx = None;
-                    session.init_rx = None;
-                    session.init_attempted = true;
-                    if let Ok(mut state) = session.state.lock() {
-                        state.radio_waterfall_status =
-                            "SESSION STOPPED (audio worker failed)".to_string();
-                    }
-                    warn!(
-                        profile = name,
-                        "Profile runtime stopped after audio failure"
-                    );
-                    continue;
+                if let Ok(mut state) = session.state.lock() {
+                    state.audio_spectrum_status = "STOPPED (audio worker failed)".to_string();
                 }
+                warn!(profile = name, "Profile audio worker stopped");
             }
-            let radio_finished = session
+            if session
                 .worker_handle
                 .as_ref()
-                .is_some_and(std::thread::JoinHandle::is_finished);
-            if radio_finished {
+                .is_some_and(std::thread::JoinHandle::is_finished)
+            {
                 if let Some(handle) = session.worker_handle.take() {
                     let _ = handle.join();
                 }
                 session.command_tx = None;
-                warn!(profile = name, "Profile radio worker stopped");
-                if session.config.enabled && !session.worker_stop.load(Ordering::Relaxed) {
-                    session.audio_worker_stop.store(true, Ordering::Relaxed);
-                    if let Some(handle) = session.audio_worker_handle.take() {
-                        let _ = handle.join();
-                    }
-                    if let Ok(mut state) = session.state.lock() {
-                        state.radio_waterfall_status =
-                            "SESSION STOPPED (radio worker failed)".to_string();
-                    }
-                    warn!(
-                        profile = name,
-                        "Profile runtime stopped after radio failure"
-                    );
-                    continue;
+                if let Ok(mut state) = session.state.lock() {
+                    state.radio_waterfall_status = "STOPPED (radio worker failed)".to_string();
                 }
+                warn!(profile = name, "Profile radio worker stopped");
             }
-            if session.init_attempted {
-                continue;
-            }
-            if !session.config.enabled {
-                session.init_attempted = true;
+            if session.init_attempted || !session.config.enabled {
                 continue;
             }
             let Some(rx) = &session.init_rx else { continue };
@@ -2900,7 +2945,7 @@ impl QsonautGuiApp {
                 Ok(Some(radio)) => {
                     session.init_attempted = true;
                     let (tx, command_rx) = mpsc::channel::<GuiCommand>();
-                    let handle = workers::radio::spawn_radio_worker(
+                    session.worker_handle = Some(workers::radio::spawn_radio_worker(
                         radio,
                         session.state.clone(),
                         session.worker_stop.clone(),
@@ -2908,32 +2953,20 @@ impl QsonautGuiApp {
                         session.display_tuning.clone(),
                         command_rx,
                         repaint_ctx.clone(),
-                    );
+                        session.ptt_allowed.clone(),
+                    ));
                     session.command_tx = Some(tx);
-                    session.worker_handle = Some(handle);
-                    info!(profile = name, "Started parked radio worker");
+                    info!(
+                        profile = name,
+                        "Started inactive radio worker with PTT disabled"
+                    );
                 }
                 Ok(None) | Err(mpsc::TryRecvError::Disconnected) => {
                     session.init_attempted = true;
                     session.init_rx = None;
-                    session.audio_worker_stop.store(true, Ordering::Relaxed);
-                    if let Some(handle) = session.audio_worker_handle.take() {
-                        let _ = handle.join();
-                    }
-                    if let Ok(mut state) = session.state.lock() {
-                        state.radio_waterfall_status =
-                            "UNAVAILABLE (connection failed)".to_string();
-                        state.last_error = Some(format!(
-                            "Failed to initialize radio backend '{}' (model '{}', endpoint '{}', serial port '{}')",
-                            session.config.backend,
-                            session.config.model,
-                            session.config.endpoint,
-                            session.config.serial_port.as_deref().unwrap_or("auto"),
-                        ));
-                    }
                     warn!(
                         profile = name,
-                        "Profile radio initialization failed; session stopped"
+                        "Inactive profile radio initialization failed"
                     );
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
@@ -3238,93 +3271,50 @@ impl QsonautGuiApp {
         }
     }
 
-    fn set_tab_audio_running(&mut self, name: &str, running: bool) {
-        if name == self.selected_profile_name {
-            self.config.audio.enabled = running;
-            self.profile_dirty = true;
-            self.persist_profile(if running {
-                "Audio worker started for"
-            } else {
-                "Audio worker stopped for"
-            });
-            self.restart_audio();
-            return;
-        }
-        let Some(session) = self.parked_radio_sessions.get_mut(name) else {
-            return;
-        };
-        session.audio_config.enabled = running;
-        session.profile.audio_enabled = running;
-        if !running {
-            session.audio_worker_stop.store(true, Ordering::Relaxed);
-            if let Some(handle) = session.audio_worker_handle.take() {
-                let _ = handle.join();
-            }
-            if let Ok(mut state) = session.state.lock() {
-                state.audio_spectrum_status = "DISABLED".to_string();
-            }
-        } else if session.audio_worker_handle.is_none() {
-            session.audio_worker_stop = Arc::new(AtomicBool::new(false));
-            session.audio_worker_handle = Some(spawn_audio_spectrum_worker(
-                session.state.clone(),
-                session.audio_worker_stop.clone(),
-                session.ft8_tx_active.clone(),
-                session.digital_tx_active.clone(),
-                session.audio_config.enabled,
-                session.audio_config.sample_rate_hz,
-                session.audio_config.channels,
-                session.audio_config.input_device.clone(),
-                session.audio_config.monitor_enabled,
-                session
-                    .audio_config
-                    .monitor_output_device
-                    .clone()
-                    .or_else(|| session.audio_config.output_device.clone()),
-                session.monitor_volume.clone(),
-                self.repaint_ctx.clone(),
-                session.display_tuning.clone(),
-            ));
-        }
-        let _ = save_operator_profile_named(name, &session.profile);
-        info!(
-            profile = name,
-            running, "Parked profile audio worker state changed"
-        );
-    }
-
-    fn set_tab_radio_running(&mut self, name: &str, running: bool) {
+    fn set_tab_workers_running(&mut self, name: &str, running: bool) {
         if name == self.selected_profile_name {
             self.config.radio.enabled = running;
+            self.config.audio.enabled = running;
+            self.ptt_allowed.store(running, Ordering::Release);
             self.profile_dirty = true;
             self.persist_profile(if running {
-                "Radio worker started for"
+                "Radio and audio workers started for"
             } else {
-                "Radio worker stopped for"
+                "Radio and audio workers stopped for"
             });
-            self.reconnect_radio();
+            if running {
+                self.reconnect_radio();
+                self.restart_audio();
+            } else {
+                self.radio_worker_stop.store(true, Ordering::Relaxed);
+                self.audio_worker_stop.store(true, Ordering::Relaxed);
+                if let Some(tx) = &self.command_tx {
+                    let _ = tx.send(GuiCommand::Quit);
+                }
+                if let Some(handle) = self.radio_worker_handle.take() {
+                    let _ = handle.join();
+                }
+                if let Some(handle) = self.audio_worker_handle.take() {
+                    let _ = handle.join();
+                }
+                self.command_tx = None;
+                if let Ok(mut state) = self.state.lock() {
+                    state.radio_waterfall_status = "STOPPED (by operator)".to_string();
+                    state.audio_spectrum_status = "STOPPED (by operator)".to_string();
+                }
+            }
             return;
         }
         let Some(session) = self.parked_radio_sessions.get_mut(name) else {
             return;
         };
         session.config.enabled = running;
+        session.audio_config.enabled = running;
         session.profile.radio_enabled = running;
-        if !running {
-            if let Some(tx) = &session.command_tx {
-                let _ = tx.send(GuiCommand::Quit);
-            }
-            session.worker_stop.store(true, Ordering::Relaxed);
-            if let Some(handle) = session.worker_handle.take() {
-                let _ = handle.join();
-            }
-            session.command_tx = None;
-            session.init_rx = None;
-            session.init_attempted = true;
-            if let Ok(mut state) = session.state.lock() {
-                state.radio_waterfall_status = "UNAVAILABLE (radio stopped)".to_string();
-            }
-        } else if session.command_tx.is_none() && session.worker_handle.is_none() {
+        session.profile.audio_enabled = running;
+        if running {
             session.worker_stop = Arc::new(AtomicBool::new(false));
+            session.audio_worker_stop = Arc::new(AtomicBool::new(false));
             let port = session.config.serial_port.clone().unwrap_or_default();
             session.init_rx = Some(spawn_radio_init(
                 session.config.backend.clone(),
@@ -3336,16 +3326,43 @@ impl QsonautGuiApp {
                 session.config.civ_address,
             ));
             session.init_attempted = false;
-            if let Ok(mut state) = session.state.lock() {
-                state.radio_waterfall_status = "CONNECTING…".to_string();
-                state.last_error = None;
+            if session.audio_worker_handle.is_none() {
+                session.audio_worker_handle = Some(spawn_audio_spectrum_worker(
+                    session.state.clone(),
+                    session.audio_worker_stop.clone(),
+                    session.ft8_tx_active.clone(),
+                    session.digital_tx_active.clone(),
+                    true,
+                    session.audio_config.sample_rate_hz,
+                    session.audio_config.channels,
+                    session.audio_config.input_device.clone(),
+                    session.audio_config.monitor_enabled,
+                    session
+                        .audio_config
+                        .monitor_output_device
+                        .clone()
+                        .or_else(|| session.audio_config.output_device.clone()),
+                    session.monitor_volume.clone(),
+                    self.repaint_ctx.clone(),
+                    session.display_tuning.clone(),
+                ));
             }
+        } else {
+            session.worker_stop.store(true, Ordering::Relaxed);
+            session.audio_worker_stop.store(true, Ordering::Relaxed);
+            if let Some(tx) = &session.command_tx {
+                let _ = tx.send(GuiCommand::Quit);
+            }
+            if let Some(handle) = session.worker_handle.take() {
+                let _ = handle.join();
+            }
+            if let Some(handle) = session.audio_worker_handle.take() {
+                let _ = handle.join();
+            }
+            session.command_tx = None;
+            session.init_rx = None;
         }
         let _ = save_operator_profile_named(name, &session.profile);
-        info!(
-            profile = name,
-            running, "Parked profile radio worker state changed"
-        );
     }
 
     fn switch_radio_tab(&mut self, name: &str) {
@@ -3367,6 +3384,7 @@ impl QsonautGuiApp {
         }
         self.park_active_radio_session();
         self.selected_profile_name = name.to_string();
+        self.new_profile_name = name.to_string();
         self.config.radio = self.radio_config_for_profile(&profile);
 
         if let Some(session) = self.parked_radio_sessions.remove(name) {
@@ -3382,11 +3400,13 @@ impl QsonautGuiApp {
             self.display_tuning = session.display_tuning;
             self.monitor_volume = session.monitor_volume;
             self.ft8_tx_active = session.ft8_tx_active;
+            self.ptt_allowed = session.ptt_allowed;
             self.digital_tx_active = session.digital_tx_active;
             self.radio_init_rx = session.init_rx;
             self.radio_init_attempted = session.init_attempted;
             self.radio_worker_handle = session.worker_handle;
             self.audio_worker_handle = session.audio_worker_handle;
+            self.ptt_allowed.store(true, Ordering::Release);
             self.apply_tab_preferences(&session_profile);
             self.restore_tab_view_state(session_view);
             info!(
@@ -3407,6 +3427,7 @@ impl QsonautGuiApp {
             self.monitor_volume =
                 Arc::new(AtomicU32::new(self.config.audio.monitor_volume.to_bits()));
             self.ft8_tx_active = Arc::new(AtomicBool::new(false));
+            self.ptt_allowed = Arc::new(AtomicBool::new(true));
             self.digital_tx_active = Arc::new(AtomicBool::new(false));
             self.start_active_radio_session();
             self.audio_worker_handle = Some(spawn_audio_spectrum_worker(
@@ -3518,7 +3539,11 @@ impl QsonautGuiApp {
         match save_operator_profile_named(&new_name, &profile) {
             Ok(()) => match remove_operator_profile_named(&old_name) {
                 Ok(()) => {
-                    let _ = select_operator_profile(&new_name);
+                    if let Err(error) = select_operator_profile(&new_name) {
+                        self.profile_io_status =
+                            format!("Renamed profile but active selection failed: {error}");
+                        return;
+                    }
                     self.selected_profile_name = new_name.clone();
                     self.available_profiles = list_operator_profiles();
                     self.new_profile_name = new_name.clone();
@@ -3693,11 +3718,54 @@ impl QsonautGuiApp {
     }
 
     fn pump_pota_spots(&mut self) {
+        if !self.pota_enabled {
+            return;
+        }
         if let Some(rx) = &self.pota_lookup_rx {
-            if let Ok(spots) = rx.try_recv() {
-                info!(count = spots.len(), "POTA activator spots refreshed");
-                self.pota_spots = spots;
-                self.pota_lookup_rx = None;
+            match rx.try_recv() {
+                Ok(spots) => {
+                    match spots {
+                        Ok(spots) => {
+                            let activators = spots
+                                .iter()
+                                .map(|spot| spot.activator.as_str())
+                                .collect::<HashSet<_>>()
+                                .len();
+                            info!(
+                                spots = spots.len(),
+                                activators,
+                                elapsed_ms = self.pota_last_lookup.elapsed().as_millis() as u64,
+                                "POTA activator spots refreshed"
+                            );
+                            self.pota_spots = spots;
+                            self.pota_last_updated = Some(Instant::now());
+                            self.pota_last_error = None;
+                            self.pota_history.push_back((Instant::now(), activators));
+                            while self.pota_history.len() > 60 {
+                                self.pota_history.pop_front();
+                            }
+                        }
+                        Err(error) => {
+                            warn!(
+                                error = %error,
+                                elapsed_ms = self.pota_last_lookup.elapsed().as_millis() as u64,
+                                "POTA activator spot lookup failed"
+                            );
+                            self.pota_last_error = Some(error);
+                        }
+                    }
+                    self.pota_lookup_rx = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    let error = "POTA lookup worker disconnected before returning a result";
+                    warn!(
+                        elapsed_ms = self.pota_last_lookup.elapsed().as_millis() as u64,
+                        "POTA activator spot lookup worker disconnected"
+                    );
+                    self.pota_last_error = Some(error.to_string());
+                    self.pota_lookup_rx = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
             }
         }
         if self.pota_lookup_rx.is_some()
@@ -3710,30 +3778,42 @@ impl QsonautGuiApp {
         let (tx, rx) = mpsc::channel();
         self.pota_lookup_rx = Some(rx);
         thread::spawn(move || {
-            let spots = reqwest::blocking::Client::builder()
+            let result = reqwest::blocking::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
-                .ok()
+                .map_err(|error| error.to_string())
                 .and_then(|client| {
                     client
                         .get("https://api.pota.app/spot/activator")
                         .send()
-                        .ok()
+                        .map_err(|error| error.to_string())
                 })
-                .and_then(|response| response.json::<Vec<PotaApiSpot>>().ok())
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|spot| {
-                    Some(PotaSpot {
-                        activator: spot.activator?.trim().to_ascii_uppercase(),
-                        reference: spot.reference?.trim().to_string(),
-                        name: spot.name?.trim().to_string(),
-                        frequency_hz: spot.frequency?.parse::<f64>().ok()?.round() as u64 * 1_000,
-                        mode: spot.mode?.trim().to_ascii_uppercase(),
-                    })
+                .and_then(|response| {
+                    response
+                        .error_for_status()
+                        .map_err(|error| error.to_string())
                 })
-                .collect();
-            let _ = tx.send(spots);
+                .and_then(|response| {
+                    response
+                        .json::<Vec<PotaApiSpot>>()
+                        .map_err(|error| error.to_string())
+                })
+                .map(|spots| {
+                    spots
+                        .into_iter()
+                        .filter_map(|spot| {
+                            Some(PotaSpot {
+                                activator: spot.activator?.trim().to_ascii_uppercase(),
+                                reference: spot.reference?.trim().to_string(),
+                                name: spot.name?.trim().to_string(),
+                                frequency_hz: spot.frequency?.parse::<f64>().ok()?.round() as u64
+                                    * 1_000,
+                                mode: spot.mode?.trim().to_ascii_uppercase(),
+                            })
+                        })
+                        .collect()
+                });
+            let _ = tx.send(result);
         });
     }
 
@@ -3994,6 +4074,7 @@ impl QsonautGuiApp {
             gui_scale: self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX),
             compute_preference: self.compute_preference,
             psk_reporter_enabled: self.psk_reporter_enabled,
+            pota_enabled: self.pota_enabled,
             psk_batch_interval_secs: self.psk_batch_interval_secs.clamp(60, 3_600),
             psk_repeat_cache_secs: self.psk_repeat_cache_secs.clamp(60, 3_600),
             psk_max_pending: self.psk_max_pending.clamp(1, 2_048),
@@ -4070,6 +4151,9 @@ impl QsonautGuiApp {
         if self.logo_clicks.len() >= 10 {
             self.logo_clicks.clear();
             self.automation_unlocked = true;
+            for session in self.parked_radio_sessions.values() {
+                session.ptt_allowed.store(true, Ordering::Release);
+            }
             self.logo_spin_until = Some(now + Duration::from_millis(700));
             self.profile_dirty = true;
             self.persist_profile("Automation controls unlocked");
@@ -4309,7 +4393,7 @@ impl QsonautGuiApp {
         });
     }
 
-    fn draw_connection_status(&self, ui: &mut egui::Ui, snapshot: &GuiState) {
+    fn draw_connection_status(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Connections").strong());
             ui.separator();
@@ -4343,36 +4427,38 @@ impl QsonautGuiApp {
             ui.separator();
             ui.label(RichText::new(server_label).color(server_color));
             ui.separator();
-            for label in ["IRC", "Discord"] {
-                ui.label(RichText::new(format!("{label} NOT IMPLEMENTED")).color(Color32::GRAY));
-                ui.separator();
-            }
-            ui.label(
-                RichText::new(format!("Compute {}", self.acceleration_report.summary()))
-                    .color(Color32::from_rgb(180, 150, 255)),
-            )
-            .on_hover_text(self.acceleration_report.hardware_detail());
-            if let Some(error) = &snapshot.last_error {
-                ui.separator();
-                ui.label(RichText::new("⚠ NEEDS ATTENTION").color(theme_warning(ui)))
-                    .on_hover_text(error);
-            }
+            let pota_activators = self
+                .pota_spots
+                .iter()
+                .map(|spot| spot.activator.as_str())
+                .collect::<HashSet<_>>()
+                .len();
+            let pota_label = if !self.pota_enabled {
+                "🌲 POTA OFF".to_string()
+            } else if self.pota_lookup_rx.is_some() {
+                "🌲 POTA …".to_string()
+            } else {
+                format!("🌲 POTA {pota_activators}")
+            };
+            let pota_button = ui
+                .selectable_label(self.pota_enabled && !self.pota_spots.is_empty(), pota_label)
+                .on_hover_text("Show live POTA activator statistics and spots");
+            egui::Popup::menu(&pota_button).show(|ui| self.draw_pota_panel(ui));
             ui.separator();
-            ui.label(RichText::new("Reporting").strong());
             if !self.psk_reporter_enabled {
-                ui.label(RichText::new("PSK Reporter OFF").color(Color32::GRAY))
+                ui.label(RichText::new("PSK OFF").color(Color32::GRAY))
                     .on_hover_text(
                         "Enable in the Reporting panel to batch decoded stations to PSK Reporter",
                     );
             } else if let Some(reporter) = &self.psk_reporter {
                 let status = reporter.status();
                 let (label, color) = if status.last_error.is_some() {
-                    ("PSK Reporter ERROR".to_string(), Color32::from_rgb(255, 110, 100))
+                    ("PSK ERROR".to_string(), Color32::from_rgb(255, 110, 100))
                 } else if !status.active {
-                    ("PSK Reporter STOPPED".to_string(), theme_warning(ui))
+                    ("PSK STOPPED".to_string(), theme_warning(ui))
                 } else {
                     (
-                        format!("PSK Reporter {} queued · {} sent", status.queued, status.sent),
+                        format!("PSK {}q · {} sent", status.queued, status.sent),
                         Color32::LIGHT_GREEN,
                     )
                 };
@@ -4383,7 +4469,7 @@ impl QsonautGuiApp {
                         .map(|error| format!("network error: {error}"))
                         .unwrap_or_else(|| {
                             format!(
-                                "Batching every ~{} s · same callsign re-reported after {} s · {} max pending",
+                                "PSK Reporter batching every ~{} s · same callsign re-reported after {} s · {} max pending",
                                 self.psk_batch_interval_secs,
                                 self.psk_repeat_cache_secs,
                                 self.psk_max_pending
@@ -4391,8 +4477,23 @@ impl QsonautGuiApp {
                         }),
                 );
             } else {
-                ui.label(RichText::new("PSK Reporter WAITING").color(theme_warning(ui)))
+                ui.label(RichText::new("PSK WAITING").color(theme_warning(ui)))
                     .on_hover_text("Set a real callsign and grid before reporting");
+            }
+            ui.separator();
+            ui.label(
+                RichText::new(format!("Compute {}", self.acceleration_report.summary()))
+                    .color(Color32::from_rgb(180, 150, 255)),
+            )
+            .on_hover_text(self.acceleration_report.hardware_detail());
+            ui.separator();
+            for label in ["IRC", "Discord"] {
+                ui.label(RichText::new(format!("{label} N/A")).color(Color32::GRAY));
+                ui.separator();
+            }
+            if let Some(error) = &snapshot.last_error {
+                ui.label(RichText::new("⚠ NEEDS ATTENTION").color(theme_warning(ui)))
+                    .on_hover_text(error);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 self.draw_about_button(ui);
@@ -4484,6 +4585,19 @@ impl eframe::App for QsonautGuiApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.pump_hamdb_lookup();
+        if let Some(rx) = &self.cat_test_rx {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.cat_test_status = Some(result);
+                    self.cat_test_rx = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.cat_test_status = Some(Err("CAT test worker stopped unexpectedly".into()));
+                    self.cat_test_rx = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
         if let Some(geometry) = WindowGeometry::read(ctx, self.window_geometry) {
             self.window_geometry = Some(geometry);
         }
@@ -4507,8 +4621,11 @@ impl eframe::App for QsonautGuiApp {
             self.first_frame_logged = true;
             info!(
                 renderer = %self.selected_renderer,
+                os = std::env::consts::OS,
+                os_dpi_adjustment = self.os_dpi_adjustment,
                 zoom_factor = ctx.zoom_factor(),
                 pixels_per_point = ctx.pixels_per_point(),
+                effective_pixels_per_point = ctx.pixels_per_point(),
                 "QSONaut first GUI frame reached"
             );
         }
@@ -4518,8 +4635,9 @@ impl eframe::App for QsonautGuiApp {
         }
         // Zoom is layered on top of the OS DPI scale, so text, controls,
         // spacing, hit targets, and custom drawings stay in proportion.
-        if (ctx.zoom_factor() - self.gui_scale).abs() > 0.001 {
-            ctx.set_zoom_factor(self.gui_scale);
+        let target_zoom = self.gui_scale * self.os_dpi_adjustment;
+        if (ctx.zoom_factor() - target_zoom).abs() > 0.001 {
+            ctx.set_zoom_factor(target_zoom);
         }
         // Give background workers a handle so they can trigger repaints directly.
         let _ = self.repaint_ctx.get_or_init(|| ctx.clone());
@@ -4551,8 +4669,7 @@ impl eframe::App for QsonautGuiApp {
             }
         }
 
-        // Poll every parked tab as well as the selected tab. Switching tabs
-        // changes presentation only; it does not pause the radio worker.
+        // Keep inactive tabs receiving/decoding; only their PTT path is gated.
         self.pump_parked_radio_sessions();
 
         let active_audio_finished = self
@@ -4564,22 +4681,8 @@ impl eframe::App for QsonautGuiApp {
                 let _ = handle.join();
             }
             warn!(profile = %self.selected_profile_name, "Active profile audio worker stopped");
-            if self.config.audio.enabled && !self.audio_worker_stop.load(Ordering::Relaxed) {
-                self.radio_worker_stop.store(true, Ordering::Relaxed);
-                if let Some(tx) = &self.command_tx {
-                    let _ = tx.send(GuiCommand::Quit);
-                }
-                if let Some(handle) = self.radio_worker_handle.take() {
-                    let _ = handle.join();
-                }
-                self.command_tx = None;
-                self.radio_init_rx = None;
-                self.radio_init_attempted = true;
-                if let Ok(mut state) = self.state.lock() {
-                    state.radio_waterfall_status =
-                        "SESSION STOPPED (audio worker failed)".to_string();
-                }
-                warn!(profile = %self.selected_profile_name, "Active profile runtime stopped after audio failure");
+            if let Ok(mut state) = self.state.lock() {
+                state.audio_spectrum_status = "STOPPED (audio worker failed)".to_string();
             }
         }
         let active_radio_finished = self
@@ -4592,16 +4695,8 @@ impl eframe::App for QsonautGuiApp {
             }
             self.command_tx = None;
             warn!(profile = %self.selected_profile_name, "Active profile radio worker stopped");
-            if self.config.radio.enabled && !self.radio_worker_stop.load(Ordering::Relaxed) {
-                self.audio_worker_stop.store(true, Ordering::Relaxed);
-                if let Some(handle) = self.audio_worker_handle.take() {
-                    let _ = handle.join();
-                }
-                if let Ok(mut state) = self.state.lock() {
-                    state.radio_waterfall_status =
-                        "SESSION STOPPED (radio worker failed)".to_string();
-                }
-                warn!(profile = %self.selected_profile_name, "Active profile runtime stopped after radio failure");
+            if let Ok(mut state) = self.state.lock() {
+                state.radio_waterfall_status = "STOPPED (radio worker failed)".to_string();
             }
         }
 
@@ -4635,6 +4730,7 @@ impl eframe::App for QsonautGuiApp {
                             self.display_tuning.clone(),
                             rx,
                             self.repaint_ctx.clone(),
+                            self.ptt_allowed.clone(),
                         );
                         self.command_tx = Some(tx);
                         self.radio_worker_handle = Some(handle);
@@ -4643,10 +4739,8 @@ impl eframe::App for QsonautGuiApp {
                         // Radio initialization failed
                         self.radio_init_attempted = true;
                         self.radio_init_rx = None;
-                        self.audio_worker_stop.store(true, Ordering::Relaxed);
-                        if let Some(handle) = self.audio_worker_handle.take() {
-                            let _ = handle.join();
-                        }
+                        // Radio initialization failure is isolated to this
+                        // profile. Its audio worker remains independent.
                         {
                             let mut s = self.state.lock().expect("ui state lock poisoned");
                             s.radio_waterfall_status =
@@ -4665,10 +4759,8 @@ impl eframe::App for QsonautGuiApp {
                         // Thread panicked or dropped
                         self.radio_init_attempted = true;
                         self.radio_init_rx = None;
-                        self.audio_worker_stop.store(true, Ordering::Relaxed);
-                        if let Some(handle) = self.audio_worker_handle.take() {
-                            let _ = handle.join();
-                        }
+                        // Radio initialization failure is isolated to this
+                        // profile. Its audio worker remains independent.
                         {
                             let mut s = self.state.lock().expect("ui state lock poisoned");
                             s.radio_waterfall_status =
@@ -4861,35 +4953,26 @@ impl eframe::App for QsonautGuiApp {
                                                 session.audio_worker_handle.is_some()
                                             })
                                     };
+                                    let workers_running = radio_running && audio_running;
+                                    let worker_label = if workers_running { "■" } else { "▶" };
+                                    let worker_hint = if workers_running {
+                                        "Stop this profile's radio and audio workers"
+                                    } else {
+                                        "Start this profile's radio and audio workers"
+                                    };
+                                    let worker_button = egui::Button::new(worker_label)
+                                    .small()
+                                    .fill(if workers_running {
+                                        Color32::from_rgb(126, 25, 39)
+                                    } else {
+                                        Color32::from_rgb(30, 105, 74)
+                                    });
                                     if ui
-                                        .small_button(if radio_running { "■R" } else { "▶R" })
-                                        .on_hover_text(if radio_running {
-                                            "Stop this profile's radio worker"
-                                        } else {
-                                            "Start this profile's radio worker"
-                                        })
+                                        .add(worker_button)
+                                        .on_hover_text(worker_hint)
                                         .clicked()
                                     {
-                                        worker_action = Some((
-                                            name.clone(),
-                                            true,
-                                            !radio_running,
-                                        ));
-                                    }
-                                    if ui
-                                        .small_button(if audio_running { "■A" } else { "▶A" })
-                                        .on_hover_text(if audio_running {
-                                            "Stop this profile's audio worker"
-                                        } else {
-                                            "Start this profile's audio worker"
-                                        })
-                                        .clicked()
-                                    {
-                                        worker_action = Some((
-                                            name.clone(),
-                                            false,
-                                            !audio_running,
-                                        ));
+                                        worker_action = Some((name.clone(), !workers_running));
                                     }
                                     if ui
                                         .small_button("⚙")
@@ -4918,12 +5001,8 @@ impl eframe::App for QsonautGuiApp {
                                 self.new_profile_tab_editing = true;
                             }
                         });
-                        if let Some((name, radio, running)) = worker_action {
-                            if radio {
-                                self.set_tab_radio_running(&name, running);
-                            } else {
-                                self.set_tab_audio_running(&name, running);
-                            }
+                        if let Some((name, running)) = worker_action {
+                            self.set_tab_workers_running(&name, running);
                         } else if let Some(name) = activate_tab {
                             self.switch_radio_tab(&name);
                         } else if let Some(name) = open_config {
@@ -5302,7 +5381,7 @@ impl eframe::App for QsonautGuiApp {
                             ));
                             ui.colored_label(
                                 Color32::YELLOW,
-                                "SWR sweep: RTTY carrier at 5% power; TX is restored afterward.",
+                                "SWR sweep: RTTY carrier at approximately 30 W; TX is restored afterward.",
                             );
                             ui.horizontal(|ui| {
                                 ui.label("Start");
@@ -6376,8 +6455,6 @@ fn radio_port_inventory(
 mod tests {
     use super::*;
 
-    const LEGACY_GUI_SCALE_BASE: f32 = 1.6;
-
     #[test]
     fn radio_profiles_apply_only_to_the_native_backend() {
         assert_eq!(
@@ -6648,19 +6725,6 @@ mod tests {
     #[test]
     fn gui_state_defaults_to_sharp_radio_scope_vbw() {
         assert!(!GuiState::default().radio_scope_vbw_wide);
-    }
-
-    #[test]
-    fn gui_scale_baseline_is_rebased_so_legacy_75_is_now_100() {
-        let legacy_75 = LEGACY_GUI_SCALE_BASE * 0.75;
-        assert!((gui_scale_percent(legacy_75) - 100.0).abs() < 0.01);
-        assert!((gui_scale_from_percent(100) - legacy_75).abs() < 0.001);
-    }
-
-    #[test]
-    fn gui_scale_percent_mapping_clamps_to_supported_range() {
-        assert_eq!(gui_scale_from_percent(10), GUI_SCALE_MIN);
-        assert_eq!(gui_scale_from_percent(500), GUI_SCALE_MAX);
     }
 
     #[test]

@@ -552,9 +552,13 @@ fn configure_graphics_environment() {
                 std::env::set_var("GALLIUM_DRIVER", "d3d12");
             }
             if std::env::var_os("WGPU_BACKEND").is_none() {
+                // WSLg's D3D12 Gallium driver exposes the hardware reliably
+                // through Mesa's OpenGL path on this Linux userspace. Vulkan
+                // can fall back to llvmpipe when the WSL Vulkan layers are
+                // incomplete, causing unusable CPU rendering.
                 std::env::set_var("WGPU_BACKEND", "gl");
             }
-            info!("Using WSLg Mesa D3D12 graphics defaults");
+            info!(backend = "gl", "Using WSLg Mesa D3D12 graphics defaults");
         }
     }
 

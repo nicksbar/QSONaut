@@ -1,10 +1,21 @@
 # Audio monitoring
 
-QSONaut captures the selected RX input once and sends the same downmixed mono
-samples to the waterfall/decoders and, when enabled, the RX monitor. The monitor
-uses a separate output stream, converts the mono signal to every device output
-channel, and continuously resamples when the input and output devices use
-different rates. Its queue is bounded so a slow output cannot stall decoding.
+QSONaut opens the selected RX device using the best format the hardware and
+operating-system driver will actually start. It tries ranked fallback formats
+when a driver advertises a configuration but rejects it at open time. Device
+audio is converted at the boundary into QSONaut's canonical 48 kHz mono `f32`
+stream using continuous band-limited resampling. Callback size, hardware channel
+count, sample representation, and device rate therefore do not change the
+waterfall or decoder contracts.
+
+The RX monitor and generated/TX audio use the reverse boundary. QSONaut opens
+the selected output at a supported native format, resamples from the canonical
+stream, and copies mono audio to every hardware output channel. Monitor queues
+remain bounded so a slow output cannot stall decoding. Because input and monitor
+devices have independent physical clocks, the monitor starts after a short
+prebuffer and continuously adjusts its conversion ratio within a narrow bounded
+parts-per-million range. Buffer underruns trigger silence and automatic
+rebuffering without affecting the canonical decoder stream or TX timing.
 
 The **Audio output** device is used for transmitted/generated audio. The
 optional **RX monitor output** can be different and falls back to Audio output
@@ -93,13 +104,16 @@ QSONAUT_AUDIO_SAMPLE_RATE_HZ=48000
 QSONAUT_AUDIO_CHANNELS=1
 ```
 
-Capture currently exposes one mono channel to the decoding pipeline. A
-multi-channel hardware input is accepted and downmixed, but
-`QSONAUT_AUDIO_CHANNELS` must remain `1`.
+The processing values are retained for configuration compatibility, but the GUI
+runtime normalizes them to the canonical 48 kHz mono format. Multi-channel
+hardware is accepted and downmixed before entering that stream.
 
 ## Validation boundary
 
-Automated tests cover sample-format conversion, stereo downmixing, continuous
-monitor resampling, and output-rate conversion. A final live check still needs
-real hardware: confirm waterfall activity, audible RX without drop reports,
-correct monitor volume, and unchanged decoding while monitoring is enabled.
+Automated tests cover sample-format conversion, stereo downmixing, callback-
+independent band-limited resampling, canonical stream sizing, and output-rate
+conversion. Diagnostics record the negotiated input rate, channels, and sample
+format; a total open failure lists every attempted configuration. A final live
+check still needs real hardware: confirm waterfall activity, stable long-running
+monitor buffer/ppm telemetry, audible RX without repeated underruns, correct
+monitor volume, and unchanged decoding while monitoring is enabled.

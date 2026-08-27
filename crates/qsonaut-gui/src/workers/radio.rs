@@ -67,6 +67,7 @@ fn workspace_audio_controls_clear_noise() -> (ControlId, ControlValue, ControlId
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_radio_worker(
     radio: ConfiguredRadio,
     state: Arc<Mutex<GuiState>>,
@@ -75,6 +76,7 @@ pub(crate) fn spawn_radio_worker(
     display_tuning: Arc<Mutex<DisplayTuning>>,
     rx: mpsc::Receiver<GuiCommand>,
     repaint_ctx: Arc<OnceLock<egui::Context>>,
+    ptt_allowed: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     thread::spawn(move || {
         {
@@ -492,6 +494,10 @@ pub(crate) fn spawn_radio_worker(
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::SetPtt(target) => {
+                        if target && !ptt_allowed.load(Ordering::Acquire) {
+                            warn!("Radio PTT command blocked while profile is inactive");
+                            continue;
+                        }
                         info!(ptt = target, "Radio PTT command requested");
                         let result = rt
                             .block_on(radio.set_ptt(target))
@@ -512,6 +518,13 @@ pub(crate) fn spawn_radio_worker(
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::SetPttWithAck(target, ack_tx) => {
+                        if target && !ptt_allowed.load(Ordering::Acquire) {
+                            let _ = ack_tx
+                                .send(Err("PTT is disabled while this radio profile is inactive"
+                                    .to_string()));
+                            warn!("Radio PTT command blocked while profile is inactive");
+                            continue;
+                        }
                         info!(
                             ptt = target,
                             "Radio PTT command requested with acknowledgement"
@@ -814,7 +827,10 @@ pub(crate) fn spawn_radio_worker(
                                 Some(format!("SWR sweep could not select RTTY mode: {error}"));
                             continue;
                         }
-                        const SWR_TEST_POWER_PERCENT: u8 = 5;
+                        // The IC-7300 manual's plot procedure calls for
+                        // approximately 30 W so the transmit SWR detector is
+                        // active and has enough signal to report a value.
+                        const SWR_TEST_POWER_PERCENT: u8 = 30;
                         let test_power = ((u16::from(SWR_TEST_POWER_PERCENT) * 255) / 100) as u8;
                         if let Err(error) = rt.block_on(
                             radio.set_control(ControlId::RfPower, ControlValue::U8(test_power)),
@@ -878,8 +894,25 @@ pub(crate) fn spawn_radio_worker(
                                 info!(frequency_hz = frequency, "SWR sweep stop requested");
                                 break;
                             }
-                            match rt.block_on(radio.get_meter(MeterId::Swr)) {
-                                Ok(Some(value)) => {
+                            let sample = match rt.block_on(radio.get_meter(MeterId::Swr)) {
+                                Ok(value) => value,
+                                Err(error) => {
+                                    read_failures += 1;
+                                    warn!(frequency_hz = frequency, error = %error, "SWR sweep meter read failed");
+                                    None
+                                }
+                            };
+                            if let Err(error) = rt.block_on(radio.set_ptt(false)) {
+                                error!(frequency_hz = frequency, error = %error, "SWR sweep failed to unkey TX");
+                                state.lock().expect("ui state lock poisoned").last_error =
+                                    Some(format!("SWR sweep could not unkey TX: {error}"));
+                                break;
+                            }
+                            tx_keyed = false;
+                            state.lock().expect("ui state lock poisoned").ptt_on = false;
+                            info!(frequency_hz = frequency, "SWR sweep TX unkeyed");
+                            match sample {
+                                Some(value) => {
                                     info!(
                                         point = points + 1,
                                         frequency_hz = frequency,
@@ -890,24 +923,11 @@ pub(crate) fn spawn_radio_worker(
                                     s.swr = Some(value);
                                     s.swr_sweep_points.push((frequency, value));
                                 }
-                                Ok(None) => {
+                                None => {
                                     read_failures += 1;
                                     warn!(frequency_hz = frequency, "SWR sweep meter unavailable");
                                 }
-                                Err(error) => {
-                                    read_failures += 1;
-                                    warn!(frequency_hz = frequency, error = %error, "SWR sweep meter read failed");
-                                }
                             }
-                            if let Err(error) = rt.block_on(radio.set_ptt(false)) {
-                                error!(frequency_hz = frequency, error = %error, "SWR sweep failed to unkey TX");
-                                state.lock().expect("ui state lock poisoned").last_error =
-                                    Some(format!("SWR sweep could not unkey TX: {error}"));
-                                break;
-                            }
-                            tx_keyed = false;
-                            state.lock().expect("ui state lock poisoned").ptt_on = false;
-                            info!(frequency_hz = frequency, "SWR sweep TX unkeyed");
                             frequency = frequency.saturating_add(step_hz);
                             points += 1;
                             if frequency == u64::MAX {

@@ -30,14 +30,23 @@ impl GraphicsPowerPreference {
     }
 
     fn from_env() -> Self {
-        match std::env::var(GRAPHICS_POWER_ENV)
+        let configured = std::env::var(GRAPHICS_POWER_ENV)
             .ok()
-            .or_else(|| std::env::var("WGPU_POWER_PREF").ok())
+            .or_else(|| std::env::var("WGPU_POWER_PREF").ok());
+        match configured
             .as_deref()
             .map(str::to_ascii_lowercase)
             .as_deref()
         {
             Some("high" | "highperformance" | "high-performance") => Self::High,
+            Some("low" | "lowpower" | "low-power") => Self::Low,
+            None if is_wslg() => {
+                // WSLg's translated GL path can make the nominal low-power
+                // policy feel sluggish even when the selected adapter is
+                // technically correct. Preserve explicit operator choices,
+                // but prefer the higher-performance policy by default there.
+                Self::High
+            }
             _ => Self::Low,
         }
     }
@@ -48,6 +57,14 @@ impl GraphicsPowerPreference {
             Self::High => wgpu::PowerPreference::HighPerformance,
         }
     }
+}
+
+fn is_wslg() -> bool {
+    cfg!(target_os = "linux")
+        && std::fs::read_to_string("/proc/version")
+            .map(|version| version.to_ascii_lowercase().contains("microsoft"))
+            .unwrap_or(false)
+        && std::path::Path::new("/dev/dxg").exists()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

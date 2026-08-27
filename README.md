@@ -22,9 +22,18 @@ Rust desktop app.
 > or a safety interlock.
 
 <p align="center">
-  <img src="assets/branding/qsonaut-screen-redacted.png" alt="QSONaut radio-console interface with callsigns blurred">
+  <img src="assets/main-screen.png" alt="QSONaut radio-console interface with station identity redacted">
   <br>
-  <em>QSONaut radio console on Linux/WSL. Callsigns are intentionally blurred.</em>
+  <em>QSONaut radio console on Linux/WSL. The station identity is redacted and visible callsign suffixes are blurred.</em>
+</p>
+
+<p align="center">
+  <img src="assets/activities-panel.png" width="48%" alt="QSONaut operating activity panel">
+  <img src="assets/swr-meter.png" width="48%" alt="QSONaut SWR meter and sweep panel">
+</p>
+
+<p align="center">
+  <em>Operating activities and the live SWR meter/sweep workflow.</em>
 </p>
 
 ## Capabilities
@@ -163,6 +172,16 @@ renderer is recorded in `qsonaut.log`.
 
 UI scale now uses a rebased baseline: the physical size that previously looked
 like 75% is now the 100% preset.
+
+QSONaut respects the OS-provided DPI scale. Windows presets use the physical
+baseline that previously appeared as 75% on this desktop, so that baseline is
+labelled 100% on Windows; Linux keeps the existing preset labels. For other
+platform-specific display quirks, the final application zoom can be tuned with
+a multiplier from `0.75` to `1.50` (default `1.0`): `QSONAUT_WINDOWS_DPI_ADJUSTMENT`,
+`QSONAUT_LINUX_DPI_ADJUSTMENT`, or `QSONAUT_MACOS_DPI_ADJUSTMENT`. Startup logs
+record the selected OS, adjustment, raw DPI, application zoom, and effective
+scale. All platforms provide the shared `50, 60, 75, 85, 100, 110, 125, 150,
+175%` scale choices.
 
 Reception data stays local unless you explicitly enable PSK Reporter. External
 automation source declarations reference environment-variable names rather

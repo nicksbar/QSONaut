@@ -132,6 +132,8 @@ pub(super) struct OperatorProfile {
     pub(super) compute_preference: ComputePreference,
     #[serde(default)]
     pub(super) psk_reporter_enabled: bool,
+    #[serde(default = "default_true")]
+    pub(super) pota_enabled: bool,
     #[serde(default = "default_psk_batch_interval_secs")]
     pub(super) psk_batch_interval_secs: u64,
     #[serde(default = "default_psk_repeat_cache_secs")]
@@ -386,8 +388,8 @@ fn validate_profile_name(name: &str) -> Result<&str> {
     anyhow::ensure!(
         name.chars()
             .all(|character| character.is_ascii_alphanumeric()
-                || matches!(character, ' ' | '-' | '_')),
-        "profile names may contain only letters, numbers, spaces, '-' and '_'"
+                || matches!(character, ' ' | '-' | '_' | '(' | ')')),
+        "profile names may contain only letters, numbers, spaces, '-', '_', and parentheses"
     );
     Ok(name)
 }
@@ -477,12 +479,10 @@ pub(super) fn save_operator_profile_named(name: &str, profile: &OperatorProfile)
         fs::create_dir_all(parent)?;
     }
     fs::write(&path, toml::to_string_pretty(profile)?)?;
-    fs::write(active_profile_path(), name)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
-        fs::set_permissions(active_profile_path(), fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
 }
@@ -510,6 +510,7 @@ mod tests {
             "Field Day 2026"
         );
         assert!(validate_profile_name("portable_vhf-2").is_ok());
+        assert!(validate_profile_name("Field Day (Portable)").is_ok());
     }
 
     #[test]

@@ -7,6 +7,56 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- Added web-ready application screenshots for the README, including the
+  operating-activity and SWR workflow panels.
+
+### Changed
+- Rebased Windows UI scale presets so the physical size previously labelled
+  75% is available as the Windows 100% baseline while preserving smaller and
+  larger choices; Linux and macOS retain independent tunable adjustments.
+- Updated the SWR sweep to follow the IC-7300 plot procedure: select an RTTY
+  carrier, use approximately 30 W, read the SWR meter while keyed, and then
+  unkey before changing frequency.
+
+### Fixed
+- Kept profile saves isolated from the active-profile pointer so renaming or
+  editing one profile cannot overwrite another profile's radio settings or
+  become the unexpected profile after restart. Parenthesized profile names are
+  also accepted.
+
+## [0.3.11] - 2026-08-26
+
+### Changed
+- Replaced the editable CAT baud-rate control with a radio-aware selection list
+  constrained to the rates supported by the selected Rigwright model profile.
+- Added an explicit POTA live-data preference in the Reporting panel, plus a
+  bottom-toolbar POTA panel with activator history, current spots, and
+  click-to-tune spot navigation.
+- Consolidated each radio tab's radio and audio worker controls into one compact,
+  colored start/stop control.
+
+### Fixed
+- Hardened POTA live-data polling so a failed lookup worker cannot leave
+  querying permanently stuck; refresh logs now include lookup duration and
+  parsed spot/activator counts.
+- Allowed audio inputs that do not expose the configured 48 kHz capture rate to
+  open at their closest supported rate and resample continuously into QSONaut's
+  canonical 48 kHz mono floating-point spectrum and decoder pipeline using a
+  band-limited converter. Input, monitor, and TX output now retry ranked native
+  device configurations when a driver rejects an advertised format. Runtime
+  status and diagnostics show the negotiated hardware format when conversion is
+  active and retain all attempted formats when none can be opened.
+- Added adaptive RX-monitor clock synchronization with startup prebuffering,
+  bounded parts-per-million correction, automatic underrun rebuffering, and
+  long-session drift telemetry. Decoder and TX timing remain isolated from the
+  monitor device clock.
+- Kept radio and audio worker failures isolated to their owning profile without
+  automatically restarting failed workers; inactive profiles continue receiving
+  while their PTT path remains locked unless unattended operation is unlocked.
+- Restored WSLg's GPU-backed Mesa D3D12/OpenGL default after Vulkan selected the
+  llvmpipe software adapter, and documented the native Wayland default.
+
 ## [0.3.10] - 2026-08-25
 
 ### Added
