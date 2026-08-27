@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.12] - 2026-08-26
+
 ### Added
 - Added web-ready application screenshots for the README, including the
   operating-activity and SWR workflow panels.
