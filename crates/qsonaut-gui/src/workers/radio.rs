@@ -67,6 +67,7 @@ fn workspace_audio_controls_clear_noise() -> (ControlId, ControlValue, ControlId
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_radio_worker(
     radio: ConfiguredRadio,
     state: Arc<Mutex<GuiState>>,

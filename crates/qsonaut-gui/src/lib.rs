@@ -4441,7 +4441,7 @@ impl QsonautGuiApp {
                 format!("🌲 POTA {pota_activators}")
             };
             let pota_button = ui
-                .selectable_label(self.pota_enabled && self.pota_spots.len() > 0, pota_label)
+                .selectable_label(self.pota_enabled && !self.pota_spots.is_empty(), pota_label)
                 .on_hover_text("Show live POTA activator statistics and spots");
             egui::Popup::menu(&pota_button).show(|ui| self.draw_pota_panel(ui));
             ui.separator();
