@@ -5381,7 +5381,7 @@ impl eframe::App for QsonautGuiApp {
                             ));
                             ui.colored_label(
                                 Color32::YELLOW,
-                                "SWR sweep: RTTY carrier at 5% power; TX is restored afterward.",
+                                "SWR sweep: RTTY carrier at approximately 30 W; TX is restored afterward.",
                             );
                             ui.horizontal(|ui| {
                                 ui.label("Start");

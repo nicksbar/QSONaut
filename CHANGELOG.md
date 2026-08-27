@@ -7,6 +7,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- Added web-ready application screenshots for the README, including the
+  operating-activity and SWR workflow panels.
+
+### Changed
+- Rebased Windows UI scale presets so the physical size previously labelled
+  75% is available as the Windows 100% baseline while preserving smaller and
+  larger choices; Linux and macOS retain independent tunable adjustments.
+- Updated the SWR sweep to follow the IC-7300 plot procedure: select an RTTY
+  carrier, use approximately 30 W, read the SWR meter while keyed, and then
+  unkey before changing frequency.
+
+### Fixed
+- Kept profile saves isolated from the active-profile pointer so renaming or
+  editing one profile cannot overwrite another profile's radio settings or
+  become the unexpected profile after restart. Parenthesized profile names are
+  also accepted.
+
 ## [0.3.11] - 2026-08-26
 
 ### Changed

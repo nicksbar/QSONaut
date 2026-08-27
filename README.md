@@ -22,9 +22,18 @@ Rust desktop app.
 > or a safety interlock.
 
 <p align="center">
-  <img src="assets/branding/qsonaut-screen-redacted.png" alt="QSONaut radio-console interface with callsigns blurred">
+  <img src="assets/main-screen.png" alt="QSONaut radio-console interface with station identity redacted">
   <br>
-  <em>QSONaut radio console on Linux/WSL. Callsigns are intentionally blurred.</em>
+  <em>QSONaut radio console on Linux/WSL. The station identity in the overview banner is redacted.</em>
+</p>
+
+<p align="center">
+  <img src="assets/activities-panel.png" width="48%" alt="QSONaut operating activity panel">
+  <img src="assets/swr-meter.png" width="48%" alt="QSONaut SWR meter and sweep panel">
+</p>
+
+<p align="center">
+  <em>Operating activities and the live SWR meter/sweep workflow.</em>
 </p>
 
 ## Capabilities

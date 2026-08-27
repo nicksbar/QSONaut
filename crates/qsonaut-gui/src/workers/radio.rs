@@ -826,7 +826,10 @@ pub(crate) fn spawn_radio_worker(
                                 Some(format!("SWR sweep could not select RTTY mode: {error}"));
                             continue;
                         }
-                        const SWR_TEST_POWER_PERCENT: u8 = 5;
+                        // The IC-7300 manual's plot procedure calls for
+                        // approximately 30 W so the transmit SWR detector is
+                        // active and has enough signal to report a value.
+                        const SWR_TEST_POWER_PERCENT: u8 = 30;
                         let test_power = ((u16::from(SWR_TEST_POWER_PERCENT) * 255) / 100) as u8;
                         if let Err(error) = rt.block_on(
                             radio.set_control(ControlId::RfPower, ControlValue::U8(test_power)),
@@ -890,7 +893,7 @@ pub(crate) fn spawn_radio_worker(
                                 info!(frequency_hz = frequency, "SWR sweep stop requested");
                                 break;
                             }
-                            let mut sample = match rt.block_on(radio.get_meter(MeterId::Swr)) {
+                            let sample = match rt.block_on(radio.get_meter(MeterId::Swr)) {
                                 Ok(value) => value,
                                 Err(error) => {
                                     read_failures += 1;
@@ -907,25 +910,6 @@ pub(crate) fn spawn_radio_worker(
                             tx_keyed = false;
                             state.lock().expect("ui state lock poisoned").ptt_on = false;
                             info!(frequency_hz = frequency, "SWR sweep TX unkeyed");
-                            // Some IC-7300 firmware/USB paths update the SWR
-                            // register on the TX->RX transition. A keyed read
-                            // can therefore return a valid-looking zero even
-                            // while the front-panel meter is moving. Retry
-                            // that specific zero after unkeying so the plot
-                            // receives the latched measurement.
-                            if sample == Some(0) {
-                                thread::sleep(Duration::from_millis(100));
-                                if let Ok(Some(value)) = rt.block_on(radio.get_meter(MeterId::Swr))
-                                {
-                                    info!(
-                                        point = points + 1,
-                                        frequency_hz = frequency,
-                                        swr_level = value,
-                                        "SWR sweep post-TX sample"
-                                    );
-                                    sample = Some(value);
-                                }
-                            }
                             match sample {
                                 Some(value) => {
                                     info!(
