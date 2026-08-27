@@ -4,7 +4,7 @@ use super::request_gui_repaint;
 const RADIO_CORE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const RADIO_LEVEL_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const RADIO_COMMAND_WAKE_INTERVAL: Duration = Duration::from_millis(50);
-const RADIO_SCOPE_READ_SLICE: Duration = Duration::from_millis(50);
+const RADIO_SCOPE_READ_SLICE: Duration = Duration::from_millis(25);
 
 // The first radio core poll is instrumented at INFO level so a hardware startup
 // stall is visible in the normal application log without logging every 100 ms
@@ -127,10 +127,14 @@ pub(crate) fn spawn_radio_worker(
             let mut cadence_started = Instant::now();
             let mut cadence_sweeps = 0usize;
             let mut cadence_rate = 0.0_f32;
+            let mut display_rows = 0usize;
+            let mut display_rate = 0.0_f32;
             let mut division_rate = 0.0_f32;
             let mut last_scope_divisions = 0_u64;
             let mut last_dropped_sweeps = 0_u64;
             let mut dropped_sweeps_delta = 0_u64;
+            let mut latest_scope_bins: Option<Vec<u8>> = None;
+            let mut last_display_row = Instant::now();
             let waterfall_repaint_interval = Duration::from_millis(66);
             let mut last_waterfall_repaint = Instant::now() - waterfall_repaint_interval;
 
@@ -252,6 +256,7 @@ pub(crate) fn spawn_radio_worker(
                                     view = ?config.view,
                                     span_code = config.span_code,
                                     vbw_wide = config.vbw_wide,
+                                    sweep_code = config.sweep_code,
                                     hold = config.hold,
                                     reference_tenths_db = config.reference_tenths_db,
                                     "Radio scope configured"
@@ -303,13 +308,44 @@ pub(crate) fn spawn_radio_worker(
                         .block_on(stream_radio.enable_spectrum_stream(Duration::from_millis(2_500)))
                     {
                         Ok(bins) => {
+                            // Enabling CI-V scope output can restore the radio's
+                            // stored sweep setting. Reassert the requested speed
+                            // only after the stream is running so Fast remains
+                            // the final scope command applied at startup.
+                            let sweep_code = last_scope_config
+                                .map(|config| config.sweep_code)
+                                .unwrap_or(1);
+                            if let Err(err) =
+                                rt.block_on(stream_radio.set_scope_sweep_speed(sweep_code))
+                            {
+                                let mut s = stream_state.lock().expect("ui state lock poisoned");
+                                s.radio_spectrum_enabled = false;
+                                s.radio_waterfall_status = "SPEED ERROR".to_string();
+                                s.last_error = Some(err.to_string());
+                                warn!(
+                                    error = %err,
+                                    sweep_code,
+                                    "Radio scope speed reapply failed after stream enable"
+                                );
+                                drop(s);
+                                thread::sleep(Duration::from_millis(500));
+                                continue;
+                            }
+                            let bin_count = bins.len();
                             let mut s = stream_state.lock().expect("ui state lock poisoned");
                             s.radio_spectrum_enabled = true;
                             apply_waterfall_bins(&mut s, &bins);
+                            latest_scope_bins = Some(bins);
+                            display_rows += 1;
+                            last_display_row = Instant::now();
                             s.radio_waterfall_status = "READY · 475 bins".to_string();
                             s.last_error = None;
                             drop(s);
-                            info!(bins = bins.len(), "Radio spectrum stream enabled");
+                            info!(
+                                bins = bin_count,
+                                sweep_code,
+                                "Radio spectrum stream enabled and sweep speed reapplied"
+                            );
                             request_gui_repaint(&stream_repaint);
                         }
                         Err(err) => {
@@ -331,32 +367,10 @@ pub(crate) fn spawn_radio_worker(
                 {
                     Ok(sweeps) if !sweeps.is_empty() => {
                         cadence_sweeps += sweeps.len();
-                        let elapsed = cadence_started.elapsed();
-                        if elapsed >= Duration::from_secs(1) {
-                            cadence_rate = cadence_sweeps as f32 / elapsed.as_secs_f32();
-                            let (divisions, _, dropped) = stream_radio.scope_stream_counters();
-                            division_rate = divisions.saturating_sub(last_scope_divisions) as f32
-                                / elapsed.as_secs_f32();
-                            dropped_sweeps_delta = dropped.saturating_sub(last_dropped_sweeps);
-                            last_scope_divisions = divisions;
-                            last_dropped_sweeps = dropped;
-                            cadence_sweeps = 0;
-                            cadence_started = Instant::now();
-                        }
-                        let mut s = stream_state.lock().expect("ui state lock poisoned");
                         for bins in sweeps {
                             if !bins.is_empty() {
-                                apply_waterfall_bins(&mut s, &bins);
+                                latest_scope_bins = Some(bins);
                             }
-                        }
-                        s.radio_waterfall_status = format!(
-                            "READY · {:.1} sweeps/s · {:.0} div/s · {} dropped",
-                            cadence_rate, division_rate, dropped_sweeps_delta
-                        );
-                        drop(s);
-                        if last_waterfall_repaint.elapsed() >= waterfall_repaint_interval {
-                            last_waterfall_repaint = Instant::now();
-                            request_gui_repaint(&stream_repaint);
                         }
                     }
                     Err(err) => {
@@ -369,9 +383,57 @@ pub(crate) fn spawn_radio_worker(
                             s.radio_spectrum_enabled = false;
                             s.radio_waterfall_status = "NO FRAME".to_string();
                             s.last_error = Some(msg);
+                            continue;
                         }
                     }
                     _ => {}
+                }
+
+                // A complete IC-7300 sweep consists of 11 CI-V division
+                // frames. Keep that native measurement honest while scrolling
+                // the display at the selected host cadence by repeating the
+                // latest complete sweep between radio updates.
+                let display_interval_ms = {
+                    let tuning = stream_display_tuning.lock().expect("tuning lock poisoned");
+                    effective_visual_profile(&tuning, &mode).0
+                };
+                let display_due =
+                    last_display_row.elapsed() >= Duration::from_millis(display_interval_ms);
+                if display_due {
+                    if let Some(bins) = latest_scope_bins.as_deref() {
+                        let mut s = stream_state.lock().expect("ui state lock poisoned");
+                        apply_waterfall_bins(&mut s, bins);
+                        display_rows += 1;
+                        last_display_row = Instant::now();
+                    }
+                }
+
+                let elapsed = cadence_started.elapsed();
+                if elapsed >= Duration::from_secs(1) {
+                    cadence_rate = cadence_sweeps as f32 / elapsed.as_secs_f32();
+                    display_rate = display_rows as f32 / elapsed.as_secs_f32();
+                    let (divisions, _, dropped) = stream_radio.scope_stream_counters();
+                    division_rate = divisions.saturating_sub(last_scope_divisions) as f32
+                        / elapsed.as_secs_f32();
+                    dropped_sweeps_delta = dropped.saturating_sub(last_dropped_sweeps);
+                    last_scope_divisions = divisions;
+                    last_dropped_sweeps = dropped;
+                    cadence_sweeps = 0;
+                    display_rows = 0;
+                    cadence_started = Instant::now();
+                }
+
+                if display_due && latest_scope_bins.is_some() {
+                    let mut s = stream_state.lock().expect("ui state lock poisoned");
+                    s.radio_waterfall_status = format!(
+                        "READY · {:.1} native/s · {:.1} rows/s · {:.0} div/s · {} dropped",
+                        cadence_rate, display_rate, division_rate, dropped_sweeps_delta
+                    );
+                    drop(s);
+                    if last_waterfall_repaint.elapsed() >= waterfall_repaint_interval {
+                        last_waterfall_repaint = Instant::now();
+                        request_gui_repaint(&stream_repaint);
+                    }
                 }
             }
         });
@@ -1449,7 +1511,6 @@ fn configure_radio_scope(
     hold_update: Option<bool>,
     reference_tenths_db_update: Option<i16>,
 ) -> Result<()> {
-    rt.block_on(radio.set_scope_sweep_speed(config.sweep_code))?;
     if let Some(reference_tenths_db) = reference_tenths_db_update {
         rt.block_on(radio.set_scope_reference_level_tenths_db(reference_tenths_db))?;
     }
@@ -1482,6 +1543,9 @@ fn configure_radio_scope(
     if let Some(hold) = hold_update {
         rt.block_on(radio.set_scope_hold(hold))?;
     }
+    // Geometry and mode changes can restore the radio's stored sweep setting,
+    // so make the requested speed the final configuration command.
+    rt.block_on(radio.set_scope_sweep_speed(config.sweep_code))?;
     Ok(())
 }
 

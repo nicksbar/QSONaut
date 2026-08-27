@@ -10,14 +10,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 - Added web-ready application screenshots for the README, including the
   operating-activity and SWR workflow panels.
+- Added manufacturer and per-model radio FAQ and Guide documents for every
+  current generic and supported radio profile, with separate in-app links.
 
 ### Changed
+- Added a per-profile Waterfall speed / frame cap selector with Auto, Fast,
+  Mid, and Slow choices; corrected the IC-7300 CI-V mapping (`00=Fast`,
+  `01=Mid`, `02=Slow`) so the controls match the radio's command table.
+- Restored a tunable host display cadence for the IC-7300 waterfall while
+  reporting the radio's lower native complete-sweep rate separately.
+- Reapply the selected IC-7300 sweep speed after scope geometry changes and
+  stream startup so the radio cannot silently restore its stored Slow setting.
 - Rebased Windows UI scale presets so the physical size previously labelled
   75% is available as the Windows 100% baseline while preserving smaller and
   larger choices; Linux and macOS retain independent tunable adjustments.
 - Updated the SWR sweep to follow the IC-7300 plot procedure: select an RTTY
   carrier, use approximately 30 W, read the SWR meter while keyed, and then
   unkey before changing frequency.
+- Reworked the radio help panel so model and manufacturer documentation open
+  in separate movable, resizable windows; model files now live in one folder
+  per radio under `docs/radios/models/`.
 
 ### Fixed
 - Kept profile saves isolated from the active-profile pointer so renaming or

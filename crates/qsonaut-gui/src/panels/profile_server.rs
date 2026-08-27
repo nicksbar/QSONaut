@@ -1277,29 +1277,51 @@ impl QsonautGuiApp {
         }
 
         ui.add_space(6.0);
-        ui.label(RichText::new("Sweep speed").strong());
-        ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("Waterfall speed / frame cap").strong());
+        ui.label(
+            RichText::new(
+                "Controls the native radio sweep speed and the host update cadence for both waterfalls.",
+            )
+            .small()
+            .color(Color32::GRAY),
+        );
+        let mut visual_changed = false;
+        {
             let mut tuning = self.display_tuning.lock().expect("tuning lock poisoned");
-            if ui.selectable_label(tuning.auto_visual, "Auto").clicked() {
-                tuning.auto_visual = true;
-            }
-            for (speed, label) in [
-                (WaterfallSpeed::Fast, "Fast"),
-                (WaterfallSpeed::Mid, "Mid"),
-                (WaterfallSpeed::Slow, "Slow"),
-            ] {
-                if ui
-                    .selectable_label(
-                        !tuning.auto_visual && tuning.waterfall_speed == speed,
-                        label,
-                    )
-                    .clicked()
-                {
-                    tuning.auto_visual = false;
-                    tuning.waterfall_speed = speed;
-                }
-            }
-        });
+            let selected = if tuning.auto_visual {
+                "Auto"
+            } else {
+                tuning.waterfall_speed.label()
+            };
+            egui::ComboBox::from_id_salt("waterfall_speed_settings")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_value(&mut tuning.auto_visual, true, "Auto")
+                        .changed()
+                    {
+                        visual_changed = true;
+                    }
+                    for speed in [
+                        WaterfallSpeed::Fast,
+                        WaterfallSpeed::Mid,
+                        WaterfallSpeed::Slow,
+                    ] {
+                        let was_manual = !tuning.auto_visual && tuning.waterfall_speed == speed;
+                        if ui.selectable_label(was_manual, speed.label()).clicked() {
+                            tuning.auto_visual = false;
+                            if tuning.waterfall_speed != speed {
+                                tuning.waterfall_speed = speed;
+                            }
+                            visual_changed = true;
+                        }
+                    }
+                });
+        }
+        if visual_changed {
+            self.profile_dirty = true;
+            self.persist_profile("Auto-saved");
+        }
 
         if supports_radio_scope {
             ui.add_space(6.0);
