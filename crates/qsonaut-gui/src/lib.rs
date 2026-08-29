@@ -77,6 +77,7 @@ const QSONAUT_ICON_PNG: &[u8] = include_bytes!("../../../assets/branding/qsonaut
 const QSONAUT_GITHUB_URL: &str = "https://github.com/nicksbar/QSONaut";
 const QSONAUT_ISSUES_URL: &str = "https://github.com/nicksbar/QSONaut/issues";
 const QSONAUT_WEBSITE_URL: &str = "https://qsonaut.com";
+const AUDIO_FAQ: &str = include_str!("../../../docs/audio_faq.md");
 
 fn qsonaut_contributors() -> &'static str {
     match option_env!("QSONAUT_CONTRIBUTORS") {
@@ -215,6 +216,7 @@ enum ProfileDrawerTab {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RadioHelpDocument {
+    Audio,
     Manufacturer,
     Model,
 }
@@ -1835,6 +1837,9 @@ struct QsonautGuiApp {
     waterfall_deck_height: f32,
     waterfall_deck_resize_pending: bool,
     show_signal_panel: bool,
+    show_meter_panel: bool,
+    meter_panel_was_tx: bool,
+    meter_panel_close_deadline: Option<Instant>,
     show_profile_drawer: bool,
     profile_drawer_anchor: Option<egui::Pos2>,
     radio_faq_window_open: bool,
@@ -2747,6 +2752,9 @@ impl QsonautGuiApp {
             waterfall_deck_height,
             waterfall_deck_resize_pending: false,
             show_signal_panel: true,
+            show_meter_panel: false,
+            meter_panel_was_tx: false,
+            meter_panel_close_deadline: None,
             show_profile_drawer: false,
             profile_drawer_anchor: None,
             radio_faq_window_open: false,
@@ -4435,6 +4443,87 @@ impl QsonautGuiApp {
         });
     }
 
+    fn draw_meter_display(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        let s_meter = meter_value(snapshot, MeterId::Signal);
+        let s_percent = s_meter.map(meter_percent).unwrap_or_default();
+        let s_response = ui
+            .add(
+                egui::ProgressBar::new(s_percent)
+                    .desired_width(220.0)
+                    .fill(meter_color(MeterId::Signal, s_meter))
+                    .text(format!("S-METER {}", format_meter_value(s_meter))),
+            )
+            .on_hover_text("Click to open the radio meter panel");
+        let s_click = ui.interact(
+            s_response.rect,
+            ui.id().with("s_meter_toggle"),
+            egui::Sense::click(),
+        );
+        if s_click.clicked() {
+            self.show_meter_panel = !self.show_meter_panel;
+            self.meter_panel_close_deadline = None;
+        }
+
+        ui.separator();
+        ui.label(RichText::new("RADIO METERS").small().strong());
+        for id in general_meter_order() {
+            if id == MeterId::Signal || !snapshot.supported_meters.contains(&id) {
+                continue;
+            }
+            let value = meter_value(snapshot, id);
+            ui.add(
+                egui::ProgressBar::new(value.map(meter_percent).unwrap_or_default())
+                    .desired_width(105.0)
+                    .fill(meter_color(id, value))
+                    .text(format!("{} {}", meter_label(id), format_meter_value(value))),
+            );
+        }
+
+        if self.show_meter_panel {
+            ui.add_space(3.0);
+            egui::Frame::group(ui.style())
+                .fill(Color32::from_rgba_unmultiplied(18, 30, 42, 235))
+                .show(ui, |ui| {
+                    let phase = if snapshot.ptt_on { "TX" } else { "RX" };
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!(
+                                "{phase} METERS · {}",
+                                radio_mode_label(&snapshot.mode, snapshot.data_mode)
+                            ))
+                            .strong()
+                            .color(if snapshot.ptt_on {
+                                Color32::from_rgb(255, 145, 120)
+                            } else {
+                                Color32::from_rgb(120, 225, 255)
+                            }),
+                        );
+                        if snapshot.ptt_on {
+                            ui.label(RichText::new("● TRANSMIT").strong().color(Color32::RED));
+                        }
+                    });
+                    ui.separator();
+                    for id in mode_meter_order(snapshot.ptt_on) {
+                        if !snapshot.supported_meters.contains(&id) {
+                            continue;
+                        }
+                        let value = meter_value(snapshot, id);
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(meter_label(id)).monospace().strong());
+                            ui.add(
+                                egui::ProgressBar::new(
+                                    value.map(meter_percent).unwrap_or_default(),
+                                )
+                                .desired_width(ui.available_width().max(100.0))
+                                .fill(meter_color(id, value))
+                                .text(format_meter_value(value)),
+                            );
+                        });
+                    }
+                });
+        }
+    }
+
     fn draw_connection_status(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Connections").strong());
@@ -4904,6 +4993,24 @@ impl eframe::App for QsonautGuiApp {
         self.emit_radio_state_hook_if_changed(&snapshot);
         self.publish_server_presence(&snapshot);
 
+        // Keep the detailed meter panel visible throughout TX and briefly
+        // afterward so the operator can see the final transmit readings.
+        let now = Instant::now();
+        if snapshot.ptt_on {
+            self.show_meter_panel = true;
+            self.meter_panel_close_deadline = None;
+        } else if self.meter_panel_was_tx {
+            self.meter_panel_close_deadline = Some(now + Duration::from_secs(2));
+        }
+        self.meter_panel_was_tx = snapshot.ptt_on;
+        if self
+            .meter_panel_close_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.show_meter_panel = false;
+            self.meter_panel_close_deadline = None;
+        }
+
         // New panel identity intentionally discards the legacy fixed-height
         // state; this header is measured entirely from its current contents.
         egui::TopBottomPanel::top("header_content_sized")
@@ -5284,6 +5391,7 @@ impl eframe::App for QsonautGuiApp {
                                 "Active radio profile\n{active_profile}\nThis profile owns the radio connection and its per-radio settings."
                             ));
                     });
+                    self.draw_meter_display(ui, &snapshot);
                         self.draw_banner_radio_controls(ui, &snapshot);
                     });
                     let radio_ready = snapshot.radio_power_on == Some(true)
@@ -6261,6 +6369,7 @@ impl eframe::App for QsonautGuiApp {
             let help = help_for_model(&self.radio_help_window_model);
             let mut faq_open = self.radio_faq_window_open;
             let (faq_title, faq_document) = match self.radio_faq_document {
+                RadioHelpDocument::Audio => ("Audio FAQ", AUDIO_FAQ),
                 RadioHelpDocument::Manufacturer => ("Manufacturer FAQ", help.manufacturer_faq),
                 RadioHelpDocument::Model => ("Model FAQ", help.model_faq),
             };
@@ -6283,6 +6392,7 @@ impl eframe::App for QsonautGuiApp {
 
             let mut guide_open = self.radio_guide_window_open;
             let (guide_title, guide_document) = match self.radio_guide_document {
+                RadioHelpDocument::Audio => ("Audio FAQ", AUDIO_FAQ),
                 RadioHelpDocument::Manufacturer => ("Manufacturer Guide", help.manufacturer_guide),
                 RadioHelpDocument::Model => ("Model Guide", help.model_guide),
             };
@@ -6548,9 +6658,106 @@ fn radio_port_inventory(
     (ports, labels, models)
 }
 
+fn general_meter_order() -> [MeterId; 8] {
+    [
+        MeterId::Signal,
+        MeterId::Power,
+        MeterId::Swr,
+        MeterId::Alc,
+        MeterId::Compression,
+        MeterId::Current,
+        MeterId::Voltage,
+        MeterId::Temperature,
+    ]
+}
+
+fn mode_meter_order(transmitting: bool) -> [MeterId; 8] {
+    if transmitting {
+        [
+            MeterId::Power,
+            MeterId::Swr,
+            MeterId::Alc,
+            MeterId::Compression,
+            MeterId::Current,
+            MeterId::Voltage,
+            MeterId::Temperature,
+            MeterId::Signal,
+        ]
+    } else {
+        general_meter_order()
+    }
+}
+
+fn meter_value(snapshot: &GuiState, id: MeterId) -> Option<u8> {
+    match id {
+        MeterId::Signal => snapshot.signal_meter,
+        MeterId::Power => snapshot.power_meter,
+        MeterId::Swr => snapshot.swr,
+        MeterId::Alc => snapshot.alc_meter,
+        MeterId::Compression => snapshot.compression_meter,
+        MeterId::Current => snapshot.current_meter,
+        MeterId::Voltage => snapshot.voltage_meter,
+        MeterId::Temperature => snapshot.temperature_meter,
+    }
+}
+
+fn meter_percent(value: u8) -> f32 {
+    f32::from(value) / 255.0
+}
+
+fn format_meter_value(value: Option<u8>) -> String {
+    value
+        .map(|value| format!("{:.0}%", f32::from(value) * 100.0 / 255.0))
+        .unwrap_or_else(|| "—".to_string())
+}
+
+fn meter_label(id: MeterId) -> &'static str {
+    match id {
+        MeterId::Signal => "S-METER",
+        MeterId::Power => "POWER",
+        MeterId::Swr => "SWR",
+        MeterId::Alc => "ALC",
+        MeterId::Compression => "COMP",
+        MeterId::Current => "CURRENT",
+        MeterId::Voltage => "VOLTAGE",
+        MeterId::Temperature => "TEMP",
+    }
+}
+
+fn meter_color(id: MeterId, value: Option<u8>) -> Color32 {
+    if value.is_none() {
+        return Color32::GRAY;
+    }
+    let value = value.unwrap_or_default();
+    match id {
+        MeterId::Swr if value >= 190 => Color32::RED,
+        MeterId::Swr if value >= 130 => Color32::YELLOW,
+        MeterId::Power | MeterId::Alc | MeterId::Compression if value >= 220 => {
+            Color32::from_rgb(255, 145, 100)
+        }
+        _ => Color32::from_rgb(100, 210, 150),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meter_display_orders_rx_and_tx_values_for_operator_context() {
+        assert_eq!(mode_meter_order(false)[0], MeterId::Signal);
+        assert_eq!(mode_meter_order(true)[0], MeterId::Power);
+        assert_eq!(mode_meter_order(true)[1], MeterId::Swr);
+        assert_eq!(meter_label(MeterId::Temperature), "TEMP");
+    }
+
+    #[test]
+    fn meter_display_normalizes_hal_levels() {
+        assert_eq!(meter_percent(0), 0.0);
+        assert_eq!(meter_percent(255), 1.0);
+        assert_eq!(format_meter_value(Some(128)), "50%");
+        assert_eq!(format_meter_value(None), "—");
+    }
 
     #[test]
     fn radio_profiles_apply_only_to_the_native_backend() {
