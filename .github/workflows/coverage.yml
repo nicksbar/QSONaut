@@ -1,0 +1,65 @@
+name: Coverage
+
+"on":
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  llvm:
+    name: Tests and LLVM coverage
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out QSONaut
+        uses: actions/checkout@v6
+
+      - name: Install native and LLVM dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev llvm
+
+      - name: Install Rust coverage tools
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --locked
+
+      - name: Run the complete test suite
+        run: cargo test --locked --workspace --all-targets
+
+      - name: Enforce workspace coverage baseline
+        run: |
+          set -o pipefail
+          cargo llvm-cov --locked --all-features --workspace --summary-only | tee coverage-summary.txt
+          bash scripts/check-coverage.sh coverage-summary.txt
+
+      - name: Generate HTML coverage report
+        run: cargo llvm-cov --locked --all-features --workspace --html --output-dir target/llvm-cov
+
+      - name: Publish test and coverage summary
+        if: always()
+        run: |
+          {
+            echo '## Test and LLVM coverage'
+            echo
+            echo 'The complete test suite and HTML coverage report are available in the workflow artifacts.'
+            echo
+            echo '### Coverage summary'
+            echo
+            if [[ -f coverage-summary.txt ]]; then
+              cat coverage-summary.txt
+              echo
+              bash scripts/check-coverage.sh coverage-summary.txt
+            else
+              echo 'Coverage summary was not generated.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload HTML coverage report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: qsonaut-llvm-coverage
+          path: target/llvm-cov/html
+          if-no-files-found: error
