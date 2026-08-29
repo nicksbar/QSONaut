@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Check out QSONaut
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Install native and LLVM dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev llvm
