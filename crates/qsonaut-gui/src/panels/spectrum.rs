@@ -10,46 +10,62 @@ fn draw_scope_attribution(
 ) {
     let blank_height =
         scope_rect.height() * (capacity.saturating_sub(rows) as f32 / capacity.max(1) as f32);
-    if blank_height < 74.0 {
+    if rows >= capacity || blank_height <= 0.0 {
         return;
     }
 
     let card_width = (scope_rect.width() - 24.0).clamp(240.0, 440.0);
-    let card_height = 64.0;
+    let card_height = 82.0;
     let card = egui::Rect::from_min_size(
         egui::pos2(
             scope_rect.center().x - card_width / 2.0,
-            scope_rect.top() + (blank_height - card_height).clamp(8.0, 18.0),
+            scope_rect.top() + blank_height - card_height - 8.0,
         ),
         egui::vec2(card_width, card_height),
     );
     let painter = ui.painter();
-    painter.rect_filled(card, 5.0, Color32::from_rgba_unmultiplied(8, 18, 28, 220));
+    painter.rect_filled(card, 5.0, Color32::from_rgba_unmultiplied(7, 20, 31, 232));
     painter.rect_stroke(
         card,
         5.0,
-        egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(110, 210, 235, 150)),
+        egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(110, 210, 235, 190)),
         egui::StrokeKind::Inside,
     );
+    painter.rect_filled(
+        egui::Rect::from_min_max(
+            card.left_top(),
+            egui::pos2(card.left() + 3.0, card.bottom()),
+        ),
+        2.0,
+        Color32::from_rgb(75, 205, 235),
+    );
     let font = egui::TextStyle::Small.resolve(ui.style());
+    let mono = egui::TextStyle::Monospace.resolve(ui.style());
     painter.text(
         card.left_top() + egui::vec2(10.0, 7.0),
         egui::Align2::LEFT_TOP,
-        format!("QSONaut · {title}"),
-        font.clone(),
+        format!("QSONAUT  //  {title}"),
+        mono,
         Color32::from_rgb(130, 225, 245),
     );
     painter.text(
         card.left_top() + egui::vec2(10.0, 25.0),
         egui::Align2::LEFT_TOP,
-        format!("Contributors · {}", qsonaut_contributors()),
+        format!("v{}  ·  Developed by N7UF", env!("CARGO_PKG_VERSION")),
         font.clone(),
-        Color32::from_gray(210),
+        Color32::from_rgb(235, 205, 125),
     );
     painter.text(
         card.left_top() + egui::vec2(10.0, 43.0),
         egui::Align2::LEFT_TOP,
-        format!("Testers · {}", qsonaut_testers()),
+        format!("Contributors  ·  {}", qsonaut_contributors()),
+        font.clone(),
+        Color32::from_gray(210),
+    );
+    painter.text(
+        card.left_top() + egui::vec2(10.0, 61.0),
+        egui::Align2::LEFT_TOP,
+        format!("Testers  ·  {}", qsonaut_testers()),
         font,
         Color32::from_gray(185),
     );
@@ -543,15 +559,16 @@ impl QsonautGuiApp {
             * AUDIO_BINS as f32)
             .round() as usize;
         let display_bins = display_bins.clamp(16, AUDIO_BINS);
-        // Capture layout geometry before texture ops — available_width() can change mid-frame.
+        // The monitor deck itself grows with history. Keep this image filling
+        // the deck so the waterfall remains a stable, useful surface.
         let display_size = egui::vec2(
             ui.available_width().max(1.0),
             (ui.available_height() - 4.0).max(56.0),
         );
-        let render_height = snapshot
-            .audio_waterfall_rows
-            .len()
-            .clamp(1, AUDIO_WF_HEIGHT);
+        // Render the complete history canvas from the first frame. Missing
+        // rows remain above the live data, allowing the in-scope attribution
+        // to recede naturally as audio history fills in, just like CI-V.
+        let render_height = AUDIO_WF_HEIGHT;
 
         if self.audio_waterfall_texture.is_none()
             || self.audio_waterfall_texture_revision != snapshot.audio_waterfall_revision

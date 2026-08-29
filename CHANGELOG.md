@@ -7,6 +7,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- Added independent audio and native CI-V waterfall controls and themes,
+  with a disabled IQ/SDR discovery button for future supported-radio work.
+- Added live native radio scope presentation with startup attribution for
+  QSONaut contributors and testers.
+
+### Changed
+- Reworked the waterfall deck into a user-resizable panel with responsive
+  audio/radio splitting; scope history now renders against its full canvas so
+  startup data fills naturally instead of stretching across the display.
+- Moved the Activity/Profile summary into the branding area, showing the
+  active call text and station callsign/grid while leaving radio profile and
+  power status independently visible in the top-right header.
+- Enlarged and refined the QSONaut branding and activity identity treatment.
+
 ## [0.3.12] - 2026-08-26
 
 ### Added

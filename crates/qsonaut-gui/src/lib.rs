@@ -3206,7 +3206,7 @@ impl QsonautGuiApp {
             let remaining = until.saturating_duration_since(Instant::now());
             (1.0 - remaining.as_secs_f32() / 0.7).clamp(0.0, 1.0) * std::f32::consts::TAU
         });
-        let logo = egui::Image::new((self.brand_icon.id(), egui::vec2(48.0, 48.0)))
+        let logo = egui::Image::new((self.brand_icon.id(), egui::vec2(56.0, 56.0)))
             .corner_radius(8.0)
             .rotate(spin_angle, egui::Vec2::splat(0.5))
             .sense(egui::Sense::click());
@@ -3226,13 +3226,13 @@ impl QsonautGuiApp {
             ui.label(
                 RichText::new("QSONaut")
                     .strong()
-                    .size(28.0)
+                    .size(32.0)
                     .color(Color32::from_rgb(109, 224, 255)),
             );
             ui.label(
                 RichText::new("AMATEUR RADIO MISSION CONTROL")
                     .strong()
-                    .size(9.0)
+                    .size(10.0)
                     .color(Color32::from_rgb(255, 137, 108)),
             );
         });
@@ -4534,6 +4534,105 @@ impl QsonautGuiApp {
         }
     }
 
+    fn draw_header_identity_and_activity(&self, ui: &mut egui::Ui) {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.horizontal_wrapped(|ui| {
+            let activity_profile = self.activity.profile();
+            ui.label(
+                RichText::new(format!("CALL · {}", activity_profile.tx_cq))
+                    .size(18.0)
+                    .monospace()
+                    .color(Color32::from_rgb(255, 190, 105)),
+            )
+            .on_hover_text(format!(
+                "Call behavior\nActivity: {}\nTransmit calling text: {}",
+                self.activity.label(),
+                activity_profile.tx_cq
+            ));
+            ui.label(RichText::new("·").color(Color32::DARK_GRAY));
+            ui.label(
+                RichText::new(format!(
+                    "📍 {} · {}",
+                    self.station_callsign_or_default(),
+                    self.station_grid_or_default()
+                ))
+                .strong()
+                .size(18.0)
+                .color(Color32::from_rgb(255, 210, 110)),
+            );
+            if let Some(client) = &self.server_client {
+                let server_status = client.status();
+                if server_status.state == ServerConnectionState::Connected
+                    && server_status.active_event_count > 0
+                {
+                    let label = if self.activity == OperatingActivity::Contest
+                        && self.contest_enabled
+                    {
+                        "✅ SERVER CONTEST · PARTICIPATING".to_string()
+                    } else {
+                        format!("✅ SERVER CONTEST · {} ACTIVE", server_status.active_event_count)
+                    };
+                    ui.label(
+                        RichText::new(label)
+                            .size(15.0)
+                            .strong()
+                            .color(Color32::from_rgb(125, 225, 150)),
+                    )
+                    .on_hover_text(format!(
+                        "Server contest status\nConnected server events: {}\nThis indicator reflects shared contest activity.",
+                        server_status.active_event_count
+                    ));
+                }
+            }
+        });
+    }
+
+    fn draw_power_button(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        let power_known = snapshot.radio_power_on.is_some();
+        let power_on = snapshot.radio_power_on.unwrap_or(false);
+        let (power_rect, power_button) = ui.allocate_exact_size(
+            egui::vec2(28.0, 28.0),
+            if snapshot.radio_power_supported && !snapshot.radio_power_command_pending {
+                egui::Sense::click()
+            } else {
+                egui::Sense::hover()
+            },
+        );
+        let power_color = if !snapshot.radio_power_supported {
+            Color32::DARK_GRAY
+        } else if !power_known {
+            Color32::GRAY
+        } else if power_on {
+            Color32::LIGHT_GREEN
+        } else {
+            Color32::GRAY
+        };
+        let painter = ui.painter_at(power_rect);
+        let center = power_rect.center();
+        painter.circle_stroke(center, 8.0, egui::Stroke::new(2.0_f32, power_color));
+        painter.line_segment(
+            [
+                egui::pos2(center.x, center.y - 11.0),
+                egui::pos2(center.x, center.y + 1.0),
+            ],
+            egui::Stroke::new(2.0_f32, power_color),
+        );
+        if power_button.clicked() {
+            self.state
+                .lock()
+                .expect("ui state lock poisoned")
+                .radio_power_command_pending = true;
+            self.send_command(GuiCommand::SetPower(!power_on));
+        }
+        power_button.on_hover_text(if !power_known {
+            "Radio power: unknown · click to turn on"
+        } else if power_on {
+            "Radio power: ON · click to turn off"
+        } else {
+            "Radio power: OFF · click to turn on"
+        });
+    }
+
     fn draw_connection_status(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Connections").strong());
@@ -5266,9 +5365,12 @@ impl eframe::App for QsonautGuiApp {
                     let header_row = ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 3.0;
                         ui.allocate_ui_with_layout(
-                            egui::vec2(360.0, 52.0),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| self.draw_header_branding(ui),
+                            egui::vec2(360.0, 116.0),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                ui.horizontal(|ui| self.draw_header_branding(ui));
+                                self.draw_header_identity_and_activity(ui);
+                            },
                         );
                         let (divider_marker, _) =
                             ui.allocate_exact_size(egui::vec2(1.0, 1.0), egui::Sense::hover());
@@ -5598,60 +5700,6 @@ impl eframe::App for QsonautGuiApp {
                             }
                         },
                     );
-                            ui.add_space(6.0);
-                            ui.separator();
-                            let activity_profile = self.activity.profile();
-                            ui.label(
-                                RichText::new(format!("CALL · {}", activity_profile.tx_cq))
-                                    .size(15.0)
-                                    .monospace()
-                                    .color(Color32::from_rgb(255, 190, 105)),
-                            )
-                            .on_hover_text(format!(
-                                "Call behavior\nActivity: {}\nTransmit calling text: {}",
-                                self.activity.label(),
-                                activity_profile.tx_cq
-                            ));
-                            if let Some(client) = &self.server_client {
-                                let server_status = client.status();
-                                if server_status.state == ServerConnectionState::Connected
-                                    && server_status.active_event_count > 0
-                                {
-                                    let label = if self.activity == OperatingActivity::Contest
-                                        && self.contest_enabled
-                                    {
-                                        "✅ SERVER CONTEST · PARTICIPATING".to_string()
-                                    } else {
-                                        format!(
-                                            "✅ SERVER CONTEST · {} ACTIVE",
-                                            server_status.active_event_count
-                                        )
-                                    };
-                                    ui.label(
-                                        RichText::new(label)
-                                            .size(15.0)
-                                            .strong()
-                                            .color(Color32::from_rgb(125, 225, 150)),
-                                    )
-                                    .on_hover_text(format!(
-                                        "Server contest status\nConnected server events: {}\nThis indicator reflects shared contest activity.",
-                                        server_status.active_event_count
-                                    ));
-                                }
-                            }
-                            let active_profile = self.active_radio_profile_name().unwrap_or("None");
-                            ui.label(
-                                RichText::new(format!("RADIO · {active_profile}"))
-                                    .size(15.0)
-                                    .color(if active_profile == "None" {
-                                        Color32::GRAY
-                                    } else {
-                                        Color32::from_rgb(255, 201, 92)
-                                    }),
-                            )
-                            .on_hover_text(format!(
-                                "Active radio profile\n{active_profile}\nThis profile owns the radio connection and its per-radio settings."
-                            ));
                     self.draw_banner_radio_controls(ui, &snapshot);
                     });
                     ui.horizontal(|ui| {
@@ -6242,66 +6290,6 @@ impl eframe::App for QsonautGuiApp {
                             }
                         });
                     });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let power_known = snapshot.radio_power_on.is_some();
-                        let power_on = snapshot.radio_power_on.unwrap_or(false);
-                        let (power_rect, power_button) = ui.allocate_exact_size(
-                            egui::vec2(28.0, 28.0),
-                            if snapshot.radio_power_supported
-                                && !snapshot.radio_power_command_pending
-                            {
-                                egui::Sense::click()
-                            } else {
-                                egui::Sense::hover()
-                            },
-                        );
-                        let power_color = if !snapshot.radio_power_supported {
-                            Color32::DARK_GRAY
-                        } else if !power_known {
-                            Color32::GRAY
-                        } else if power_on {
-                            Color32::LIGHT_GREEN
-                        } else {
-                            Color32::GRAY
-                        };
-                        let painter = ui.painter_at(power_rect);
-                        let center = power_rect.center();
-                        painter.circle_stroke(
-                            center,
-                            8.0,
-                            egui::Stroke::new(2.0_f32, power_color),
-                        );
-                        painter.line_segment(
-                            [
-                                egui::pos2(center.x, center.y - 11.0),
-                                egui::pos2(center.x, center.y + 1.0),
-                            ],
-                            egui::Stroke::new(2.0_f32, power_color),
-                        );
-                        if power_button.clicked() {
-                            self.state
-                                .lock()
-                                .expect("ui state lock poisoned")
-                                .radio_power_command_pending = true;
-                            self.send_command(GuiCommand::SetPower(!power_on));
-                        }
-                        power_button.on_hover_text(if !power_known {
-                            "Radio power: unknown · click to turn on"
-                        } else if power_on {
-                            "Radio power: ON · click to turn off"
-                        } else {
-                            "Radio power: OFF · click to turn on"
-                        });
-                        ui.label(
-                            RichText::new(format!(
-                                "📍 {} · {}",
-                                self.station_callsign_or_default(),
-                                self.station_grid_or_default()
-                            ))
-                            .strong()
-                            .color(Color32::from_rgb(255, 210, 110)),
-                        );
-                    });
                     });
                     });
                     });
@@ -6319,6 +6307,28 @@ impl eframe::App for QsonautGuiApp {
                     if commit_new_profile {
                         self.create_profile_from_tab_name();
                     }
+                });
+            });
+
+        egui::Area::new(egui::Id::new("radio_profile_power_top_right"))
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 6.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let active_profile = self.active_radio_profile_name().unwrap_or("None");
+                    ui.label(
+                        RichText::new(format!("RADIO · {active_profile}"))
+                            .small()
+                            .color(if active_profile == "None" {
+                                Color32::GRAY
+                            } else {
+                                Color32::from_rgb(255, 201, 92)
+                            }),
+                    )
+                    .on_hover_text(format!(
+                        "Active radio profile\n{active_profile}\nThis profile owns the radio connection and its per-radio settings."
+                    ));
+                    self.draw_power_button(ui, &snapshot);
                 });
             });
 
@@ -6609,38 +6619,37 @@ impl eframe::App for QsonautGuiApp {
             self.radio_guide_window_open = guide_open;
         }
 
+        let monitor_has_data = !snapshot.audio_waterfall_rows.is_empty()
+            || (radio_scope_visible && !snapshot.radio_waterfall_rows.is_empty());
+        if monitor_has_data {
+            // The waterfall deck is a real user-resizable panel. Its height
+            // must not track incoming rows or silently change the workspace
+            // layout while a radio is running.
+            egui::TopBottomPanel::top("waterfall_deck")
+                .resizable(true)
+                .default_height(260.0)
+                .height_range(80.0..=ctx.content_rect().height().max(240.0) * 0.75)
+                .show_separator_line(true)
+                .show(ctx, |ui| {
+                    if radio_scope_visible {
+                        let total_width = ui.available_width();
+                        let radio_default_width = total_width * 0.5;
+                        let radio_max_width = (total_width - 260.0).max(280.0);
+                        egui::SidePanel::left("radio_waterfall_split")
+                            .resizable(true)
+                            .default_width(radio_default_width)
+                            .width_range(280.0..=radio_max_width)
+                            .show_inside(ui, |ui| {
+                                self.draw_radio_waterfall(ui, ctx, &snapshot);
+                            });
+                        self.draw_audio_waterfall(ui, ctx, &snapshot);
+                    } else {
+                        self.draw_audio_waterfall(ui, ctx, &snapshot);
+                    }
+                });
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
-            let monitor_has_data = !snapshot.audio_waterfall_rows.is_empty()
-                || (radio_scope_visible && !snapshot.radio_waterfall_rows.is_empty());
-            if monitor_has_data {
-                // The monitor gets a proportional slice of the live viewport;
-                // the mode workspace receives the rest. There is no persisted
-                // pixel height and no empty monitor is allocated before data
-                // exists.
-                let monitor_height = (ui.available_height() * 0.42).clamp(80.0, 360.0);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), monitor_height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        if radio_scope_visible {
-                            let total_width = ui.available_width();
-                            let radio_default_width = total_width * 0.5;
-                            let radio_max_width = (total_width - 260.0).max(280.0);
-                            egui::SidePanel::left("radio_waterfall_split")
-                                .resizable(true)
-                                .default_width(radio_default_width)
-                                .width_range(280.0..=radio_max_width)
-                                .show_inside(ui, |ui| {
-                                    self.draw_radio_waterfall(ui, ctx, &snapshot);
-                                });
-                            self.draw_audio_waterfall(ui, ctx, &snapshot);
-                        } else {
-                            self.draw_audio_waterfall(ui, ctx, &snapshot);
-                        }
-                    },
-                );
-                ui.separator();
-            }
             self.draw_bounded_workspace(ui, ctx, &snapshot);
         });
     }
