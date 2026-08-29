@@ -6961,7 +6961,7 @@ fn draw_primary_meter(ui: &egui::Ui, rect: egui::Rect, label: &str, fraction: f3
     painter.rect_stroke(
         outer,
         egui::CornerRadius::same(7),
-        egui::Stroke::new(1.0, color.gamma_multiply(0.65)),
+        egui::Stroke::new(1.0_f32, color.gamma_multiply(0.65)),
         egui::StrokeKind::Inside,
     );
 

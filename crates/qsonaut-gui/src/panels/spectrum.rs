@@ -38,7 +38,7 @@ fn draw_scope_attribution(
     painter.rect_stroke(
         card,
         5.0,
-        egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(110, 210, 235, 190)),
+        egui::Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(110, 210, 235, 190)),
         egui::StrokeKind::Inside,
     );
     painter.rect_filled(
