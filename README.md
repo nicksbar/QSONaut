@@ -116,7 +116,7 @@ the per-file report is the source of truth for those areas.
 
 ### Coverage area snapshot
 
-The current baseline was measured on 2026-08-29 with 167 tests and 21.23%
+The current baseline was measured on 2026-08-29 with 176 tests and 21.65%
 workspace line coverage. These are grouped line-coverage figures from the
 same LLVM report; the downloadable HTML artifact remains the detailed,
 per-file source of truth.
@@ -131,10 +131,10 @@ per-file source of truth.
 | qsonaut-server-client | 267 / 633 | 42.18% |
 | qsonaut-audio | 327 / 906 | 36.09% |
 | qsonaut-core | 135 / 325 | 41.54% |
-| GUI core | 2,171 / 9,869 | 22.00% |
+| GUI core | 2,208 / 9,885 | 22.34% |
 | GUI workers | 322 / 1,747 | 18.43% |
-| GUI modes | 424 / 5,321 | 7.97% |
-| GUI panels | 31 / 2,837 | 1.09% |
+| GUI modes | 474 / 5,345 | 8.87% |
+| GUI panels | 68 / 2,853 | 2.38% |
 | Rigwright integration | 197 / 2,137 | 9.22% |
 | Application entry point | 0 / 467 | 0.00% |
 

@@ -75,3 +75,29 @@ impl QsonautGuiApp {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Submode;
+
+    #[test]
+    fn labels_and_durations_cover_every_fst4_submode() {
+        let expected = [
+            (Submode::S15, "FST4-15", 15.0),
+            (Submode::S30, "FST4-30", 30.0),
+            (Submode::S60, "FST4-60", 60.0),
+            (Submode::S120, "FST4-120", 120.0),
+            (Submode::S300, "FST4-300", 300.0),
+        ];
+
+        for (submode, label, seconds) in expected {
+            assert_eq!(submode.label(), label);
+            assert_eq!(submode.seconds(), seconds);
+        }
+    }
+
+    #[test]
+    fn fst4_defaults_to_the_sixty_second_submode() {
+        assert_eq!(Submode::default(), Submode::S60);
+    }
+}

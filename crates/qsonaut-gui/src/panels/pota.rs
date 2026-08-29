@@ -174,3 +174,27 @@ fn draw_pota_history_graph(ui: &mut egui::Ui, history: &VecDeque<(Instant, usize
         theme_muted(ui),
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{draw_pota_history_graph, format_frequency};
+    use std::collections::VecDeque;
+
+    #[test]
+    fn formats_pota_frequencies_in_human_readable_units() {
+        assert_eq!(format_frequency(14_074_000), "14.074000 MHz");
+        assert_eq!(format_frequency(144_300_000), "144.300000 MHz");
+        assert_eq!(format_frequency(999_900), "999.9 kHz");
+    }
+
+    #[test]
+    fn draws_an_empty_history_graph_without_data() {
+        let context = eframe::egui::Context::default();
+        let history = VecDeque::new();
+        let _ = context.run(Default::default(), |context| {
+            eframe::egui::CentralPanel::default().show(context, |ui| {
+                draw_pota_history_graph(ui, &history);
+            });
+        });
+    }
+}

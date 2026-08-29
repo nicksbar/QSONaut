@@ -175,3 +175,21 @@ impl QsonautGuiApp {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_beacon;
+
+    #[test]
+    fn parses_a_complete_type_one_beacon() {
+        assert_eq!(parse_beacon("K1ABC FN42 37"), Some(("K1ABC", "FN42", 37)));
+    }
+
+    #[test]
+    fn rejects_incomplete_invalid_and_extra_beacon_fields() {
+        assert_eq!(parse_beacon("K1ABC FN42"), None);
+        assert_eq!(parse_beacon("K1ABC FN42 nope"), None);
+        assert_eq!(parse_beacon("K1ABC FN42 37 extra"), None);
+        assert_eq!(parse_beacon(""), None);
+    }
+}
