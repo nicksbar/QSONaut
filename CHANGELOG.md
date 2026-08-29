@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.14] - 2026-08-29
+
 ### Added
 - Added independent audio and native CI-V waterfall controls and themes,
   with a disabled IQ/SDR discovery button for future supported-radio work.
@@ -14,6 +16,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   QSONaut contributors and testers.
 
 ### Changed
+- Updated `mfsk-core` to upstream revision `1ba4450`, adding the latest FT4
+  mixed-radix FFT and filtered-DDC candidate pipeline, sync-search
+  optimizations, golden/equivalence coverage, and embedded benchmark work.
 - Reworked the waterfall deck into a user-resizable panel with responsive
   audio/radio splitting; scope history now renders against its full canvas so
   startup data fills naturally instead of stretching across the display.
