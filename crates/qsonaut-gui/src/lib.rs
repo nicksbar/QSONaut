@@ -1839,7 +1839,6 @@ struct QsonautGuiApp {
     radio_scope_lock_if_to_filter: bool,
     waterfall_theme: WaterfallTheme,
     waterfall_deck_height: f32,
-    waterfall_deck_resize_pending: bool,
     show_signal_panel: bool,
     show_meter_panel: bool,
     meter_panel_was_tx: bool,
@@ -2754,7 +2753,6 @@ impl QsonautGuiApp {
             radio_scope_lock_if_to_filter: true,
             waterfall_theme,
             waterfall_deck_height,
-            waterfall_deck_resize_pending: false,
             show_signal_panel: true,
             show_meter_panel: false,
             meter_panel_was_tx: false,
@@ -3036,7 +3034,7 @@ impl QsonautGuiApp {
             })
             .unwrap_or_else(|| format!("📻 {}", selected_activity.label()));
         let previous_interact_height = ui.spacing().interact_size.y;
-        ui.spacing_mut().interact_size.y = 64.0;
+        ui.spacing_mut().interact_size.y = 28.0;
         ui.menu_button(
             RichText::new(activity_button_label)
                 .strong()
@@ -3197,7 +3195,7 @@ impl QsonautGuiApp {
             let remaining = until.saturating_duration_since(Instant::now());
             (1.0 - remaining.as_secs_f32() / 0.7).clamp(0.0, 1.0) * std::f32::consts::TAU
         });
-        let logo = egui::Image::new((self.brand_icon.id(), egui::vec2(68.0, 68.0)))
+        let logo = egui::Image::new((self.brand_icon.id(), egui::vec2(48.0, 48.0)))
             .corner_radius(8.0)
             .rotate(spin_angle, egui::Vec2::splat(0.5))
             .sense(egui::Sense::click());
@@ -3217,13 +3215,13 @@ impl QsonautGuiApp {
             ui.label(
                 RichText::new("QSONaut")
                     .strong()
-                    .size(36.0)
+                    .size(28.0)
                     .color(Color32::from_rgb(109, 224, 255)),
             );
             ui.label(
                 RichText::new("AMATEUR RADIO MISSION CONTROL")
                     .strong()
-                    .size(12.0)
+                    .size(9.0)
                     .color(Color32::from_rgb(255, 137, 108)),
             );
         });
@@ -4470,28 +4468,6 @@ impl QsonautGuiApp {
             self.meter_panel_close_deadline = None;
         }
 
-        ui.separator();
-        ui.horizontal_wrapped(|ui| {
-            for id in general_meter_order() {
-                if id == primary_id
-                    || !snapshot.supported_meters.contains(&id)
-                    || (snapshot.ptt_on && id == MeterId::Signal)
-                {
-                    continue;
-                }
-                let value = meter_value(snapshot, id);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(meter_label(id)).small().monospace().strong());
-                    ui.add(
-                        egui::ProgressBar::new(value.map(meter_percent).unwrap_or_default())
-                            .desired_width(92.0)
-                            .desired_height(11.0)
-                            .fill(meter_color(id, value)),
-                    );
-                });
-            }
-        });
-
         if self.show_meter_panel {
             let drawer_position = egui::pos2(primary_rect.left(), primary_rect.bottom() + 5.0);
             egui::Area::new(ui.id().with("meter_drawer_overlay"))
@@ -4656,7 +4632,7 @@ impl QsonautGuiApp {
 
     fn draw_banner_radio_controls(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         let supports_levels = snapshot.supported_controls.contains(&ControlId::AfGain);
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             ui.scope(|ui| {
                 ui.spacing_mut().item_spacing.x = 7.0;
                 ui.spacing_mut().button_padding.x = 4.0;
@@ -5033,15 +5009,15 @@ impl eframe::App for QsonautGuiApp {
             self.meter_panel_close_deadline = None;
         }
 
-        // New panel identity intentionally discards the legacy fixed-height
-        // state; this header is measured entirely from its current contents.
-        egui::TopBottomPanel::top("header_content_sized")
+        // Use a compact, stable rail so the responsive control rows do not
+        // inherit stale panel height or consume the waterfall's workspace.
+        egui::TopBottomPanel::top("header_control_deck")
             .resizable(false)
             .show(ctx, |ui| {
                 ui.scope(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(9.0, 5.0);
-                    ui.spacing_mut().button_padding = egui::vec2(8.0, 8.0);
-                    ui.style_mut().override_font_id = Some(egui::FontId::proportional(15.0));
+                    ui.spacing_mut().item_spacing = egui::vec2(7.0, 2.0);
+                    ui.spacing_mut().button_padding = egui::vec2(7.0, 3.0);
+                    ui.style_mut().override_font_id = Some(egui::FontId::proportional(13.0));
                     let visuals = ui.visuals_mut();
                     visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(8);
                     visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(8);
@@ -5055,7 +5031,7 @@ impl eframe::App for QsonautGuiApp {
                     let header_row = ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 3.0;
                         ui.allocate_ui_with_layout(
-                            egui::vec2(420.0, 68.0),
+                            egui::vec2(360.0, 52.0),
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| self.draw_header_branding(ui),
                         );
@@ -5063,7 +5039,7 @@ impl eframe::App for QsonautGuiApp {
                             ui.allocate_exact_size(egui::vec2(1.0, 1.0), egui::Sense::hover());
                         section_divider_x = Some(divider_marker.center().x);
                         ui.vertical(|ui| {
-                    if !radio_tabs.is_empty() {
+                            if !radio_tabs.is_empty() {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 3.0;
                             for name in radio_tabs {
@@ -5206,7 +5182,7 @@ impl eframe::App for QsonautGuiApp {
                         ui.visuals().widgets.noninteractive.bg_stroke,
                     );
                     ui.add_space(1.0);
-                    ui.horizontal_wrapped(|ui| {
+                    ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 3.0;
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
@@ -5441,14 +5417,14 @@ impl eframe::App for QsonautGuiApp {
                             .on_hover_text(format!(
                                 "Active radio profile\n{active_profile}\nThis profile owns the radio connection and its per-radio settings."
                             ));
+                    self.draw_banner_radio_controls(ui, &snapshot);
                     });
-                    self.draw_meter_display(ui, &snapshot);
-                        self.draw_banner_radio_controls(ui, &snapshot);
-                    });
+                    ui.horizontal(|ui| {
+                        self.draw_meter_display(ui, &snapshot);
                     let radio_ready = snapshot.radio_power_on == Some(true)
                         && !snapshot.radio_power_command_pending;
                     let supports_control = |id| snapshot.supported_controls.contains(&id);
-                    ui.scope(|ui| {
+                        ui.scope(|ui| {
                         ui.spacing_mut().button_padding.y = 4.0;
                         ui.horizontal(|ui| {
                             ui.separator();
@@ -5509,7 +5485,7 @@ impl eframe::App for QsonautGuiApp {
                         );
                             }
                         });
-                    });
+                        });
                     if supports_control(ControlId::Tuner) {
                         let tuner_color = if snapshot.tuner_status.is_some_and(|status| status.tuning) {
                             Color32::YELLOW
@@ -5874,15 +5850,9 @@ impl eframe::App for QsonautGuiApp {
                                     ui.horizontal(|ui| {
                                         ui.label(label);
                                         let fraction = value.map_or(0.0, |raw| f32::from(raw) / 255.0);
-                                        let text = if id == MeterId::Swr {
-                                            format_swr_display(&self.config.radio.model, value)
-                                        } else {
-                                            value.map_or_else(|| "—".to_string(), |raw| format!("{raw}/255"))
-                                        };
                                         ui.add(
                                             egui::ProgressBar::new(fraction)
-                                                .desired_width(120.0)
-                                                .text(text),
+                                                .desired_width(120.0),
                                         );
                                     });
                                 }
@@ -6097,7 +6067,9 @@ impl eframe::App for QsonautGuiApp {
                         );
                     });
                     });
-                        });
+                    });
+                    });
+                    });
                     });
                     if let Some(divider_x) = section_divider_x {
                         ui.painter().line_segment(
@@ -6120,71 +6092,9 @@ impl eframe::App for QsonautGuiApp {
         let radio_scope_visible = self.civ_spectrum_on
             && supports_radio_scope
             && !snapshot.radio_waterfall_status.starts_with("UNAVAILABLE");
-        let monitor_min_height = 170.0;
-        let monitor_max_height = 560.0_f32.min(ctx.content_rect().height() * 0.75).max(170.0);
-        self.waterfall_deck_height = self
-            .waterfall_deck_height
-            .clamp(monitor_min_height, monitor_max_height);
-        let waterfall_panel_id = egui::Id::new("waterfall_monitor_deck");
-        let previous_deck_height = self.waterfall_deck_height;
-        egui::TopBottomPanel::top(waterfall_panel_id)
-            .resizable(true)
-            .show_separator_line(true)
-            .default_height(self.waterfall_deck_height)
-            .height_range(monitor_min_height..=monitor_max_height)
-            .show(ctx, |ui| {
-                // Own exactly the remainder of the panel. Waterfall controls and
-                // images may clip inside this child, but they must never enlarge
-                // the parent response and ratchet the saved panel height upward.
-                let deck_rect = ui.available_rect_before_wrap();
-                ui.allocate_rect(deck_rect, egui::Sense::hover());
-                let mut deck_ui = ui.new_child(
-                    egui::UiBuilder::new()
-                        .id_salt("waterfall_deck_contents")
-                        .max_rect(deck_rect)
-                        .layout(egui::Layout::top_down(egui::Align::Min)),
-                );
-                deck_ui.set_clip_rect(deck_rect);
-                if radio_scope_visible {
-                    let total_width = deck_ui.available_width();
-                    let radio_default_width = total_width * 0.5;
-                    let radio_max_width = (total_width - 260.0).max(280.0);
-                    egui::SidePanel::left("radio_waterfall_split")
-                        .resizable(true)
-                        .default_width(radio_default_width)
-                        .width_range(280.0..=radio_max_width)
-                        .show_inside(&mut deck_ui, |ui| {
-                            self.draw_radio_waterfall(ui, ctx, &snapshot);
-                        });
-                    self.draw_audio_waterfall(&mut deck_ui, ctx, &snapshot);
-                } else {
-                    self.draw_audio_waterfall(&mut deck_ui, ctx, &snapshot);
-                }
-            });
-        let actual_deck_height = egui::containers::panel::PanelState::load(ctx, waterfall_panel_id)
-            .map(|state| state.size().y)
-            .unwrap_or(previous_deck_height)
-            .clamp(monitor_min_height, monitor_max_height);
-        if (actual_deck_height - previous_deck_height).abs() > 0.5 {
-            info!(
-                previous_height = previous_deck_height,
-                actual_height = actual_deck_height,
-                "Waterfall panel resized"
-            );
-            self.waterfall_deck_height = actual_deck_height;
-            self.profile_dirty = true;
-            self.waterfall_deck_resize_pending = true;
-        }
-        // Native panel state owns live dragging. Persist only on release so
-        // profile I/O never fights the pointer or forces an old height back.
-        if self.waterfall_deck_resize_pending && ctx.input(|input| input.pointer.any_released()) {
-            self.waterfall_deck_resize_pending = false;
-            self.persist_profile("Auto-saved");
-        }
-
         // Bottom panels are stacked in declaration order: the first one owns
-        // the outermost bottom strip. Declare the compact status strip first
-        // so it remains below the resizable contact log.
+        // the outermost bottom strip. The monitor is rendered in the remaining
+        // central region below, so its height follows the window naturally.
         egui::TopBottomPanel::bottom("connection_status")
             .resizable(false)
             .exact_height(30.0)
@@ -6468,6 +6378,37 @@ impl eframe::App for QsonautGuiApp {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            let monitor_has_data = !snapshot.audio_waterfall_rows.is_empty()
+                || (radio_scope_visible && !snapshot.radio_waterfall_rows.is_empty());
+            if monitor_has_data {
+                // The monitor gets a proportional slice of the live viewport;
+                // the mode workspace receives the rest. There is no persisted
+                // pixel height and no empty monitor is allocated before data
+                // exists.
+                let monitor_height = (ui.available_height() * 0.42).clamp(80.0, 360.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), monitor_height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        if radio_scope_visible {
+                            let total_width = ui.available_width();
+                            let radio_default_width = total_width * 0.5;
+                            let radio_max_width = (total_width - 260.0).max(280.0);
+                            egui::SidePanel::left("radio_waterfall_split")
+                                .resizable(true)
+                                .default_width(radio_default_width)
+                                .width_range(280.0..=radio_max_width)
+                                .show_inside(ui, |ui| {
+                                    self.draw_radio_waterfall(ui, ctx, &snapshot);
+                                });
+                            self.draw_audio_waterfall(ui, ctx, &snapshot);
+                        } else {
+                            self.draw_audio_waterfall(ui, ctx, &snapshot);
+                        }
+                    },
+                );
+                ui.separator();
+            }
             self.draw_bounded_workspace(ui, ctx, &snapshot);
         });
     }

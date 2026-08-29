@@ -58,6 +58,7 @@ impl QsonautGuiApp {
             ui.available_width().max(1.0),
             (ui.available_height() - 4.0).max(56.0),
         );
+        let render_height = rows.len().clamp(1, RADIO_WF_HEIGHT);
 
         if self.radio_waterfall_texture.is_none()
             || self.radio_waterfall_texture_revision != source_revision
@@ -78,12 +79,8 @@ impl QsonautGuiApp {
                     "Rebuilding radio waterfall texture geometry"
                 );
             }
-            let image = build_scope_waterfall_image(
-                rows,
-                render_bins,
-                RADIO_WF_HEIGHT,
-                self.waterfall_theme,
-            );
+            let image =
+                build_scope_waterfall_image(rows, render_bins, render_height, self.waterfall_theme);
             if let Some(tex) = &mut self.radio_waterfall_texture {
                 tex.set(image, TextureOptions::LINEAR);
             } else {
@@ -305,6 +302,10 @@ impl QsonautGuiApp {
             ui.available_width().max(1.0),
             (ui.available_height() - 4.0).max(56.0),
         );
+        let render_height = snapshot
+            .audio_waterfall_rows
+            .len()
+            .clamp(1, AUDIO_WF_HEIGHT);
 
         if self.audio_waterfall_texture.is_none()
             || self.audio_waterfall_texture_revision != snapshot.audio_waterfall_revision
@@ -326,7 +327,7 @@ impl QsonautGuiApp {
                 &snapshot.audio_waterfall_rows,
                 bw_hz,
                 display_bins,
-                AUDIO_WF_HEIGHT,
+                render_height,
                 self.waterfall_theme,
             );
             if let Some(tex) = &mut self.audio_waterfall_texture {

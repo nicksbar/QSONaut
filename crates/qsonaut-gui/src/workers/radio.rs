@@ -2,14 +2,97 @@ use super::super::*;
 use super::request_gui_repaint;
 
 const RADIO_CORE_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const RADIO_LEVEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const RADIO_LEVEL_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const RADIO_COMMAND_WAKE_INTERVAL: Duration = Duration::from_millis(50);
 const RADIO_SCOPE_READ_SLICE: Duration = Duration::from_millis(25);
+const RADIO_SIGNAL_METER_INTERVAL: Duration = Duration::from_millis(400);
+const RADIO_TX_METER_INTERVAL: Duration = Duration::from_millis(300);
+const RADIO_AUX_METER_INTERVAL: Duration = Duration::from_millis(1_500);
+const RADIO_METER_RESPONSE_TIMEOUT: Duration = Duration::from_millis(150);
 
 // The first radio core poll is instrumented at INFO level so a hardware startup
 // stall is visible in the normal application log without logging every 100 ms
 // poll forever.
 static FIRST_RADIO_CORE_POLL: AtomicBool = AtomicBool::new(true);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScheduledMeter {
+    Signal,
+    Power,
+    Swr,
+    Alc,
+    Compression,
+    Current,
+    Voltage,
+    Temperature,
+}
+
+impl ScheduledMeter {
+    fn meter_id(self) -> MeterId {
+        match self {
+            Self::Signal => MeterId::Signal,
+            Self::Power => MeterId::Power,
+            Self::Swr => MeterId::Swr,
+            Self::Alc => MeterId::Alc,
+            Self::Compression => MeterId::Compression,
+            Self::Current => MeterId::Current,
+            Self::Voltage => MeterId::Voltage,
+            Self::Temperature => MeterId::Temperature,
+        }
+    }
+}
+
+struct MeterPollScheduler {
+    next_signal: Instant,
+    next_tx: Instant,
+    next_aux: Instant,
+    aux_index: usize,
+    tx_index: usize,
+}
+
+impl MeterPollScheduler {
+    fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            next_signal: now,
+            next_tx: now,
+            next_aux: now + RADIO_AUX_METER_INTERVAL,
+            aux_index: 0,
+            tx_index: 0,
+        }
+    }
+
+    fn next_due(&mut self, now: Instant, transmitting: bool) -> Option<ScheduledMeter> {
+        if !transmitting && now >= self.next_signal {
+            self.next_signal = now + RADIO_SIGNAL_METER_INTERVAL;
+            return Some(ScheduledMeter::Signal);
+        }
+        if transmitting && now >= self.next_tx {
+            self.next_tx = now + RADIO_TX_METER_INTERVAL;
+            let meter = match self.tx_index % 4 {
+                0 => ScheduledMeter::Power,
+                1 => ScheduledMeter::Swr,
+                2 => ScheduledMeter::Alc,
+                _ => ScheduledMeter::Compression,
+            };
+            self.tx_index = self.tx_index.wrapping_add(1);
+            return Some(meter);
+        }
+        if now >= self.next_aux {
+            const AUXILIARY: [ScheduledMeter; 4] = [
+                ScheduledMeter::Current,
+                ScheduledMeter::Voltage,
+                ScheduledMeter::Temperature,
+                ScheduledMeter::Signal,
+            ];
+            let meter = AUXILIARY[self.aux_index % AUXILIARY.len()];
+            self.aux_index = self.aux_index.wrapping_add(1);
+            self.next_aux = now + RADIO_AUX_METER_INTERVAL;
+            return Some(meter);
+        }
+        None
+    }
+}
 
 const RADIO_CONTROL_IDS: &[ControlId] = &[
     ControlId::AfGain,
@@ -137,6 +220,7 @@ pub(crate) fn spawn_radio_worker(
             let mut last_display_row = Instant::now();
             let waterfall_repaint_interval = Duration::from_millis(66);
             let mut last_waterfall_repaint = Instant::now() - waterfall_repaint_interval;
+            let mut meter_scheduler = MeterPollScheduler::new();
 
             let Some(stream_radio) = stream_radio else {
                 warn!("Radio scope worker unavailable: radio has no scope stream");
@@ -159,6 +243,7 @@ pub(crate) fn spawn_radio_worker(
                     vbw_wide,
                     workspace_mode,
                     mode,
+                    ptt_on,
                     scope_hold,
                     scope_reference_tenths_db,
                 ) = {
@@ -175,6 +260,7 @@ pub(crate) fn spawn_radio_worker(
                         s.radio_scope_vbw_wide,
                         s.workspace_mode,
                         s.mode.clone(),
+                        s.ptt_on,
                         s.radio_scope_hold,
                         s.radio_scope_reference_tenths_db,
                     )
@@ -387,6 +473,15 @@ pub(crate) fn spawn_radio_worker(
                         }
                     }
                     _ => {}
+                }
+
+                // CI-V scope traffic owns the connection's fast path. Read at
+                // most one meter after servicing the scope, and only when its
+                // priority makes it due. This prevents a level batch from
+                // monopolizing the serial connection and lets TX meters take
+                // precedence over the slower auxiliary rotation.
+                if let Some(meter) = meter_scheduler.next_due(Instant::now(), ptt_on) {
+                    poll_scheduled_icom_meter(&rt, &stream_radio, &stream_state, meter);
                 }
 
                 // A complete IC-7300 sweep consists of 11 CI-V division
@@ -1245,6 +1340,10 @@ fn poll_radio_core_state(
         .lock()
         .expect("ui state lock poisoned")
         .radio_spectrum_enabled;
+    // While the scope worker is active it is the sole owner of Icom meter
+    // scheduling. A command-triggered refresh must not reintroduce a large
+    // synchronous CI-V level batch beside the scope stream.
+    let poll_levels = poll_levels && !spectrum_enabled;
     let status_result = if spectrum_enabled {
         rt.block_on(radio.probe_stream_status())
     } else {
@@ -1266,14 +1365,17 @@ fn poll_radio_core_state(
     // IC-7300 mode status can report a misleading data byte through the
     // generic 0x04 response. Query the model-specific DataMode control for the
     // flag used by the UI label.
-    let data_mode = rt
-        .block_on(radio.get_control(ControlId::DataMode))
-        .ok()
-        .flatten()
-        .and_then(|value| match value {
-            ControlValue::Bool(enabled) => Some(enabled),
-            _ => None,
-        });
+    let data_mode = if poll_levels {
+        rt.block_on(radio.get_control(ControlId::DataMode))
+            .ok()
+            .flatten()
+            .and_then(|value| match value {
+                ControlValue::Bool(enabled) => Some(enabled),
+                _ => None,
+            })
+    } else {
+        None
+    };
     let (af, rf, pwr) = if poll_levels {
         (
             read_u8_control(rt, radio, ControlId::AfGain),
@@ -1294,7 +1396,6 @@ fn poll_radio_core_state(
         notch_auto,
         notch_manual,
         agc,
-        swr,
         tuner_status,
     ) = if poll_levels {
         (
@@ -1308,21 +1409,18 @@ fn poll_radio_core_state(
             read_bool_control(rt, radio, ControlId::Notch),
             read_bool_control(rt, radio, ControlId::ManualNotch),
             read_u8_control(rt, radio, ControlId::Agc),
-            if radio.supports_meter(MeterId::Swr) {
-                rt.block_on(radio.get_meter(MeterId::Swr)).ok().flatten()
-            } else {
-                None
-            },
             rt.block_on(radio.get_tuner_status()).ok().flatten(),
         )
     } else {
         (
-            None, None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None,
         )
     };
     // The IC-7300's regular mode response does not consistently include the
     // active FIL number, so filter state needs its own fast query.
-    let filt = read_u8_control(rt, radio, ControlId::Filter);
+    let filt = poll_levels
+        .then(|| read_u8_control(rt, radio, ControlId::Filter))
+        .flatten();
     let mut s = state.lock().expect("ui state lock poisoned");
     if let Ok(status) = status_result {
         s.radio_power_on = Some(true);
@@ -1386,14 +1484,45 @@ fn poll_radio_core_state(
     if let Some(v) = agc {
         s.agc = Some(v);
     }
-    if let Some(v) = swr {
-        s.swr = Some(v);
-    }
     if tuner_status.is_some() {
         s.tuner_status = tuner_status;
     }
     if let Some(v) = filt {
         s.filter = Some(v);
+    }
+}
+
+fn poll_scheduled_icom_meter(
+    rt: &tokio::runtime::Runtime,
+    radio: &IcomCiVRadio,
+    state: &Arc<Mutex<GuiState>>,
+    scheduled: ScheduledMeter,
+) {
+    let id = scheduled.meter_id();
+    if !radio.supports_meter(id) {
+        return;
+    }
+    let started = Instant::now();
+    let value = rt
+        .block_on(radio.get_meter_with_timeout(id, RADIO_METER_RESPONSE_TIMEOUT))
+        .ok()
+        .flatten();
+    let elapsed = started.elapsed();
+    if elapsed >= Duration::from_millis(100) {
+        debug!(meter = ?id, elapsed_ms = elapsed.as_millis(), "Slow scheduled CI-V meter read");
+    }
+    if let Some(value) = value {
+        let mut s = state.lock().expect("ui state lock poisoned");
+        match id {
+            MeterId::Signal => s.signal_meter = Some(value),
+            MeterId::Power => s.power_meter = Some(value),
+            MeterId::Alc => s.alc_meter = Some(value),
+            MeterId::Swr => s.swr = Some(value),
+            MeterId::Compression => s.compression_meter = Some(value),
+            MeterId::Current => s.current_meter = Some(value),
+            MeterId::Voltage => s.voltage_meter = Some(value),
+            MeterId::Temperature => s.temperature_meter = Some(value),
+        }
     }
 }
 
@@ -1589,6 +1718,38 @@ fn scope_vbw_wide_for_view(_view: RadioScopeView, user_vbw_wide: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meter_scheduler_prioritizes_signal_and_one_tx_meter() {
+        let now = Instant::now();
+        let mut scheduler = MeterPollScheduler::new();
+        scheduler.next_signal = now;
+        scheduler.next_tx = now;
+        scheduler.next_aux = now;
+
+        assert_eq!(scheduler.next_due(now, false), Some(ScheduledMeter::Signal));
+        assert_eq!(scheduler.next_due(now, true), Some(ScheduledMeter::Power));
+        assert_eq!(scheduler.next_due(now, true), Some(ScheduledMeter::Current));
+    }
+
+    #[test]
+    fn meter_scheduler_rotates_auxiliary_reads_without_batching() {
+        let now = Instant::now();
+        let mut scheduler = MeterPollScheduler::new();
+        scheduler.next_signal = now + Duration::from_secs(10);
+        scheduler.next_tx = now + Duration::from_secs(10);
+        scheduler.next_aux = now;
+
+        assert_eq!(
+            scheduler.next_due(now, false),
+            Some(ScheduledMeter::Current)
+        );
+        scheduler.next_aux = now;
+        assert_eq!(
+            scheduler.next_due(now, false),
+            Some(ScheduledMeter::Voltage)
+        );
+    }
 
     #[test]
     fn scope_vbw_respects_checkbox_in_narrow_and_overview_views() {
