@@ -69,15 +69,20 @@ pub(super) struct OperatorProfile {
     pub(super) cq_only_view: bool,
     #[serde(default)]
     pub(super) civ_spectrum_on: bool,
-    #[serde(default)]
+    // Runtime-only waterfall controls. Keep accepting the old fields through
+    // serde's unknown-field behavior, but never restore them from a profile
+    // or write them back into one.
+    #[serde(skip, default)]
     pub(super) radio_scope_vbw_wide: bool,
-    #[serde(default)]
+    #[serde(skip, default)]
     pub(super) radio_scope_view: RadioScopeView,
     #[serde(default)]
     pub(super) waterfall_theme: WaterfallTheme,
-    #[serde(default = "default_waterfall_auto_visual")]
+    #[serde(default)]
+    pub(super) radio_waterfall_theme: WaterfallTheme,
+    #[serde(skip, default = "default_waterfall_auto_visual")]
     pub(super) waterfall_auto_visual: bool,
-    #[serde(default = "default_waterfall_speed")]
+    #[serde(skip, default = "default_waterfall_speed")]
     pub(super) waterfall_speed: WaterfallSpeed,
     #[serde(default = "default_waterfall_deck_height")]
     pub(super) waterfall_deck_height: f32,

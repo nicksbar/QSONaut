@@ -53,8 +53,8 @@ use qsonaut_radio::{
     },
     enumerate_serial_port_descriptors,
     models::{find_model, Manufacturer, Protocol, POPULAR_RADIOS},
-    BaseMode, ControlId, ControlValue, IcomCiVRadio, MeterId, Mode, Radio, SerialPortDescriptor,
-    TunerStatus,
+    BaseMode, ControlId, ControlValue, IcomCiVRadio, MeterId, Mode, OperatingMode, Radio,
+    SerialPortDescriptor, TunerStatus,
 };
 use qsonaut_server_client::{
     log_idempotency_key, new_instance_id, ConnectionConfig as ServerConnectionConfig,
@@ -211,7 +211,6 @@ enum ProfileDrawerTab {
     Tuning,
     DigitalTiming,
     Monitoring,
-    Waterfall,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -832,15 +831,19 @@ impl WaterfallTheme {
 
 #[derive(Debug, Clone)]
 struct DisplayTuning {
-    auto_visual: bool,
-    waterfall_speed: WaterfallSpeed,
+    audio_auto_visual: bool,
+    audio_waterfall_speed: WaterfallSpeed,
+    radio_auto_visual: bool,
+    radio_waterfall_speed: WaterfallSpeed,
 }
 
 impl Default for DisplayTuning {
     fn default() -> Self {
         Self {
-            auto_visual: true,
-            waterfall_speed: WaterfallSpeed::Mid,
+            audio_auto_visual: true,
+            audio_waterfall_speed: WaterfallSpeed::Mid,
+            radio_auto_visual: true,
+            radio_waterfall_speed: WaterfallSpeed::Mid,
         }
     }
 }
@@ -1018,6 +1021,7 @@ struct GuiState {
     radio_scope_hold: bool,
     radio_scope_reference_tenths_db: i16,
     radio_scope_view: RadioScopeView,
+    radio_scope_settings_dirty: bool,
     audio_spectrum_status: String,
     audio_device_sample_rate_hz: Option<u32>,
     audio_device_channels: Option<u16>,
@@ -1130,6 +1134,7 @@ impl Default for GuiState {
             radio_scope_hold: false,
             radio_scope_reference_tenths_db: 0,
             radio_scope_view: RadioScopeView::Narrow,
+            radio_scope_settings_dirty: false,
             audio_spectrum_status: "INIT".to_string(),
             audio_device_sample_rate_hz: None,
             audio_device_channels: None,
@@ -1838,6 +1843,7 @@ struct QsonautGuiApp {
     radio_scope_view: RadioScopeView,
     radio_scope_lock_if_to_filter: bool,
     waterfall_theme: WaterfallTheme,
+    radio_waterfall_theme: WaterfallTheme,
     waterfall_deck_height: f32,
     show_signal_panel: bool,
     show_meter_panel: bool,
@@ -2185,6 +2191,7 @@ impl QsonautGuiApp {
         let mut radio_scope_vbw_wide = false;
         let mut radio_scope_view = RadioScopeView::Narrow;
         let mut waterfall_theme = WaterfallTheme::default();
+        let mut radio_waterfall_theme = WaterfallTheme::default();
         let mut waterfall_deck_height = default_waterfall_deck_height();
         let ft8_stop_policy = AutoTxStopPolicy::Continuous;
         let mut ft8_max_attempts = default_ft8_max_attempts();
@@ -2255,6 +2262,7 @@ impl QsonautGuiApp {
             radio_scope_vbw_wide = p.radio_scope_vbw_wide;
             radio_scope_view = p.radio_scope_view;
             waterfall_theme = p.waterfall_theme;
+            radio_waterfall_theme = p.radio_waterfall_theme;
             waterfall_deck_height = p.waterfall_deck_height.clamp(170.0, 560.0);
             ft8_max_attempts = p.ft8_max_attempts.clamp(1, 20);
             ft8_hold_tx_freq = if p.profile_version >= 3 {
@@ -2377,6 +2385,7 @@ impl QsonautGuiApp {
                 radio_scope_vbw_wide,
                 radio_scope_view,
                 waterfall_theme,
+                radio_waterfall_theme,
                 waterfall_auto_visual: true,
                 waterfall_speed: WaterfallSpeed::Mid,
                 waterfall_deck_height,
@@ -2752,6 +2761,7 @@ impl QsonautGuiApp {
             radio_scope_view,
             radio_scope_lock_if_to_filter: true,
             waterfall_theme,
+            radio_waterfall_theme,
             waterfall_deck_height,
             show_signal_panel: true,
             show_meter_panel: false,
@@ -2853,10 +2863,11 @@ impl QsonautGuiApp {
         self.radio_scope_vbw_wide = profile.radio_scope_vbw_wide;
         self.radio_scope_view = profile.radio_scope_view;
         self.waterfall_theme = profile.waterfall_theme;
+        self.radio_waterfall_theme = profile.radio_waterfall_theme;
         self.waterfall_deck_height = profile.waterfall_deck_height.clamp(170.0, 560.0);
         if let Ok(mut tuning) = self.display_tuning.lock() {
-            tuning.auto_visual = profile.waterfall_auto_visual;
-            tuning.waterfall_speed = profile.waterfall_speed;
+            tuning.audio_auto_visual = profile.waterfall_auto_visual;
+            tuning.audio_waterfall_speed = profile.waterfall_speed;
         }
         self.rx_tone_hz = profile.rx_tone_hz;
         self.tx_tone_hz = if self.ft8_hold_tx_freq {
@@ -4094,8 +4105,9 @@ impl QsonautGuiApp {
             radio_scope_vbw_wide: self.radio_scope_vbw_wide,
             radio_scope_view: self.radio_scope_view,
             waterfall_theme: self.waterfall_theme,
-            waterfall_auto_visual: display_tuning.auto_visual,
-            waterfall_speed: display_tuning.waterfall_speed,
+            radio_waterfall_theme: self.radio_waterfall_theme,
+            waterfall_auto_visual: display_tuning.audio_auto_visual,
+            waterfall_speed: display_tuning.audio_waterfall_speed,
             waterfall_deck_height: self.waterfall_deck_height,
             // This control is deliberately one-shot and is not restored on launch.
             halt_after_tx: false,
@@ -4628,6 +4640,229 @@ impl QsonautGuiApp {
                 self.draw_about_button(ui);
             });
         });
+    }
+
+    fn draw_waterfall_buttons(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        let audio_button = ui
+            .button(RichText::new("〰").size(16.0).color(Color32::LIGHT_BLUE))
+            .on_hover_text("Audio waterfall controls");
+        egui::Popup::menu(&audio_button)
+            // Keep the drawer alive while nested combo boxes and sliders are
+            // interacting with it. The banner redraws it every frame.
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_min_width(250.0);
+                ui.label(RichText::new("AUDIO WATERFALL").strong());
+                ui.label(RichText::new("Live audio spectrum display").small());
+                ui.separator();
+                ui.label(RichText::new("Theme").strong());
+                ui.horizontal_wrapped(|ui| {
+                    for theme in [
+                        WaterfallTheme::RadioBlue,
+                        WaterfallTheme::Inferno,
+                        WaterfallTheme::Phosphor,
+                        WaterfallTheme::Monochrome,
+                    ] {
+                        if ui
+                            .selectable_label(self.waterfall_theme == theme, theme.label())
+                            .clicked()
+                        {
+                            self.waterfall_theme = theme;
+                            self.profile_dirty = true;
+                            self.persist_profile("Waterfall theme saved to");
+                        }
+                    }
+                });
+                ui.label(RichText::new("Audio display speed").strong());
+                {
+                    let mut tuning = self.display_tuning.lock().expect("tuning lock poisoned");
+                    let selected = if tuning.audio_auto_visual {
+                        "Auto"
+                    } else {
+                        tuning.audio_waterfall_speed.label()
+                    };
+                    ui.horizontal_wrapped(|ui| {
+                        if ui
+                            .selectable_label(tuning.audio_auto_visual, selected)
+                            .clicked()
+                        {
+                            tuning.audio_auto_visual = true;
+                        }
+                        for speed in [
+                            WaterfallSpeed::Fast,
+                            WaterfallSpeed::Mid,
+                            WaterfallSpeed::Slow,
+                        ] {
+                            let selected =
+                                !tuning.audio_auto_visual && tuning.audio_waterfall_speed == speed;
+                            if ui.selectable_label(selected, speed.label()).clicked() {
+                                tuning.audio_auto_visual = false;
+                                tuning.audio_waterfall_speed = speed;
+                            }
+                        }
+                    });
+                }
+            });
+
+        let radio_scope_available = self.config.radio.enabled
+            && native_radio_profile(&self.config.radio.backend, &self.config.radio.model)
+                .is_some_and(|profile| profile.capabilities.spectrum);
+        if radio_scope_available {
+            let radio_button = ui
+                .button(
+                    RichText::new("🌈")
+                        .size(15.0)
+                        .color(Color32::from_rgb(180, 220, 255)),
+                )
+                .on_hover_text("Native CI-V waterfall controls");
+            egui::Popup::menu(&radio_button)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| {
+                    ui.set_min_width(280.0);
+                    ui.label(RichText::new("RADIO WATERFALL").strong());
+                    ui.label(RichText::new("Native scope stream controls").small());
+                    ui.separator();
+                    if ui
+                        .checkbox(&mut self.civ_spectrum_on, "Enable radio waterfall")
+                        .changed()
+                    {
+                        self.profile_dirty = true;
+                        self.persist_profile("Radio waterfall setting saved to");
+                    }
+                    ui.label(RichText::new("Radio waterfall theme").strong());
+                    ui.horizontal_wrapped(|ui| {
+                        for theme in [
+                            WaterfallTheme::RadioBlue,
+                            WaterfallTheme::Inferno,
+                            WaterfallTheme::Phosphor,
+                            WaterfallTheme::Monochrome,
+                        ] {
+                            if ui
+                                .selectable_label(
+                                    self.radio_waterfall_theme == theme,
+                                    theme.label(),
+                                )
+                                .clicked()
+                            {
+                                self.radio_waterfall_theme = theme;
+                                self.profile_dirty = true;
+                                self.persist_profile("Radio waterfall theme saved to");
+                            }
+                        }
+                    });
+                    ui.label(RichText::new("Native sweep speed").strong());
+                    let mut visual_changed = false;
+                    {
+                        let mut tuning = self.display_tuning.lock().expect("tuning lock poisoned");
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(if tuning.radio_auto_visual {
+                                "Auto (mode-driven)"
+                            } else {
+                                "Native speed"
+                            });
+                            for speed in [
+                                WaterfallSpeed::Fast,
+                                WaterfallSpeed::Mid,
+                                WaterfallSpeed::Slow,
+                            ] {
+                                let selected = !tuning.radio_auto_visual
+                                    && tuning.radio_waterfall_speed == speed;
+                                if ui.selectable_label(selected, speed.label()).clicked() {
+                                    tuning.radio_auto_visual = false;
+                                    tuning.radio_waterfall_speed = speed;
+                                    visual_changed = true;
+                                }
+                            }
+                        });
+                    }
+                    if visual_changed {
+                        self.state
+                            .lock()
+                            .expect("ui state lock poisoned")
+                            .radio_scope_settings_dirty = true;
+                    }
+                    let mut scope_changed = false;
+                    ui.horizontal(|ui| {
+                        scope_changed |= ui
+                            .selectable_value(
+                                &mut self.radio_scope_view,
+                                RadioScopeView::Narrow,
+                                "Narrow",
+                            )
+                            .changed();
+                        scope_changed |= ui
+                            .selectable_value(
+                                &mut self.radio_scope_view,
+                                RadioScopeView::Overview,
+                                "Overview",
+                            )
+                            .changed();
+                    });
+                    scope_changed |= ui
+                        .checkbox(&mut self.radio_scope_vbw_wide, "Wide VBW")
+                        .changed();
+                    ui.checkbox(&mut self.radio_scope_lock_if_to_filter, "Match span to FIL");
+                    if self.radio_scope_lock_if_to_filter {
+                        self.radio_scope_span_code =
+                            scope_span_for_filter(&snapshot.mode, snapshot.filter);
+                        ui.label(format!(
+                            "Automatic span: {}",
+                            scope_span_label(self.radio_scope_span_code)
+                        ));
+                    } else {
+                        ui.horizontal_wrapped(|ui| {
+                            for (code, label) in [
+                                (0_u8, "±2.5 kHz"),
+                                (1, "±5 kHz"),
+                                (2, "±10 kHz"),
+                                (3, "±25 kHz"),
+                                (4, "±50 kHz"),
+                                (5, "±100 kHz"),
+                                (6, "±250 kHz"),
+                                (7, "±500 kHz"),
+                            ] {
+                                if ui
+                                    .selectable_label(self.radio_scope_span_code == code, label)
+                                    .clicked()
+                                {
+                                    self.radio_scope_span_code = code;
+                                    scope_changed = true;
+                                }
+                            }
+                        });
+                    }
+                    scope_changed |= ui.checkbox(&mut self.radio_scope_hold, "Hold").changed();
+                    scope_changed |= ui
+                        .add(
+                            egui::Slider::new(
+                                &mut self.radio_scope_reference_tenths_db,
+                                -200..=200,
+                            )
+                            .step_by(5.0)
+                            .custom_formatter(|value, _| format!("{:.1} dB", value / 10.0))
+                            .text("Reference"),
+                        )
+                        .changed();
+                    if scope_changed {
+                        self.state
+                            .lock()
+                            .expect("ui state lock poisoned")
+                            .radio_scope_settings_dirty = true;
+                    }
+                });
+        }
+
+        ui.add_enabled(
+            false,
+            egui::Button::new(
+                RichText::new("📡")
+                    .size(13.0)
+                    .color(Color32::from_gray(145)),
+            ),
+        )
+        .on_disabled_hover_text(
+            "IQ/SDR waterfall support is not enabled yet — development needs a radio that offers a supported IQ/SDR stream 😢",
+        );
     }
 
     fn draw_banner_radio_controls(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
@@ -5922,6 +6157,7 @@ impl eframe::App for QsonautGuiApp {
                         });
                     }
                     ui.separator();
+                    self.draw_waterfall_buttons(ui, &snapshot);
                     let monitor_label = "MON";
                     let monitor_color = if self.config.audio.monitor_enabled {
                         Color32::LIGHT_GREEN
@@ -6298,7 +6534,6 @@ impl eframe::App for QsonautGuiApp {
                         (ProfileDrawerTab::Tuning, "TUNING"),
                         (ProfileDrawerTab::DigitalTiming, "DIGITAL TIMING"),
                         (ProfileDrawerTab::Monitoring, "MONITORING"),
-                        (ProfileDrawerTab::Waterfall, "WATERFALL"),
                     ] {
                         if ui
                             .selectable_label(self.profile_drawer_tab == tab, label)
@@ -6318,9 +6553,6 @@ impl eframe::App for QsonautGuiApp {
                         ProfileDrawerTab::Tuning => self.draw_radio_profile_assignments(ui),
                         ProfileDrawerTab::DigitalTiming => self.draw_digital_timing_settings(ui),
                         ProfileDrawerTab::Monitoring => self.draw_monitoring_settings(ui),
-                        ProfileDrawerTab::Waterfall => {
-                            self.draw_waterfall_profile_panel(ui, &snapshot)
-                        }
                     });
             });
             if !drawer_open {
@@ -6496,9 +6728,19 @@ fn filter_bandwidth_hz(mode: &str, filter: Option<u8>) -> u32 {
     }
 }
 
-fn effective_visual_profile(tuning: &DisplayTuning, mode: &str) -> (u64, u8) {
-    if !tuning.auto_visual {
-        return match tuning.waterfall_speed {
+fn effective_visual_profile(tuning: &DisplayTuning, mode: &str, radio: bool) -> (u64, u8) {
+    let auto_visual = if radio {
+        tuning.radio_auto_visual
+    } else {
+        tuning.audio_auto_visual
+    };
+    let waterfall_speed = if radio {
+        tuning.radio_waterfall_speed
+    } else {
+        tuning.audio_waterfall_speed
+    };
+    if !auto_visual {
+        return match waterfall_speed {
             WaterfallSpeed::Slow => (220, 2),
             WaterfallSpeed::Mid => (120, 1),
             WaterfallSpeed::Fast => (50, 0),
@@ -6980,22 +7222,36 @@ mod tests {
     #[test]
     fn automatic_digital_visuals_use_the_fast_radio_scope_cadence() {
         let tuning = DisplayTuning::default();
-        assert_eq!(effective_visual_profile(&tuning, "USB-D"), (50, 0));
-        assert_eq!(effective_visual_profile(&tuning, "FT8"), (50, 0));
+        assert_eq!(effective_visual_profile(&tuning, "USB-D", true), (50, 0));
+        assert_eq!(effective_visual_profile(&tuning, "FT8", false), (50, 0));
     }
 
     #[test]
     fn manual_waterfall_speeds_match_ic7300_scope_values() {
         let mut tuning = DisplayTuning {
-            auto_visual: false,
+            radio_auto_visual: false,
             ..DisplayTuning::default()
         };
-        tuning.waterfall_speed = WaterfallSpeed::Slow;
-        assert_eq!(effective_visual_profile(&tuning, "FT8"), (220, 2));
-        tuning.waterfall_speed = WaterfallSpeed::Mid;
-        assert_eq!(effective_visual_profile(&tuning, "FT8"), (120, 1));
-        tuning.waterfall_speed = WaterfallSpeed::Fast;
-        assert_eq!(effective_visual_profile(&tuning, "FT8"), (50, 0));
+        tuning.radio_waterfall_speed = WaterfallSpeed::Slow;
+        assert_eq!(effective_visual_profile(&tuning, "FT8", true), (220, 2));
+        tuning.radio_waterfall_speed = WaterfallSpeed::Mid;
+        assert_eq!(effective_visual_profile(&tuning, "FT8", true), (120, 1));
+        tuning.radio_waterfall_speed = WaterfallSpeed::Fast;
+        assert_eq!(effective_visual_profile(&tuning, "FT8", true), (50, 0));
+    }
+
+    #[test]
+    fn audio_and_radio_visual_tuning_are_independent() {
+        let mut tuning = DisplayTuning {
+            audio_auto_visual: false,
+            radio_auto_visual: false,
+            ..DisplayTuning::default()
+        };
+        tuning.audio_waterfall_speed = WaterfallSpeed::Slow;
+        tuning.radio_waterfall_speed = WaterfallSpeed::Fast;
+
+        assert_eq!(effective_visual_profile(&tuning, "USB", false), (220, 2));
+        assert_eq!(effective_visual_profile(&tuning, "USB", true), (50, 0));
     }
 
     #[test]

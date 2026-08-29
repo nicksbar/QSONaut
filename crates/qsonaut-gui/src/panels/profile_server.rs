@@ -1218,6 +1218,7 @@ impl QsonautGuiApp {
         }
     }
 
+    #[allow(dead_code)]
     pub(in super::super) fn draw_waterfall_profile_panel(
         &mut self,
         ui: &mut egui::Ui,
@@ -1277,10 +1278,10 @@ impl QsonautGuiApp {
         }
 
         ui.add_space(6.0);
-        ui.label(RichText::new("Waterfall speed / frame cap").strong());
+        ui.label(RichText::new("Audio waterfall speed / frame cap").strong());
         ui.label(
             RichText::new(
-                "Controls the native radio sweep speed and the host update cadence for both waterfalls.",
+                "Controls the host audio update cadence. Native radio scope speed is configured separately.",
             )
             .small()
             .color(Color32::GRAY),
@@ -1288,16 +1289,16 @@ impl QsonautGuiApp {
         let mut visual_changed = false;
         {
             let mut tuning = self.display_tuning.lock().expect("tuning lock poisoned");
-            let selected = if tuning.auto_visual {
+            let selected = if tuning.audio_auto_visual {
                 "Auto"
             } else {
-                tuning.waterfall_speed.label()
+                tuning.audio_waterfall_speed.label()
             };
             egui::ComboBox::from_id_salt("waterfall_speed_settings")
                 .selected_text(selected)
                 .show_ui(ui, |ui| {
                     if ui
-                        .selectable_value(&mut tuning.auto_visual, true, "Auto")
+                        .selectable_value(&mut tuning.audio_auto_visual, true, "Auto")
                         .changed()
                     {
                         visual_changed = true;
@@ -1307,11 +1308,12 @@ impl QsonautGuiApp {
                         WaterfallSpeed::Mid,
                         WaterfallSpeed::Slow,
                     ] {
-                        let was_manual = !tuning.auto_visual && tuning.waterfall_speed == speed;
+                        let was_manual =
+                            !tuning.audio_auto_visual && tuning.audio_waterfall_speed == speed;
                         if ui.selectable_label(was_manual, speed.label()).clicked() {
-                            tuning.auto_visual = false;
-                            if tuning.waterfall_speed != speed {
-                                tuning.waterfall_speed = speed;
+                            tuning.audio_auto_visual = false;
+                            if tuning.audio_waterfall_speed != speed {
+                                tuning.audio_waterfall_speed = speed;
                             }
                             visual_changed = true;
                         }
@@ -1344,6 +1346,10 @@ impl QsonautGuiApp {
                     .changed();
             });
             if scope_view_changed {
+                self.state
+                    .lock()
+                    .expect("ui state lock poisoned")
+                    .radio_scope_settings_dirty = true;
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
             }
@@ -1365,6 +1371,10 @@ impl QsonautGuiApp {
                 )
                 .changed();
             if vbw_changed {
+                self.state
+                    .lock()
+                    .expect("ui state lock poisoned")
+                    .radio_scope_settings_dirty = true;
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
             }
@@ -1375,6 +1385,7 @@ impl QsonautGuiApp {
                     scope_span_label(self.radio_scope_span_code)
                 ));
             } else {
+                let mut span_changed = false;
                 egui::ComboBox::from_id_salt("radio_scope_span_settings")
                     .selected_text(scope_span_label(self.radio_scope_span_code))
                     .show_ui(ui, |ui| {
@@ -1388,17 +1399,37 @@ impl QsonautGuiApp {
                             (6_u8, "±250 kHz"),
                             (7_u8, "±500 kHz"),
                         ] {
-                            ui.selectable_value(&mut self.radio_scope_span_code, code, label);
+                            span_changed |= ui
+                                .selectable_value(&mut self.radio_scope_span_code, code, label)
+                                .changed();
                         }
                     });
+                if span_changed {
+                    self.state
+                        .lock()
+                        .expect("ui state lock poisoned")
+                        .radio_scope_settings_dirty = true;
+                }
             }
-            ui.checkbox(&mut self.radio_scope_hold, "Hold radio scope");
-            ui.add(
-                egui::Slider::new(&mut self.radio_scope_reference_tenths_db, -200..=200)
-                    .step_by(5.0)
-                    .custom_formatter(|value, _| format!("{:.1} dB", value / 10.0))
-                    .text("Reference"),
-            );
+            let hold_changed = ui
+                .checkbox(&mut self.radio_scope_hold, "Hold radio scope")
+                .changed();
+            let reference_changed = ui
+                .add(
+                    egui::Slider::new(&mut self.radio_scope_reference_tenths_db, -200..=200)
+                        .step_by(5.0)
+                        .custom_formatter(|value, _| format!("{:.1} dB", value / 10.0))
+                        .text("Reference"),
+                )
+                .changed();
+            if hold_changed || reference_changed {
+                self.state
+                    .lock()
+                    .expect("ui state lock poisoned")
+                    .radio_scope_settings_dirty = true;
+                self.profile_dirty = true;
+                self.persist_profile("Auto-saved");
+            }
         }
         ui.add_space(6.0);
         ui.label(RichText::new("Audio waterfall only").strong());

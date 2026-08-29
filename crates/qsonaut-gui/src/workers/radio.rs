@@ -246,6 +246,7 @@ pub(crate) fn spawn_radio_worker(
                     ptt_on,
                     scope_hold,
                     scope_reference_tenths_db,
+                    scope_settings_dirty,
                 ) = {
                     let s = stream_state.lock().expect("ui state lock poisoned");
                     (
@@ -263,6 +264,7 @@ pub(crate) fn spawn_radio_worker(
                         s.ptt_on,
                         s.radio_scope_hold,
                         s.radio_scope_reference_tenths_db,
+                        s.radio_scope_settings_dirty,
                     )
                 };
 
@@ -280,7 +282,6 @@ pub(crate) fn spawn_radio_worker(
                         "WAITING FOR RADIO".to_string()
                     };
                     drop(s);
-                    last_scope_config = None;
                     thread::sleep(Duration::from_millis(250));
                     continue;
                 }
@@ -304,7 +305,7 @@ pub(crate) fn spawn_radio_worker(
                     };
                     let sweep_code = {
                         let tuning = stream_display_tuning.lock().expect("tuning lock poisoned");
-                        effective_visual_profile(&tuning, &mode).1
+                        effective_visual_profile(&tuning, &mode, true).1
                     };
                     let config = RadioScopeStreamConfig {
                         view: scope_view,
@@ -315,7 +316,16 @@ pub(crate) fn spawn_radio_worker(
                         hold: scope_hold,
                         reference_tenths_db: scope_reference_tenths_db,
                     };
-                    if last_scope_config != Some(config) {
+                    // The first observed configuration is a baseline, not a
+                    // command. Startup must not restore QSONaut defaults onto
+                    // the radio. Subsequent changes are operator-driven and
+                    // may be applied normally.
+                    if !scope_settings_dirty {
+                        // Profile hydration, mode readback, and initial
+                        // frequency discovery are observations, not operator
+                        // requests. Keep the latest values as the baseline.
+                        last_scope_config = Some(config);
+                    } else if scope_config_changed(last_scope_config, config) {
                         let geometry_changed = last_scope_config.is_none_or(|previous| {
                             previous.view != config.view
                                 || previous.span_code != config.span_code
@@ -348,6 +358,7 @@ pub(crate) fn spawn_radio_worker(
                                     "Radio scope configured"
                                 );
                                 let mut s = stream_state.lock().expect("ui state lock poisoned");
+                                s.radio_scope_settings_dirty = false;
                                 if geometry_changed {
                                     s.radio_waterfall_rows.clear();
                                     s.radio_waterfall_revision =
@@ -394,29 +405,6 @@ pub(crate) fn spawn_radio_worker(
                         .block_on(stream_radio.enable_spectrum_stream(Duration::from_millis(2_500)))
                     {
                         Ok(bins) => {
-                            // Enabling CI-V scope output can restore the radio's
-                            // stored sweep setting. Reassert the requested speed
-                            // only after the stream is running so Fast remains
-                            // the final scope command applied at startup.
-                            let sweep_code = last_scope_config
-                                .map(|config| config.sweep_code)
-                                .unwrap_or(1);
-                            if let Err(err) =
-                                rt.block_on(stream_radio.set_scope_sweep_speed(sweep_code))
-                            {
-                                let mut s = stream_state.lock().expect("ui state lock poisoned");
-                                s.radio_spectrum_enabled = false;
-                                s.radio_waterfall_status = "SPEED ERROR".to_string();
-                                s.last_error = Some(err.to_string());
-                                warn!(
-                                    error = %err,
-                                    sweep_code,
-                                    "Radio scope speed reapply failed after stream enable"
-                                );
-                                drop(s);
-                                thread::sleep(Duration::from_millis(500));
-                                continue;
-                            }
                             let bin_count = bins.len();
                             let mut s = stream_state.lock().expect("ui state lock poisoned");
                             s.radio_spectrum_enabled = true;
@@ -429,8 +417,7 @@ pub(crate) fn spawn_radio_worker(
                             drop(s);
                             info!(
                                 bins = bin_count,
-                                sweep_code,
-                                "Radio spectrum stream enabled and sweep speed reapplied"
+                                "Radio spectrum stream enabled without changing scope settings"
                             );
                             request_gui_repaint(&stream_repaint);
                         }
@@ -490,7 +477,7 @@ pub(crate) fn spawn_radio_worker(
                 // latest complete sweep between radio updates.
                 let display_interval_ms = {
                     let tuning = stream_display_tuning.lock().expect("tuning lock poisoned");
-                    effective_visual_profile(&tuning, &mode).0
+                    effective_visual_profile(&tuning, &mode, true).0
                 };
                 let display_due =
                     last_display_row.elapsed() >= Duration::from_millis(display_interval_ms);
@@ -534,10 +521,13 @@ pub(crate) fn spawn_radio_worker(
         });
 
         info!("Initial radio poll started");
-        // Establish only the essential frequency/mode state before entering
-        // the normal polling schedule. Optional level reads begin on the next
+        // Establish frequency/mode state before entering the normal polling
+        // schedule. Icom control state is also read here so the capability
+        // panel is useful immediately; non-Icom level reads begin on the next
         // scheduled poll and cannot delay startup.
-        poll_radio_core_state(&rt, &radio, &state, false);
+        // The Icom scope worker owns high-rate meter reads, but it must not
+        // suppress live state for controls such as TUNE, NB, IP+, and notch.
+        poll_radio_core_state(&rt, &radio, &state, radio.as_icom().is_some());
         info!("Initial radio poll completed");
         let mut next_core_poll = Instant::now() + RADIO_CORE_POLL_INTERVAL;
         let mut next_level_poll = Instant::now() + RADIO_LEVEL_POLL_INTERVAL;
@@ -758,9 +748,10 @@ pub(crate) fn spawn_radio_worker(
                         let frequency_result = rt.block_on(radio.set_frequency_hz(frequency_hz));
                         let (nr_id, nr_value, nb_id, nb_value) =
                             workspace_audio_controls_clear_noise();
-                        let noise_result = rt
-                            .block_on(radio.set_control(nr_id, nr_value))
-                            .and_then(|_| rt.block_on(radio.set_control(nb_id, nb_value)));
+                        let noise_result = [(nr_id, nr_value), (nb_id, nb_value)]
+                            .into_iter()
+                            .filter(|(id, _)| radio.supports_control_write(*id))
+                            .try_for_each(|(id, value)| rt.block_on(radio.set_control(id, value)));
                         if let Some(icom) = radio.as_icom() {
                             let mode_result = rt.block_on(icom.set_operating_mode_details(
                                 preset.base_mode,
@@ -878,7 +869,14 @@ pub(crate) fn spawn_radio_worker(
                     }
                     GuiCommand::SetControl(id, value) => {
                         debug!(control = ?id, value = ?value, "Radio control change requested");
-                        match rt.block_on(radio.set_control(id, value.clone())) {
+                        let result = if radio.supports_control_write(id) {
+                            rt.block_on(radio.set_control(id, value.clone()))
+                        } else {
+                            Err(anyhow::anyhow!(
+                                "control {id:?} is not writable by the loaded radio profile"
+                            ))
+                        };
+                        match result {
                             Ok(()) => {
                                 if id == ControlId::Vfo {
                                     if let Some(vfo) = control_vfo_value(&value) {
@@ -1341,9 +1339,8 @@ fn poll_radio_core_state(
         .expect("ui state lock poisoned")
         .radio_spectrum_enabled;
     // While the scope worker is active it is the sole owner of Icom meter
-    // scheduling. A command-triggered refresh must not reintroduce a large
-    // synchronous CI-V level batch beside the scope stream.
-    let poll_levels = poll_levels && !spectrum_enabled;
+    // scheduling. This branch only reads optional control state; it does not
+    // perform the meter batch used by non-Icom backends.
     let status_result = if spectrum_enabled {
         rt.block_on(radio.probe_stream_status())
     } else {
@@ -1366,8 +1363,13 @@ fn poll_radio_core_state(
     // generic 0x04 response. Query the model-specific DataMode control for the
     // flag used by the UI label.
     let data_mode = if poll_levels {
-        rt.block_on(radio.get_control(ControlId::DataMode))
-            .ok()
+        radio
+            .supports_control_read(ControlId::DataMode)
+            .then(|| {
+                rt.block_on(radio.get_control(ControlId::DataMode))
+                    .ok()
+                    .flatten()
+            })
             .flatten()
             .and_then(|value| match value {
                 ControlValue::Bool(enabled) => Some(enabled),
@@ -1409,7 +1411,10 @@ fn poll_radio_core_state(
             read_bool_control(rt, radio, ControlId::Notch),
             read_bool_control(rt, radio, ControlId::ManualNotch),
             read_u8_control(rt, radio, ControlId::Agc),
-            rt.block_on(radio.get_tuner_status()).ok().flatten(),
+            radio
+                .supports_control_read(ControlId::Tuner)
+                .then(|| rt.block_on(radio.get_tuner_status()).ok().flatten())
+                .flatten(),
         )
     } else {
         (
@@ -1437,8 +1442,7 @@ fn poll_radio_core_state(
             s.mode = mode;
         }
         if let Some(details) = status.mode_details {
-            s.data_mode = Some(details.data_mode);
-            s.filter = details.filter;
+            apply_icom_mode_details(&mut s, details, data_mode);
         }
         if let Some(data_mode) = data_mode {
             s.data_mode = Some(data_mode);
@@ -1533,6 +1537,45 @@ fn control_vfo_value(value: &ControlValue) -> Option<u8> {
     }
 }
 
+fn icom_base_mode_label(mode: BaseMode) -> &'static str {
+    match mode {
+        BaseMode::Lsb => "LSB",
+        BaseMode::Usb => "USB",
+        BaseMode::Am => "AM",
+        BaseMode::Cw => "CW",
+        BaseMode::Rtty => "RTTY",
+        BaseMode::Fm => "FM",
+        BaseMode::Wfm => "WFM",
+        BaseMode::CwR => "CW-R",
+        BaseMode::RttyR => "RTTY-R",
+        BaseMode::Unknown(_) => "UNKNOWN",
+    }
+}
+
+fn scope_config_changed(
+    previous: Option<RadioScopeStreamConfig>,
+    current: RadioScopeStreamConfig,
+) -> bool {
+    previous.is_some_and(|previous| previous != current)
+}
+
+fn apply_icom_mode_details(
+    state: &mut GuiState,
+    details: OperatingMode,
+    data_mode_override: Option<bool>,
+) {
+    // Keep the base mode independent from the data flag. On the IC-7300 the
+    // ordinary 0x04 response can carry a stale or misleading data byte;
+    // DataMode is read back separately when the profile supports it.
+    state.mode = icom_base_mode_label(details.base).to_string();
+    state.data_mode = Some(data_mode_override.unwrap_or(details.data_mode));
+    // Some Icom responses omit FIL even though the mode is valid. Do not
+    // erase a known filter while waiting for the dedicated read.
+    if let Some(filter) = details.filter {
+        state.filter = Some(filter);
+    }
+}
+
 fn read_vfo_control<R: Radio + ?Sized>(rt: &tokio::runtime::Runtime, radio: &R) -> Option<u8> {
     if !radio.supports_control_read(ControlId::Vfo) {
         return None;
@@ -1591,7 +1634,10 @@ fn poll_radio_level_state(
     let ip_plus = read_bool_control(rt, radio, ControlId::IpPlus);
     let notch_auto = read_bool_control(rt, radio, ControlId::Notch);
     let notch_manual = read_bool_control(rt, radio, ControlId::ManualNotch);
-    let tuner_status = rt.block_on(radio.get_tuner_status()).ok().flatten();
+    let tuner_status = radio
+        .supports_control_read(ControlId::Tuner)
+        .then(|| rt.block_on(radio.get_tuner_status()).ok().flatten())
+        .flatten();
     let meters = [
         (MeterId::Signal, read_meter(MeterId::Signal)),
         (MeterId::Power, read_meter(MeterId::Power)),
@@ -1758,6 +1804,68 @@ mod tests {
             assert!(scope_vbw_wide_for_view(view, true));
         }
     }
+
+    #[test]
+    fn first_scope_observation_is_not_a_radio_configuration_change() {
+        let config = RadioScopeStreamConfig {
+            view: RadioScopeView::Narrow,
+            span_code: 3,
+            vbw_wide: false,
+            edges: None,
+            sweep_code: 1,
+            hold: false,
+            reference_tenths_db: 0,
+        };
+
+        assert!(!scope_config_changed(None, config));
+        assert!(!scope_config_changed(Some(config), config));
+        assert!(scope_config_changed(
+            Some(config),
+            RadioScopeStreamConfig {
+                sweep_code: 2,
+                ..config
+            }
+        ));
+    }
+
+    #[test]
+    fn icom_mode_readback_preserves_filter_when_mode_frame_omits_it() {
+        let mut state = GuiState {
+            filter: Some(3),
+            ..GuiState::default()
+        };
+        apply_icom_mode_details(
+            &mut state,
+            OperatingMode {
+                base: BaseMode::Usb,
+                data_mode: false,
+                filter: None,
+            },
+            Some(false),
+        );
+
+        assert_eq!(state.mode, "USB");
+        assert_eq!(state.data_mode, Some(false));
+        assert_eq!(state.filter, Some(3));
+    }
+
+    #[test]
+    fn icom_mode_readback_uses_dedicated_data_state_over_stale_mode_flag() {
+        let mut state = GuiState::default();
+        apply_icom_mode_details(
+            &mut state,
+            OperatingMode {
+                base: BaseMode::Usb,
+                data_mode: true,
+                filter: Some(2),
+            },
+            Some(false),
+        );
+
+        assert_eq!(state.mode, "USB");
+        assert_eq!(state.data_mode, Some(false));
+        assert_eq!(state.filter, Some(2));
+    }
 }
 
 fn read_u8_control<R: Radio + ?Sized>(
@@ -1765,6 +1873,9 @@ fn read_u8_control<R: Radio + ?Sized>(
     radio: &R,
     id: ControlId,
 ) -> Option<u8> {
+    if !radio.supports_control_read(id) {
+        return None;
+    }
     match rt.block_on(radio.get_control(id)).ok().flatten() {
         Some(ControlValue::U8(v)) => Some(v),
         _ => None,
@@ -1776,6 +1887,9 @@ fn read_bool_control<R: Radio + ?Sized>(
     radio: &R,
     id: ControlId,
 ) -> Option<bool> {
+    if !radio.supports_control_read(id) {
+        return None;
+    }
     match rt.block_on(radio.get_control(id)).ok().flatten() {
         Some(ControlValue::Bool(v)) => Some(v),
         _ => None,
