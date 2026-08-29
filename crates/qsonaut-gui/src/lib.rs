@@ -5551,6 +5551,8 @@ impl eframe::App for QsonautGuiApp {
                                 }
                             });
                         }).response.on_hover_text("Enable the antenna tuner or start tuning");
+                    }
+                    if snapshot.supported_meters.contains(&MeterId::Swr) {
                         if let Some((band_start, band_stop, band_name)) =
                             band_edges_for_frequency(snapshot.frequency_hz)
                         {
