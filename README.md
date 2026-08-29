@@ -116,7 +116,7 @@ the per-file report is the source of truth for those areas.
 
 ### Coverage area snapshot
 
-The current baseline was measured on 2026-08-29 with 161 tests and 20.89%
+The current baseline was measured on 2026-08-29 with 167 tests and 21.23%
 workspace line coverage. These are grouped line-coverage figures from the
 same LLVM report; the downloadable HTML artifact remains the detailed,
 per-file source of truth.
@@ -130,13 +130,13 @@ per-file source of truth.
 | qsonaut-pskreporter | 100 / 227 | 44.05% |
 | qsonaut-server-client | 267 / 633 | 42.18% |
 | qsonaut-audio | 327 / 906 | 36.09% |
-| qsonaut-core | 132 / 322 | 40.99% |
-| GUI core | 2,102 / 9,843 | 21.36% |
-| GUI workers | 295 / 1,736 | 16.99% |
+| qsonaut-core | 135 / 325 | 41.54% |
+| GUI core | 2,171 / 9,869 | 22.00% |
+| GUI workers | 322 / 1,747 | 18.43% |
 | GUI modes | 424 / 5,321 | 7.97% |
 | GUI panels | 31 / 2,837 | 1.09% |
 | Rigwright integration | 197 / 2,137 | 9.22% |
-| Application | 0 / 467 | 0.00% |
+| Application entry point | 0 / 467 | 0.00% |
 
 The first improvement targets are the application entry point and GUI panels,
 modes, and workers. Changes to these areas should add deterministic seams or

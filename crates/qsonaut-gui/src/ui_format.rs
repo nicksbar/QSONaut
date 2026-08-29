@@ -51,3 +51,45 @@ pub(super) fn ft8_period_progress() -> f32 {
         .unwrap_or(0.0);
     ((seconds % 15.0) / 15.0) as f32
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{format_signal_report, ft8_period_progress, qso_stage_label, utc_hhmmss_millis};
+    use crate::modes::exchange::QsoStage;
+
+    #[test]
+    fn formats_signal_reports_with_clamping_and_signs() {
+        assert_eq!(format_signal_report(-100), "-50");
+        assert_eq!(format_signal_report(-7), "-07");
+        assert_eq!(format_signal_report(0), "+00");
+        assert_eq!(format_signal_report(9), "+09");
+        assert_eq!(format_signal_report(100), "+49");
+    }
+
+    #[test]
+    fn labels_every_qso_stage() {
+        assert_eq!(qso_stage_label(QsoStage::Calling), "Calling");
+        assert_eq!(qso_stage_label(QsoStage::GridSent), "Grid sent");
+        assert_eq!(qso_stage_label(QsoStage::ReportSent), "Report sent");
+        assert_eq!(
+            qso_stage_label(QsoStage::RogerReportSent),
+            "Roger/report sent"
+        );
+        assert_eq!(qso_stage_label(QsoStage::FinalSent), "Final sent");
+        assert_eq!(qso_stage_label(QsoStage::Complete), "Complete");
+    }
+
+    #[test]
+    fn formats_utc_time_and_rolls_milliseconds_into_the_next_day() {
+        assert_eq!(utc_hhmmss_millis(-1.0), "00:00:00.000");
+        assert_eq!(utc_hhmmss_millis(3_723.456), "01:02:03.456");
+        assert_eq!(utc_hhmmss_millis(86_399.9996), "00:00:00.000");
+        assert_eq!(utc_hhmmss_millis(86_400.25), "00:00:00.250");
+    }
+
+    #[test]
+    fn reports_current_ft8_period_as_a_unit_interval() {
+        let progress = ft8_period_progress();
+        assert!((0.0..1.0).contains(&progress));
+    }
+}
