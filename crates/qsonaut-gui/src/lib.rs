@@ -7916,7 +7916,7 @@ mod tests {
         })
         .expect("callsign event");
         assert_eq!(callsign.kind, EventKind::CallsignHit);
-        assert!(callsign.tags.contains(&"directed_to_me".to_string()));
+        assert!(callsign.tags.iter().any(|tag| tag == "directed_to_me"));
         assert_eq!(
             callsign.fields.get("snr").map(String::as_str),
             Some("-12.5")
@@ -7943,7 +7943,7 @@ mod tests {
         })
         .expect("server event");
         assert_eq!(server.kind, EventKind::ServerMessage);
-        assert!(server.tags.contains(&"radio_state".to_string()));
+        assert!(server.tags.iter().any(|tag| tag == "radio_state"));
         assert_eq!(
             server.fields.get("kind").map(String::as_str),
             Some("radio_state")

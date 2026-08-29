@@ -131,7 +131,7 @@ per-file source of truth.
 | qsonaut-server-client | 733 / 870 | 84.25% |
 | qsonaut-audio | 405 / 961 | 42.14% |
 | qsonaut-core | 368 / 428 | 85.98% |
-| GUI core | 2,613 / 10,091 | 25.89% |
+| GUI core | 2,615 / 10,093 | 25.91% |
 | GUI workers | 321 / 1,747 | 18.37% |
 | GUI modes | 715 / 5,549 | 12.89% |
 | GUI panels | 118 / 2,881 | 4.10% |
