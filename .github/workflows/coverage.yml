@@ -32,7 +32,7 @@ jobs:
         run: |
           set -o pipefail
           cargo llvm-cov --locked --all-features --workspace --summary-only | tee coverage-summary.txt
-          bash scripts/check-coverage.sh coverage-summary.txt
+          bash scripts/check-coverage.sh coverage-summary.txt 28
 
       - name: Enforce changed-file coverage
         if: github.event_name == 'pull_request'
@@ -56,7 +56,7 @@ jobs:
             if [[ -f coverage-summary.txt ]]; then
               cat coverage-summary.txt
               echo
-              bash scripts/check-coverage.sh coverage-summary.txt
+              bash scripts/check-coverage.sh coverage-summary.txt 28
             else
               echo 'Coverage summary was not generated.'
             fi

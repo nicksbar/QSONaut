@@ -461,4 +461,137 @@ backend = "none"
         assert_eq!(AppConfig::default().radio.backend, "native");
         assert_eq!(AppConfig::default().radio.endpoint, "127.0.0.1:4532");
     }
+
+    #[test]
+    fn parses_boolean_and_optional_string_values_conservatively() {
+        for value in ["1", "true", "YES", " on "] {
+            assert!(parse_bool(value));
+        }
+        for value in ["0", "false", "no", "off", "maybe", ""] {
+            assert!(!parse_bool(value));
+        }
+        assert_eq!(
+            nonempty("  device  ".to_string()),
+            Some("device".to_string())
+        );
+        assert_eq!(nonempty("   ".to_string()), None);
+    }
+
+    #[test]
+    fn parses_contest_mode_aliases_and_rejects_unknown_values() {
+        assert_eq!(
+            parse_contest_operating_mode("run"),
+            Some(ContestOperatingMode::Run)
+        );
+        for value in ["snp", "search", "search_and_pounce", "search-and-pounce"] {
+            assert_eq!(
+                parse_contest_operating_mode(value),
+                Some(ContestOperatingMode::SearchAndPounce)
+            );
+        }
+        assert_eq!(parse_contest_operating_mode("other"), None);
+    }
+
+    #[test]
+    fn parses_split_and_fox_hound_aliases() {
+        for value in ["off", "none"] {
+            assert_eq!(parse_split_policy(value), Some(SplitPolicy::Off));
+        }
+        for value in ["fake", "fake_split", "fake-split"] {
+            assert_eq!(parse_split_policy(value), Some(SplitPolicy::Fake));
+        }
+        for value in ["rig", "rig_split", "rig-split"] {
+            assert_eq!(parse_split_policy(value), Some(SplitPolicy::Rig));
+        }
+        assert_eq!(parse_split_policy("invalid"), None);
+
+        for value in ["disabled", "off", "none"] {
+            assert_eq!(parse_fox_hound_role(value), Some(FoxHoundRole::Disabled));
+        }
+        assert_eq!(parse_fox_hound_role("fox"), Some(FoxHoundRole::Fox));
+        assert_eq!(parse_fox_hound_role("hound"), Some(FoxHoundRole::Hound));
+        assert_eq!(parse_fox_hound_role("invalid"), None);
+    }
+
+    #[test]
+    fn parses_decimal_and_hex_radio_addresses() {
+        assert_eq!(parse_u8_flexible("148"), Some(148));
+        assert_eq!(parse_u8_flexible("0x94"), Some(148));
+        assert_eq!(parse_u8_flexible("94h"), Some(148));
+        assert_eq!(parse_u8_flexible("E0"), Some(224));
+        for value in ["", "  ", "0x", "100h", "not-an-address"] {
+            assert_eq!(parse_u8_flexible(value), None);
+        }
+    }
+
+    #[test]
+    fn config_defaults_are_stable_and_safe() {
+        assert_eq!(default_monitor_volume(), 1.0);
+        assert_eq!(default_radio_baud_rate(), 115_200);
+        assert_eq!(default_radio_model(), "IC-7300");
+        assert_eq!(default_radio_endpoint(), "127.0.0.1:4532");
+        assert_eq!(default_radio_civ_address(), 0x94);
+        assert_eq!(default_controller_civ_address(), 0xE0);
+        assert_eq!(default_serial_start(), 1);
+        assert_eq!(default_serial_step(), 1);
+        assert!(default_dupe_check());
+    }
+
+    #[test]
+    fn loads_file_config_and_migrates_legacy_none_backend() {
+        let path = std::env::temp_dir().join(format!(
+            "qsonaut-core-config-test-{}.toml",
+            std::process::id()
+        ));
+        let src = r#"
+[station]
+callsign = "N7UF"
+grid = "CN84JU"
+
+[audio]
+enabled = false
+sample_rate_hz = 44100
+channels = 2
+
+[radio]
+enabled = true
+backend = "none"
+serial_port = "COM3"
+baud_rate = 9600
+civ_address = 148
+controller_civ_address = 224
+"#;
+        std::fs::write(&path, src).expect("write isolated config fixture");
+        let cfg = AppConfig::load(Some(&path)).expect("load config fixture");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(cfg.station.callsign.as_deref(), Some("N7UF"));
+        assert!(!cfg.audio.enabled);
+        assert_eq!(cfg.audio.sample_rate_hz, 44_100);
+        assert_eq!(cfg.audio.channels, 2);
+        assert_eq!(cfg.radio.backend, "native");
+        assert_eq!(cfg.radio.serial_port.as_deref(), Some("COM3"));
+        assert_eq!(cfg.radio.baud_rate, 9_600);
+        assert_eq!(cfg.radio.civ_address, 148);
+        assert_eq!(cfg.radio.controller_civ_address, 224);
+    }
+
+    #[test]
+    fn reports_missing_and_invalid_config_files() {
+        let missing = std::env::temp_dir().join(format!(
+            "qsonaut-core-config-missing-{}.toml",
+            std::process::id()
+        ));
+        let error = AppConfig::load(Some(&missing)).expect_err("missing config must fail");
+        assert!(error.to_string().contains("failed reading config file"));
+
+        let invalid = std::env::temp_dir().join(format!(
+            "qsonaut-core-config-invalid-{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(&invalid, "not = valid = toml").expect("write invalid fixture");
+        let error = AppConfig::load(Some(&invalid)).expect_err("invalid config must fail");
+        let _ = std::fs::remove_file(&invalid);
+        assert!(error.to_string().contains("failed parsing config file"));
+    }
 }

@@ -7236,6 +7236,42 @@ mod tests {
     }
 
     #[test]
+    fn labels_all_core_display_choices() {
+        assert_eq!(AppLogLevelFilter::All.label(), "All levels");
+        assert_eq!(AppLogLevelFilter::Info.label(), "Info+");
+        assert_eq!(AppLogLevelFilter::Warning.label(), "Warnings+");
+        assert_eq!(AppLogLevelFilter::Error.label(), "Errors only");
+        assert_eq!(WaterfallSpeed::Slow.label(), "Slow · ~4.5 rows/s");
+        assert_eq!(WaterfallSpeed::Mid.label(), "Mid · ~8 rows/s");
+        assert_eq!(WaterfallSpeed::Fast.label(), "Fast · ~20 rows/s");
+        assert_eq!(WaterfallTheme::RadioBlue.label(), "Radio blue");
+        assert_eq!(WaterfallTheme::Inferno.label(), "Inferno");
+        assert_eq!(WaterfallTheme::Phosphor.label(), "Phosphor");
+        assert_eq!(WaterfallTheme::Monochrome.label(), "Monochrome");
+    }
+
+    #[test]
+    fn clamps_platform_gui_scale_and_preserves_round_trip_values() {
+        assert_eq!(platform_gui_scale_from_percent(25), GUI_SCALE_MIN);
+        assert_eq!(platform_gui_scale_from_percent(250), GUI_SCALE_MAX);
+        let scale = platform_gui_scale_from_percent(125);
+        assert!((platform_gui_scale_percent(scale) - 125.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn labels_sstv_choices_and_operator_call_badges() {
+        assert_eq!(SstvOverlayCorner::ALL.len(), 4);
+        assert_eq!(SstvOverlayCorner::BottomRight.label(), "Bottom right");
+        assert_eq!(SstvAiPipelineMode::ALL.len(), 3);
+        assert_eq!(
+            SstvAiPipelineMode::AnalyzeReceived.label(),
+            "Analyze received"
+        );
+        assert_eq!(call_hit_badge(OperatorCallHit::DirectedToMe).0, "📡 YOU!");
+        assert_eq!(call_hit_badge(OperatorCallHit::Mentioned).0, "✨ YOUR CALL");
+    }
+
+    #[test]
     fn manual_waterfall_speeds_match_ic7300_scope_values() {
         let mut tuning = DisplayTuning {
             radio_auto_visual: false,
@@ -7296,6 +7332,120 @@ mod tests {
         );
         assert_eq!(scope_span_for_filter("FM", Some(1)), 2);
         assert_eq!(scope_span_label(0), "±2.5 kHz");
+    }
+
+    #[test]
+    fn display_policy_covers_filter_modes_and_scope_span_limits() {
+        assert_eq!(filter_bandwidth_hz("CW", Some(2)), 250);
+        assert_eq!(filter_bandwidth_hz("FM", Some(3)), 7_000);
+        assert_eq!(filter_bandwidth_hz("RTTY", Some(2)), 350);
+        assert_eq!(filter_bandwidth_hz("USB", Some(3)), 1_800);
+        assert_eq!(filter_bandwidth_hz("USB", None), 3_000);
+        assert_eq!(filter_bandwidth_hz("USB", Some(9)), 3_000);
+
+        assert_eq!(scope_span_for_filter("CW", Some(1)), 0);
+        assert_eq!(scope_span_for_filter("FM", Some(1)), 2);
+        assert_eq!(scope_span_for_filter("FM", Some(9)), 2);
+        assert_eq!(scope_span_label(7), "±500 kHz");
+        assert_eq!(scope_span_label(99), "±500 kHz");
+        assert_eq!(scope_span_hz(6), 250_000);
+        assert_eq!(scope_span_hz(99), 500_000);
+    }
+
+    #[test]
+    fn display_policy_classifies_modes_errors_and_band_edges() {
+        assert_eq!(
+            scope_projection_for_mode("LSB-D"),
+            ScopeProjection::LowerSideband
+        );
+        assert_eq!(
+            scope_projection_for_mode("USB"),
+            ScopeProjection::UpperSideband
+        );
+        assert_eq!(
+            scope_projection_for_mode("DATA"),
+            ScopeProjection::UpperSideband
+        );
+        assert_eq!(
+            scope_projection_for_mode("DIGI"),
+            ScopeProjection::UpperSideband
+        );
+        assert_eq!(scope_projection_for_mode("FM"), ScopeProjection::Full);
+
+        assert!(is_transient_civ_read_error("CI-V response timed out"));
+        assert!(is_transient_civ_read_error("failed to read CI-V response"));
+        assert!(is_transient_civ_read_error("serial timeout"));
+        assert!(!is_transient_civ_read_error("invalid mode response"));
+
+        assert_eq!(band_edges_for_frequency(None), None);
+        assert_eq!(
+            band_edges_for_frequency(Some(14_074_000)),
+            Some((14_000_000, 14_350_000, "20m"))
+        );
+        assert_eq!(
+            band_edges_for_frequency(Some(145_000_000)),
+            Some((144_000_000, 148_000_000, "2m"))
+        );
+        assert_eq!(band_edges_for_frequency(Some(1_000_000)), None);
+    }
+
+    #[test]
+    fn sideband_edges_round_to_kilohertz_and_saturate() {
+        assert_eq!(
+            sideband_scope_edges(14_074_123, 5_001, ScopeProjection::UpperSideband),
+            Some((14_074_000, 14_080_000))
+        );
+        assert_eq!(
+            sideband_scope_edges(14_074_123, 5_001, ScopeProjection::LowerSideband),
+            Some((14_069_000, 14_075_000))
+        );
+        assert_eq!(
+            sideband_scope_edges(100, u64::MAX, ScopeProjection::LowerSideband),
+            Some((0, 1_000))
+        );
+    }
+
+    #[test]
+    fn meter_policy_maps_hal_values_and_warning_colors() {
+        let snapshot = GuiState {
+            signal_meter: Some(1),
+            power_meter: Some(2),
+            swr: Some(3),
+            alc_meter: Some(4),
+            compression_meter: Some(5),
+            current_meter: Some(6),
+            voltage_meter: Some(7),
+            temperature_meter: Some(8),
+            ..GuiState::default()
+        };
+        for (id, value) in [
+            (MeterId::Signal, 1),
+            (MeterId::Power, 2),
+            (MeterId::Swr, 3),
+            (MeterId::Alc, 4),
+            (MeterId::Compression, 5),
+            (MeterId::Current, 6),
+            (MeterId::Voltage, 7),
+            (MeterId::Temperature, 8),
+        ] {
+            assert_eq!(meter_value(&snapshot, id), Some(value));
+        }
+        assert_eq!(meter_value(&GuiState::default(), MeterId::Signal), None);
+        assert_eq!(meter_color(MeterId::Signal, None), Color32::GRAY);
+        assert_eq!(
+            meter_color(MeterId::Swr, Some(129)),
+            Color32::from_rgb(100, 210, 150)
+        );
+        assert_eq!(meter_color(MeterId::Swr, Some(130)), Color32::YELLOW);
+        assert_eq!(meter_color(MeterId::Swr, Some(190)), Color32::RED);
+        assert_eq!(
+            meter_color(MeterId::Power, Some(220)),
+            Color32::from_rgb(255, 145, 100)
+        );
+        assert_eq!(
+            meter_color(MeterId::Temperature, Some(255)),
+            Color32::from_rgb(100, 210, 150)
+        );
     }
 
     #[test]
@@ -7751,6 +7901,92 @@ mod tests {
         assert_eq!(
             event.fields.get("channel").map(String::as_str),
             Some("#qsonaut")
+        );
+    }
+
+    #[test]
+    fn normalize_app_events_preserves_tags_and_structured_fields() {
+        let callsign = normalize_app_event_for_automation(AppEvent::CallsignHit {
+            mode: "FT8".to_string(),
+            call: "W1AW".to_string(),
+            snr_db: -12.5,
+            freq_hz: 1_500,
+            message: "CQ W1AW FN42".to_string(),
+            directed_to_me: true,
+        })
+        .expect("callsign event");
+        assert_eq!(callsign.kind, EventKind::CallsignHit);
+        assert!(callsign.tags.contains(&"directed_to_me".to_string()));
+        assert_eq!(
+            callsign.fields.get("snr").map(String::as_str),
+            Some("-12.5")
+        );
+
+        let qso = normalize_app_event_for_automation(AppEvent::QsoLogged {
+            mode: "CW".to_string(),
+            call: "K1ABC".to_string(),
+            band: "20m".to_string(),
+            frequency_hz: 14_060_000,
+        })
+        .expect("qso event");
+        assert_eq!(qso.kind, EventKind::QsoLogged);
+        assert_eq!(
+            qso.fields.get("frequency_hz").map(String::as_str),
+            Some("14060000")
+        );
+
+        let mut fields = BTreeMap::new();
+        fields.insert("frequency_hz".to_string(), "14074000".to_string());
+        let server = normalize_app_event_for_automation(AppEvent::ServerMessageReceived {
+            kind: "radio_state".to_string(),
+            fields,
+        })
+        .expect("server event");
+        assert_eq!(server.kind, EventKind::ServerMessage);
+        assert!(server.tags.contains(&"radio_state".to_string()));
+        assert_eq!(
+            server.fields.get("kind").map(String::as_str),
+            Some("radio_state")
+        );
+    }
+
+    #[test]
+    fn normalize_automation_hooks_maps_supported_kinds_and_rejects_unknown_events() {
+        for (kind, expected) in [
+            ("contest_state", EventKind::ContestState),
+            ("operator_profile", EventKind::OperatorProfile),
+            ("callsign_hit", EventKind::CallsignHit),
+            ("qso_logged", EventKind::QsoLogged),
+            ("radio_state", EventKind::RadioState),
+        ] {
+            let event = normalize_app_event_for_automation(AppEvent::AutomationHook {
+                kind: kind.to_string(),
+                source: "test".to_string(),
+                detail: "enabled=true".to_string(),
+            })
+            .expect("supported hook");
+            assert_eq!(event.kind, expected);
+            assert_eq!(
+                event.fields.get("enabled").map(String::as_str),
+                Some("true")
+            );
+        }
+        assert!(
+            normalize_app_event_for_automation(AppEvent::AutomationHook {
+                kind: "not_supported".to_string(),
+                source: "test".to_string(),
+                detail: String::new(),
+            })
+            .is_none()
+        );
+        assert!(normalize_app_event_for_automation(AppEvent::ShutdownRequested).is_none());
+        assert!(
+            normalize_app_event_for_automation(AppEvent::DeviceDiscovered {
+                subsystem: "radio".to_string(),
+                name: "IC-7300".to_string(),
+                detail: "test".to_string(),
+            })
+            .is_none()
         );
     }
 

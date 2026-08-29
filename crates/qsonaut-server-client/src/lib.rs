@@ -801,6 +801,42 @@ struct Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::pin::Pin;
+    use std::task::{Context as TaskContext, Poll};
+
+    struct RecordingSink {
+        messages: Vec<Message>,
+    }
+
+    impl futures_util::Sink<Message> for RecordingSink {
+        type Error = std::io::Error;
+
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+            self.messages.push(item);
+            Ok(())
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
 
     #[test]
     fn installs_a_process_level_tls_crypto_provider() {
@@ -951,6 +987,264 @@ mod tests {
             reloaded.entries[0].idempotency_key,
             "11111111-1111-1111-1111-111111111111"
         );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn durable_queue_requires_keys_and_removes_only_matching_entries() {
+        let path = test_queue_path();
+        let mut queue = DurableLogQueue::load(&path);
+        assert!(queue
+            .push(serde_json::json!({"message": "missing key"}))
+            .is_err());
+        queue
+            .push(serde_json::json!({"idempotency_key": "one", "message": "first"}))
+            .unwrap();
+        queue
+            .push(serde_json::json!({"idempotency_key": "two", "message": "second"}))
+            .unwrap();
+        queue.remove("unknown").unwrap();
+        assert_eq!(queue.entries.len(), 2);
+        queue.remove("one").unwrap();
+        assert_eq!(queue.entries.len(), 1);
+        assert_eq!(queue.entries[0].idempotency_key, "two");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn normalizes_websocket_urls_and_rejects_unsupported_schemes() {
+        assert_eq!(
+            websocket_url("WS://example.test/old").unwrap().scheme(),
+            "ws"
+        );
+        assert_eq!(
+            websocket_url("wss://example.test").unwrap().path(),
+            "/api/v1/ws"
+        );
+        assert!(websocket_url("ftp://example.test").is_err());
+        assert!(websocket_url("not a url").is_err());
+    }
+
+    #[test]
+    fn bounded_automation_events_discard_oldest_entries() {
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        for index in 0..257 {
+            push_automation_event(&events, "test", [("index", index.to_string())]);
+        }
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 256);
+        assert_eq!(events.front().unwrap().fields["index"], "1");
+        assert_eq!(events.back().unwrap().fields["index"], "256");
+    }
+
+    #[test]
+    fn status_helpers_update_and_clear_connection_errors() {
+        let status = Arc::new(Mutex::new(ConnectionStatus::default()));
+        set_state(&status, ConnectionState::Connecting);
+        assert_eq!(status.lock().unwrap().state, ConnectionState::Connecting);
+        set_error(&status, ConnectionState::Stopped, "offline".to_string());
+        assert_eq!(
+            status.lock().unwrap().last_error.as_deref(),
+            Some("offline")
+        );
+        clear_error(&status);
+        assert!(status.lock().unwrap().last_error.is_none());
+    }
+
+    #[test]
+    fn instance_and_log_keys_have_expected_stable_shapes() {
+        assert_eq!(new_instance_id().len(), 36);
+        assert_ne!(new_instance_id(), new_instance_id());
+        assert_ne!(log_idempotency_key(1), log_idempotency_key(2));
+        assert_eq!(log_idempotency_key(42).len(), 36);
+    }
+
+    #[test]
+    fn welcome_and_snapshot_update_status_and_history_events() {
+        let status = Arc::new(Mutex::new(ConnectionStatus::default()));
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let queue = Arc::new(Mutex::new(DurableLogQueue::load(&test_queue_path())));
+        let mut inflight = BTreeMap::new();
+        receive(
+            r#"{
+                "protocol_version":"v1",
+                "event_id":"00000000-0000-0000-0000-000000000000",
+                "type":"welcome",
+                "payload":{"user":{"callsign":"N7UF"}}
+            }"#,
+            &status,
+            &events,
+            &queue,
+            &mut inflight,
+        )
+        .unwrap();
+        assert_eq!(
+            status.lock().unwrap().operator_callsign.as_deref(),
+            Some("N7UF")
+        );
+        assert_eq!(
+            events.lock().unwrap().pop_front().unwrap().kind,
+            "connected"
+        );
+
+        receive(
+            r#"{
+                "protocol_version":"v1",
+                "event_id":"00000000-0000-0000-0000-000000000000",
+                "type":"snapshot",
+                "payload":{
+                    "events":[{
+                        "id":"event-1","club_id":"club-1","name":"Field Day",
+                        "contest_name":"ARRL Field Day","status":"active",
+                        "starts_at":"2026-06-27T18:00:00Z","ends_at":"2026-06-28T21:00:00Z",
+                        "participant_count":4
+                    }],
+                    "clubs":[{"id":"club-1","name":"Radio Club","callsign":"W1AW"}],
+                    "contest_templates":[{"name":"Field Day"}],
+                    "channel_messages":[{
+                        "id":"message-1","author_callsign":"W1AW","channel":"ops",
+                        "message":"Welcome","created_at":"2026-06-27T18:00:00Z"
+                    }]
+                }
+            }"#,
+            &status,
+            &events,
+            &queue,
+            &mut inflight,
+        )
+        .unwrap();
+        let current = status.lock().unwrap();
+        assert_eq!(current.active_event_count, 1);
+        assert_eq!(current.catalog_size, 1);
+        assert_eq!(current.clubs[0].name, "Radio Club");
+        assert_eq!(current.active_events[0].club_name, "Radio Club");
+        drop(current);
+        let events = events.lock().unwrap();
+        assert_eq!(events.front().unwrap().kind, "snapshot");
+        assert_eq!(events.back().unwrap().kind, "channel_history");
+    }
+
+    #[test]
+    fn protocol_and_server_errors_are_reported_without_panicking() {
+        let status = Arc::new(Mutex::new(ConnectionStatus::default()));
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let queue = Arc::new(Mutex::new(DurableLogQueue::load(&test_queue_path())));
+        let mut inflight = BTreeMap::new();
+        let error = receive(
+            r#"{"protocol_version":"v0","event_id":"00000000-0000-0000-0000-000000000000","type":"ack"}"#,
+            &status,
+            &events,
+            &queue,
+            &mut inflight,
+        )
+        .expect_err("unsupported protocol must fail");
+        assert!(error.to_string().contains("unsupported server protocol"));
+
+        receive(
+            r#"{
+                "protocol_version":"v1",
+                "event_id":"00000000-0000-0000-0000-000000000000",
+                "type":"error","payload":{"message":"permission denied"}
+            }"#,
+            &status,
+            &events,
+            &queue,
+            &mut inflight,
+        )
+        .unwrap();
+        assert_eq!(
+            status.lock().unwrap().last_error.as_deref(),
+            Some("permission denied")
+        );
+        assert_eq!(
+            events.lock().unwrap().back().unwrap().fields["message"],
+            "permission denied"
+        );
+    }
+
+    #[test]
+    fn accepted_log_removes_the_matching_inflight_queue_entry() {
+        let status = Arc::new(Mutex::new(ConnectionStatus::default()));
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let path = test_queue_path();
+        let queue = Arc::new(Mutex::new(DurableLogQueue::load(&path)));
+        queue
+            .lock()
+            .unwrap()
+            .push(serde_json::json!({"idempotency_key":"key-1","callsign":"N7UF"}))
+            .unwrap();
+        let event_id = Uuid::nil();
+        let mut inflight = BTreeMap::from([(event_id, "key-1".to_string())]);
+        receive(
+            r#"{"protocol_version":"v1","event_id":"00000000-0000-0000-0000-000000000000","type":"log_accepted","payload":{}}"#,
+            &status,
+            &events,
+            &queue,
+            &mut inflight,
+        )
+        .unwrap();
+        assert!(inflight.is_empty());
+        assert!(queue.lock().unwrap().entries.is_empty());
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn sends_versioned_envelopes_and_pending_logs_without_duplicates() {
+        let mut sink = RecordingSink {
+            messages: Vec::new(),
+        };
+        let event_id = send(&mut sink, ClientMessage::Ping).await.unwrap();
+        assert_eq!(sink.messages.len(), 1);
+        let Message::Text(text) = &sink.messages[0] else {
+            panic!("expected text envelope");
+        };
+        let json: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(json["protocol_version"], "v1");
+        assert_eq!(json["event_id"], event_id.to_string());
+        assert_eq!(json["type"], "ping");
+
+        let path = test_queue_path();
+        let mut durable = DurableLogQueue::load(&path);
+        durable
+            .push(serde_json::json!({"idempotency_key":"one","call":"K1ABC"}))
+            .unwrap();
+        let queue = Arc::new(Mutex::new(durable));
+        let first_event = Uuid::new_v4();
+        let mut inflight = BTreeMap::from([(first_event, "one".to_string())]);
+        send_pending_logs(&mut sink, &queue, &mut inflight)
+            .await
+            .unwrap();
+        assert_eq!(sink.messages.len(), 1);
+        assert!(inflight.contains_key(&first_event));
+
+        inflight.clear();
+        send_pending_logs(&mut sink, &queue, &mut inflight)
+            .await
+            .unwrap();
+        assert_eq!(sink.messages.len(), 2);
+        assert_eq!(inflight.len(), 1);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn server_client_starts_disabled_when_worker_cannot_connect() {
+        let path = test_queue_path();
+        let client = ServerClient::spawn(ConnectionConfig {
+            server_url: "not a valid server url".to_string(),
+            device_token: String::new(),
+            client_version: "test".to_string(),
+            queue_path: path.clone(),
+            share_logs: false,
+        });
+        for _ in 0..20 {
+            if client.status().last_error.is_some() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(client.status().state, ConnectionState::Reconnecting);
+        assert!(client.status().last_error.is_some());
+        drop(client);
         let _ = fs::remove_file(path);
     }
 

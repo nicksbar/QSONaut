@@ -429,4 +429,63 @@ mod tests {
         };
         assert!(correct_and_faster.eligible(1.2));
     }
+
+    #[test]
+    fn reports_preference_labels_and_hardware_fallback_details() {
+        assert_eq!(ComputePreference::Auto.label(), "AUTO");
+        assert_eq!(ComputePreference::Cpu.label(), "CPU");
+        assert_eq!(ComputePreference::Gpu.label(), "GPU");
+        assert_eq!(ActiveBackend::CpuSimd.label(), "CPU SIMD");
+        assert_eq!(ActiveBackend::GpuCompute.label(), "GPU COMPUTE");
+
+        let pending = AccelerationReport::pending(ComputePreference::Auto);
+        assert_eq!(pending.active, ActiveBackend::CpuSimd);
+        assert!(!pending.gpu_kernels_validated);
+        assert!(pending.hardware_detail().contains("GPU not exposed"));
+        assert!(pending.summary().contains("threads"));
+    }
+
+    #[test]
+    fn formats_telemetry_with_zero_and_nonzero_budgets() {
+        let empty = DecodeTelemetry {
+            mode: "FT8".to_string(),
+            backend: ActiveBackend::CpuSimd,
+            samples: 0,
+            decoded: 0,
+            total: Duration::from_millis(10),
+            budget: Duration::ZERO,
+            stages: Vec::new(),
+        };
+        assert_eq!(empty.realtime_percent(), 0.0);
+        assert!(empty.concise().contains("0% slot"));
+        assert_eq!(empty.stage_detail(), "");
+
+        let measured = DecodeTelemetry {
+            total: Duration::from_millis(25),
+            budget: Duration::from_millis(100),
+            decoded: 2,
+            stages: vec![StageTiming {
+                name: "decode",
+                duration: Duration::from_millis(25),
+            }],
+            ..empty
+        };
+        assert_eq!(measured.realtime_percent(), 25.0);
+        assert!(measured.concise().contains("2 decoded"));
+        assert_eq!(measured.stage_detail(), "decode 25ms");
+    }
+
+    #[test]
+    fn kernel_benchmark_rejects_empty_fixtures_and_clamps_speedup_floor() {
+        let benchmark = KernelBenchmark {
+            fixture_count: 0,
+            cpu_digest: 1,
+            accelerator_digest: 1,
+            cpu_time: Duration::from_millis(10),
+            accelerator_time: Duration::ZERO,
+        };
+        assert!(!benchmark.outputs_match());
+        assert!(!benchmark.eligible(0.0));
+        assert!(benchmark.speedup().is_infinite());
+    }
 }

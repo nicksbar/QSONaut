@@ -1,5 +1,14 @@
 use super::super::*;
 
+fn display_operator_name(parts: [&str; 4]) -> String {
+    parts
+        .into_iter()
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl QsonautGuiApp {
     pub(in super::super) fn draw_contact_log(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         ui.horizontal(|ui| {
@@ -125,17 +134,12 @@ impl QsonautGuiApp {
                                         .hamdb
                                         .as_ref()
                                         .map(|hamdb| {
-                                            [
+                                            display_operator_name([
                                                 hamdb.first_name.as_str(),
                                                 hamdb.middle_name.as_str(),
                                                 hamdb.name.as_str(),
                                                 hamdb.suffix.as_str(),
-                                            ]
-                                            .into_iter()
-                                            .map(str::trim)
-                                            .filter(|part| !part.is_empty())
-                                            .collect::<Vec<_>>()
-                                            .join(" ")
+                                            ])
                                         })
                                         .filter(|name| !name.is_empty())
                                         .unwrap_or_else(|| "—".to_string());
@@ -208,17 +212,12 @@ impl QsonautGuiApp {
                                 delete_selected = true;
                             }
                             if let Some(hamdb) = &contact.hamdb {
-                                let operator_name = [
+                                let operator_name = display_operator_name([
                                     hamdb.first_name.as_str(),
                                     hamdb.middle_name.as_str(),
                                     hamdb.name.as_str(),
                                     hamdb.suffix.as_str(),
-                                ]
-                                .into_iter()
-                                .map(str::trim)
-                                .filter(|part| !part.is_empty())
-                                .collect::<Vec<_>>()
-                                .join(" ");
+                                ]);
                                 ui.label(
                                     RichText::new(if operator_name.is_empty() {
                                         "HamDB: name unavailable"
@@ -471,5 +470,19 @@ impl QsonautGuiApp {
                     }
                 }
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_operator_name;
+
+    #[test]
+    fn formats_operator_names_without_empty_parts() {
+        assert_eq!(
+            display_operator_name([" Ada ", "", "Lovelace", " "]),
+            "Ada Lovelace"
+        );
+        assert_eq!(display_operator_name(["", "", "", ""]), "");
     }
 }

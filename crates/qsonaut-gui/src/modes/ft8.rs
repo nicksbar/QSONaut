@@ -16,6 +16,23 @@ pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
     ("70cm", 432_074_000),
 ];
 
+fn ft8_phase_label(
+    ptt_on: bool,
+    queued_period: Option<u64>,
+    autoseq: bool,
+    has_session: bool,
+) -> &'static str {
+    if ptt_on {
+        "TX NOW"
+    } else if queued_period.is_some() {
+        "TX QUEUED"
+    } else if autoseq && has_session {
+        "AUTO TX ARMED"
+    } else {
+        "RX"
+    }
+}
+
 impl QsonautGuiApp {
     fn ft8_conversation_target(&self) -> Option<String> {
         self.ft8_seq_target
@@ -244,15 +261,12 @@ impl QsonautGuiApp {
             // 15-second period progress
             let progress = ft8_period_progress();
             let tx_active = snapshot.ptt_on || self.ft8_tx_active.load(Ordering::Acquire);
-            let phase_label = if snapshot.ptt_on {
-                "TX NOW"
-            } else if self.ft8_tx_queued_period.is_some() {
-                "TX QUEUED"
-            } else if self.ft8_autoseq && self.ft8_session.is_some() {
-                "AUTO TX ARMED"
-            } else {
-                "RX"
-            };
+            let phase_label = ft8_phase_label(
+                snapshot.ptt_on,
+                self.ft8_tx_queued_period,
+                self.ft8_autoseq,
+                self.ft8_session.is_some(),
+            );
             let period_color = if tx_active || self.ft8_tx_queued_period.is_some() {
                 Color32::from_rgb(190, 70, 35)
             } else if self.ft8_autoseq && self.ft8_session.is_some() {
@@ -947,5 +961,26 @@ impl QsonautGuiApp {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ft8_phase_label, BAND_PLAN};
+
+    #[test]
+    fn prioritizes_ft8_transmit_state_in_the_phase_label() {
+        assert_eq!(ft8_phase_label(true, Some(4), true, true), "TX NOW");
+        assert_eq!(ft8_phase_label(false, Some(4), true, true), "TX QUEUED");
+        assert_eq!(ft8_phase_label(false, None, true, true), "AUTO TX ARMED");
+        assert_eq!(ft8_phase_label(false, None, true, false), "RX");
+    }
+
+    #[test]
+    fn exposes_the_ft8_band_plan_in_frequency_order() {
+        assert_eq!(BAND_PLAN.len(), 13);
+        assert_eq!(BAND_PLAN.first(), Some(&("160m", 1_840_000)));
+        assert_eq!(BAND_PLAN.last(), Some(&("70cm", 432_074_000)));
+        assert!(BAND_PLAN.windows(2).all(|bands| bands[0].1 < bands[1].1));
     }
 }

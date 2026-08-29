@@ -108,7 +108,7 @@ cargo llvm-cov --locked --all-features --workspace --summary-only
 
 To generate the browsable report, use `--html`; it is written beneath
 `target/llvm-cov/html`. Pull requests and pushes to `main` run the same
-coverage workflow, enforce the current 20% workspace line-coverage baseline,
+coverage workflow, enforce the current 28% workspace line-coverage baseline,
 enforce changed-file coverage on pull requests, and upload the HTML report as
 an artifact. The baseline is intentionally
 conservative while GUI and hardware-facing paths gain dedicated harnesses;
@@ -116,7 +116,7 @@ the per-file report is the source of truth for those areas.
 
 ### Coverage area snapshot
 
-The current baseline was measured on 2026-08-29 with 176 tests and 21.65%
+The current baseline was measured on 2026-08-29 with 251 tests and 28.06%
 workspace line coverage. These are grouped line-coverage figures from the
 same LLVM report; the downloadable HTML artifact remains the detailed,
 per-file source of truth.
@@ -125,22 +125,22 @@ per-file source of truth.
 | --- | ---: | ---: |
 | qsonaut-sstv | 776 / 855 | 90.76% |
 | qsonaut-automation | 217 / 264 | 82.20% |
-| qsonaut-log | 524 / 809 | 64.77% |
-| qsonaut-accelerate | 170 / 267 | 63.67% |
-| qsonaut-pskreporter | 100 / 227 | 44.05% |
-| qsonaut-server-client | 267 / 633 | 42.18% |
-| qsonaut-audio | 327 / 906 | 36.09% |
-| qsonaut-core | 135 / 325 | 41.54% |
-| GUI core | 2,208 / 9,885 | 22.34% |
-| GUI workers | 322 / 1,747 | 18.43% |
-| GUI modes | 474 / 5,345 | 8.87% |
-| GUI panels | 68 / 2,853 | 2.38% |
+| qsonaut-log | 740 / 913 | 81.05% |
+| qsonaut-accelerate | 281 / 318 | 88.36% |
+| qsonaut-pskreporter | 275 / 336 | 81.85% |
+| qsonaut-server-client | 733 / 870 | 84.25% |
+| qsonaut-audio | 405 / 961 | 42.14% |
+| qsonaut-core | 368 / 428 | 85.98% |
+| GUI core | 2,613 / 10,091 | 25.89% |
+| GUI workers | 321 / 1,747 | 18.37% |
+| GUI modes | 715 / 5,549 | 12.89% |
+| GUI panels | 118 / 2,881 | 4.10% |
 | Rigwright integration | 197 / 2,137 | 9.22% |
-| Application entry point | 0 / 467 | 0.00% |
+| Application entry point | 53 / 495 | 10.71% |
 
 The first improvement targets are the application entry point and GUI panels,
 modes, and workers. Changes to these areas should add deterministic seams or
-focused tests rather than weakening the 20% gate.
+focused tests rather than weakening the 28% gate.
 
 Changed-file coverage is enforced with `scripts/check-changed-coverage.sh`.
 The small set of pre-existing zero-coverage files is explicitly tracked in

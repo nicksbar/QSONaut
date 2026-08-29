@@ -1,6 +1,28 @@
 use super::super::*;
 use crate::visuals::build_audio_waterfall_image_with_theme;
 
+fn scope_attribution_layout(
+    scope_rect: egui::Rect,
+    rows: usize,
+    capacity: usize,
+) -> Option<egui::Rect> {
+    let blank_height =
+        scope_rect.height() * (capacity.saturating_sub(rows) as f32 / capacity.max(1) as f32);
+    if rows >= capacity || blank_height <= 0.0 {
+        return None;
+    }
+
+    let card_width = (scope_rect.width() - 24.0).clamp(240.0, 440.0);
+    let card_height = 82.0;
+    Some(egui::Rect::from_min_size(
+        egui::pos2(
+            scope_rect.center().x - card_width / 2.0,
+            scope_rect.top() + blank_height - card_height - 8.0,
+        ),
+        egui::vec2(card_width, card_height),
+    ))
+}
+
 fn draw_scope_attribution(
     ui: &mut egui::Ui,
     scope_rect: egui::Rect,
@@ -8,21 +30,9 @@ fn draw_scope_attribution(
     capacity: usize,
     title: &str,
 ) {
-    let blank_height =
-        scope_rect.height() * (capacity.saturating_sub(rows) as f32 / capacity.max(1) as f32);
-    if rows >= capacity || blank_height <= 0.0 {
+    let Some(card) = scope_attribution_layout(scope_rect, rows, capacity) else {
         return;
-    }
-
-    let card_width = (scope_rect.width() - 24.0).clamp(240.0, 440.0);
-    let card_height = 82.0;
-    let card = egui::Rect::from_min_size(
-        egui::pos2(
-            scope_rect.center().x - card_width / 2.0,
-            scope_rect.top() + blank_height - card_height - 8.0,
-        ),
-        egui::vec2(card_width, card_height),
-    );
+    };
     let painter = ui.painter();
     painter.rect_filled(card, 5.0, Color32::from_rgba_unmultiplied(7, 20, 31, 232));
     painter.rect_stroke(
@@ -844,5 +854,35 @@ impl QsonautGuiApp {
                 "Audio waterfall",
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scope_attribution_layout;
+    use eframe::egui;
+
+    #[test]
+    fn only_places_attribution_in_remaining_scope_history() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1_000.0, 500.0));
+        assert!(scope_attribution_layout(rect, 10, 10).is_none());
+        assert!(scope_attribution_layout(rect, 11, 10).is_none());
+        let card = scope_attribution_layout(rect, 0, 10).expect("empty scope has room");
+        assert_eq!(card.width(), 440.0);
+        assert_eq!(card.height(), 82.0);
+    }
+
+    #[test]
+    fn clamps_attribution_card_width_for_narrow_and_wide_scopes() {
+        let narrow = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 500.0));
+        let wide = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1_000.0, 500.0));
+        assert_eq!(
+            scope_attribution_layout(narrow, 1, 10).unwrap().width(),
+            240.0
+        );
+        assert_eq!(
+            scope_attribution_layout(wide, 1, 10).unwrap().width(),
+            440.0
+        );
     }
 }

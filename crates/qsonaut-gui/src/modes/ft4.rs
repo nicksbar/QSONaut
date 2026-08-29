@@ -16,6 +16,18 @@ pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
     ("70cm", 432_076_000),
 ];
 
+fn ft4_phase_label(ptt_on: bool, tx_active: bool, autoseq: bool) -> &'static str {
+    if ptt_on {
+        "TX NOW"
+    } else if tx_active {
+        "TX QUEUED"
+    } else if autoseq {
+        "AUTO TX ARMED"
+    } else {
+        "RX · DISARMED"
+    }
+}
+
 impl QsonautGuiApp {
     fn draw_ft4_conversation(&self, ui: &mut egui::Ui, snapshot: &GuiState, height: f32) {
         let operator_call = self.station_callsign_or_default().to_string();
@@ -194,15 +206,7 @@ impl QsonautGuiApp {
         ui.horizontal_wrapped(|ui| {
             ui.heading("FT4");
             ui.separator();
-            let phase_label = if snapshot.ptt_on {
-                "TX NOW"
-            } else if tx_active {
-                "TX QUEUED"
-            } else if self.ft4_autoseq {
-                "AUTO TX ARMED"
-            } else {
-                "RX · DISARMED"
-            };
+            let phase_label = ft4_phase_label(snapshot.ptt_on, tx_active, self.ft4_autoseq);
             ui.label(
                 RichText::new(phase_label)
                     .strong()
@@ -776,5 +780,26 @@ impl QsonautGuiApp {
                 );
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ft4_phase_label, BAND_PLAN};
+
+    #[test]
+    fn prioritizes_active_tx_state_in_the_phase_label() {
+        assert_eq!(ft4_phase_label(true, true, true), "TX NOW");
+        assert_eq!(ft4_phase_label(false, true, true), "TX QUEUED");
+        assert_eq!(ft4_phase_label(false, false, true), "AUTO TX ARMED");
+        assert_eq!(ft4_phase_label(false, false, false), "RX · DISARMED");
+    }
+
+    #[test]
+    fn exposes_the_ft4_band_plan_in_frequency_order() {
+        assert_eq!(BAND_PLAN.len(), 13);
+        assert_eq!(BAND_PLAN.first(), Some(&("160m", 1_840_000)));
+        assert_eq!(BAND_PLAN.last(), Some(&("70cm", 432_076_000)));
+        assert!(BAND_PLAN.windows(2).all(|bands| bands[0].1 < bands[1].1));
     }
 }

@@ -30,6 +30,53 @@ pub(crate) const FLDIGI_BAND_PLAN: &[(&str, u64)] = &[
     ("6m", 50_313_000),
 ];
 
+fn native_radio_mode_label(preset: crate::band_plan::WorkspaceRadioPreset) -> &'static str {
+    match (preset.base_mode, preset.data_mode) {
+        (BaseMode::Usb, true) => "USB-D",
+        (BaseMode::Usb, false) => "USB",
+        (BaseMode::Lsb, true) => "LSB-D",
+        (BaseMode::Lsb, false) => "LSB",
+        (BaseMode::Cw | BaseMode::CwR, _) => "CW",
+        (BaseMode::Rtty | BaseMode::RttyR, true) => "RTTY-D",
+        (BaseMode::Rtty | BaseMode::RttyR, false) => "RTTY",
+        _ => "DIGITAL",
+    }
+}
+
+fn native_slot_label(mode: WorkspaceMode, fst4_submode: crate::modes::fst4::Submode) -> String {
+    mode.slot_seconds(fst4_submode).map_or_else(
+        || "Continuous".to_string(),
+        |seconds| {
+            if seconds.fract() == 0.0 {
+                format!("{seconds:.0} s")
+            } else {
+                format!("{seconds:.1} s")
+            }
+        },
+    )
+}
+
+fn native_mode_guidance(mode: WorkspaceMode) -> &'static str {
+    match mode {
+        WorkspaceMode::Wspr => {
+            "WSPR is a 120-second propagation beacon. TX format: CALL GRID POWER_DBM; use one-shot transmissions only."
+        }
+        WorkspaceMode::Fst4 => {
+            "FST4-60 is currently selected by the decoder. TX is one timed frame; verify the slot countdown before sending."
+        }
+        WorkspaceMode::Jt9 => {
+            "JT9 uses 60-second slots. The native panel provides manual one-shot TX; sequencing is not enabled yet."
+        }
+        WorkspaceMode::Jt65 => {
+            "JT65 uses 60-second slots. The native panel provides manual one-shot TX; sequencing is not enabled yet."
+        }
+        WorkspaceMode::Q65 => {
+            "Q65-A30 is currently selected by the decoder. The native panel provides manual one-shot TX."
+        }
+        _ => "Native digital TX is one-shot and slot-timed; use STOP TX to disarm a queued frame.",
+    }
+}
+
 impl QsonautGuiApp {
     pub(crate) fn draw_mfsk_mode_workspace(
         &mut self,
@@ -98,26 +145,8 @@ impl QsonautGuiApp {
         mode: WorkspaceMode,
     ) {
         let preset = workspace_radio_preset(mode);
-        let preset_label = match (preset.base_mode, preset.data_mode) {
-            (BaseMode::Usb, true) => "USB-D",
-            (BaseMode::Usb, false) => "USB",
-            (BaseMode::Lsb, true) => "LSB-D",
-            (BaseMode::Lsb, false) => "LSB",
-            (BaseMode::Cw | BaseMode::CwR, _) => "CW",
-            (BaseMode::Rtty | BaseMode::RttyR, true) => "RTTY-D",
-            (BaseMode::Rtty | BaseMode::RttyR, false) => "RTTY",
-            _ => "DIGITAL",
-        };
-        let slot_s = mode.slot_seconds(self.fst4_submode).map_or_else(
-            || "Continuous".to_string(),
-            |seconds| {
-                if seconds.fract() == 0.0 {
-                    format!("{seconds:.0} s")
-                } else {
-                    format!("{seconds:.1} s")
-                }
-            },
-        );
+        let preset_label = native_radio_mode_label(preset);
+        let slot_s = native_slot_label(mode, self.fst4_submode);
 
         ui.heading(mode.label());
         ui.separator();
@@ -152,25 +181,11 @@ impl QsonautGuiApp {
             ));
         });
         ui.add_space(8.0);
-        let mode_guidance = match mode {
-            WorkspaceMode::Wspr => {
-                "WSPR is a 120-second propagation beacon. TX format: CALL GRID POWER_DBM; use one-shot transmissions only."
-            }
-            WorkspaceMode::Fst4 => {
-                "FST4-60 is currently selected by the decoder. TX is one timed frame; verify the slot countdown before sending."
-            }
-            WorkspaceMode::Jt9 => {
-                "JT9 uses 60-second slots. The native panel provides manual one-shot TX; sequencing is not enabled yet."
-            }
-            WorkspaceMode::Jt65 => {
-                "JT65 uses 60-second slots. The native panel provides manual one-shot TX; sequencing is not enabled yet."
-            }
-            WorkspaceMode::Q65 => {
-                "Q65-A30 is currently selected by the decoder. The native panel provides manual one-shot TX."
-            }
-            _ => "Native digital TX is one-shot and slot-timed; use STOP TX to disarm a queued frame.",
-        };
-        ui.label(RichText::new(mode_guidance).small().color(Color32::GRAY));
+        ui.label(
+            RichText::new(native_mode_guidance(mode))
+                .small()
+                .color(Color32::GRAY),
+        );
         if matches!(
             mode,
             WorkspaceMode::Fst4 | WorkspaceMode::Jt9 | WorkspaceMode::Jt65 | WorkspaceMode::Q65
@@ -365,5 +380,69 @@ impl QsonautGuiApp {
                 .color(theme_warning(ui)),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{native_mode_guidance, native_radio_mode_label, native_slot_label};
+    use crate::{band_plan::WorkspaceRadioPreset, modes::fst4::Submode, BaseMode, WorkspaceMode};
+
+    fn preset(base_mode: BaseMode, data_mode: bool) -> WorkspaceRadioPreset {
+        WorkspaceRadioPreset {
+            base_mode,
+            data_mode,
+            filter: 1,
+        }
+    }
+
+    #[test]
+    fn labels_all_supported_native_radio_modes() {
+        assert_eq!(
+            native_radio_mode_label(preset(BaseMode::Usb, true)),
+            "USB-D"
+        );
+        assert_eq!(native_radio_mode_label(preset(BaseMode::Usb, false)), "USB");
+        assert_eq!(
+            native_radio_mode_label(preset(BaseMode::Lsb, true)),
+            "LSB-D"
+        );
+        assert_eq!(native_radio_mode_label(preset(BaseMode::Lsb, false)), "LSB");
+        assert_eq!(native_radio_mode_label(preset(BaseMode::Cw, false)), "CW");
+        assert_eq!(native_radio_mode_label(preset(BaseMode::CwR, true)), "CW");
+        assert_eq!(
+            native_radio_mode_label(preset(BaseMode::Rtty, true)),
+            "RTTY-D"
+        );
+        assert_eq!(
+            native_radio_mode_label(preset(BaseMode::RttyR, false)),
+            "RTTY"
+        );
+        assert_eq!(
+            native_radio_mode_label(preset(BaseMode::Am, false)),
+            "DIGITAL"
+        );
+    }
+
+    #[test]
+    fn formats_continuous_and_timed_native_slots() {
+        assert_eq!(
+            native_slot_label(WorkspaceMode::Wspr, Submode::S60),
+            "120 s"
+        );
+        assert_eq!(native_slot_label(WorkspaceMode::Jt9, Submode::S60), "60 s");
+        assert_eq!(
+            native_slot_label(WorkspaceMode::Cw, Submode::S60),
+            "Continuous"
+        );
+    }
+
+    #[test]
+    fn keeps_mode_specific_operator_guidance() {
+        assert!(native_mode_guidance(WorkspaceMode::Wspr).contains("120-second"));
+        assert!(native_mode_guidance(WorkspaceMode::Fst4).contains("FST4-60"));
+        assert!(native_mode_guidance(WorkspaceMode::Jt65).contains("JT65"));
+        assert!(native_mode_guidance(WorkspaceMode::Q65).contains("Q65-A30"));
+        assert!(native_mode_guidance(WorkspaceMode::Fldigi).contains("one-shot"));
     }
 }
