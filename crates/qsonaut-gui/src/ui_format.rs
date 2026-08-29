@@ -83,7 +83,7 @@ mod tests {
     fn formats_utc_time_and_rolls_milliseconds_into_the_next_day() {
         assert_eq!(utc_hhmmss_millis(-1.0), "00:00:00.000");
         assert_eq!(utc_hhmmss_millis(3_723.456), "01:02:03.456");
-        assert_eq!(utc_hhmmss_millis(86_399.9996), "00:00:00.000");
+        assert_eq!(utc_hhmmss_millis(86_399.999_6), "00:00:00.000");
         assert_eq!(utc_hhmmss_millis(86_400.25), "00:00:00.250");
     }
 
