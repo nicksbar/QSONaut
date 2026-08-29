@@ -2,7 +2,7 @@ use super::super::*;
 use super::request_gui_repaint;
 
 const RADIO_CORE_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const RADIO_LEVEL_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const RADIO_LEVEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const RADIO_COMMAND_WAKE_INTERVAL: Duration = Duration::from_millis(50);
 const RADIO_SCOPE_READ_SLICE: Duration = Duration::from_millis(25);
 
@@ -783,8 +783,16 @@ pub(crate) fn spawn_radio_worker(
                     }
                     GuiCommand::SetControl(id, value) => {
                         debug!(control = ?id, value = ?value, "Radio control change requested");
-                        match rt.block_on(radio.set_control(id, value)) {
-                            Ok(()) => info!(control = ?id, "Radio control change accepted"),
+                        match rt.block_on(radio.set_control(id, value.clone())) {
+                            Ok(()) => {
+                                if id == ControlId::Vfo {
+                                    if let Some(vfo) = control_vfo_value(&value) {
+                                        state.lock().expect("ui state lock poisoned").active_vfo =
+                                            vfo;
+                                    }
+                                }
+                                info!(control = ?id, "Radio control change accepted")
+                            }
                             Err(error) => {
                                 error!(control = ?id, error = %error, "Radio control change failed");
                                 state.lock().expect("ui state lock poisoned").last_error =
@@ -1149,6 +1157,7 @@ fn poll_radio_core_state(
     state: &Arc<Mutex<GuiState>>,
     poll_levels: bool,
 ) {
+    let reported_vfo = read_vfo_control(rt, radio);
     if radio.as_icom().is_none() {
         let instrument_poll = FIRST_RADIO_CORE_POLL.swap(false, Ordering::Relaxed);
         if instrument_poll {
@@ -1171,6 +1180,9 @@ fn poll_radio_core_state(
             match (frequency, mode) {
                 (Ok(frequency_hz), Ok(mode)) => {
                     s.frequency_hz = Some(frequency_hz);
+                    if let Some(vfo) = reported_vfo {
+                        s.active_vfo = vfo;
+                    }
                     s.mode = match mode {
                         Mode::Usb => "USB",
                         Mode::Lsb => "LSB",
@@ -1320,6 +1332,9 @@ fn poll_radio_core_state(
         if let Some(freq) = status.frequency_hz {
             s.frequency_hz = Some(freq);
         }
+        if let Some(vfo) = reported_vfo {
+            s.active_vfo = vfo;
+        }
         if let Some(mode) = status.mode {
             s.mode = mode;
         }
@@ -1380,6 +1395,24 @@ fn poll_radio_core_state(
     if let Some(v) = filt {
         s.filter = Some(v);
     }
+}
+
+fn control_vfo_value(value: &ControlValue) -> Option<u8> {
+    match value {
+        ControlValue::U8(value) | ControlValue::Vfo(value) if *value <= 1 => Some(*value),
+        _ => None,
+    }
+}
+
+fn read_vfo_control<R: Radio + ?Sized>(rt: &tokio::runtime::Runtime, radio: &R) -> Option<u8> {
+    if !radio.supports_control_read(ControlId::Vfo) {
+        return None;
+    }
+    control_vfo_value(
+        &rt.block_on(radio.get_control(ControlId::Vfo))
+            .ok()
+            .flatten()?,
+    )
 }
 
 fn poll_radio_level_state(

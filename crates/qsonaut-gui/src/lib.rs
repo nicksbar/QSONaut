@@ -963,6 +963,9 @@ impl SstvAiPipelineMode {
 #[derive(Debug, Clone)]
 struct GuiState {
     frequency_hz: Option<u64>,
+    /// Active VFO selector: 0 = A, 1 = B. Drivers without reliable readback
+    /// remain on the safe startup assumption of VFO A.
+    active_vfo: u8,
     mode: String,
     data_mode: Option<bool>,
     filter: Option<u8>,
@@ -1074,6 +1077,7 @@ impl Default for GuiState {
     fn default() -> Self {
         Self {
             frequency_hz: None,
+            active_vfo: 0,
             mode: "(unknown)".to_string(),
             data_mode: None,
             filter: None,
@@ -4444,82 +4448,100 @@ impl QsonautGuiApp {
     }
 
     fn draw_meter_display(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
-        let s_meter = meter_value(snapshot, MeterId::Signal);
-        let s_percent = s_meter.map(meter_percent).unwrap_or_default();
-        let s_response = ui
-            .add(
-                egui::ProgressBar::new(s_percent)
-                    .desired_width(220.0)
-                    .fill(meter_color(MeterId::Signal, s_meter))
-                    .text(format!("S-METER {}", format_meter_value(s_meter))),
-            )
-            .on_hover_text("Click to open the radio meter panel");
-        let s_click = ui.interact(
-            s_response.rect,
-            ui.id().with("s_meter_toggle"),
-            egui::Sense::click(),
+        let primary_id = if snapshot.ptt_on {
+            MeterId::Power
+        } else {
+            MeterId::Signal
+        };
+        let primary_value = meter_value(snapshot, primary_id);
+        let primary_label = if snapshot.ptt_on { "POWER" } else { "S-METER" };
+        let (primary_rect, primary_response) =
+            ui.allocate_exact_size(egui::vec2(280.0, 24.0), egui::Sense::click());
+        draw_primary_meter(
+            ui,
+            primary_rect,
+            primary_label,
+            primary_value.map(meter_percent).unwrap_or_default(),
+            meter_color(primary_id, primary_value),
         );
+        let s_click = primary_response.on_hover_text("Click to open the live radio meter drawer");
         if s_click.clicked() {
             self.show_meter_panel = !self.show_meter_panel;
             self.meter_panel_close_deadline = None;
         }
 
         ui.separator();
-        ui.label(RichText::new("RADIO METERS").small().strong());
-        for id in general_meter_order() {
-            if id == MeterId::Signal || !snapshot.supported_meters.contains(&id) {
-                continue;
+        ui.horizontal_wrapped(|ui| {
+            for id in general_meter_order() {
+                if id == primary_id
+                    || !snapshot.supported_meters.contains(&id)
+                    || (snapshot.ptt_on && id == MeterId::Signal)
+                {
+                    continue;
+                }
+                let value = meter_value(snapshot, id);
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(meter_label(id)).small().monospace().strong());
+                    ui.add(
+                        egui::ProgressBar::new(value.map(meter_percent).unwrap_or_default())
+                            .desired_width(92.0)
+                            .desired_height(11.0)
+                            .fill(meter_color(id, value)),
+                    );
+                });
             }
-            let value = meter_value(snapshot, id);
-            ui.add(
-                egui::ProgressBar::new(value.map(meter_percent).unwrap_or_default())
-                    .desired_width(105.0)
-                    .fill(meter_color(id, value))
-                    .text(format!("{} {}", meter_label(id), format_meter_value(value))),
-            );
-        }
+        });
 
         if self.show_meter_panel {
-            ui.add_space(3.0);
-            egui::Frame::group(ui.style())
-                .fill(Color32::from_rgba_unmultiplied(18, 30, 42, 235))
-                .show(ui, |ui| {
-                    let phase = if snapshot.ptt_on { "TX" } else { "RX" };
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(format!(
-                                "{phase} METERS · {}",
-                                radio_mode_label(&snapshot.mode, snapshot.data_mode)
-                            ))
-                            .strong()
-                            .color(if snapshot.ptt_on {
-                                Color32::from_rgb(255, 145, 120)
-                            } else {
-                                Color32::from_rgb(120, 225, 255)
-                            }),
-                        );
-                        if snapshot.ptt_on {
-                            ui.label(RichText::new("● TRANSMIT").strong().color(Color32::RED));
-                        }
-                    });
-                    ui.separator();
-                    for id in mode_meter_order(snapshot.ptt_on) {
-                        if !snapshot.supported_meters.contains(&id) {
-                            continue;
-                        }
-                        let value = meter_value(snapshot, id);
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(meter_label(id)).monospace().strong());
-                            ui.add(
-                                egui::ProgressBar::new(
-                                    value.map(meter_percent).unwrap_or_default(),
-                                )
-                                .desired_width(ui.available_width().max(100.0))
-                                .fill(meter_color(id, value))
-                                .text(format_meter_value(value)),
-                            );
+            let drawer_position = egui::pos2(primary_rect.left(), primary_rect.bottom() + 5.0);
+            egui::Area::new(ui.id().with("meter_drawer_overlay"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(drawer_position)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::group(ui.style())
+                        .fill(Color32::from_rgba_unmultiplied(18, 30, 42, 245))
+                        .show(ui, |ui| {
+                            let phase = if snapshot.ptt_on { "TX" } else { "RX" };
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{phase} METER DRAWER · {}",
+                                        radio_mode_label(&snapshot.mode, snapshot.data_mode)
+                                    ))
+                                    .strong()
+                                    .color(
+                                        if snapshot.ptt_on {
+                                            Color32::from_rgb(255, 145, 120)
+                                        } else {
+                                            Color32::from_rgb(120, 225, 255)
+                                        },
+                                    ),
+                                );
+                                if snapshot.ptt_on {
+                                    ui.label(
+                                        RichText::new("● TRANSMIT").strong().color(Color32::RED),
+                                    );
+                                }
+                            });
+                            ui.separator();
+                            for id in mode_meter_order(snapshot.ptt_on) {
+                                if !snapshot.supported_meters.contains(&id) {
+                                    continue;
+                                }
+                                let value = meter_value(snapshot, id);
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(meter_label(id)).monospace().strong());
+                                    ui.add(
+                                        egui::ProgressBar::new(
+                                            value.map(meter_percent).unwrap_or_default(),
+                                        )
+                                        .desired_width(ui.available_width().max(100.0))
+                                        .desired_height(14.0)
+                                        .fill(meter_color(id, value)),
+                                    );
+                                });
+                            }
                         });
-                    }
                 });
         }
     }
@@ -5203,6 +5225,35 @@ impl eframe::App for QsonautGuiApp {
                                 theme_warning(ui)
                             }),
                     );
+                    let supports_vfo = snapshot
+                        .supported_controls
+                        .contains(&ControlId::Vfo);
+                    let vfo = snapshot.active_vfo.min(1);
+                    let vfo_label = if vfo == 0 { "VFO A" } else { "VFO B" };
+                    if ui
+                        .add_enabled(
+                            supports_vfo && snapshot.radio_power_on == Some(true),
+                            egui::Button::new(
+                                RichText::new(vfo_label)
+                                    .monospace()
+                                    .strong()
+                                    .color(if vfo == 0 {
+                                        Color32::from_rgb(130, 220, 255)
+                                    } else {
+                                        Color32::from_rgb(255, 190, 105)
+                                    }),
+                            ),
+                        )
+                        .on_hover_text("Toggle the active radio VFO")
+                        .clicked()
+                    {
+                        self.send_command(GuiCommand::SetControl(
+                            ControlId::Vfo,
+                            // Rigwright's CI-V VFO selector is a write-only
+                            // command and its current HAL contract is U8.
+                            ControlValue::U8(1 - vfo),
+                        ));
+                    }
                     let radio_profile = self
                         .config
                         .radio
@@ -6705,6 +6756,49 @@ fn meter_percent(value: u8) -> f32 {
     f32::from(value) / 255.0
 }
 
+fn draw_primary_meter(ui: &egui::Ui, rect: egui::Rect, label: &str, fraction: f32, color: Color32) {
+    let painter = ui.painter();
+    let outer = rect.expand(1.0);
+    painter.rect_filled(
+        outer,
+        egui::CornerRadius::same(7),
+        Color32::from_rgb(10, 20, 29),
+    );
+    painter.rect_stroke(
+        outer,
+        egui::CornerRadius::same(7),
+        egui::Stroke::new(1.0, color.gamma_multiply(0.65)),
+        egui::StrokeKind::Inside,
+    );
+
+    let inner = rect.shrink2(egui::vec2(5.0, 6.0));
+    let segments = 30;
+    let gap = 2.0;
+    let segment_width = ((inner.width() - gap * (segments - 1) as f32) / segments as f32).max(1.0);
+    let lit = (fraction.clamp(0.0, 1.0) * segments as f32).ceil() as usize;
+    for index in 0..segments {
+        let left = inner.left() + index as f32 * (segment_width + gap);
+        let segment = egui::Rect::from_min_max(
+            egui::pos2(left, inner.top()),
+            egui::pos2(left + segment_width, inner.bottom()),
+        );
+        let fill = if index < lit {
+            color
+        } else {
+            Color32::from_rgb(28, 45, 57)
+        };
+        painter.rect_filled(segment, egui::CornerRadius::same(2), fill);
+    }
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::monospace(12.0),
+        Color32::WHITE,
+    );
+}
+
+#[cfg(test)]
 fn format_meter_value(value: Option<u8>) -> String {
     value
         .map(|value| format!("{:.0}%", f32::from(value) * 100.0 / 255.0))
