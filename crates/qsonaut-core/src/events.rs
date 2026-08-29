@@ -70,3 +70,45 @@ impl AppEventBus {
         self.tx.subscribe()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{AppEvent, AppEventBus};
+
+    #[test]
+    fn publishes_events_to_subscribers() {
+        let bus = AppEventBus::new(4);
+        let mut subscriber = bus.subscribe();
+
+        bus.publish(AppEvent::ShutdownRequested);
+
+        assert!(matches!(
+            subscriber.try_recv(),
+            Ok(AppEvent::ShutdownRequested)
+        ));
+    }
+
+    #[test]
+    fn subscribers_are_independent_and_receive_later_events() {
+        let bus = AppEventBus::new(4);
+        let mut first = bus.subscribe();
+        let mut second = bus.subscribe();
+
+        bus.publish(AppEvent::AutomationHook {
+            kind: "timer".to_string(),
+            source: "test".to_string(),
+            detail: "coverage".to_string(),
+        });
+
+        assert!(matches!(
+            first.try_recv(),
+            Ok(AppEvent::AutomationHook { .. })
+        ));
+        assert!(matches!(
+            second.try_recv(),
+            Ok(AppEvent::AutomationHook { .. })
+        ));
+        assert!(first.try_recv().is_err());
+        assert!(second.try_recv().is_err());
+    }
+}

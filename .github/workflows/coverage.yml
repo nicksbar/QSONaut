@@ -34,6 +34,12 @@ jobs:
           cargo llvm-cov --locked --all-features --workspace --summary-only | tee coverage-summary.txt
           bash scripts/check-coverage.sh coverage-summary.txt
 
+      - name: Enforce changed-file coverage
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/check-changed-coverage.sh coverage-summary.txt
+
       - name: Generate HTML coverage report
         run: cargo llvm-cov --locked --all-features --workspace --html --output-dir target/llvm-cov
 

@@ -109,13 +109,14 @@ cargo llvm-cov --locked --all-features --workspace --summary-only
 To generate the browsable report, use `--html`; it is written beneath
 `target/llvm-cov/html`. Pull requests and pushes to `main` run the same
 coverage workflow, enforce the current 20% workspace line-coverage baseline,
-and upload the HTML report as an artifact. The baseline is intentionally
+enforce changed-file coverage on pull requests, and upload the HTML report as
+an artifact. The baseline is intentionally
 conservative while GUI and hardware-facing paths gain dedicated harnesses;
 the per-file report is the source of truth for those areas.
 
 ### Coverage area snapshot
 
-The current baseline was measured on 2026-08-29 with 159 tests and 20.79%
+The current baseline was measured on 2026-08-29 with 161 tests and 20.89%
 workspace line coverage. These are grouped line-coverage figures from the
 same LLVM report; the downloadable HTML artifact remains the detailed,
 per-file source of truth.
@@ -129,7 +130,7 @@ per-file source of truth.
 | qsonaut-pskreporter | 100 / 227 | 44.05% |
 | qsonaut-server-client | 267 / 633 | 42.18% |
 | qsonaut-audio | 327 / 906 | 36.09% |
-| qsonaut-core | 102 / 302 | 33.77% |
+| qsonaut-core | 132 / 322 | 40.99% |
 | GUI core | 2,102 / 9,843 | 21.36% |
 | GUI workers | 295 / 1,736 | 16.99% |
 | GUI modes | 424 / 5,321 | 7.97% |
@@ -140,6 +141,11 @@ per-file source of truth.
 The first improvement targets are the application entry point and GUI panels,
 modes, and workers. Changes to these areas should add deterministic seams or
 focused tests rather than weakening the 20% gate.
+
+Changed-file coverage is enforced with `scripts/check-changed-coverage.sh`.
+The small set of pre-existing zero-coverage files is explicitly tracked in
+`.coverage-baseline`; new zero-coverage production files fail the pull request
+check.
 
 Rigwright driver implementation coverage is intentionally separate: it is an
 external dependency and is measured by Rigwright's own driver coverage

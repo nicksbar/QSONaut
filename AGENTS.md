@@ -17,14 +17,17 @@ future agent changes:
   documented baseline or area values stale.
 - Preserve the coverage workflow in `.github/workflows/coverage.yml`: it must
   run on pull requests and pushes to `main`, enforce the workspace baseline,
-  publish the job summary, and upload the HTML report. Changes to the test or
-  build matrix must keep coverage execution representative of the workspace.
+  enforce changed-file coverage on pull requests, publish the job summary, and
+  upload the HTML report. Changes to the test or build matrix must keep
+  coverage execution representative of the workspace.
 - The README coverage table is a current line-coverage snapshot, not a claim
   of hardware validation. Keep area names stable so trends remain comparable;
   add a new area only when its ownership boundary is clear.
 - A new production Rust file should ship with a test or an explicit follow-up
   in the coverage plan. Aggregate coverage must not be used to disguise a
-  completely untested new path.
+  completely untested new path. Existing zero-coverage exceptions are tracked
+  only in `.coverage-baseline`; do not add new exceptions casually, and remove
+  each entry when its focused tests land.
 - Keep release/version documentation synchronized with `Cargo.toml`, the
   current release branch/tag, and `CHANGELOG.md`.
 
