@@ -15,7 +15,7 @@ pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
 ];
 
 fn workspace_description() -> &'static str {
-    "JT65A is the mfsk-core submode currently available here. The workspace uses the backend's standard 60-second decoder and synthesizer with manual one-shot TX."
+    "JT65A is the shared WSJT submode currently available here. The workspace uses the backend's standard 60-second decoder and synthesizer with manual one-shot TX."
 }
 
 impl QsonautGuiApp {

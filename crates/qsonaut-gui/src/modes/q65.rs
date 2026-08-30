@@ -15,7 +15,7 @@ pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
 ];
 
 fn workspace_description() -> &'static str {
-    "Q65-A30 is the configured mfsk-core submode. QSONaut currently exposes the backend's 30-second decode and standard waveform TX with manual one-shot operation."
+    "Q65-A30 is the configured shared WSJT submode. QSONaut currently exposes the backend's 30-second decode and standard waveform TX with manual one-shot operation."
 }
 
 impl QsonautGuiApp {

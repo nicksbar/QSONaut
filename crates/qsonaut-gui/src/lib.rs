@@ -169,7 +169,7 @@ const HAMDB_CACHE_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
 // The generated waveform starts at +0.5 s and ends at about +13.14 s.
 const FT8_EARLY_DECODE_S: f64 = 13.2;
 const FT8_SLOT_SAMPLES: usize = 12_000 * 15;
-// mfsk-core's WSJT-X depth/recall ladder is calibrated at 1.3. In particular,
+// The shared WSJT adapter's WSJT-X depth/recall ladder is calibrated at 1.3. In particular,
 // D2 scales this to WSJT-X's 2.0 early-pass threshold; using 1.9 here had
 // unintentionally raised the early gate to ~2.92 and discarded weak signals.
 const FT8_FAST_SYNC_MIN: f32 = 1.3;

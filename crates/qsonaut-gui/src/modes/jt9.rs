@@ -15,7 +15,7 @@ pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
 ];
 
 fn workspace_description() -> &'static str {
-    "JT9 uses mfsk-core's 60-second decoder and standard message synthesizer. QSONaut currently provides manual one-shot slot TX; no JT9 sequencing is implied."
+    "JT9 uses the shared WSJT 60-second decoder and standard message synthesizer. QSONaut currently provides manual one-shot slot TX; no JT9 sequencing is implied."
 }
 
 impl QsonautGuiApp {

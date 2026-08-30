@@ -154,7 +154,7 @@ impl QsonautGuiApp {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Backend:").strong());
             let backend = if mode.has_native_decoder() {
-                "mfsk-core"
+                "shared WSJT adapter"
             } else if mode == WorkspaceMode::Fldigi {
                 "external FLDIGI bridge"
             } else {

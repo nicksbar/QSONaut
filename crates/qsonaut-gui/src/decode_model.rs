@@ -116,7 +116,7 @@ pub(super) struct PotaSpot {
     pub(super) mode: String,
 }
 
-/// An immutable native-mode decode event using mfsk-core's common result data.
+/// An immutable native-mode decode event using the shared WSJT result data.
 #[derive(Debug, Clone)]
 pub(super) struct DigitalDecodeEntry {
     pub(super) mode: WorkspaceMode,
