@@ -315,11 +315,39 @@ logs, recordings, or proprietary manuals.
 ### About credits
 
 The About panel credits the original author, plus optional contributors and
-testers. Release builds read the comma-separated repository Actions variables
+testers. Release builds read the repository Actions variables
 `QSONAUT_CONTRIBUTORS` and `QSONAUT_TESTERS`; unset or empty variables display
-`None listed`. Set them under the repository's **Settings → Secrets and
-variables → Actions → Variables** page so credit names or callsigns can be
-updated without changing source code.
+`None listed`. The preferred value is a JSON array, which also supplies
+identities to the null radio simulator:
+
+```json
+[
+  {
+    "name": "Nick",
+    "callsign": "N7UF",
+    "grid": "CN87",
+    "power_dbm": 30,
+    "role": "maintainer",
+    "modes": ["ft8", "ft4", "sstv", "wspr"]
+  },
+  {
+    "name": "Example Tester",
+    "callsign": "W1AW",
+    "grid": "FN31",
+    "power_dbm": 30,
+    "role": "tester",
+    "modes": ["ft8", "sstv"],
+    "enabled": true
+  }
+]
+```
+
+Only `callsign` is required for simulated exchanges. `grid` and `power_dbm`
+are used by WSPR, while `name`, `role`, and `modes` are available for credit
+and future simulator presentation. Set the variables under the repository's
+**Settings → Secrets and variables → Actions → Variables** page so identities
+can be updated without changing source code. Plain text remains accepted for
+the About panel, but it cannot provide structured simulator metadata.
 
 ## Acknowledgements
 

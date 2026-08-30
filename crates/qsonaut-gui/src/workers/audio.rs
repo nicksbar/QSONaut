@@ -18,10 +18,47 @@ use std::sync::atomic::AtomicU32;
 
 type CwRecording = (WavWriter<BufWriter<File>>, BufWriter<File>, PathBuf, u64);
 
-const NULL_SIM_EXCHANGES: &[(&str, &str, &str)] = &[
-    ("CQ N7UF CN87", "N7UF W1AW -10", "W1AW N7UF R-07"),
-    ("N7UF W1AW RR73", "W1AW N7UF 73", "CQ K6ABC DM13"),
-];
+fn null_sim_stations(mode: WorkspaceMode) -> Vec<QsonautPerson> {
+    let mut stations = qsonaut_demo_people()
+        .into_iter()
+        .filter(|person| {
+            person.modes.is_empty()
+                || person
+                    .modes
+                    .iter()
+                    .any(|supported| supported.eq_ignore_ascii_case(mode.label()))
+        })
+        .filter(|person| person.callsign.as_deref().is_some_and(is_probable_callsign))
+        .collect::<Vec<_>>();
+    if stations.is_empty() {
+        stations.push(QsonautPerson {
+            name: Some("QSONaut".to_string()),
+            callsign: Some("N7UF".to_string()),
+            grid: Some("CN87".to_string()),
+            power_dbm: Some(30),
+            ..QsonautPerson::default()
+        });
+    }
+    if stations.len() < 2 {
+        stations.push(QsonautPerson {
+            name: Some("Test Station".to_string()),
+            callsign: Some("W1AW".to_string()),
+            grid: Some("FN31".to_string()),
+            power_dbm: Some(30),
+            ..QsonautPerson::default()
+        });
+    }
+    if stations.len() < 3 {
+        stations.push(QsonautPerson {
+            name: Some("Demo Station".to_string()),
+            callsign: Some("K6ABC".to_string()),
+            grid: Some("DM13".to_string()),
+            power_dbm: Some(30),
+            ..QsonautPerson::default()
+        });
+    }
+    stations
+}
 
 struct NullAudioGenerator {
     mode: Option<WorkspaceMode>,
@@ -57,21 +94,51 @@ impl NullAudioGenerator {
         };
         self.waveforms.clear();
 
-        let messages: Vec<(&str, u32)> = match mode {
-            WorkspaceMode::Sstv => vec![("SSTV", 1_500)],
-            WorkspaceMode::Cw => vec![("CQ N7UF", 700), ("N7UF W1AW", 1_500)],
-            WorkspaceMode::Wspr => vec![("N7UF CN87 30", 1_000), ("W1AW FN31 30", 2_000)],
-            _ => NULL_SIM_EXCHANGES
+        let stations = null_sim_stations(mode);
+        let first = &stations[0];
+        let second = &stations[1];
+        let first_call = first.callsign.as_deref().unwrap_or("N7UF");
+        let second_call = second.callsign.as_deref().unwrap_or("W1AW");
+        let first_grid = first.grid.as_deref().unwrap_or("CN87");
+        let second_grid = second.grid.as_deref().unwrap_or("FN31");
+        let first_power = first.power_dbm.unwrap_or(30);
+        let second_power = second.power_dbm.unwrap_or(30);
+        let messages: Vec<(String, u32)> = match mode {
+            WorkspaceMode::Sstv => stations
                 .iter()
-                .flat_map(|(first, second, third)| [*first, *second, *third])
-                .enumerate()
-                .map(|(index, message)| (message, 700 + index as u32 % 3 * 700))
+                .take(3)
+                .map(|station| {
+                    (
+                        format!(
+                            "{} {}",
+                            station.callsign.as_deref().unwrap_or("N7UF"),
+                            station.name.as_deref().unwrap_or("IMAGE")
+                        ),
+                        1_500,
+                    )
+                })
                 .collect(),
+            WorkspaceMode::Cw => vec![
+                (format!("CQ {first_call}"), 700),
+                (format!("{first_call} DE {second_call}"), 1_500),
+            ],
+            WorkspaceMode::Wspr => vec![
+                (format!("{first_call} {first_grid} {first_power}"), 1_000),
+                (format!("{second_call} {second_grid} {second_power}"), 2_000),
+            ],
+            _ => vec![
+                (format!("CQ {first_call} {first_grid}"), 700),
+                (format!("{first_call} {second_call} -10"), 1_400),
+                (format!("{second_call} {first_call} R-07"), 2_100),
+                (format!("{first_call} {second_call} RR73"), 700),
+                (format!("{second_call} {first_call} 73"), 1_400),
+                (format!("CQ {second_call} {second_grid}"), 2_100),
+            ],
         };
-        for (message, tone_hz) in messages {
+        for (frame_index, (message, tone_hz)) in messages.into_iter().enumerate() {
             let mut waveform = Vec::new();
             let pcm = match mode {
-                WorkspaceMode::Ft8 => build_ft8_tx_pcm(message, tone_hz),
+                WorkspaceMode::Ft8 => build_ft8_tx_pcm(&message, tone_hz),
                 WorkspaceMode::Ft4
                 | WorkspaceMode::Fst4
                 | WorkspaceMode::Jt9
@@ -79,7 +146,7 @@ impl NullAudioGenerator {
                 | WorkspaceMode::Q65
                 | WorkspaceMode::Wspr => build_native_digital_tx_pcm(
                     mode,
-                    message,
+                    &message,
                     tone_hz,
                     state.fst4_submode,
                     state.cw_wpm,
@@ -88,7 +155,7 @@ impl NullAudioGenerator {
                 .map(|(pcm, _)| pcm),
                 WorkspaceMode::Cw => build_native_digital_tx_pcm(
                     mode,
-                    message,
+                    &message,
                     tone_hz,
                     state.fst4_submode,
                     state.cw_wpm,
@@ -102,9 +169,9 @@ impl NullAudioGenerator {
                     for y in 0..height {
                         for x in 0..width {
                             let offset = (y * width + x) * 3;
-                            rgb[offset] = (x % 256) as u8;
-                            rgb[offset + 1] = (y % 256) as u8;
-                            rgb[offset + 2] = ((x + y) % 256) as u8;
+                            rgb[offset] = ((x + frame_index * 47) % 256) as u8;
+                            rgb[offset + 1] = ((y + frame_index * 71) % 256) as u8;
+                            rgb[offset + 2] = ((x + y + frame_index * 29) % 256) as u8;
                         }
                     }
                     qsonaut_sstv::encode_rgb_mode_12k(
@@ -124,13 +191,47 @@ impl NullAudioGenerator {
             for (target, sample) in waveform.iter_mut().zip(pcm) {
                 *target += sample as f32 / i16::MAX as f32
                     * if mode == WorkspaceMode::Sstv {
-                        0.12
+                        0.04
                     } else {
-                        0.16
+                        0.06
                     };
             }
             self.waveforms.push(waveform);
         }
+        if mode == WorkspaceMode::Sstv {
+            // Martin M1 is approximately 114 seconds at 320x256. Leave a
+            // small guard interval so the next image cannot truncate the
+            // current VIS/image transmission.
+            let longest_s = self
+                .waveforms
+                .iter()
+                .map(|waveform| waveform.len() as f64 / f64::from(CANONICAL_SAMPLE_RATE_HZ))
+                .fold(0.0, f64::max);
+            self.period_s = self
+                .period_s
+                .max(
+                    f64::from(qsonaut_sstv::mode_duration_seconds(
+                        qsonaut_sstv::SstvMode::MartinM1,
+                    )) + 2.0,
+                )
+                .max(longest_s + 2.0);
+        }
+    }
+
+    fn status(&self) -> String {
+        let now_s = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64())
+            .unwrap_or_default();
+        let cycle = (now_s / self.period_s).floor() as usize;
+        let frame_count = self.waveforms.len().max(1);
+        let frame = cycle % frame_count + 1;
+        let until_next = self.period_s - now_s.rem_euclid(self.period_s);
+        format!(
+            "SIMULATED RX · {} · frame {frame}/{frame_count} · next slot in {:.1}s",
+            self.mode.map(WorkspaceMode::label).unwrap_or("starting"),
+            until_next
+        )
     }
 
     fn read_chunk(&mut self, sample_count: usize, state: &Arc<Mutex<GuiState>>) -> Vec<f32> {
@@ -575,7 +676,12 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 .map(|error| format!("LIVE RX · MONITOR ERROR ({error})"))
                                 .unwrap_or_else(|| {
                                     if null_audio {
-                                        "SIMULATED RX · NULL SOUND CARD".to_string()
+                                        null_generator
+                                            .as_ref()
+                                            .map(NullAudioGenerator::status)
+                                            .unwrap_or_else(|| {
+                                                "SIMULATED RX · NULL SOUND CARD".to_string()
+                                            })
                                     } else if resampling_input {
                                         format!(
                                             "LIVE RX · RESAMPLED {} → {} Hz{monitor_status}{monitor_clock_status}",
@@ -1554,6 +1660,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
 #[cfg(test)]
 mod tests {
     use super::{GuiState, NullAudioGenerator, WorkspaceMode};
+    use qsonaut_third_party::sstv as qsonaut_sstv;
 
     #[test]
     fn null_audio_generator_builds_waveforms_for_supported_demo_modes() {
@@ -1602,6 +1709,61 @@ mod tests {
         generator.rebuild(WorkspaceMode::Fst4, &state);
         assert_eq!(generator.period_s, 60.0);
         assert_eq!(generator.waveforms.len(), 6);
+
+        let state = GuiState {
+            workspace_mode: WorkspaceMode::Wspr,
+            ..GuiState::default()
+        };
+        generator.rebuild(WorkspaceMode::Wspr, &state);
+        assert_eq!(generator.period_s, 120.0);
+        assert_eq!(generator.waveforms.len(), 2);
+
+        let state = GuiState {
+            workspace_mode: WorkspaceMode::Sstv,
+            ..GuiState::default()
+        };
+        generator.rebuild(WorkspaceMode::Sstv, &state);
+        assert!(generator.period_s > 60.0);
+        assert!(generator.period_s >= generator.waveforms[0].len() as f64 / 12_000.0 + 2.0);
+        assert_eq!(generator.waveforms.len(), 3);
+        assert!(generator.waveforms[0] != generator.waveforms[1]);
+        assert!(generator.waveforms[1] != generator.waveforms[2]);
+        let status = generator.status();
+        assert!(status.contains("SSTV"));
+        assert!(
+            status.contains("frame 1/3")
+                || status.contains("frame 2/3")
+                || status.contains("frame 3/3")
+        );
+        assert!(status.contains("next slot in"));
+    }
+
+    #[test]
+    fn null_sstv_signal_remains_auto_target_decodable_at_simulation_level() {
+        let state = GuiState {
+            workspace_mode: WorkspaceMode::Sstv,
+            ..GuiState::default()
+        };
+        let mut generator = NullAudioGenerator::default();
+        generator.rebuild(WorkspaceMode::Sstv, &state);
+
+        let mut audio = vec![0.0_f32; 12_000];
+        audio.extend_from_slice(&generator.waveforms[0]);
+        audio.extend(std::iter::repeat_n(0.0, 12_000));
+        let mut receiver = qsonaut_sstv::MultiModeReceiver::default();
+        receiver.set_auto_target(true);
+        let mut decoded = None;
+        for chunk in audio.chunks(4096) {
+            decoded = receiver.push(chunk).or(decoded);
+        }
+        assert!(
+            decoded.is_some(),
+            "null SSTV signal should auto-target and decode"
+        );
+        assert_eq!(
+            receiver.take_completed_mode(),
+            Some(qsonaut_sstv::SstvMode::MartinM1)
+        );
     }
 }
 

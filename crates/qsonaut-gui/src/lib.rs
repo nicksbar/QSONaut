@@ -71,18 +71,70 @@ const QSONAUT_ISSUES_URL: &str = "https://github.com/nicksbar/QSONaut/issues";
 const QSONAUT_WEBSITE_URL: &str = "https://qsonaut.com";
 const AUDIO_FAQ: &str = include_str!("../../../docs/audio_faq.md");
 
-fn qsonaut_contributors() -> &'static str {
-    match option_env!("QSONAUT_CONTRIBUTORS") {
-        Some(value) if !value.trim().is_empty() => value,
-        _ => "None listed",
-    }
+#[derive(Clone, Debug, Default, Deserialize)]
+pub(crate) struct QsonautPerson {
+    pub(crate) name: Option<String>,
+    pub(crate) callsign: Option<String>,
+    pub(crate) grid: Option<String>,
+    pub(crate) power_dbm: Option<i8>,
+    pub(crate) role: Option<String>,
+    #[serde(default)]
+    pub(crate) modes: Vec<String>,
+    #[serde(default = "default_enabled")]
+    pub(crate) enabled: bool,
 }
 
-fn qsonaut_testers() -> &'static str {
-    match option_env!("QSONAUT_TESTERS") {
-        Some(value) if !value.trim().is_empty() => value,
-        _ => "None listed",
+fn default_enabled() -> bool {
+    true
+}
+
+fn qsonaut_people(raw: Option<&'static str>) -> Vec<QsonautPerson> {
+    let Some(raw) = raw.filter(|value| !value.trim().is_empty()) else {
+        return Vec::new();
+    };
+    serde_json::from_str(raw).unwrap_or_default()
+}
+
+pub(crate) fn qsonaut_demo_people() -> Vec<QsonautPerson> {
+    qsonaut_people(option_env!("QSONAUT_CONTRIBUTORS"))
+        .into_iter()
+        .chain(qsonaut_people(option_env!("QSONAUT_TESTERS")))
+        .filter(|person| person.enabled)
+        .collect()
+}
+
+fn qsonaut_credit_text(raw: Option<&'static str>) -> String {
+    let Some(raw) = raw.filter(|value| !value.trim().is_empty()) else {
+        return "None listed".to_string();
+    };
+    let people = qsonaut_people(Some(raw));
+    if people.is_empty() {
+        return raw.to_string();
     }
+    people
+        .into_iter()
+        .filter(|person| person.enabled)
+        .map(|person| {
+            let identity = match (person.name, person.callsign) {
+                (Some(name), Some(callsign)) => format!("{name} ({callsign})"),
+                (Some(name), None) | (None, Some(name)) => name,
+                (None, None) => "Unnamed contributor".to_string(),
+            };
+            person
+                .role
+                .filter(|role| !role.trim().is_empty())
+                .map_or(identity.clone(), |role| format!("{identity} · {role}"))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn qsonaut_contributors() -> String {
+    qsonaut_credit_text(option_env!("QSONAUT_CONTRIBUTORS"))
+}
+
+fn qsonaut_testers() -> String {
+    qsonaut_credit_text(option_env!("QSONAUT_TESTERS"))
 }
 
 fn effective_audio_input_device(backend: &str, input: Option<String>) -> Option<String> {
