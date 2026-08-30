@@ -4510,24 +4510,44 @@ impl QsonautGuiApp {
                                 }
                             });
                             ui.separator();
-                            for id in mode_meter_order(snapshot.ptt_on) {
-                                if !snapshot.supported_meters.contains(&id) {
-                                    continue;
-                                }
-                                let value = meter_value(snapshot, id);
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new(meter_label(id)).monospace().strong());
-                                    ui.add(
-                                        egui::ProgressBar::new(
-                                            value.map(meter_percent).unwrap_or_default(),
-                                        )
-                                        .desired_width(ui.available_width().max(100.0))
-                                        .desired_height(14.0)
-                                        .fill(meter_color(id, value))
-                                        .text(meter_reading(id, value)),
-                                    );
+                            egui::ScrollArea::vertical()
+                                .max_height(280.0)
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    if snapshot.ptt_on
+                                        && snapshot.supported_controls.contains(&ControlId::RfPower)
+                                    {
+                                        ui.horizontal(|ui| {
+                                            ui.label(RichText::new("TX SET").monospace().strong())
+                                                .on_hover_text(
+                                                "Configured RF transmit power, not measured output",
+                                            );
+                                            let value = snapshot.rf_power;
+                                            ui.label(meter_reading(MeterId::Power, value));
+                                        });
+                                    }
+                                    for id in mode_meter_order(snapshot.ptt_on) {
+                                        if !snapshot.supported_meters.contains(&id) {
+                                            continue;
+                                        }
+                                        let value = meter_value(snapshot, id);
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                RichText::new(meter_label(id)).monospace().strong(),
+                                            )
+                                            .on_hover_text(meter_tooltip(id));
+                                            ui.add(
+                                                egui::ProgressBar::new(
+                                                    value.map(meter_percent).unwrap_or_default(),
+                                                )
+                                                .desired_width(ui.available_width().max(100.0))
+                                                .desired_height(14.0)
+                                                .fill(meter_color(id, value))
+                                                .text(meter_reading(id, value)),
+                                            );
+                                        });
+                                    }
                                 });
-                            }
                         });
                 });
         }
@@ -7112,8 +7132,25 @@ fn meter_reading(id: MeterId, value: Option<u8>) -> String {
                 u16::from(value) * 100 / 255
             )
         }
+    } else if id == MeterId::Voltage {
+        format!("REL {value}/255")
     } else {
         format!("{}%", u16::from(value) * 100 / 255)
+    }
+}
+
+fn meter_tooltip(id: MeterId) -> &'static str {
+    match id {
+        MeterId::Signal => {
+            "Receive signal level; S-unit display is derived from the normalized driver level"
+        }
+        MeterId::Power => "Measured relative RF output level",
+        MeterId::Swr => "Transmit SWR meter level; exact ratio is model-specific",
+        MeterId::Alc => "Transmit ALC level",
+        MeterId::Compression => "Transmit speech/data compression level",
+        MeterId::Current => "PA drain/current meter level",
+        MeterId::Voltage => "Relative PA voltage level; this driver does not expose volts",
+        MeterId::Temperature => "PA temperature meter; exact units depend on the driver",
     }
 }
 
@@ -7164,6 +7201,7 @@ mod tests {
         assert_eq!(meter_reading(MeterId::Signal, Some(72)), "S6 · 28%");
         assert_eq!(meter_reading(MeterId::Signal, Some(120)), "S9 +6 dB · 47%");
         assert_eq!(meter_reading(MeterId::Power, Some(128)), "50%");
+        assert_eq!(meter_reading(MeterId::Voltage, Some(128)), "REL 128/255");
     }
 
     #[test]

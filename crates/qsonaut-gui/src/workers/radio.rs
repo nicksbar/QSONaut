@@ -79,11 +79,13 @@ impl MeterPollScheduler {
             return Some(meter);
         }
         if now >= self.next_aux {
-            const AUXILIARY: [ScheduledMeter; 4] = [
+            // Signal is an RX reading. Keep the last useful RX value visible
+            // during TX instead of replacing it with a radio's often-zero
+            // transmit-side response.
+            const AUXILIARY: [ScheduledMeter; 3] = [
                 ScheduledMeter::Current,
                 ScheduledMeter::Voltage,
                 ScheduledMeter::Temperature,
-                ScheduledMeter::Signal,
             ];
             let meter = AUXILIARY[self.aux_index % AUXILIARY.len()];
             self.aux_index = self.aux_index.wrapping_add(1);
@@ -1797,6 +1799,13 @@ mod tests {
         assert_eq!(scheduler.next_due(now, false), Some(ScheduledMeter::Signal));
         assert_eq!(scheduler.next_due(now, true), Some(ScheduledMeter::Power));
         assert_eq!(scheduler.next_due(now, true), Some(ScheduledMeter::Current));
+        scheduler.next_aux = now;
+        assert_eq!(scheduler.next_due(now, true), Some(ScheduledMeter::Voltage));
+        scheduler.next_aux = now;
+        assert_eq!(
+            scheduler.next_due(now, true),
+            Some(ScheduledMeter::Temperature)
+        );
     }
 
     #[test]
@@ -1815,6 +1824,11 @@ mod tests {
         assert_eq!(
             scheduler.next_due(now, false),
             Some(ScheduledMeter::Voltage)
+        );
+        scheduler.next_aux = now;
+        assert_eq!(
+            scheduler.next_due(now, true),
+            Some(ScheduledMeter::Temperature)
         );
     }
 
