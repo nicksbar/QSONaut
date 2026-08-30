@@ -3479,7 +3479,7 @@ dependencies = [
 [[package]]
 name = "qsonaut-third-party"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=e3e5167#e3e51678d53b4a062aa63414f7c4038260076f52"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=fc34f84#fc34f849460f671e410087dcce723de3703d7b1f"
 dependencies = [
  "cwdit-dsp",
  "cwdit-morse",
