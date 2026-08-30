@@ -5,7 +5,64 @@ The README gives the short version; this page records what is actually wired
 into the application, what is gated by the selected backend/radio profile, and
 what remains experimental or planned.
 
-## Implementation levels
+## v0.4 maturity vocabulary
+
+The v0.4 consolidation uses four release-planning classifications. The
+implementation levels below remain useful detail, but they do not by
+themselves imply release support.
+
+| Maturity | Meaning for v0.4 |
+|---|---|
+| **Stable enough to depend on** | The workflow is implemented, has automated coverage where practical, and has either the reference-station evidence or a clearly bounded non-hardware contract. |
+| **Experimental but usable** | An operator can use the workflow, but timing, hardware, external-service, or completeness limits remain. |
+| **Concept only** | Models, permissions, placeholders, or partial scaffolding exist without a complete dependable operator workflow. |
+| **Deferred** | Explicitly outside the v0.4 consolidation scope; do not use its absence as an implementation defect for this release. |
+
+Maturity is intentionally conservative: a passing software test is not a
+hardware-validation result, and a cataloged Rigwright model is not a validated
+radio. The detailed tables below retain the more precise implementation level
+and the limitation that explains each classification.
+
+## Reference station and evidence boundary
+
+The v0.4 reference station is Linux/WSL with an Icom IC-7300 using its USB
+CI-V/control and USB audio paths. The repeatable setup guidance is in the
+[IC-7300 guide](radios/models/ic-7300/guide.md) and the [audio monitoring
+guide](audio-monitoring.md). The IC-7300 native control/scope path is the
+current hardware-validated baseline; other radio profiles, serial families,
+and alternate platforms remain experimental until their own evidence is
+recorded.
+
+Evidence in this document has two separate meanings:
+
+- **Software-tested** means covered by unit/integration tests, generated
+  waveforms, mock/offline backends, or CI checks. It proves deterministic
+  application behavior within that test boundary.
+- **Hardware-tested** means exercised on the stated physical radio/audio
+  setup with the operating conditions and expected-versus-observed result
+  recorded. It is not inferred from a build, a profile entry, or a software
+  test.
+
+The current baseline is intentionally not a claim that every listed mode,
+radio, connector, or platform is hardware-tested. Open hardware evidence is
+tracked by the radio validation program in issue #41 and its model issues.
+
+## v0.4 classification summary
+
+| Component or feature group | Maturity | Evidence and boundary |
+|---|---|---|
+| Reference IC-7300 native control and scope | Stable enough to depend on | Hardware-validated development path; model-specific controls and scope have software coverage as well. |
+| FT8 and FT4 core workflows | Stable enough to depend on | Generated-audio and timing tests plus the established IC-7300 path; broader hardware campaign remains tracked separately. |
+| QSO logging, ADIF import/export, and local persistence | Stable enough to depend on | Software-tested round trips and GUI workflow; backup/restore and broader acceptance evidence remain open. |
+| Audio selection, canonical 48 kHz processing, and monitoring | Stable enough to depend on | Software-tested negotiation/resampling and documented Linux/WSL setup; device-matrix validation remains open. |
+| SSTV receive, transmit preparation, and explicit TX safety | Experimental but usable | Software round-trip coverage and operator-visible abort/disarm paths; end-to-end hardware validation remains open. |
+| JT9, JT65, Q65, FST4, and CW | Experimental but usable | Native or generated-audio paths exist, with uneven workflow completeness and validation. |
+| WSPR and MSK144 | Experimental but usable | Receive-only integration; transmit workflows are intentionally unavailable. |
+| Radio profiles other than the IC-7300 | Experimental but usable | Capability-gated implementations; physical validation is not implied by catalog presence. |
+| Contest workflow and automation actions | Experimental but usable | Software state/persistence/guard tests exist; complete contest and external-adapter workflows remain unvalidated. |
+| Local AI, PSK Reporter, and QSONaut Server integration | Experimental but usable | Optional paths with failure isolation and opt-in boundaries; external service and privacy validation remain open. |
+| Discord/IRC connectors and unattended operation | Concept only | Scaffolding or policy exists without a complete validated production workflow. |
+| New modem implementations, broad radio expansion, advanced contest scoring, and new distribution formats | Deferred | Explicit v0.4 non-goals from the consolidation epic. |
 
 | Level | Meaning |
 |---|---|

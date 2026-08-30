@@ -289,6 +289,11 @@ from those tags and changelog entries.
 See [`docs/versioning-and-releases.md`](docs/versioning-and-releases.md) for
 the concrete policy and release checklist.
 
+For the current consolidation baseline, see the [v0.4 maturity and feature
+matrix](docs/feature-matrix.md) and the [deterministic regression fixture
+catalog](docs/regression-fixtures.md). These documents distinguish software
+test evidence from physical-station validation.
+
 ## Before transmitting
 
 At minimum:
