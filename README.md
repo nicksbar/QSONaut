@@ -5,6 +5,7 @@
 # QSONaut
 
 [![CI](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml)
+[![Coverage gate](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml)
 [![Release builds](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml/badge.svg)](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml)
 [![Latest release](https://img.shields.io/github/v/release/nicksbar/QSONaut?display_name=tag&sort=semver)](https://github.com/nicksbar/QSONaut/releases)
 
@@ -87,6 +88,71 @@ Cargo resolves a pinned upstream revision and records that source in
 `Cargo.lock` for reproducible builds.
 
 Use a release build for live decoding. Debug builds are substantially slower.
+
+## Tests and coverage
+
+Run the complete workspace test suite with:
+
+```bash
+cargo test --locked --workspace --all-targets
+```
+
+QSONaut uses LLVM source-based coverage through `cargo-llvm-cov`. Install the
+tool once, then generate the terminal baseline with:
+
+```bash
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov --locked
+cargo llvm-cov --locked --all-features --workspace --summary-only
+```
+
+To generate the browsable report, use `--html`; it is written beneath
+`target/llvm-cov/html`. Pull requests and pushes to `main` run the same
+coverage workflow, enforce the current 28% workspace line-coverage baseline,
+enforce changed-file coverage on pull requests, and upload the HTML report as
+an artifact. The baseline is intentionally
+conservative while GUI and hardware-facing paths gain dedicated harnesses;
+the per-file report is the source of truth for those areas.
+
+### Coverage area snapshot
+
+The current baseline was measured on 2026-08-29 with 251 tests and 28.06%
+workspace line coverage. These are grouped line-coverage figures from the
+same LLVM report; the downloadable HTML artifact remains the detailed,
+per-file source of truth.
+
+| Area | Covered / executable lines | Line coverage |
+| --- | ---: | ---: |
+| qsonaut-sstv | 776 / 855 | 90.76% |
+| qsonaut-automation | 217 / 264 | 82.20% |
+| qsonaut-log | 740 / 913 | 81.05% |
+| qsonaut-accelerate | 281 / 318 | 88.36% |
+| qsonaut-pskreporter | 275 / 336 | 81.85% |
+| qsonaut-server-client | 733 / 870 | 84.25% |
+| qsonaut-audio | 405 / 961 | 42.14% |
+| qsonaut-core | 368 / 428 | 85.98% |
+| GUI core | 2,615 / 10,093 | 25.91% |
+| GUI workers | 321 / 1,747 | 18.37% |
+| GUI modes | 715 / 5,549 | 12.89% |
+| GUI panels | 118 / 2,881 | 4.10% |
+| Rigwright integration | 197 / 2,137 | 9.22% |
+| Application entry point | 53 / 495 | 10.71% |
+
+The first improvement targets are the application entry point and GUI panels,
+modes, and workers. Changes to these areas should add deterministic seams or
+focused tests rather than weakening the 28% gate.
+
+Changed-file coverage is enforced with `scripts/check-changed-coverage.sh`.
+The small set of pre-existing zero-coverage files is explicitly tracked in
+`.coverage-baseline`; new zero-coverage production files fail the pull request
+check.
+
+Rigwright driver implementation coverage is intentionally separate: it is an
+external dependency and is measured by Rigwright's own driver coverage
+workflow. The `Rigwright integration` area above covers QSONaut's device and
+radio-worker interaction with the HAL. Those tests must verify capability
+discovery, readback, control dispatch, meter updates, and failure handling
+without duplicating vendor protocol tests.
 
 On Ubuntu, native build dependencies include:
 

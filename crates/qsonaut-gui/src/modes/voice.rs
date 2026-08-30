@@ -348,3 +348,32 @@ fn unix_now() -> u64 {
         .map(|duration| duration.as_secs())
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{unix_now, VoiceContestField, BAND_PLAN};
+
+    #[test]
+    fn initializes_voice_contest_fields_for_editing() {
+        let field = VoiceContestField::new("Section");
+        assert_eq!(field.name, "Section");
+        assert!(field.sent.is_empty());
+        assert!(field.received.is_empty());
+
+        let owned_name = VoiceContestField::new(String::from("Class"));
+        assert_eq!(owned_name.name, "Class");
+    }
+
+    #[test]
+    fn exposes_the_voice_band_plan_in_frequency_order() {
+        assert_eq!(BAND_PLAN.len(), 13);
+        assert_eq!(BAND_PLAN.first(), Some(&("160m", 1_880_000)));
+        assert_eq!(BAND_PLAN.last(), Some(&("70cm", 446_000_000)));
+        assert!(BAND_PLAN.windows(2).all(|bands| bands[0].1 < bands[1].1));
+    }
+
+    #[test]
+    fn unix_now_returns_a_nonzero_current_timestamp() {
+        assert!(unix_now() > 1_700_000_000);
+    }
+}

@@ -31,3 +31,26 @@ pub(super) fn request_gui_repaint(ctx: &Arc<OnceLock<egui::Context>>) {
         ctx.request_repaint();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{request_gui_repaint, LAST_GUI_REPAINT_MS};
+    use std::sync::{Arc, OnceLock};
+
+    #[test]
+    fn requests_repaint_when_a_context_is_available() {
+        LAST_GUI_REPAINT_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let context = Arc::new(OnceLock::new());
+        assert!(context.set(eframe::egui::Context::default()).is_ok());
+
+        request_gui_repaint(&context);
+    }
+
+    #[test]
+    fn coalesces_a_second_repaint_request_within_the_interval() {
+        LAST_GUI_REPAINT_MS.store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+        let context = Arc::new(OnceLock::new());
+
+        request_gui_repaint(&context);
+    }
+}

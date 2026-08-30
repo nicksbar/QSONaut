@@ -755,3 +755,44 @@ fn format_control_value(value: &ControlValue) -> String {
         ControlValue::Receiver(v) => format!("receiver {v}"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{CliControl, CliMode, CliPtt};
+    use qsonaut_radio::{ControlId, Mode};
+
+    #[test]
+    fn maps_every_cli_mode_to_the_radio_mode() {
+        assert_eq!(Mode::from(CliMode::Lsb), Mode::Lsb);
+        assert_eq!(Mode::from(CliMode::Usb), Mode::Usb);
+        assert_eq!(Mode::from(CliMode::Cw), Mode::Cw);
+        assert_eq!(Mode::from(CliMode::Data), Mode::Data);
+    }
+
+    #[test]
+    fn maps_cli_ptt_values_to_explicit_states() {
+        assert!(!CliPtt::Off.as_enabled());
+        assert!(CliPtt::On.as_enabled());
+    }
+
+    #[test]
+    fn maps_every_cli_control_to_the_hal_control_id() {
+        let controls = [
+            (CliControl::AfGain, ControlId::AfGain),
+            (CliControl::RfGain, ControlId::RfGain),
+            (CliControl::Squelch, ControlId::Squelch),
+            (CliControl::RfPower, ControlId::RfPower),
+            (CliControl::Preamp, ControlId::Preamp),
+            (CliControl::Attenuator, ControlId::Attenuator),
+            (CliControl::Nb, ControlId::NoiseBlanker),
+            (CliControl::Nr, ControlId::NoiseReduction),
+            (CliControl::Agc, ControlId::Agc),
+            (CliControl::Split, ControlId::Split),
+            (CliControl::DataMode, ControlId::DataMode),
+            (CliControl::Filter, ControlId::Filter),
+        ];
+        for (cli, expected) in controls {
+            assert_eq!(ControlId::from(cli), expected);
+        }
+    }
+}

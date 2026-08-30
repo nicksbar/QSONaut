@@ -105,6 +105,28 @@ pub(super) struct HunterAlert {
     pub(super) accent: Color32,
 }
 
+fn custom_rule_id(title: &str, existing: &[CustomAchievementRule]) -> String {
+    let mut id = title
+        .chars()
+        .map(|ch: char| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    if id.is_empty() {
+        id = format!("custom-{}", existing.len() + 1);
+    }
+    if existing.iter().any(|rule| rule.id == id) {
+        id = format!("{id}-{}", existing.len() + 1);
+    }
+    id
+}
+
 impl QsonautGuiApp {
     pub(super) fn push_hunter_alert(
         &mut self,
@@ -202,24 +224,7 @@ impl QsonautGuiApp {
             return;
         }
 
-        let mut id = title
-            .chars()
-            .map(|ch: char| {
-                if ch.is_ascii_alphanumeric() {
-                    ch.to_ascii_lowercase()
-                } else {
-                    '-'
-                }
-            })
-            .collect::<String>()
-            .trim_matches('-')
-            .to_string();
-        if id.is_empty() {
-            id = format!("custom-{}", self.hunter_custom_rules.len() + 1);
-        }
-        if self.hunter_custom_rules.iter().any(|rule| rule.id == id) {
-            id = format!("{id}-{}", self.hunter_custom_rules.len() + 1);
-        }
+        let id = custom_rule_id(title, &self.hunter_custom_rules);
 
         self.hunter_custom_rules.push(CustomAchievementRule {
             id,
@@ -941,6 +946,43 @@ impl QsonautGuiApp {
                 "TX request rejected: {} transmit path is not available",
                 unsupported.label()
             ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{custom_rule_id, AchievementKind, CustomAchievementRule, HunterMetric};
+
+    fn existing(id: &str) -> CustomAchievementRule {
+        CustomAchievementRule {
+            id: id.to_string(),
+            title: String::new(),
+            detail: String::new(),
+            metric: HunterMetric::UniqueHeard,
+            threshold: 1,
+            enabled: true,
+            unlocked: false,
+        }
+    }
+
+    #[test]
+    fn creates_stable_custom_rule_ids_and_disambiguates_duplicates() {
+        assert_eq!(custom_rule_id("  My Grid!  ", &[]), "my-grid");
+        assert_eq!(custom_rule_id("!!!", &[]), "custom-1");
+        assert_eq!(
+            custom_rule_id("My Grid!", &[existing("my-grid")]),
+            "my-grid-2"
+        );
+    }
+
+    #[test]
+    fn every_builtin_achievement_has_presentation_text() {
+        assert_eq!(AchievementKind::ALL.len(), 17);
+        for kind in AchievementKind::ALL {
+            let (title, detail) = kind.presentation();
+            assert!(!title.is_empty());
+            assert!(!detail.is_empty());
         }
     }
 }

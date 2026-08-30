@@ -14,15 +14,31 @@ pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
     ("6m", 50_323_000),
 ];
 
+fn workspace_description() -> &'static str {
+    "Q65-A30 is the configured mfsk-core submode. QSONaut currently exposes the backend's 30-second decode and standard waveform TX with manual one-shot operation."
+}
+
 impl QsonautGuiApp {
     pub(crate) fn draw_q65_workspace(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         self.draw_mfsk_mode_workspace(ui, snapshot, WorkspaceMode::Q65);
         ui.label(
-            RichText::new(
-                "Q65-A30 is the configured mfsk-core submode. QSONaut currently exposes the backend's 30-second decode and standard waveform TX with manual one-shot operation.",
-            )
-            .small()
-            .color(theme_muted(ui)),
+            RichText::new(workspace_description())
+                .small()
+                .color(theme_muted(ui)),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{workspace_description, BAND_PLAN};
+
+    #[test]
+    fn exposes_the_q65_band_plan_and_timing_contract() {
+        assert_eq!(BAND_PLAN.len(), 11);
+        assert_eq!(BAND_PLAN.first(), Some(&("160m", 1_838_000)));
+        assert_eq!(BAND_PLAN.last(), Some(&("6m", 50_323_000)));
+        assert!(workspace_description().contains("30-second decode"));
+        assert!(workspace_description().contains("manual one-shot operation"));
     }
 }

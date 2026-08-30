@@ -2412,7 +2412,7 @@ dependencies = [
 [[package]]
 name = "mfsk-core"
 version = "0.10.1"
-source = "git+https://github.com/jl1nie/mfsk-core.git?rev=62803e78f757d5fdb815c9297113c438e0f05239#62803e78f757d5fdb815c9297113c438e0f05239"
+source = "git+https://github.com/jl1nie/mfsk-core.git?rev=1ba4450#1ba44501a68cc736dea5b66b3fb1e56fbeeda8d1"
 dependencies = [
  "crc",
  "num-complex",
@@ -3345,7 +3345,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut"
-version = "0.3.12"
+version = "0.3.14"
 dependencies = [
  "anyhow",
  "clap",
@@ -3363,14 +3363,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-accelerate"
-version = "0.3.12"
+version = "0.3.14"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "qsonaut-audio"
-version = "0.3.12"
+version = "0.3.14"
 dependencies = [
  "anyhow",
  "cpal",
@@ -3379,7 +3379,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-automation"
-version = "0.3.12"
+version = "0.3.14"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -3388,7 +3388,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-core"
-version = "0.3.12"
+version = "0.3.14"
 dependencies = [
  "anyhow",
  "dotenvy",
@@ -3399,7 +3399,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-gui"
-version = "0.3.12"
+version = "0.3.14"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3436,7 +3436,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-log"
-version = "0.3.12"
+version = "0.3.14"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -3449,14 +3449,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-pskreporter"
-version = "0.3.12"
+version = "0.3.14"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "qsonaut-server-client"
-version = "0.3.12"
+version = "0.3.14"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -3472,7 +3472,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-sstv"
-version = "0.3.12"
+version = "0.3.14"
 dependencies = [
  "image",
  "komitoto-sstv",
@@ -3894,9 +3894,9 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rigwright"
-version = "0.1.10"
+version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a092874cabb6a65adc731194ca9e85afb35f34908ce3dc25a2ce8ed06d0c3063"
+checksum = "89ecb8a11f72c50fc63de4c8164116b3d140427cba4e57d026745d7cc09e20d7"
 dependencies = [
  "anyhow",
  "async-trait",

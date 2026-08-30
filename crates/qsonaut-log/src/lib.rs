@@ -1051,4 +1051,133 @@ mod tests {
         assert_eq!(summary.invalid, 3);
         assert!(log.contacts.is_empty());
     }
+
+    #[test]
+    fn normalizes_adif_date_time_and_frequency_values() {
+        assert_eq!(
+            normalize_adif_date("2026-08-29"),
+            Some("20260829".to_string())
+        );
+        assert_eq!(normalize_adif_date("2026082"), None);
+        assert_eq!(normalize_adif_time("12:34"), Some("123400".to_string()));
+        assert_eq!(
+            normalize_adif_time("123456.789"),
+            Some("123456".to_string())
+        );
+        assert_eq!(normalize_adif_time("123"), None);
+        assert_eq!(parse_adif_frequency_hz("14.074"), Some(14_074_000));
+        assert_eq!(parse_adif_frequency_hz("0"), None);
+        assert_eq!(parse_adif_frequency_hz("not-a-frequency"), None);
+    }
+
+    #[test]
+    fn maps_supported_adif_frequencies_and_rejects_gaps() {
+        let cases = [
+            (1_800_000, "160m"),
+            (3_500_000, "80m"),
+            (5_000_000, "60m"),
+            (7_000_000, "40m"),
+            (10_100_000, "30m"),
+            (14_000_000, "20m"),
+            (18_068_000, "17m"),
+            (21_000_000, "15m"),
+            (24_890_000, "12m"),
+            (28_000_000, "10m"),
+            (50_000_000, "6m"),
+            (144_000_000, "2m"),
+            (420_000_000, "70cm"),
+        ];
+        for (frequency, band) in cases {
+            assert_eq!(band_from_frequency_hz(frequency).as_deref(), Some(band));
+        }
+        assert_eq!(band_from_frequency_hz(2_500_000), None);
+    }
+
+    #[test]
+    fn parses_adif_tokens_case_insensitively_and_ignores_malformed_fields() {
+        let records = parse_adif_records(
+            "<eoh><call:5>K1ABC <broken><mode:x>FT8 <MODE:3>FT8 <EOR><CALL:4>W1AW",
+        );
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].get("CALL").map(String::as_str), Some("K1ABC"));
+        assert_eq!(records[0].get("MODE").map(String::as_str), Some("FT8"));
+        assert_eq!(records[1].get("CALL").map(String::as_str), Some("W1AW"));
+    }
+
+    #[test]
+    fn normalizes_duplicate_keys_and_only_emits_nonempty_adif_fields() {
+        assert_eq!(
+            adif_duplicate_key(" k1abc ", "20260829", "120000", "20m", "ft8"),
+            (
+                "K1ABC".to_string(),
+                "20260829".to_string(),
+                "120000".to_string(),
+                "20M".to_string(),
+                "FT8".to_string()
+            )
+        );
+        let mut output = String::new();
+        push_adif(&mut output, "CALL", "K1ABC");
+        push_adif(&mut output, "EMPTY", "  ");
+        assert_eq!(output, "<CALL:5>K1ABC ");
+    }
+
+    #[test]
+    fn converts_epoch_seconds_to_utc_across_days_and_leap_years() {
+        assert_eq!(
+            utc_date_time(86_399),
+            ("19700101".to_string(), "235959".to_string())
+        );
+        assert_eq!(
+            utc_date_time(86_400),
+            ("19700102".to_string(), "000000".to_string())
+        );
+        assert_eq!(
+            utc_date_time(1_709_164_800),
+            ("20240229".to_string(), "000000".to_string())
+        );
+    }
+
+    #[test]
+    fn hamdb_cache_upserts_and_observes_ttl_boundaries() {
+        let path =
+            std::env::temp_dir().join(format!("qsonaut-hamdb-test-{}.sqlite3", std::process::id()));
+        let cache = HamDbCache::open(&path).expect("open cache");
+        let entry = HamDbCacheEntry {
+            callsign: "K1ABC".to_string(),
+            name: "Ada Lovelace".to_string(),
+            country: "US".to_string(),
+            fetched_at_unix: 100,
+            ..HamDbCacheEntry::default()
+        };
+        cache.upsert(&entry).expect("insert cache entry");
+        assert_eq!(
+            cache.get_fresh("K1ABC", 110, 20).unwrap(),
+            Some(entry.clone())
+        );
+        assert_eq!(cache.get_fresh("K1ABC", 121, 20).unwrap(), None);
+
+        let mut updated = entry.clone();
+        updated.name = "Grace Hopper".to_string();
+        updated.fetched_at_unix = 200;
+        cache.upsert(&updated).expect("update cache entry");
+        assert_eq!(cache.get_fresh("K1ABC", 205, 10).unwrap(), Some(updated));
+        assert_eq!(cache.get_fresh("N0CALL", 205, 10).unwrap(), None);
+        drop(cache);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn missing_qso_log_loads_empty_and_export_writes_a_file() {
+        let base = std::env::temp_dir().join(format!("qsonaut-log-io-{}", std::process::id()));
+        let missing = base.with_extension("missing.toml");
+        let loaded = QsoLog::load(&missing).expect("missing logs are empty");
+        assert!(loaded.contacts.is_empty());
+
+        let export = base.with_extension("adif");
+        let log = QsoLog::default();
+        log.export_adif(&export).expect("export empty log");
+        assert!(fs::read_to_string(&export).unwrap().contains("<EOH>"));
+        let _ = fs::remove_file(export);
+    }
 }

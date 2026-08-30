@@ -1,5 +1,17 @@
 use super::super::*;
 
+fn retuned_ft8_tones(
+    freq_hz: u32,
+    current_tx_hz: u32,
+    move_tx_to_remote: bool,
+    hold_tx_freq: bool,
+) -> (u32, u32, bool) {
+    let picked = freq_hz.clamp(100, 3_500);
+    let tx_moved = move_tx_to_remote && !hold_tx_freq;
+    let tx_hz = if tx_moved { picked } else { current_tx_hz };
+    (picked, tx_hz, tx_moved)
+}
+
 impl QsonautGuiApp {
     fn log_completed_ft8_session(&mut self, session: &QsoSession) {
         let frequency_hz = self
@@ -228,12 +240,14 @@ impl QsonautGuiApp {
     }
 
     fn retune_from_decode_pick(&mut self, freq_hz: u32, move_tx_to_remote: bool) -> bool {
-        let picked = freq_hz.clamp(100, 3_500);
-        self.rx_tone_hz = picked;
-        let tx_moved = move_tx_to_remote && !self.ft8_hold_tx_freq;
-        if tx_moved {
-            self.tx_tone_hz = picked;
-        }
+        let (rx_hz, tx_hz, tx_moved) = retuned_ft8_tones(
+            freq_hz,
+            self.tx_tone_hz,
+            move_tx_to_remote,
+            self.ft8_hold_tx_freq,
+        );
+        self.rx_tone_hz = rx_hz;
+        self.tx_tone_hz = tx_hz;
         self.profile_dirty = true;
         self.persist_profile("Auto-saved");
         tx_moved
@@ -584,5 +598,27 @@ impl QsonautGuiApp {
             should_move_tx_to_decode(&selected.parsed, false),
         );
         self.queue_ft8_tx_from_compose(Ft8TxQueuePolicy::ReplyAsap, Some(entry.period));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retuned_ft8_tones;
+
+    #[test]
+    fn clamps_decode_picks_and_respects_tx_hold() {
+        assert_eq!(retuned_ft8_tones(20, 1_500, true, false), (100, 100, true));
+        assert_eq!(
+            retuned_ft8_tones(4_000, 1_500, true, false),
+            (3_500, 3_500, true)
+        );
+        assert_eq!(
+            retuned_ft8_tones(2_000, 1_500, true, true),
+            (2_000, 1_500, false)
+        );
+        assert_eq!(
+            retuned_ft8_tones(2_000, 1_500, false, false),
+            (2_000, 1_500, false)
+        );
     }
 }

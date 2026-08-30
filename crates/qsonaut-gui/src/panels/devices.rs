@@ -373,6 +373,11 @@ impl QsonautGuiApp {
                         self.radio_guide_document = RadioHelpDocument::Manufacturer;
                         self.radio_guide_window_open = true;
                     }
+                    if ui.link("Audio FAQ").clicked() {
+                        self.radio_help_window_model = self.config.radio.model.clone();
+                        self.radio_faq_document = RadioHelpDocument::Audio;
+                        self.radio_faq_window_open = true;
+                    }
                 });
             });
             ui.add_space(4.0);
@@ -865,7 +870,7 @@ mod tests {
     fn native_radio_labels_and_controls_follow_rigwright_profiles() {
         assert_eq!(
             selected_radio_label("FTDX10"),
-            "Yaesu FTDX10 — experimental"
+            "Yaesu FTDX10 — hardware validated"
         );
     }
 

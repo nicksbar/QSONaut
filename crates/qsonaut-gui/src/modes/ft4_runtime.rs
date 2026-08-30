@@ -1,5 +1,21 @@
 use super::super::*;
 
+fn native_sequence_enabled(
+    mode: WorkspaceMode,
+    ft4_autoseq: bool,
+    native_autoseq_mode: Option<WorkspaceMode>,
+) -> bool {
+    if mode == WorkspaceMode::Ft4 {
+        ft4_autoseq
+    } else {
+        native_autoseq_mode == Some(mode)
+    }
+}
+
+fn retain_recent_decode(period: u64, latest: u64) -> bool {
+    period.saturating_add(100) >= latest
+}
+
 impl QsonautGuiApp {
     fn log_completed_native_session(&mut self, session: &QsoSession, mode: WorkspaceMode) {
         let frequency_hz = self
@@ -74,7 +90,7 @@ impl QsonautGuiApp {
                 .max()
                 .unwrap_or_default();
             self.ft4_seen_decodes
-                .retain(|(period, _, _)| *period + 100 >= latest);
+                .retain(|(period, _, _)| retain_recent_decode(*period, latest));
         }
 
         let operator_call = self.station_callsign_or_default().to_string();
@@ -94,11 +110,8 @@ impl QsonautGuiApp {
             }
         }
 
-        let auto_sequence = if mode == WorkspaceMode::Ft4 {
-            self.ft4_autoseq
-        } else {
-            self.native_autoseq_mode == Some(mode)
-        };
+        let auto_sequence =
+            native_sequence_enabled(mode, self.ft4_autoseq, self.native_autoseq_mode);
         if !auto_sequence || self.digital_tx_active.load(Ordering::Acquire) {
             return;
         }
@@ -503,5 +516,38 @@ impl QsonautGuiApp {
                 }
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{native_sequence_enabled, retain_recent_decode};
+    use crate::WorkspaceMode;
+
+    #[test]
+    fn selects_the_correct_auto_sequence_setting_for_ft4_and_native_modes() {
+        assert!(native_sequence_enabled(WorkspaceMode::Ft4, true, None));
+        assert!(!native_sequence_enabled(
+            WorkspaceMode::Ft4,
+            false,
+            Some(WorkspaceMode::Ft4)
+        ));
+        assert!(native_sequence_enabled(
+            WorkspaceMode::Jt9,
+            false,
+            Some(WorkspaceMode::Jt9)
+        ));
+        assert!(!native_sequence_enabled(
+            WorkspaceMode::Jt9,
+            true,
+            Some(WorkspaceMode::Jt65)
+        ));
+    }
+
+    #[test]
+    fn retains_only_recent_seen_decodes_and_handles_counter_saturation() {
+        assert!(retain_recent_decode(900, 1_000));
+        assert!(!retain_recent_decode(899, 1_000));
+        assert!(retain_recent_decode(u64::MAX, u64::MAX));
     }
 }

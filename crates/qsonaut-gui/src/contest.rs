@@ -178,3 +178,35 @@ impl QsonautGuiApp {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{contest_operating_mode_label, fox_hound_role_label, split_policy_label};
+    use crate::{ContestOperatingMode, FoxHoundRole, SplitPolicy};
+
+    #[test]
+    fn labels_all_contest_operating_modes() {
+        assert_eq!(
+            contest_operating_mode_label(ContestOperatingMode::Run),
+            "run"
+        );
+        assert_eq!(
+            contest_operating_mode_label(ContestOperatingMode::SearchAndPounce),
+            "search_and_pounce"
+        );
+    }
+
+    #[test]
+    fn labels_all_split_policies() {
+        assert_eq!(split_policy_label(SplitPolicy::Off), "off");
+        assert_eq!(split_policy_label(SplitPolicy::Fake), "fake");
+        assert_eq!(split_policy_label(SplitPolicy::Rig), "rig");
+    }
+
+    #[test]
+    fn labels_all_fox_and_hound_roles() {
+        assert_eq!(fox_hound_role_label(FoxHoundRole::Disabled), "disabled");
+        assert_eq!(fox_hound_role_label(FoxHoundRole::Fox), "fox");
+        assert_eq!(fox_hound_role_label(FoxHoundRole::Hound), "hound");
+    }
+}

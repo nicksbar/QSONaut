@@ -457,11 +457,7 @@ impl AudioStream {
     }
 
     pub fn read_chunk(&mut self, bytes_to_read: usize) -> Result<Vec<i16>> {
-        let frame_bytes = 2 * self.requested_channels;
-        if !bytes_to_read.is_multiple_of(frame_bytes) {
-            bail!("PCM byte length is not an even multiple of the requested frame size");
-        }
-        let requested_samples = bytes_to_read / frame_bytes;
+        let requested_samples = validated_pcm_sample_count(bytes_to_read, self.requested_channels)?;
         while self.pending.len() < requested_samples {
             match self.errors_rx.try_recv() {
                 Ok(error) => bail!("audio input stream failed: {error}"),
@@ -490,11 +486,7 @@ impl AudioStream {
         bytes_to_read: usize,
         stop: &AtomicBool,
     ) -> Result<Option<Vec<i16>>> {
-        let frame_bytes = 2 * self.requested_channels;
-        if !bytes_to_read.is_multiple_of(frame_bytes) {
-            bail!("PCM byte length is not an even multiple of the requested frame size");
-        }
-        let requested_samples = bytes_to_read / frame_bytes;
+        let requested_samples = validated_pcm_sample_count(bytes_to_read, self.requested_channels)?;
         let deadline = Instant::now() + Duration::from_secs(2);
         while self.pending.len() < requested_samples {
             if stop.load(Ordering::Relaxed) {
@@ -846,6 +838,14 @@ fn f32_to_i16(sample: f32) -> i16 {
     (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
 }
 
+fn validated_pcm_sample_count(bytes_to_read: usize, channels: usize) -> Result<usize> {
+    let frame_bytes = 2 * channels;
+    if frame_bytes == 0 || !bytes_to_read.is_multiple_of(frame_bytes) {
+        bail!("PCM byte length is not an even multiple of the requested frame size");
+    }
+    Ok(bytes_to_read / frame_bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -865,6 +865,27 @@ mod tests {
             sample_format_preference(SampleFormat::I16)
                 < sample_format_preference(SampleFormat::U8)
         );
+    }
+
+    #[test]
+    fn ranks_every_supported_sample_format_deterministically() {
+        let formats = [
+            SampleFormat::F32,
+            SampleFormat::I16,
+            SampleFormat::I32,
+            SampleFormat::F64,
+            SampleFormat::U16,
+            SampleFormat::U32,
+            SampleFormat::I64,
+            SampleFormat::U64,
+            SampleFormat::I8,
+            SampleFormat::U8,
+        ];
+        let ranks: Vec<_> = formats
+            .iter()
+            .map(|format| sample_format_preference(*format))
+            .collect();
+        assert_eq!(ranks, (0..10).collect::<Vec<_>>());
     }
 
     #[test]
@@ -896,5 +917,51 @@ mod tests {
     fn monitor_clock_controller_waits_until_output_is_primed() {
         let mut controller = MonitorClockController::default();
         assert_eq!(controller.update(0, 5_760, 0.1, false), 0);
+    }
+
+    #[test]
+    fn monitor_clock_controller_handles_empty_targets_and_clamps_adjustment() {
+        let mut controller = MonitorClockController::default();
+        assert_eq!(controller.update(100, 0, 1.0, true), 0);
+        let high = controller.update(100_000, 1, 1.0, true);
+        assert_eq!(high, -MONITOR_MAX_ADJUSTMENT_PPM);
+        let mut controller = MonitorClockController::default();
+        let mut low = 0;
+        for _ in 0..20 {
+            low = controller.update(0, 100_000, 1.0, true);
+        }
+        assert_eq!(low, MONITOR_MAX_ADJUSTMENT_PPM);
+    }
+
+    #[test]
+    fn downmix_handles_empty_channels_and_incomplete_frames() {
+        assert!(downmix_f32(&[1.0, 2.0], 0).is_empty());
+        assert_eq!(downmix_f32(&[1.0, 3.0, 5.0], 2), vec![2.0]);
+        assert!(downmix_f32(&[], 2).is_empty());
+    }
+
+    #[test]
+    fn converts_and_clamps_float_samples_to_i16() {
+        assert_eq!(f32_to_i16(-2.0), -i16::MAX);
+        assert_eq!(f32_to_i16(-1.0), -i16::MAX);
+        assert_eq!(f32_to_i16(0.0), 0);
+        assert_eq!(f32_to_i16(1.0), i16::MAX);
+        assert_eq!(f32_to_i16(2.0), i16::MAX);
+    }
+
+    #[test]
+    fn labels_audio_device_kinds_and_keeps_canonical_contract() {
+        assert_eq!(kind_label(AudioDeviceKind::Input), "input");
+        assert_eq!(kind_label(AudioDeviceKind::Output), "output");
+        assert_eq!(CANONICAL_SAMPLE_RATE_HZ, 48_000);
+        assert_eq!(CANONICAL_CHANNELS, 1);
+    }
+
+    #[test]
+    fn validates_pcm_requests_for_mono_and_multichannel_frames() {
+        assert_eq!(validated_pcm_sample_count(0, 1).unwrap(), 0);
+        assert_eq!(validated_pcm_sample_count(8, 2).unwrap(), 2);
+        assert!(validated_pcm_sample_count(3, 1).is_err());
+        assert!(validated_pcm_sample_count(4, 0).is_err());
     }
 }

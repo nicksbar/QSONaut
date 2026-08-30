@@ -53,8 +53,8 @@ use qsonaut_radio::{
     },
     enumerate_serial_port_descriptors,
     models::{find_model, Manufacturer, Protocol, POPULAR_RADIOS},
-    BaseMode, ControlId, ControlValue, IcomCiVRadio, MeterId, Mode, Radio, SerialPortDescriptor,
-    TunerStatus,
+    BaseMode, ControlId, ControlValue, IcomCiVRadio, MeterId, Mode, OperatingMode, Radio,
+    SerialPortDescriptor, TunerStatus,
 };
 use qsonaut_server_client::{
     log_idempotency_key, new_instance_id, ConnectionConfig as ServerConnectionConfig,
@@ -77,6 +77,7 @@ const QSONAUT_ICON_PNG: &[u8] = include_bytes!("../../../assets/branding/qsonaut
 const QSONAUT_GITHUB_URL: &str = "https://github.com/nicksbar/QSONaut";
 const QSONAUT_ISSUES_URL: &str = "https://github.com/nicksbar/QSONaut/issues";
 const QSONAUT_WEBSITE_URL: &str = "https://qsonaut.com";
+const AUDIO_FAQ: &str = include_str!("../../../docs/audio_faq.md");
 
 fn qsonaut_contributors() -> &'static str {
     match option_env!("QSONAUT_CONTRIBUTORS") {
@@ -210,11 +211,11 @@ enum ProfileDrawerTab {
     Tuning,
     DigitalTiming,
     Monitoring,
-    Waterfall,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RadioHelpDocument {
+    Audio,
     Manufacturer,
     Model,
 }
@@ -830,15 +831,19 @@ impl WaterfallTheme {
 
 #[derive(Debug, Clone)]
 struct DisplayTuning {
-    auto_visual: bool,
-    waterfall_speed: WaterfallSpeed,
+    audio_auto_visual: bool,
+    audio_waterfall_speed: WaterfallSpeed,
+    radio_auto_visual: bool,
+    radio_waterfall_speed: WaterfallSpeed,
 }
 
 impl Default for DisplayTuning {
     fn default() -> Self {
         Self {
-            auto_visual: true,
-            waterfall_speed: WaterfallSpeed::Mid,
+            audio_auto_visual: true,
+            audio_waterfall_speed: WaterfallSpeed::Mid,
+            radio_auto_visual: true,
+            radio_waterfall_speed: WaterfallSpeed::Mid,
         }
     }
 }
@@ -961,6 +966,9 @@ impl SstvAiPipelineMode {
 #[derive(Debug, Clone)]
 struct GuiState {
     frequency_hz: Option<u64>,
+    /// Active VFO selector: 0 = A, 1 = B. Drivers without reliable readback
+    /// remain on the safe startup assumption of VFO A.
+    active_vfo: u8,
     mode: String,
     data_mode: Option<bool>,
     filter: Option<u8>,
@@ -1013,6 +1021,7 @@ struct GuiState {
     radio_scope_hold: bool,
     radio_scope_reference_tenths_db: i16,
     radio_scope_view: RadioScopeView,
+    radio_scope_settings_dirty: bool,
     audio_spectrum_status: String,
     audio_device_sample_rate_hz: Option<u32>,
     audio_device_channels: Option<u16>,
@@ -1072,6 +1081,7 @@ impl Default for GuiState {
     fn default() -> Self {
         Self {
             frequency_hz: None,
+            active_vfo: 0,
             mode: "(unknown)".to_string(),
             data_mode: None,
             filter: None,
@@ -1124,6 +1134,7 @@ impl Default for GuiState {
             radio_scope_hold: false,
             radio_scope_reference_tenths_db: 0,
             radio_scope_view: RadioScopeView::Narrow,
+            radio_scope_settings_dirty: false,
             audio_spectrum_status: "INIT".to_string(),
             audio_device_sample_rate_hz: None,
             audio_device_channels: None,
@@ -1832,9 +1843,12 @@ struct QsonautGuiApp {
     radio_scope_view: RadioScopeView,
     radio_scope_lock_if_to_filter: bool,
     waterfall_theme: WaterfallTheme,
+    radio_waterfall_theme: WaterfallTheme,
     waterfall_deck_height: f32,
-    waterfall_deck_resize_pending: bool,
     show_signal_panel: bool,
+    show_meter_panel: bool,
+    meter_panel_was_tx: bool,
+    meter_panel_close_deadline: Option<Instant>,
     show_profile_drawer: bool,
     profile_drawer_anchor: Option<egui::Pos2>,
     radio_faq_window_open: bool,
@@ -2177,6 +2191,7 @@ impl QsonautGuiApp {
         let mut radio_scope_vbw_wide = false;
         let mut radio_scope_view = RadioScopeView::Narrow;
         let mut waterfall_theme = WaterfallTheme::default();
+        let mut radio_waterfall_theme = WaterfallTheme::default();
         let mut waterfall_deck_height = default_waterfall_deck_height();
         let ft8_stop_policy = AutoTxStopPolicy::Continuous;
         let mut ft8_max_attempts = default_ft8_max_attempts();
@@ -2247,6 +2262,7 @@ impl QsonautGuiApp {
             radio_scope_vbw_wide = p.radio_scope_vbw_wide;
             radio_scope_view = p.radio_scope_view;
             waterfall_theme = p.waterfall_theme;
+            radio_waterfall_theme = p.radio_waterfall_theme;
             waterfall_deck_height = p.waterfall_deck_height.clamp(170.0, 560.0);
             ft8_max_attempts = p.ft8_max_attempts.clamp(1, 20);
             ft8_hold_tx_freq = if p.profile_version >= 3 {
@@ -2369,6 +2385,7 @@ impl QsonautGuiApp {
                 radio_scope_vbw_wide,
                 radio_scope_view,
                 waterfall_theme,
+                radio_waterfall_theme,
                 waterfall_auto_visual: true,
                 waterfall_speed: WaterfallSpeed::Mid,
                 waterfall_deck_height,
@@ -2744,9 +2761,12 @@ impl QsonautGuiApp {
             radio_scope_view,
             radio_scope_lock_if_to_filter: true,
             waterfall_theme,
+            radio_waterfall_theme,
             waterfall_deck_height,
-            waterfall_deck_resize_pending: false,
             show_signal_panel: true,
+            show_meter_panel: false,
+            meter_panel_was_tx: false,
+            meter_panel_close_deadline: None,
             show_profile_drawer: false,
             profile_drawer_anchor: None,
             radio_faq_window_open: false,
@@ -2843,10 +2863,11 @@ impl QsonautGuiApp {
         self.radio_scope_vbw_wide = profile.radio_scope_vbw_wide;
         self.radio_scope_view = profile.radio_scope_view;
         self.waterfall_theme = profile.waterfall_theme;
+        self.radio_waterfall_theme = profile.radio_waterfall_theme;
         self.waterfall_deck_height = profile.waterfall_deck_height.clamp(170.0, 560.0);
         if let Ok(mut tuning) = self.display_tuning.lock() {
-            tuning.auto_visual = profile.waterfall_auto_visual;
-            tuning.waterfall_speed = profile.waterfall_speed;
+            tuning.audio_auto_visual = profile.waterfall_auto_visual;
+            tuning.audio_waterfall_speed = profile.waterfall_speed;
         }
         self.rx_tone_hz = profile.rx_tone_hz;
         self.tx_tone_hz = if self.ft8_hold_tx_freq {
@@ -3024,7 +3045,7 @@ impl QsonautGuiApp {
             })
             .unwrap_or_else(|| format!("📻 {}", selected_activity.label()));
         let previous_interact_height = ui.spacing().interact_size.y;
-        ui.spacing_mut().interact_size.y = 64.0;
+        ui.spacing_mut().interact_size.y = 28.0;
         ui.menu_button(
             RichText::new(activity_button_label)
                 .strong()
@@ -3185,7 +3206,7 @@ impl QsonautGuiApp {
             let remaining = until.saturating_duration_since(Instant::now());
             (1.0 - remaining.as_secs_f32() / 0.7).clamp(0.0, 1.0) * std::f32::consts::TAU
         });
-        let logo = egui::Image::new((self.brand_icon.id(), egui::vec2(68.0, 68.0)))
+        let logo = egui::Image::new((self.brand_icon.id(), egui::vec2(56.0, 56.0)))
             .corner_radius(8.0)
             .rotate(spin_angle, egui::Vec2::splat(0.5))
             .sense(egui::Sense::click());
@@ -3205,13 +3226,13 @@ impl QsonautGuiApp {
             ui.label(
                 RichText::new("QSONaut")
                     .strong()
-                    .size(36.0)
+                    .size(32.0)
                     .color(Color32::from_rgb(109, 224, 255)),
             );
             ui.label(
                 RichText::new("AMATEUR RADIO MISSION CONTROL")
                     .strong()
-                    .size(12.0)
+                    .size(10.0)
                     .color(Color32::from_rgb(255, 137, 108)),
             );
         });
@@ -4084,8 +4105,9 @@ impl QsonautGuiApp {
             radio_scope_vbw_wide: self.radio_scope_vbw_wide,
             radio_scope_view: self.radio_scope_view,
             waterfall_theme: self.waterfall_theme,
-            waterfall_auto_visual: display_tuning.auto_visual,
-            waterfall_speed: display_tuning.waterfall_speed,
+            radio_waterfall_theme: self.radio_waterfall_theme,
+            waterfall_auto_visual: display_tuning.audio_auto_visual,
+            waterfall_speed: display_tuning.audio_waterfall_speed,
             waterfall_deck_height: self.waterfall_deck_height,
             // This control is deliberately one-shot and is not restored on launch.
             halt_after_tx: false,
@@ -4435,6 +4457,182 @@ impl QsonautGuiApp {
         });
     }
 
+    fn draw_meter_display(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        let primary_id = if snapshot.ptt_on {
+            MeterId::Power
+        } else {
+            MeterId::Signal
+        };
+        let primary_value = meter_value(snapshot, primary_id);
+        let primary_label = if snapshot.ptt_on { "POWER" } else { "S-METER" };
+        let (primary_rect, primary_response) =
+            ui.allocate_exact_size(egui::vec2(280.0, 24.0), egui::Sense::click());
+        draw_primary_meter(
+            ui,
+            primary_rect,
+            primary_label,
+            primary_value.map(meter_percent).unwrap_or_default(),
+            meter_color(primary_id, primary_value),
+        );
+        let s_click = primary_response.on_hover_text("Click to open the live radio meter drawer");
+        if s_click.clicked() {
+            self.show_meter_panel = !self.show_meter_panel;
+            self.meter_panel_close_deadline = None;
+        }
+
+        if self.show_meter_panel {
+            let drawer_position = egui::pos2(primary_rect.left(), primary_rect.bottom() + 5.0);
+            egui::Area::new(ui.id().with("meter_drawer_overlay"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(drawer_position)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::group(ui.style())
+                        .fill(Color32::from_rgba_unmultiplied(18, 30, 42, 245))
+                        .show(ui, |ui| {
+                            let phase = if snapshot.ptt_on { "TX" } else { "RX" };
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{phase} METER DRAWER · {}",
+                                        radio_mode_label(&snapshot.mode, snapshot.data_mode)
+                                    ))
+                                    .strong()
+                                    .color(
+                                        if snapshot.ptt_on {
+                                            Color32::from_rgb(255, 145, 120)
+                                        } else {
+                                            Color32::from_rgb(120, 225, 255)
+                                        },
+                                    ),
+                                );
+                                if snapshot.ptt_on {
+                                    ui.label(
+                                        RichText::new("● TRANSMIT").strong().color(Color32::RED),
+                                    );
+                                }
+                            });
+                            ui.separator();
+                            for id in mode_meter_order(snapshot.ptt_on) {
+                                if !snapshot.supported_meters.contains(&id) {
+                                    continue;
+                                }
+                                let value = meter_value(snapshot, id);
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(meter_label(id)).monospace().strong());
+                                    ui.add(
+                                        egui::ProgressBar::new(
+                                            value.map(meter_percent).unwrap_or_default(),
+                                        )
+                                        .desired_width(ui.available_width().max(100.0))
+                                        .desired_height(14.0)
+                                        .fill(meter_color(id, value)),
+                                    );
+                                });
+                            }
+                        });
+                });
+        }
+    }
+
+    fn draw_header_identity_and_activity(&self, ui: &mut egui::Ui) {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.horizontal_wrapped(|ui| {
+            let activity_profile = self.activity.profile();
+            ui.label(
+                RichText::new(format!("CALL · {}", activity_profile.tx_cq))
+                    .size(18.0)
+                    .monospace()
+                    .color(Color32::from_rgb(255, 190, 105)),
+            )
+            .on_hover_text(format!(
+                "Call behavior\nActivity: {}\nTransmit calling text: {}",
+                self.activity.label(),
+                activity_profile.tx_cq
+            ));
+            ui.label(RichText::new("·").color(Color32::DARK_GRAY));
+            ui.label(
+                RichText::new(format!(
+                    "📍 {} · {}",
+                    self.station_callsign_or_default(),
+                    self.station_grid_or_default()
+                ))
+                .strong()
+                .size(18.0)
+                .color(Color32::from_rgb(255, 210, 110)),
+            );
+            if let Some(client) = &self.server_client {
+                let server_status = client.status();
+                if server_status.state == ServerConnectionState::Connected
+                    && server_status.active_event_count > 0
+                {
+                    let label = if self.activity == OperatingActivity::Contest
+                        && self.contest_enabled
+                    {
+                        "✅ SERVER CONTEST · PARTICIPATING".to_string()
+                    } else {
+                        format!("✅ SERVER CONTEST · {} ACTIVE", server_status.active_event_count)
+                    };
+                    ui.label(
+                        RichText::new(label)
+                            .size(15.0)
+                            .strong()
+                            .color(Color32::from_rgb(125, 225, 150)),
+                    )
+                    .on_hover_text(format!(
+                        "Server contest status\nConnected server events: {}\nThis indicator reflects shared contest activity.",
+                        server_status.active_event_count
+                    ));
+                }
+            }
+        });
+    }
+
+    fn draw_power_button(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        let power_known = snapshot.radio_power_on.is_some();
+        let power_on = snapshot.radio_power_on.unwrap_or(false);
+        let (power_rect, power_button) = ui.allocate_exact_size(
+            egui::vec2(28.0, 28.0),
+            if snapshot.radio_power_supported && !snapshot.radio_power_command_pending {
+                egui::Sense::click()
+            } else {
+                egui::Sense::hover()
+            },
+        );
+        let power_color = if !snapshot.radio_power_supported {
+            Color32::DARK_GRAY
+        } else if !power_known {
+            Color32::GRAY
+        } else if power_on {
+            Color32::LIGHT_GREEN
+        } else {
+            Color32::GRAY
+        };
+        let painter = ui.painter_at(power_rect);
+        let center = power_rect.center();
+        painter.circle_stroke(center, 8.0, egui::Stroke::new(2.0_f32, power_color));
+        painter.line_segment(
+            [
+                egui::pos2(center.x, center.y - 11.0),
+                egui::pos2(center.x, center.y + 1.0),
+            ],
+            egui::Stroke::new(2.0_f32, power_color),
+        );
+        if power_button.clicked() {
+            self.state
+                .lock()
+                .expect("ui state lock poisoned")
+                .radio_power_command_pending = true;
+            self.send_command(GuiCommand::SetPower(!power_on));
+        }
+        power_button.on_hover_text(if !power_known {
+            "Radio power: unknown · click to turn on"
+        } else if power_on {
+            "Radio power: ON · click to turn off"
+        } else {
+            "Radio power: OFF · click to turn on"
+        });
+    }
+
     fn draw_connection_status(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Connections").strong());
@@ -4543,9 +4741,232 @@ impl QsonautGuiApp {
         });
     }
 
+    fn draw_waterfall_buttons(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        let audio_button = ui
+            .button(RichText::new("〰").size(16.0).color(Color32::LIGHT_BLUE))
+            .on_hover_text("Audio waterfall controls");
+        egui::Popup::menu(&audio_button)
+            // Keep the drawer alive while nested combo boxes and sliders are
+            // interacting with it. The banner redraws it every frame.
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_min_width(250.0);
+                ui.label(RichText::new("AUDIO WATERFALL").strong());
+                ui.label(RichText::new("Live audio spectrum display").small());
+                ui.separator();
+                ui.label(RichText::new("Theme").strong());
+                ui.horizontal_wrapped(|ui| {
+                    for theme in [
+                        WaterfallTheme::RadioBlue,
+                        WaterfallTheme::Inferno,
+                        WaterfallTheme::Phosphor,
+                        WaterfallTheme::Monochrome,
+                    ] {
+                        if ui
+                            .selectable_label(self.waterfall_theme == theme, theme.label())
+                            .clicked()
+                        {
+                            self.waterfall_theme = theme;
+                            self.profile_dirty = true;
+                            self.persist_profile("Waterfall theme saved to");
+                        }
+                    }
+                });
+                ui.label(RichText::new("Audio display speed").strong());
+                {
+                    let mut tuning = self.display_tuning.lock().expect("tuning lock poisoned");
+                    let selected = if tuning.audio_auto_visual {
+                        "Auto"
+                    } else {
+                        tuning.audio_waterfall_speed.label()
+                    };
+                    ui.horizontal_wrapped(|ui| {
+                        if ui
+                            .selectable_label(tuning.audio_auto_visual, selected)
+                            .clicked()
+                        {
+                            tuning.audio_auto_visual = true;
+                        }
+                        for speed in [
+                            WaterfallSpeed::Fast,
+                            WaterfallSpeed::Mid,
+                            WaterfallSpeed::Slow,
+                        ] {
+                            let selected =
+                                !tuning.audio_auto_visual && tuning.audio_waterfall_speed == speed;
+                            if ui.selectable_label(selected, speed.label()).clicked() {
+                                tuning.audio_auto_visual = false;
+                                tuning.audio_waterfall_speed = speed;
+                            }
+                        }
+                    });
+                }
+            });
+
+        let radio_scope_available = self.config.radio.enabled
+            && native_radio_profile(&self.config.radio.backend, &self.config.radio.model)
+                .is_some_and(|profile| profile.capabilities.spectrum);
+        if radio_scope_available {
+            let radio_button = ui
+                .button(
+                    RichText::new("🌈")
+                        .size(15.0)
+                        .color(Color32::from_rgb(180, 220, 255)),
+                )
+                .on_hover_text("Native CI-V waterfall controls");
+            egui::Popup::menu(&radio_button)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| {
+                    ui.set_min_width(280.0);
+                    ui.label(RichText::new("RADIO WATERFALL").strong());
+                    ui.label(RichText::new("Native scope stream controls").small());
+                    ui.separator();
+                    if ui
+                        .checkbox(&mut self.civ_spectrum_on, "Enable radio waterfall")
+                        .changed()
+                    {
+                        self.profile_dirty = true;
+                        self.persist_profile("Radio waterfall setting saved to");
+                    }
+                    ui.label(RichText::new("Radio waterfall theme").strong());
+                    ui.horizontal_wrapped(|ui| {
+                        for theme in [
+                            WaterfallTheme::RadioBlue,
+                            WaterfallTheme::Inferno,
+                            WaterfallTheme::Phosphor,
+                            WaterfallTheme::Monochrome,
+                        ] {
+                            if ui
+                                .selectable_label(
+                                    self.radio_waterfall_theme == theme,
+                                    theme.label(),
+                                )
+                                .clicked()
+                            {
+                                self.radio_waterfall_theme = theme;
+                                self.profile_dirty = true;
+                                self.persist_profile("Radio waterfall theme saved to");
+                            }
+                        }
+                    });
+                    ui.label(RichText::new("Native sweep speed").strong());
+                    let mut visual_changed = false;
+                    {
+                        let mut tuning = self.display_tuning.lock().expect("tuning lock poisoned");
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(if tuning.radio_auto_visual {
+                                "Auto (mode-driven)"
+                            } else {
+                                "Native speed"
+                            });
+                            for speed in [
+                                WaterfallSpeed::Fast,
+                                WaterfallSpeed::Mid,
+                                WaterfallSpeed::Slow,
+                            ] {
+                                let selected = !tuning.radio_auto_visual
+                                    && tuning.radio_waterfall_speed == speed;
+                                if ui.selectable_label(selected, speed.label()).clicked() {
+                                    tuning.radio_auto_visual = false;
+                                    tuning.radio_waterfall_speed = speed;
+                                    visual_changed = true;
+                                }
+                            }
+                        });
+                    }
+                    if visual_changed {
+                        self.state
+                            .lock()
+                            .expect("ui state lock poisoned")
+                            .radio_scope_settings_dirty = true;
+                    }
+                    let mut scope_changed = false;
+                    ui.horizontal(|ui| {
+                        scope_changed |= ui
+                            .selectable_value(
+                                &mut self.radio_scope_view,
+                                RadioScopeView::Narrow,
+                                "Narrow",
+                            )
+                            .changed();
+                        scope_changed |= ui
+                            .selectable_value(
+                                &mut self.radio_scope_view,
+                                RadioScopeView::Overview,
+                                "Overview",
+                            )
+                            .changed();
+                    });
+                    scope_changed |= ui
+                        .checkbox(&mut self.radio_scope_vbw_wide, "Wide VBW")
+                        .changed();
+                    ui.checkbox(&mut self.radio_scope_lock_if_to_filter, "Match span to FIL");
+                    if self.radio_scope_lock_if_to_filter {
+                        self.radio_scope_span_code =
+                            scope_span_for_filter(&snapshot.mode, snapshot.filter);
+                        ui.label(format!(
+                            "Automatic span: {}",
+                            scope_span_label(self.radio_scope_span_code)
+                        ));
+                    } else {
+                        ui.horizontal_wrapped(|ui| {
+                            for (code, label) in [
+                                (0_u8, "±2.5 kHz"),
+                                (1, "±5 kHz"),
+                                (2, "±10 kHz"),
+                                (3, "±25 kHz"),
+                                (4, "±50 kHz"),
+                                (5, "±100 kHz"),
+                                (6, "±250 kHz"),
+                                (7, "±500 kHz"),
+                            ] {
+                                if ui
+                                    .selectable_label(self.radio_scope_span_code == code, label)
+                                    .clicked()
+                                {
+                                    self.radio_scope_span_code = code;
+                                    scope_changed = true;
+                                }
+                            }
+                        });
+                    }
+                    scope_changed |= ui.checkbox(&mut self.radio_scope_hold, "Hold").changed();
+                    scope_changed |= ui
+                        .add(
+                            egui::Slider::new(
+                                &mut self.radio_scope_reference_tenths_db,
+                                -200..=200,
+                            )
+                            .step_by(5.0)
+                            .custom_formatter(|value, _| format!("{:.1} dB", value / 10.0))
+                            .text("Reference"),
+                        )
+                        .changed();
+                    if scope_changed {
+                        self.state
+                            .lock()
+                            .expect("ui state lock poisoned")
+                            .radio_scope_settings_dirty = true;
+                    }
+                });
+        }
+
+        ui.add_enabled(
+            false,
+            egui::Button::new(
+                RichText::new("📡")
+                    .size(13.0)
+                    .color(Color32::from_gray(145)),
+            ),
+        )
+        .on_disabled_hover_text(
+            "IQ/SDR waterfall support is not enabled yet — development needs a radio that offers a supported IQ/SDR stream 😢",
+        );
+    }
+
     fn draw_banner_radio_controls(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         let supports_levels = snapshot.supported_controls.contains(&ControlId::AfGain);
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             ui.scope(|ui| {
                 ui.spacing_mut().item_spacing.x = 7.0;
                 ui.spacing_mut().button_padding.x = 4.0;
@@ -4904,15 +5325,33 @@ impl eframe::App for QsonautGuiApp {
         self.emit_radio_state_hook_if_changed(&snapshot);
         self.publish_server_presence(&snapshot);
 
-        // New panel identity intentionally discards the legacy fixed-height
-        // state; this header is measured entirely from its current contents.
-        egui::TopBottomPanel::top("header_content_sized")
+        // Keep the detailed meter panel visible throughout TX and briefly
+        // afterward so the operator can see the final transmit readings.
+        let now = Instant::now();
+        if snapshot.ptt_on {
+            self.show_meter_panel = true;
+            self.meter_panel_close_deadline = None;
+        } else if self.meter_panel_was_tx {
+            self.meter_panel_close_deadline = Some(now + Duration::from_secs(2));
+        }
+        self.meter_panel_was_tx = snapshot.ptt_on;
+        if self
+            .meter_panel_close_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.show_meter_panel = false;
+            self.meter_panel_close_deadline = None;
+        }
+
+        // Use a compact, stable rail so the responsive control rows do not
+        // inherit stale panel height or consume the waterfall's workspace.
+        egui::TopBottomPanel::top("header_control_deck")
             .resizable(false)
             .show(ctx, |ui| {
                 ui.scope(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(9.0, 5.0);
-                    ui.spacing_mut().button_padding = egui::vec2(8.0, 8.0);
-                    ui.style_mut().override_font_id = Some(egui::FontId::proportional(15.0));
+                    ui.spacing_mut().item_spacing = egui::vec2(7.0, 2.0);
+                    ui.spacing_mut().button_padding = egui::vec2(7.0, 3.0);
+                    ui.style_mut().override_font_id = Some(egui::FontId::proportional(13.0));
                     let visuals = ui.visuals_mut();
                     visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(8);
                     visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(8);
@@ -4926,15 +5365,18 @@ impl eframe::App for QsonautGuiApp {
                     let header_row = ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 3.0;
                         ui.allocate_ui_with_layout(
-                            egui::vec2(420.0, 68.0),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| self.draw_header_branding(ui),
+                            egui::vec2(360.0, 116.0),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                ui.horizontal(|ui| self.draw_header_branding(ui));
+                                self.draw_header_identity_and_activity(ui);
+                            },
                         );
                         let (divider_marker, _) =
                             ui.allocate_exact_size(egui::vec2(1.0, 1.0), egui::Sense::hover());
                         section_divider_x = Some(divider_marker.center().x);
                         ui.vertical(|ui| {
-                    if !radio_tabs.is_empty() {
+                            if !radio_tabs.is_empty() {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 3.0;
                             for name in radio_tabs {
@@ -5077,7 +5519,7 @@ impl eframe::App for QsonautGuiApp {
                         ui.visuals().widgets.noninteractive.bg_stroke,
                     );
                     ui.add_space(1.0);
-                    ui.horizontal_wrapped(|ui| {
+                    ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 3.0;
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
@@ -5096,6 +5538,35 @@ impl eframe::App for QsonautGuiApp {
                                 theme_warning(ui)
                             }),
                     );
+                    let supports_vfo = snapshot
+                        .supported_controls
+                        .contains(&ControlId::Vfo);
+                    let vfo = snapshot.active_vfo.min(1);
+                    let vfo_label = if vfo == 0 { "VFO A" } else { "VFO B" };
+                    if ui
+                        .add_enabled(
+                            supports_vfo && snapshot.radio_power_on == Some(true),
+                            egui::Button::new(
+                                RichText::new(vfo_label)
+                                    .monospace()
+                                    .strong()
+                                    .color(if vfo == 0 {
+                                        Color32::from_rgb(130, 220, 255)
+                                    } else {
+                                        Color32::from_rgb(255, 190, 105)
+                                    }),
+                            ),
+                        )
+                        .on_hover_text("Toggle the active radio VFO")
+                        .clicked()
+                    {
+                        self.send_command(GuiCommand::SetControl(
+                            ControlId::Vfo,
+                            // Rigwright's CI-V VFO selector is a write-only
+                            // command and its current HAL contract is U8.
+                            ControlValue::U8(1 - vfo),
+                        ));
+                    }
                     let radio_profile = self
                         .config
                         .radio
@@ -5229,67 +5700,14 @@ impl eframe::App for QsonautGuiApp {
                             }
                         },
                     );
-                            ui.add_space(6.0);
-                            ui.separator();
-                            let activity_profile = self.activity.profile();
-                            ui.label(
-                                RichText::new(format!("CALL · {}", activity_profile.tx_cq))
-                                    .size(15.0)
-                                    .monospace()
-                                    .color(Color32::from_rgb(255, 190, 105)),
-                            )
-                            .on_hover_text(format!(
-                                "Call behavior\nActivity: {}\nTransmit calling text: {}",
-                                self.activity.label(),
-                                activity_profile.tx_cq
-                            ));
-                            if let Some(client) = &self.server_client {
-                                let server_status = client.status();
-                                if server_status.state == ServerConnectionState::Connected
-                                    && server_status.active_event_count > 0
-                                {
-                                    let label = if self.activity == OperatingActivity::Contest
-                                        && self.contest_enabled
-                                    {
-                                        "✅ SERVER CONTEST · PARTICIPATING".to_string()
-                                    } else {
-                                        format!(
-                                            "✅ SERVER CONTEST · {} ACTIVE",
-                                            server_status.active_event_count
-                                        )
-                                    };
-                                    ui.label(
-                                        RichText::new(label)
-                                            .size(15.0)
-                                            .strong()
-                                            .color(Color32::from_rgb(125, 225, 150)),
-                                    )
-                                    .on_hover_text(format!(
-                                        "Server contest status\nConnected server events: {}\nThis indicator reflects shared contest activity.",
-                                        server_status.active_event_count
-                                    ));
-                                }
-                            }
-                            let active_profile = self.active_radio_profile_name().unwrap_or("None");
-                            ui.label(
-                                RichText::new(format!("RADIO · {active_profile}"))
-                                    .size(15.0)
-                                    .color(if active_profile == "None" {
-                                        Color32::GRAY
-                                    } else {
-                                        Color32::from_rgb(255, 201, 92)
-                                    }),
-                            )
-                            .on_hover_text(format!(
-                                "Active radio profile\n{active_profile}\nThis profile owns the radio connection and its per-radio settings."
-                            ));
+                    self.draw_banner_radio_controls(ui, &snapshot);
                     });
-                        self.draw_banner_radio_controls(ui, &snapshot);
-                    });
+                    ui.horizontal(|ui| {
+                        self.draw_meter_display(ui, &snapshot);
                     let radio_ready = snapshot.radio_power_on == Some(true)
                         && !snapshot.radio_power_command_pending;
                     let supports_control = |id| snapshot.supported_controls.contains(&id);
-                    ui.scope(|ui| {
+                        ui.scope(|ui| {
                         ui.spacing_mut().button_padding.y = 4.0;
                         ui.horizontal(|ui| {
                             ui.separator();
@@ -5350,7 +5768,7 @@ impl eframe::App for QsonautGuiApp {
                         );
                             }
                         });
-                    });
+                        });
                     if supports_control(ControlId::Tuner) {
                         let tuner_color = if snapshot.tuner_status.is_some_and(|status| status.tuning) {
                             Color32::YELLOW
@@ -5392,6 +5810,8 @@ impl eframe::App for QsonautGuiApp {
                                 }
                             });
                         }).response.on_hover_text("Enable the antenna tuner or start tuning");
+                    }
+                    if snapshot.supported_meters.contains(&MeterId::Swr) {
                         if let Some((band_start, band_stop, band_name)) =
                             band_edges_for_frequency(snapshot.frequency_hz)
                         {
@@ -5713,15 +6133,9 @@ impl eframe::App for QsonautGuiApp {
                                     ui.horizontal(|ui| {
                                         ui.label(label);
                                         let fraction = value.map_or(0.0, |raw| f32::from(raw) / 255.0);
-                                        let text = if id == MeterId::Swr {
-                                            format_swr_display(&self.config.radio.model, value)
-                                        } else {
-                                            value.map_or_else(|| "—".to_string(), |raw| format!("{raw}/255"))
-                                        };
                                         ui.add(
                                             egui::ProgressBar::new(fraction)
-                                                .desired_width(120.0)
-                                                .text(text),
+                                                .desired_width(120.0),
                                         );
                                     });
                                 }
@@ -5791,6 +6205,7 @@ impl eframe::App for QsonautGuiApp {
                         });
                     }
                     ui.separator();
+                    self.draw_waterfall_buttons(ui, &snapshot);
                     let monitor_label = "MON";
                     let monitor_color = if self.config.audio.monitor_enabled {
                         Color32::LIGHT_GREEN
@@ -5875,68 +6290,10 @@ impl eframe::App for QsonautGuiApp {
                             }
                         });
                     });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let power_known = snapshot.radio_power_on.is_some();
-                        let power_on = snapshot.radio_power_on.unwrap_or(false);
-                        let (power_rect, power_button) = ui.allocate_exact_size(
-                            egui::vec2(28.0, 28.0),
-                            if snapshot.radio_power_supported
-                                && !snapshot.radio_power_command_pending
-                            {
-                                egui::Sense::click()
-                            } else {
-                                egui::Sense::hover()
-                            },
-                        );
-                        let power_color = if !snapshot.radio_power_supported {
-                            Color32::DARK_GRAY
-                        } else if !power_known {
-                            Color32::GRAY
-                        } else if power_on {
-                            Color32::LIGHT_GREEN
-                        } else {
-                            Color32::GRAY
-                        };
-                        let painter = ui.painter_at(power_rect);
-                        let center = power_rect.center();
-                        painter.circle_stroke(
-                            center,
-                            8.0,
-                            egui::Stroke::new(2.0_f32, power_color),
-                        );
-                        painter.line_segment(
-                            [
-                                egui::pos2(center.x, center.y - 11.0),
-                                egui::pos2(center.x, center.y + 1.0),
-                            ],
-                            egui::Stroke::new(2.0_f32, power_color),
-                        );
-                        if power_button.clicked() {
-                            self.state
-                                .lock()
-                                .expect("ui state lock poisoned")
-                                .radio_power_command_pending = true;
-                            self.send_command(GuiCommand::SetPower(!power_on));
-                        }
-                        power_button.on_hover_text(if !power_known {
-                            "Radio power: unknown · click to turn on"
-                        } else if power_on {
-                            "Radio power: ON · click to turn off"
-                        } else {
-                            "Radio power: OFF · click to turn on"
-                        });
-                        ui.label(
-                            RichText::new(format!(
-                                "📍 {} · {}",
-                                self.station_callsign_or_default(),
-                                self.station_grid_or_default()
-                            ))
-                            .strong()
-                            .color(Color32::from_rgb(255, 210, 110)),
-                        );
                     });
                     });
-                        });
+                    });
+                    });
                     });
                     if let Some(divider_x) = section_divider_x {
                         ui.painter().line_segment(
@@ -5953,77 +6310,37 @@ impl eframe::App for QsonautGuiApp {
                 });
             });
 
+        egui::Area::new(egui::Id::new("radio_profile_power_top_right"))
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 6.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let active_profile = self.active_radio_profile_name().unwrap_or("None");
+                    ui.label(
+                        RichText::new(format!("RADIO · {active_profile}"))
+                            .small()
+                            .color(if active_profile == "None" {
+                                Color32::GRAY
+                            } else {
+                                Color32::from_rgb(255, 201, 92)
+                            }),
+                    )
+                    .on_hover_text(format!(
+                        "Active radio profile\n{active_profile}\nThis profile owns the radio connection and its per-radio settings."
+                    ));
+                    self.draw_power_button(ui, &snapshot);
+                });
+            });
+
         let supports_radio_scope =
             native_radio_profile(&self.config.radio.backend, &self.config.radio.model)
                 .is_some_and(|profile| profile.capabilities.spectrum);
         let radio_scope_visible = self.civ_spectrum_on
             && supports_radio_scope
             && !snapshot.radio_waterfall_status.starts_with("UNAVAILABLE");
-        let monitor_min_height = 170.0;
-        let monitor_max_height = 560.0_f32.min(ctx.content_rect().height() * 0.75).max(170.0);
-        self.waterfall_deck_height = self
-            .waterfall_deck_height
-            .clamp(monitor_min_height, monitor_max_height);
-        let waterfall_panel_id = egui::Id::new("waterfall_monitor_deck");
-        let previous_deck_height = self.waterfall_deck_height;
-        egui::TopBottomPanel::top(waterfall_panel_id)
-            .resizable(true)
-            .show_separator_line(true)
-            .default_height(self.waterfall_deck_height)
-            .height_range(monitor_min_height..=monitor_max_height)
-            .show(ctx, |ui| {
-                // Own exactly the remainder of the panel. Waterfall controls and
-                // images may clip inside this child, but they must never enlarge
-                // the parent response and ratchet the saved panel height upward.
-                let deck_rect = ui.available_rect_before_wrap();
-                ui.allocate_rect(deck_rect, egui::Sense::hover());
-                let mut deck_ui = ui.new_child(
-                    egui::UiBuilder::new()
-                        .id_salt("waterfall_deck_contents")
-                        .max_rect(deck_rect)
-                        .layout(egui::Layout::top_down(egui::Align::Min)),
-                );
-                deck_ui.set_clip_rect(deck_rect);
-                if radio_scope_visible {
-                    let total_width = deck_ui.available_width();
-                    let radio_default_width = total_width * 0.5;
-                    let radio_max_width = (total_width - 260.0).max(280.0);
-                    egui::SidePanel::left("radio_waterfall_split")
-                        .resizable(true)
-                        .default_width(radio_default_width)
-                        .width_range(280.0..=radio_max_width)
-                        .show_inside(&mut deck_ui, |ui| {
-                            self.draw_radio_waterfall(ui, ctx, &snapshot);
-                        });
-                    self.draw_audio_waterfall(&mut deck_ui, ctx, &snapshot);
-                } else {
-                    self.draw_audio_waterfall(&mut deck_ui, ctx, &snapshot);
-                }
-            });
-        let actual_deck_height = egui::containers::panel::PanelState::load(ctx, waterfall_panel_id)
-            .map(|state| state.size().y)
-            .unwrap_or(previous_deck_height)
-            .clamp(monitor_min_height, monitor_max_height);
-        if (actual_deck_height - previous_deck_height).abs() > 0.5 {
-            info!(
-                previous_height = previous_deck_height,
-                actual_height = actual_deck_height,
-                "Waterfall panel resized"
-            );
-            self.waterfall_deck_height = actual_deck_height;
-            self.profile_dirty = true;
-            self.waterfall_deck_resize_pending = true;
-        }
-        // Native panel state owns live dragging. Persist only on release so
-        // profile I/O never fights the pointer or forces an old height back.
-        if self.waterfall_deck_resize_pending && ctx.input(|input| input.pointer.any_released()) {
-            self.waterfall_deck_resize_pending = false;
-            self.persist_profile("Auto-saved");
-        }
-
         // Bottom panels are stacked in declaration order: the first one owns
-        // the outermost bottom strip. Declare the compact status strip first
-        // so it remains below the resizable contact log.
+        // the outermost bottom strip. The monitor is rendered in the remaining
+        // central region below, so its height follows the window naturally.
         egui::TopBottomPanel::bottom("connection_status")
             .resizable(false)
             .exact_height(30.0)
@@ -6227,7 +6544,6 @@ impl eframe::App for QsonautGuiApp {
                         (ProfileDrawerTab::Tuning, "TUNING"),
                         (ProfileDrawerTab::DigitalTiming, "DIGITAL TIMING"),
                         (ProfileDrawerTab::Monitoring, "MONITORING"),
-                        (ProfileDrawerTab::Waterfall, "WATERFALL"),
                     ] {
                         if ui
                             .selectable_label(self.profile_drawer_tab == tab, label)
@@ -6247,9 +6563,6 @@ impl eframe::App for QsonautGuiApp {
                         ProfileDrawerTab::Tuning => self.draw_radio_profile_assignments(ui),
                         ProfileDrawerTab::DigitalTiming => self.draw_digital_timing_settings(ui),
                         ProfileDrawerTab::Monitoring => self.draw_monitoring_settings(ui),
-                        ProfileDrawerTab::Waterfall => {
-                            self.draw_waterfall_profile_panel(ui, &snapshot)
-                        }
                     });
             });
             if !drawer_open {
@@ -6261,6 +6574,7 @@ impl eframe::App for QsonautGuiApp {
             let help = help_for_model(&self.radio_help_window_model);
             let mut faq_open = self.radio_faq_window_open;
             let (faq_title, faq_document) = match self.radio_faq_document {
+                RadioHelpDocument::Audio => ("Audio FAQ", AUDIO_FAQ),
                 RadioHelpDocument::Manufacturer => ("Manufacturer FAQ", help.manufacturer_faq),
                 RadioHelpDocument::Model => ("Model FAQ", help.model_faq),
             };
@@ -6283,6 +6597,7 @@ impl eframe::App for QsonautGuiApp {
 
             let mut guide_open = self.radio_guide_window_open;
             let (guide_title, guide_document) = match self.radio_guide_document {
+                RadioHelpDocument::Audio => ("Audio FAQ", AUDIO_FAQ),
                 RadioHelpDocument::Manufacturer => ("Manufacturer Guide", help.manufacturer_guide),
                 RadioHelpDocument::Model => ("Model Guide", help.model_guide),
             };
@@ -6302,6 +6617,36 @@ impl eframe::App for QsonautGuiApp {
                         });
                 });
             self.radio_guide_window_open = guide_open;
+        }
+
+        let monitor_has_data = !snapshot.audio_waterfall_rows.is_empty()
+            || (radio_scope_visible && !snapshot.radio_waterfall_rows.is_empty());
+        if monitor_has_data {
+            // The waterfall deck is a real user-resizable panel. Its height
+            // must not track incoming rows or silently change the workspace
+            // layout while a radio is running.
+            egui::TopBottomPanel::top("waterfall_deck")
+                .resizable(true)
+                .default_height(260.0)
+                .height_range(80.0..=ctx.content_rect().height().max(240.0) * 0.75)
+                .show_separator_line(true)
+                .show(ctx, |ui| {
+                    if radio_scope_visible {
+                        let total_width = ui.available_width();
+                        let radio_default_width = total_width * 0.5;
+                        let radio_max_width = (total_width - 260.0).max(280.0);
+                        egui::SidePanel::left("radio_waterfall_split")
+                            .resizable(true)
+                            .default_width(radio_default_width)
+                            .width_range(280.0..=radio_max_width)
+                            .show_inside(ui, |ui| {
+                                self.draw_radio_waterfall(ui, ctx, &snapshot);
+                            });
+                        self.draw_audio_waterfall(ui, ctx, &snapshot);
+                    } else {
+                        self.draw_audio_waterfall(ui, ctx, &snapshot);
+                    }
+                });
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -6392,9 +6737,19 @@ fn filter_bandwidth_hz(mode: &str, filter: Option<u8>) -> u32 {
     }
 }
 
-fn effective_visual_profile(tuning: &DisplayTuning, mode: &str) -> (u64, u8) {
-    if !tuning.auto_visual {
-        return match tuning.waterfall_speed {
+fn effective_visual_profile(tuning: &DisplayTuning, mode: &str, radio: bool) -> (u64, u8) {
+    let auto_visual = if radio {
+        tuning.radio_auto_visual
+    } else {
+        tuning.audio_auto_visual
+    };
+    let waterfall_speed = if radio {
+        tuning.radio_waterfall_speed
+    } else {
+        tuning.audio_waterfall_speed
+    };
+    if !auto_visual {
+        return match waterfall_speed {
             WaterfallSpeed::Slow => (220, 2),
             WaterfallSpeed::Mid => (120, 1),
             WaterfallSpeed::Fast => (50, 0),
@@ -6548,9 +6903,149 @@ fn radio_port_inventory(
     (ports, labels, models)
 }
 
+fn general_meter_order() -> [MeterId; 8] {
+    [
+        MeterId::Signal,
+        MeterId::Power,
+        MeterId::Swr,
+        MeterId::Alc,
+        MeterId::Compression,
+        MeterId::Current,
+        MeterId::Voltage,
+        MeterId::Temperature,
+    ]
+}
+
+fn mode_meter_order(transmitting: bool) -> [MeterId; 8] {
+    if transmitting {
+        [
+            MeterId::Power,
+            MeterId::Swr,
+            MeterId::Alc,
+            MeterId::Compression,
+            MeterId::Current,
+            MeterId::Voltage,
+            MeterId::Temperature,
+            MeterId::Signal,
+        ]
+    } else {
+        general_meter_order()
+    }
+}
+
+fn meter_value(snapshot: &GuiState, id: MeterId) -> Option<u8> {
+    match id {
+        MeterId::Signal => snapshot.signal_meter,
+        MeterId::Power => snapshot.power_meter,
+        MeterId::Swr => snapshot.swr,
+        MeterId::Alc => snapshot.alc_meter,
+        MeterId::Compression => snapshot.compression_meter,
+        MeterId::Current => snapshot.current_meter,
+        MeterId::Voltage => snapshot.voltage_meter,
+        MeterId::Temperature => snapshot.temperature_meter,
+    }
+}
+
+fn meter_percent(value: u8) -> f32 {
+    f32::from(value) / 255.0
+}
+
+fn draw_primary_meter(ui: &egui::Ui, rect: egui::Rect, label: &str, fraction: f32, color: Color32) {
+    let painter = ui.painter();
+    let outer = rect.expand(1.0);
+    painter.rect_filled(
+        outer,
+        egui::CornerRadius::same(7),
+        Color32::from_rgb(10, 20, 29),
+    );
+    painter.rect_stroke(
+        outer,
+        egui::CornerRadius::same(7),
+        egui::Stroke::new(1.0_f32, color.gamma_multiply(0.65)),
+        egui::StrokeKind::Inside,
+    );
+
+    let inner = rect.shrink2(egui::vec2(5.0, 6.0));
+    let segments = 30;
+    let gap = 2.0;
+    let segment_width = ((inner.width() - gap * (segments - 1) as f32) / segments as f32).max(1.0);
+    let lit = (fraction.clamp(0.0, 1.0) * segments as f32).ceil() as usize;
+    for index in 0..segments {
+        let left = inner.left() + index as f32 * (segment_width + gap);
+        let segment = egui::Rect::from_min_max(
+            egui::pos2(left, inner.top()),
+            egui::pos2(left + segment_width, inner.bottom()),
+        );
+        let fill = if index < lit {
+            color
+        } else {
+            Color32::from_rgb(28, 45, 57)
+        };
+        painter.rect_filled(segment, egui::CornerRadius::same(2), fill);
+    }
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::monospace(12.0),
+        Color32::WHITE,
+    );
+}
+
+#[cfg(test)]
+fn format_meter_value(value: Option<u8>) -> String {
+    value
+        .map(|value| format!("{:.0}%", f32::from(value) * 100.0 / 255.0))
+        .unwrap_or_else(|| "—".to_string())
+}
+
+fn meter_label(id: MeterId) -> &'static str {
+    match id {
+        MeterId::Signal => "S-METER",
+        MeterId::Power => "POWER",
+        MeterId::Swr => "SWR",
+        MeterId::Alc => "ALC",
+        MeterId::Compression => "COMP",
+        MeterId::Current => "CURRENT",
+        MeterId::Voltage => "VOLTAGE",
+        MeterId::Temperature => "TEMP",
+    }
+}
+
+fn meter_color(id: MeterId, value: Option<u8>) -> Color32 {
+    if value.is_none() {
+        return Color32::GRAY;
+    }
+    let value = value.unwrap_or_default();
+    match id {
+        MeterId::Swr if value >= 190 => Color32::RED,
+        MeterId::Swr if value >= 130 => Color32::YELLOW,
+        MeterId::Power | MeterId::Alc | MeterId::Compression if value >= 220 => {
+            Color32::from_rgb(255, 145, 100)
+        }
+        _ => Color32::from_rgb(100, 210, 150),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meter_display_orders_rx_and_tx_values_for_operator_context() {
+        assert_eq!(mode_meter_order(false)[0], MeterId::Signal);
+        assert_eq!(mode_meter_order(true)[0], MeterId::Power);
+        assert_eq!(mode_meter_order(true)[1], MeterId::Swr);
+        assert_eq!(meter_label(MeterId::Temperature), "TEMP");
+    }
+
+    #[test]
+    fn meter_display_normalizes_hal_levels() {
+        assert_eq!(meter_percent(0), 0.0);
+        assert_eq!(meter_percent(255), 1.0);
+        assert_eq!(format_meter_value(Some(128)), "50%");
+        assert_eq!(format_meter_value(None), "—");
+    }
 
     #[test]
     fn radio_profiles_apply_only_to_the_native_backend() {
@@ -6736,22 +7231,72 @@ mod tests {
     #[test]
     fn automatic_digital_visuals_use_the_fast_radio_scope_cadence() {
         let tuning = DisplayTuning::default();
-        assert_eq!(effective_visual_profile(&tuning, "USB-D"), (50, 0));
-        assert_eq!(effective_visual_profile(&tuning, "FT8"), (50, 0));
+        assert_eq!(effective_visual_profile(&tuning, "USB-D", true), (50, 0));
+        assert_eq!(effective_visual_profile(&tuning, "FT8", false), (50, 0));
+    }
+
+    #[test]
+    fn labels_all_core_display_choices() {
+        assert_eq!(AppLogLevelFilter::All.label(), "All levels");
+        assert_eq!(AppLogLevelFilter::Info.label(), "Info+");
+        assert_eq!(AppLogLevelFilter::Warning.label(), "Warnings+");
+        assert_eq!(AppLogLevelFilter::Error.label(), "Errors only");
+        assert_eq!(WaterfallSpeed::Slow.label(), "Slow · ~4.5 rows/s");
+        assert_eq!(WaterfallSpeed::Mid.label(), "Mid · ~8 rows/s");
+        assert_eq!(WaterfallSpeed::Fast.label(), "Fast · ~20 rows/s");
+        assert_eq!(WaterfallTheme::RadioBlue.label(), "Radio blue");
+        assert_eq!(WaterfallTheme::Inferno.label(), "Inferno");
+        assert_eq!(WaterfallTheme::Phosphor.label(), "Phosphor");
+        assert_eq!(WaterfallTheme::Monochrome.label(), "Monochrome");
+    }
+
+    #[test]
+    fn clamps_platform_gui_scale_and_preserves_round_trip_values() {
+        assert_eq!(platform_gui_scale_from_percent(25), GUI_SCALE_MIN);
+        assert_eq!(platform_gui_scale_from_percent(250), GUI_SCALE_MAX);
+        let scale = platform_gui_scale_from_percent(125);
+        assert!((platform_gui_scale_percent(scale) - 125.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn labels_sstv_choices_and_operator_call_badges() {
+        assert_eq!(SstvOverlayCorner::ALL.len(), 4);
+        assert_eq!(SstvOverlayCorner::BottomRight.label(), "Bottom right");
+        assert_eq!(SstvAiPipelineMode::ALL.len(), 3);
+        assert_eq!(
+            SstvAiPipelineMode::AnalyzeReceived.label(),
+            "Analyze received"
+        );
+        assert_eq!(call_hit_badge(OperatorCallHit::DirectedToMe).0, "📡 YOU!");
+        assert_eq!(call_hit_badge(OperatorCallHit::Mentioned).0, "✨ YOUR CALL");
     }
 
     #[test]
     fn manual_waterfall_speeds_match_ic7300_scope_values() {
         let mut tuning = DisplayTuning {
-            auto_visual: false,
+            radio_auto_visual: false,
             ..DisplayTuning::default()
         };
-        tuning.waterfall_speed = WaterfallSpeed::Slow;
-        assert_eq!(effective_visual_profile(&tuning, "FT8"), (220, 2));
-        tuning.waterfall_speed = WaterfallSpeed::Mid;
-        assert_eq!(effective_visual_profile(&tuning, "FT8"), (120, 1));
-        tuning.waterfall_speed = WaterfallSpeed::Fast;
-        assert_eq!(effective_visual_profile(&tuning, "FT8"), (50, 0));
+        tuning.radio_waterfall_speed = WaterfallSpeed::Slow;
+        assert_eq!(effective_visual_profile(&tuning, "FT8", true), (220, 2));
+        tuning.radio_waterfall_speed = WaterfallSpeed::Mid;
+        assert_eq!(effective_visual_profile(&tuning, "FT8", true), (120, 1));
+        tuning.radio_waterfall_speed = WaterfallSpeed::Fast;
+        assert_eq!(effective_visual_profile(&tuning, "FT8", true), (50, 0));
+    }
+
+    #[test]
+    fn audio_and_radio_visual_tuning_are_independent() {
+        let mut tuning = DisplayTuning {
+            audio_auto_visual: false,
+            radio_auto_visual: false,
+            ..DisplayTuning::default()
+        };
+        tuning.audio_waterfall_speed = WaterfallSpeed::Slow;
+        tuning.radio_waterfall_speed = WaterfallSpeed::Fast;
+
+        assert_eq!(effective_visual_profile(&tuning, "USB", false), (220, 2));
+        assert_eq!(effective_visual_profile(&tuning, "USB", true), (50, 0));
     }
 
     #[test]
@@ -6787,6 +7332,120 @@ mod tests {
         );
         assert_eq!(scope_span_for_filter("FM", Some(1)), 2);
         assert_eq!(scope_span_label(0), "±2.5 kHz");
+    }
+
+    #[test]
+    fn display_policy_covers_filter_modes_and_scope_span_limits() {
+        assert_eq!(filter_bandwidth_hz("CW", Some(2)), 250);
+        assert_eq!(filter_bandwidth_hz("FM", Some(3)), 7_000);
+        assert_eq!(filter_bandwidth_hz("RTTY", Some(2)), 350);
+        assert_eq!(filter_bandwidth_hz("USB", Some(3)), 1_800);
+        assert_eq!(filter_bandwidth_hz("USB", None), 3_000);
+        assert_eq!(filter_bandwidth_hz("USB", Some(9)), 3_000);
+
+        assert_eq!(scope_span_for_filter("CW", Some(1)), 0);
+        assert_eq!(scope_span_for_filter("FM", Some(1)), 2);
+        assert_eq!(scope_span_for_filter("FM", Some(9)), 2);
+        assert_eq!(scope_span_label(7), "±500 kHz");
+        assert_eq!(scope_span_label(99), "±500 kHz");
+        assert_eq!(scope_span_hz(6), 250_000);
+        assert_eq!(scope_span_hz(99), 500_000);
+    }
+
+    #[test]
+    fn display_policy_classifies_modes_errors_and_band_edges() {
+        assert_eq!(
+            scope_projection_for_mode("LSB-D"),
+            ScopeProjection::LowerSideband
+        );
+        assert_eq!(
+            scope_projection_for_mode("USB"),
+            ScopeProjection::UpperSideband
+        );
+        assert_eq!(
+            scope_projection_for_mode("DATA"),
+            ScopeProjection::UpperSideband
+        );
+        assert_eq!(
+            scope_projection_for_mode("DIGI"),
+            ScopeProjection::UpperSideband
+        );
+        assert_eq!(scope_projection_for_mode("FM"), ScopeProjection::Full);
+
+        assert!(is_transient_civ_read_error("CI-V response timed out"));
+        assert!(is_transient_civ_read_error("failed to read CI-V response"));
+        assert!(is_transient_civ_read_error("serial timeout"));
+        assert!(!is_transient_civ_read_error("invalid mode response"));
+
+        assert_eq!(band_edges_for_frequency(None), None);
+        assert_eq!(
+            band_edges_for_frequency(Some(14_074_000)),
+            Some((14_000_000, 14_350_000, "20m"))
+        );
+        assert_eq!(
+            band_edges_for_frequency(Some(145_000_000)),
+            Some((144_000_000, 148_000_000, "2m"))
+        );
+        assert_eq!(band_edges_for_frequency(Some(1_000_000)), None);
+    }
+
+    #[test]
+    fn sideband_edges_round_to_kilohertz_and_saturate() {
+        assert_eq!(
+            sideband_scope_edges(14_074_123, 5_001, ScopeProjection::UpperSideband),
+            Some((14_074_000, 14_080_000))
+        );
+        assert_eq!(
+            sideband_scope_edges(14_074_123, 5_001, ScopeProjection::LowerSideband),
+            Some((14_069_000, 14_075_000))
+        );
+        assert_eq!(
+            sideband_scope_edges(100, u64::MAX, ScopeProjection::LowerSideband),
+            Some((0, 1_000))
+        );
+    }
+
+    #[test]
+    fn meter_policy_maps_hal_values_and_warning_colors() {
+        let snapshot = GuiState {
+            signal_meter: Some(1),
+            power_meter: Some(2),
+            swr: Some(3),
+            alc_meter: Some(4),
+            compression_meter: Some(5),
+            current_meter: Some(6),
+            voltage_meter: Some(7),
+            temperature_meter: Some(8),
+            ..GuiState::default()
+        };
+        for (id, value) in [
+            (MeterId::Signal, 1),
+            (MeterId::Power, 2),
+            (MeterId::Swr, 3),
+            (MeterId::Alc, 4),
+            (MeterId::Compression, 5),
+            (MeterId::Current, 6),
+            (MeterId::Voltage, 7),
+            (MeterId::Temperature, 8),
+        ] {
+            assert_eq!(meter_value(&snapshot, id), Some(value));
+        }
+        assert_eq!(meter_value(&GuiState::default(), MeterId::Signal), None);
+        assert_eq!(meter_color(MeterId::Signal, None), Color32::GRAY);
+        assert_eq!(
+            meter_color(MeterId::Swr, Some(129)),
+            Color32::from_rgb(100, 210, 150)
+        );
+        assert_eq!(meter_color(MeterId::Swr, Some(130)), Color32::YELLOW);
+        assert_eq!(meter_color(MeterId::Swr, Some(190)), Color32::RED);
+        assert_eq!(
+            meter_color(MeterId::Power, Some(220)),
+            Color32::from_rgb(255, 145, 100)
+        );
+        assert_eq!(
+            meter_color(MeterId::Temperature, Some(255)),
+            Color32::from_rgb(100, 210, 150)
+        );
     }
 
     #[test]
@@ -7242,6 +7901,92 @@ mod tests {
         assert_eq!(
             event.fields.get("channel").map(String::as_str),
             Some("#qsonaut")
+        );
+    }
+
+    #[test]
+    fn normalize_app_events_preserves_tags_and_structured_fields() {
+        let callsign = normalize_app_event_for_automation(AppEvent::CallsignHit {
+            mode: "FT8".to_string(),
+            call: "W1AW".to_string(),
+            snr_db: -12.5,
+            freq_hz: 1_500,
+            message: "CQ W1AW FN42".to_string(),
+            directed_to_me: true,
+        })
+        .expect("callsign event");
+        assert_eq!(callsign.kind, EventKind::CallsignHit);
+        assert!(callsign.tags.iter().any(|tag| tag == "directed_to_me"));
+        assert_eq!(
+            callsign.fields.get("snr").map(String::as_str),
+            Some("-12.5")
+        );
+
+        let qso = normalize_app_event_for_automation(AppEvent::QsoLogged {
+            mode: "CW".to_string(),
+            call: "K1ABC".to_string(),
+            band: "20m".to_string(),
+            frequency_hz: 14_060_000,
+        })
+        .expect("qso event");
+        assert_eq!(qso.kind, EventKind::QsoLogged);
+        assert_eq!(
+            qso.fields.get("frequency_hz").map(String::as_str),
+            Some("14060000")
+        );
+
+        let mut fields = BTreeMap::new();
+        fields.insert("frequency_hz".to_string(), "14074000".to_string());
+        let server = normalize_app_event_for_automation(AppEvent::ServerMessageReceived {
+            kind: "radio_state".to_string(),
+            fields,
+        })
+        .expect("server event");
+        assert_eq!(server.kind, EventKind::ServerMessage);
+        assert!(server.tags.iter().any(|tag| tag == "radio_state"));
+        assert_eq!(
+            server.fields.get("kind").map(String::as_str),
+            Some("radio_state")
+        );
+    }
+
+    #[test]
+    fn normalize_automation_hooks_maps_supported_kinds_and_rejects_unknown_events() {
+        for (kind, expected) in [
+            ("contest_state", EventKind::ContestState),
+            ("operator_profile", EventKind::OperatorProfile),
+            ("callsign_hit", EventKind::CallsignHit),
+            ("qso_logged", EventKind::QsoLogged),
+            ("radio_state", EventKind::RadioState),
+        ] {
+            let event = normalize_app_event_for_automation(AppEvent::AutomationHook {
+                kind: kind.to_string(),
+                source: "test".to_string(),
+                detail: "enabled=true".to_string(),
+            })
+            .expect("supported hook");
+            assert_eq!(event.kind, expected);
+            assert_eq!(
+                event.fields.get("enabled").map(String::as_str),
+                Some("true")
+            );
+        }
+        assert!(
+            normalize_app_event_for_automation(AppEvent::AutomationHook {
+                kind: "not_supported".to_string(),
+                source: "test".to_string(),
+                detail: String::new(),
+            })
+            .is_none()
+        );
+        assert!(normalize_app_event_for_automation(AppEvent::ShutdownRequested).is_none());
+        assert!(
+            normalize_app_event_for_automation(AppEvent::DeviceDiscovered {
+                subsystem: "radio".to_string(),
+                name: "IC-7300".to_string(),
+                detail: "test".to_string(),
+            })
+            .is_none()
         );
     }
 

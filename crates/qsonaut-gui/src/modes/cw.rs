@@ -16,11 +16,15 @@ pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
     ("70cm", 432_100_000),
 ];
 
+pub(crate) fn workspace_description() -> &'static str {
+    "CW · Software Audio"
+}
+
 impl QsonautGuiApp {
     pub(crate) fn draw_cw_workspace(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         let preset = workspace_radio_preset(WorkspaceMode::Cw);
         ui.horizontal_wrapped(|ui| {
-            ui.heading("CW · Software Audio");
+            ui.heading(workspace_description());
             ui.separator();
             ui.label(
                 RichText::new("Backend: cw-dit")
@@ -227,5 +231,23 @@ impl QsonautGuiApp {
                 ui.label(RichText::new(format!("{}  {}", entry.utc, entry.message)).monospace());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{workspace_description, BAND_PLAN};
+
+    #[test]
+    fn exposes_the_complete_cw_band_plan() {
+        assert_eq!(BAND_PLAN.len(), 13);
+        assert_eq!(BAND_PLAN.first(), Some(&("160m", 1_836_000)));
+        assert_eq!(BAND_PLAN.last(), Some(&("70cm", 432_100_000)));
+        assert!(BAND_PLAN.windows(2).all(|bands| bands[0].1 < bands[1].1));
+    }
+
+    #[test]
+    fn identifies_the_software_cw_workspace() {
+        assert_eq!(workspace_description(), "CW · Software Audio");
     }
 }

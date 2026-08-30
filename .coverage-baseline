@@ -1,0 +1,6 @@
+# Existing production files with no covered executable lines at the initial
+# QSONaut coverage baseline. Remove an entry when its tests land.
+apps/qsonaut/src/main.rs
+crates/qsonaut-gui/src/panels/profile_server.rs
+crates/qsonaut-gui/src/panels/spectrum.rs
+crates/qsonaut-gui/src/workers/audio.rs

@@ -268,7 +268,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                     let s = state.lock().expect("ui state lock poisoned");
                     s.mode.clone()
                 };
-                let interval_ms = effective_visual_profile(&t, &mode).0;
+                let interval_ms = effective_visual_profile(&t, &mode, false).0;
                 ((sample_rate_hz as u64 * interval_ms / 1_000) as usize).max(256)
             };
             match stream.read_frames_f32_until_stopped(chunk_samples, &stop) {

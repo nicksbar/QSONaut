@@ -349,4 +349,132 @@ mod tests {
         assert!(packet.windows(2).any(|window| window == [0xF4, 3]));
         assert_eq!(packet.len() % 4, 0);
     }
+
+    #[test]
+    fn production_config_and_tuning_defaults_are_operator_safe() {
+        let config = ReporterConfig::production(" n1dq ", "FN42hn");
+        assert_eq!(config.receiver_callsign, " n1dq ");
+        assert_eq!(config.receiver_locator, "FN42hn");
+        assert!(config.decoder_software.starts_with("QSONaut "));
+        assert_eq!(config.destination, "report.pskreporter.info:4739");
+        assert_eq!(config.tuning.batch_interval_secs, 300);
+        assert_eq!(config.tuning.repeat_cache_secs, 300);
+        assert_eq!(config.tuning.max_pending, 80);
+    }
+
+    #[test]
+    fn packet_without_templates_still_has_valid_aligned_lengths() {
+        let config = ReporterConfig::production("N0CALL", "AA00");
+        let packet = encode_packet(&config, &[], 99, 123, 456, false);
+        assert_eq!(&packet[..2], &[0, 10]);
+        assert_eq!(
+            u16::from_be_bytes([packet[2], packet[3]]) as usize,
+            packet.len()
+        );
+        assert_eq!(packet.len() % 4, 0);
+        assert_eq!(packet.len(), 52);
+    }
+
+    #[test]
+    fn string_encoding_is_length_limited_and_padding_is_four_byte_aligned() {
+        let mut output = Vec::new();
+        push_string(&mut output, &"x".repeat(300));
+        assert_eq!(output[0], 254);
+        assert_eq!(output.len(), 255);
+        pad4(&mut output);
+        assert_eq!(output.len() % 4, 0);
+
+        let start = output.len();
+        output.extend_from_slice(&[0, 0, 0, 0]);
+        set_length(&mut output, start);
+        assert_eq!(
+            u16::from_be_bytes([output[start + 2], output[start + 3]]),
+            4
+        );
+    }
+
+    #[test]
+    fn report_sender_forwards_only_while_worker_channel_is_alive() {
+        let (tx, rx) = mpsc::channel();
+        let sender = ReportSender(tx);
+        let report = ReceptionReport {
+            sender_callsign: "K1ABC".into(),
+            frequency_hz: 14_074_000,
+            snr_db: -10,
+            mode: "FT8".into(),
+            sender_locator: "FN42".into(),
+            received_at: 1,
+        };
+        assert!(sender.submit(report));
+        assert!(matches!(rx.try_recv(), Ok(Command::Report(_))));
+        drop(rx);
+        assert!(!sender.submit(ReceptionReport {
+            sender_callsign: "W1AW".into(),
+            frequency_hz: 7_074_000,
+            snr_db: 0,
+            mode: "FT8".into(),
+            sender_locator: "FN31".into(),
+            received_at: 2,
+        }));
+    }
+
+    #[test]
+    fn encodes_multiple_reports_and_preserves_signed_snr_values() {
+        let config = ReporterConfig::production("N0CALL", "AA00");
+        let reports = [
+            ReceptionReport {
+                sender_callsign: "K1ABC".into(),
+                frequency_hz: 1,
+                snr_db: -128,
+                mode: "FT8".into(),
+                sender_locator: "FN42".into(),
+                received_at: 10,
+            },
+            ReceptionReport {
+                sender_callsign: "W1AW".into(),
+                frequency_hz: u64::from(u32::MAX) + 1,
+                snr_db: 127,
+                mode: "FT4".into(),
+                sender_locator: "FN31".into(),
+                received_at: 20,
+            },
+        ];
+        let packet = encode_packet(&config, &reports, u32::MAX, 9, 11, false);
+        assert_eq!(
+            u16::from_be_bytes([packet[2], packet[3]]) as usize,
+            packet.len()
+        );
+        assert!(packet.windows(5).any(|window| window == [0, 0, 0, 0, 1]));
+        assert!(packet.contains(&0x7F));
+        assert!(packet.len().is_multiple_of(4));
+    }
+
+    #[test]
+    fn reporter_marks_invalid_destination_as_inactive() {
+        let reporter = Reporter::start(ReporterConfig {
+            receiver_callsign: "N0CALL".into(),
+            receiver_locator: "AA00".into(),
+            decoder_software: "test".into(),
+            destination: "not a valid destination".into(),
+            tuning: ReporterTuning::default(),
+        });
+        for _ in 0..20 {
+            if !reporter.status().active {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        let status = reporter.status();
+        assert!(!status.active);
+        assert!(status.last_error.is_some());
+    }
+
+    #[test]
+    fn session_identifiers_are_nonzero_and_callsign_sensitive() {
+        let first = session_identifier("K1ABC");
+        let second = session_identifier("W1AW");
+        assert_ne!(first, 0);
+        assert_ne!(first, second);
+        assert!(unix_seconds() > 1_700_000_000);
+    }
 }
