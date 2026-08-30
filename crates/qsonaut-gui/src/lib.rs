@@ -6748,33 +6748,52 @@ impl eframe::App for QsonautGuiApp {
             // The waterfall deck is a real user-resizable panel. Its height
             // must not track incoming rows or silently change the workspace
             // layout while a radio is running.
-            let waterfall_panel = egui::TopBottomPanel::top("waterfall_deck")
+            let resize_id = egui::Id::new("waterfall_deck").with("__resize");
+            let resize_in_progress = ctx
+                .read_response(resize_id)
+                .is_some_and(|response| response.dragged());
+            let mut waterfall_panel = egui::TopBottomPanel::top("waterfall_deck")
                 .resizable(true)
                 .default_height(self.waterfall_deck_height)
                 .height_range(170.0..=ctx.content_rect().height().max(240.0) * 0.75)
-                .show_separator_line(true)
-                .show(ctx, |ui| {
-                    if radio_scope_visible {
-                        let total_width = ui.available_width();
-                        let radio_default_width = total_width * 0.5;
-                        let radio_max_width = (total_width - 260.0).max(280.0);
-                        egui::SidePanel::left("radio_waterfall_split")
-                            .resizable(true)
-                            .default_width(radio_default_width)
-                            .width_range(280.0..=radio_max_width)
-                            .show_inside(ui, |ui| {
-                                self.draw_radio_waterfall(ui, ctx, &snapshot);
-                            });
-                        self.draw_audio_waterfall(ui, ctx, &snapshot);
-                    } else {
-                        self.draw_audio_waterfall(ui, ctx, &snapshot);
-                    }
-                });
-            let actual_height = waterfall_panel.response.rect.height();
-            if actual_height.is_finite() && (actual_height - self.waterfall_deck_height).abs() > 0.5
-            {
-                self.waterfall_deck_height = actual_height.clamp(170.0, 560.0);
-                self.profile_dirty = true;
+                .show_separator_line(true);
+            // egui keeps its own panel size between frames. Reassert the
+            // application's last chosen height whenever the resize handle is
+            // idle, otherwise a stale/clamped panel state can feed a smaller
+            // rectangle back to the waterfall after an empty-input transition.
+            if !resize_in_progress {
+                waterfall_panel = waterfall_panel.min_height(self.waterfall_deck_height);
+            }
+            let waterfall_panel = waterfall_panel.show(ctx, |ui| {
+                if radio_scope_visible {
+                    let total_width = ui.available_width();
+                    let radio_default_width = total_width * 0.5;
+                    let radio_max_width = (total_width - 260.0).max(280.0);
+                    egui::SidePanel::left("radio_waterfall_split")
+                        .resizable(true)
+                        .default_width(radio_default_width)
+                        .width_range(280.0..=radio_max_width)
+                        .show_inside(ui, |ui| {
+                            self.draw_radio_waterfall(ui, ctx, &snapshot);
+                        });
+                    self.draw_audio_waterfall(ui, ctx, &snapshot);
+                } else {
+                    self.draw_audio_waterfall(ui, ctx, &snapshot);
+                }
+            });
+            // Only accept a new height while the panel resize handle is being
+            // dragged. The panel response also reflects layout constraints, so
+            // copying its height every frame lets changing/empty waterfall
+            // content overwrite the user's chosen height and creates a
+            // shrink-to-minimum feedback loop.
+            if resize_in_progress {
+                let actual_height = waterfall_panel.response.rect.height();
+                if actual_height.is_finite()
+                    && (actual_height - self.waterfall_deck_height).abs() > 0.5
+                {
+                    self.waterfall_deck_height = actual_height.clamp(170.0, 560.0);
+                    self.profile_dirty = true;
+                }
             }
         }
 
