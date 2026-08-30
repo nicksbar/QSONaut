@@ -662,6 +662,10 @@ impl QsonautGuiApp {
                         };
                         if is_cw {
                             self.cw_tone_hz = selected_hz as u16;
+                            self.state
+                                .lock()
+                                .expect("ui state lock poisoned")
+                                .cw_auto_target_tone_hz = None;
                         }
                         self.rx_tone_hz = selected_hz;
                         if is_cw || !self.ft8_hold_tx_freq {
@@ -682,6 +686,10 @@ impl QsonautGuiApp {
                     if is_cw {
                         self.cw_tone_hz = selected_hz as u16;
                         self.rx_tone_hz = selected_hz;
+                        self.state
+                            .lock()
+                            .expect("ui state lock poisoned")
+                            .cw_auto_target_tone_hz = None;
                     }
                     self.tx_tone_hz = selected_hz;
                     self.profile_dirty = true;

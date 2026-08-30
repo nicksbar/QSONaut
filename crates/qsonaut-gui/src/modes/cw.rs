@@ -22,6 +22,9 @@ pub(crate) fn workspace_description() -> &'static str {
 
 impl QsonautGuiApp {
     pub(crate) fn draw_cw_workspace(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        if let Some(tone_hz) = snapshot.cw_auto_target_tone_hz {
+            self.cw_tone_hz = tone_hz.clamp(200, 3_000) as u16;
+        }
         let preset = workspace_radio_preset(WorkspaceMode::Cw);
         ui.horizontal_wrapped(|ui| {
             ui.heading(workspace_description());
@@ -53,6 +56,34 @@ impl QsonautGuiApp {
             if let Some(level) = snapshot.audio_level_dbfs {
                 ui.separator();
                 ui.label(format!("Input {level:.0} dBFS"));
+            }
+        });
+        ui.horizontal(|ui| {
+            let auto_target = ui
+                .add(
+                    egui::Button::new("🎯 AUTO TARGET")
+                        .selected(snapshot.cw_auto_target),
+                )
+                .on_hover_text(
+                    "Scan for the next stable CW carrier, retune the decoder, then disarm automatically",
+                );
+            if auto_target.clicked() {
+                let mut state = self.state.lock().expect("ui state lock poisoned");
+                state.cw_auto_target = !state.cw_auto_target;
+                state.cw_auto_target_tone_hz = None;
+                state.digital_decode_status = if state.cw_auto_target {
+                    "CW AUTO TARGET: scanning for a stable carrier".to_string()
+                } else {
+                    "CW auto target disarmed".to_string()
+                };
+                info!(enabled = state.cw_auto_target, "CW auto target changed");
+            }
+            if let Some(tone_hz) = snapshot.cw_auto_target_tone_hz {
+                ui.label(
+                    RichText::new(format!("LOCKED {tone_hz} Hz"))
+                        .small()
+                        .color(theme_success(ui)),
+                );
             }
         });
         ui.horizontal_wrapped(|ui| {
@@ -161,6 +192,10 @@ impl QsonautGuiApp {
                 .changed()
             {
                 info!(tone_hz = self.cw_tone_hz, "CW operating tone changed");
+                self.state
+                    .lock()
+                    .expect("ui state lock poisoned")
+                    .cw_auto_target_tone_hz = None;
                 self.profile_dirty = true;
                 self.persist_profile("CW tone saved to");
             }

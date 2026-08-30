@@ -18,6 +18,29 @@ use std::sync::atomic::AtomicU32;
 
 type CwRecording = (WavWriter<BufWriter<File>>, BufWriter<File>, PathBuf, u64);
 
+fn strongest_cw_tone_hz(buffer: &[Complex<f32>], sample_rate_hz: u32) -> Option<u32> {
+    if buffer.len() < 4 || sample_rate_hz == 0 {
+        return None;
+    }
+    let low = ((300.0 * buffer.len() as f32) / sample_rate_hz as f32).ceil() as usize;
+    let high = ((3_000.0 * buffer.len() as f32) / sample_rate_hz as f32).floor() as usize;
+    let high = high.min(buffer.len() / 2);
+    if low >= high {
+        return None;
+    }
+    let magnitudes: Vec<f32> = (low..=high).map(|index| buffer[index].norm()).collect();
+    let average = magnitudes.iter().sum::<f32>() / magnitudes.len() as f32;
+    let (peak_offset, peak) = magnitudes
+        .iter()
+        .enumerate()
+        .max_by(|(_, left), (_, right)| left.total_cmp(right))?;
+    if !peak.is_finite() || *peak < 1e-4 || *peak < average * 8.0 {
+        return None;
+    }
+    let bin = low + peak_offset;
+    Some((bin as f32 * sample_rate_hz as f32 / buffer.len() as f32).round() as u32)
+}
+
 fn null_sim_stations(mode: WorkspaceMode) -> Vec<QsonautPerson> {
     let mut stations = qsonaut_demo_people()
         .into_iter()
@@ -521,6 +544,8 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut cw_stream_decoder: Option<CwDitChannel> = None;
         let mut cw_stream_tone_hz = 0_u32;
         let mut cw_stream_wpm = 0_u8;
+        let mut cw_auto_target_candidate: Option<u32> = None;
+        let mut cw_auto_target_observations = 0_u8;
         let mut last_cw_diagnostics = Instant::now();
         let mut last_cw_status = Instant::now() - Duration::from_secs(1);
         let mut cw_recording: Option<CwRecording> = None;
@@ -708,6 +733,8 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             cw_stream_decoder = None;
                             cw_stream_tone_hz = 0;
                             cw_stream_wpm = 0;
+                            cw_auto_target_candidate = None;
+                            cw_auto_target_observations = 0;
                             ft8_slot_gate.reset();
                             ft4_slot_gate.reset();
                             digital_slot_gate.reset();
@@ -1304,6 +1331,33 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     "CW TX active; receive window reset".to_string();
                                 continue;
                             }
+                            let auto_target =
+                                state.lock().expect("ui state lock poisoned").cw_auto_target;
+                            if auto_target {
+                                let candidate = strongest_cw_tone_hz(&fft_buf, sample_rate_hz);
+                                if candidate == cw_auto_target_candidate {
+                                    cw_auto_target_observations =
+                                        cw_auto_target_observations.saturating_add(1);
+                                } else {
+                                    cw_auto_target_candidate = candidate;
+                                    cw_auto_target_observations = candidate.map_or(0, |_| 1);
+                                }
+                                if let Some(tone_hz) =
+                                    candidate.filter(|_| cw_auto_target_observations >= 3)
+                                {
+                                    let mut shared = state.lock().expect("ui state lock poisoned");
+                                    shared.selected_audio_hz = tone_hz;
+                                    shared.cw_auto_target = false;
+                                    shared.cw_auto_target_tone_hz = Some(tone_hz);
+                                    shared.digital_decode_status =
+                                        format!("CW AUTO TARGET: locked {tone_hz} Hz");
+                                    cw_auto_target_candidate = None;
+                                    cw_auto_target_observations = 0;
+                                }
+                            } else {
+                                cw_auto_target_candidate = None;
+                                cw_auto_target_observations = 0;
+                            }
                             let selected_tone_hz = state
                                 .lock()
                                 .expect("ui state lock poisoned")
@@ -1659,8 +1713,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
 
 #[cfg(test)]
 mod tests {
-    use super::{GuiState, NullAudioGenerator, WorkspaceMode};
+    use super::{strongest_cw_tone_hz, GuiState, NullAudioGenerator, WorkspaceMode};
     use qsonaut_third_party::sstv as qsonaut_sstv;
+    use rustfft::num_complex::Complex;
 
     #[test]
     fn null_audio_generator_builds_waveforms_for_supported_demo_modes() {
@@ -1764,6 +1819,15 @@ mod tests {
             receiver.take_completed_mode(),
             Some(qsonaut_sstv::SstvMode::MartinM1)
         );
+    }
+
+    #[test]
+    fn strongest_cw_tone_requires_a_prominent_audio_peak() {
+        let mut spectrum = vec![Complex::new(0.001, 0.0); 2_048];
+        assert_eq!(strongest_cw_tone_hz(&spectrum, 12_000), None);
+        spectrum[256] = Complex::new(1.0, 0.0);
+        let tone_hz = strongest_cw_tone_hz(&spectrum, 12_000).expect("CW peak");
+        assert_eq!(tone_hz, 1_500);
     }
 }
 
