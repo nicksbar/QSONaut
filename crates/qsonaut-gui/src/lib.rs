@@ -5301,16 +5301,24 @@ impl eframe::App for QsonautGuiApp {
             };
             self.handle_native_sequence(mode, &native_decodes, None);
         }
-        self.handle_ft8_decodes(&new_decodes, completed_decode_period);
-        self.ft8_log.extend(new_decodes);
-        // Keep the log bounded.
         let max_entries = self.ft8_max_log_entries.max(80);
-        if self.ft8_log.len() > max_entries {
-            let removed = self.ft8_log.len() - max_entries;
+        self.handle_ft8_decodes(&new_decodes, completed_decode_period);
+        let removed = append_ft8_log_entries(&mut self.ft8_log, &new_decodes, max_entries);
+        if removed > 0 {
             self.ft8_log.drain(..removed);
             if let Some(sel) = self.ft8_selected {
                 self.ft8_selected = sel.checked_sub(removed);
             }
+        }
+        if !new_decodes.is_empty() {
+            info!(
+                received = new_decodes.len(),
+                visible_log_entries = self.ft8_log.len(),
+                "FT8 decodes transferred to GUI log"
+            );
+        }
+        if removed > 0 {
+            debug!(removed, max_entries, "FT8 GUI log bounded");
         }
 
         let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
@@ -7019,6 +7027,17 @@ fn meter_color(id: MeterId, value: Option<u8>) -> Color32 {
     }
 }
 
+/// Append completed FT8 results to the UI-owned log and report how many old
+/// rows must be removed to enforce the configured limit.
+fn append_ft8_log_entries(
+    log: &mut Vec<Ft8DecodeEntry>,
+    decodes: &[Ft8DecodeEntry],
+    max_entries: usize,
+) -> usize {
+    log.extend_from_slice(decodes);
+    log.len().saturating_sub(max_entries)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7182,6 +7201,50 @@ mod tests {
         assert_eq!(stats.unique_stations, 2);
         assert_eq!(stats.most_heard, Some(("K1ABC".to_string(), 3)));
         assert_eq!(stats.median_snr, Some(-8));
+    }
+
+    #[test]
+    fn completed_ft8_results_are_appended_to_the_visible_log() {
+        let entry = |period, message: &str| Ft8DecodeEntry {
+            period,
+            utc: "12:00:00".to_string(),
+            snr_db: -12,
+            dt_s: 0.1,
+            freq_hz: 1_500,
+            message: message.to_string(),
+            is_cq: message.starts_with("CQ "),
+        };
+        let mut log = Vec::new();
+
+        let removed = append_ft8_log_entries(
+            &mut log,
+            &[entry(42, "CQ K1ABC FN42"), entry(42, "W1AW K1ABC -12")],
+            80,
+        );
+
+        assert_eq!(removed, 0);
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].message, "CQ K1ABC FN42");
+        assert_eq!(log[1].message, "W1AW K1ABC -12");
+    }
+
+    #[test]
+    fn completed_ft8_results_keep_the_newest_rows_when_log_is_full() {
+        let entry = |period| Ft8DecodeEntry {
+            period,
+            utc: format!("12:00:{period:02}"),
+            snr_db: -12,
+            dt_s: 0.1,
+            freq_hz: 1_500,
+            message: format!("CQ K{period}ABC FN42"),
+            is_cq: true,
+        };
+        let mut log = vec![entry(1), entry(2)];
+
+        let removed = append_ft8_log_entries(&mut log, &[entry(3)], 2);
+        log.drain(..removed);
+
+        assert_eq!(log.iter().map(|row| row.period).collect::<Vec<_>>(), [2, 3]);
     }
 
     #[test]
