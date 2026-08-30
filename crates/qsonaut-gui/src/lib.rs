@@ -2856,7 +2856,9 @@ impl QsonautGuiApp {
         self.radio_scope_view = profile.radio_scope_view;
         self.waterfall_theme = profile.waterfall_theme;
         self.radio_waterfall_theme = profile.radio_waterfall_theme;
-        self.waterfall_deck_height = profile.waterfall_deck_height.clamp(170.0, 560.0);
+        // Waterfall geometry is application-wide. Do not reload the profile's
+        // historical value when switching radio tabs; doing so makes a tab
+        // switch snap the shared deck back to that profile's default.
         if let Ok(mut tuning) = self.display_tuning.lock() {
             tuning.audio_auto_visual = profile.waterfall_auto_visual;
             tuning.audio_waterfall_speed = profile.waterfall_speed;
@@ -6625,10 +6627,10 @@ impl eframe::App for QsonautGuiApp {
             // The waterfall deck is a real user-resizable panel. Its height
             // must not track incoming rows or silently change the workspace
             // layout while a radio is running.
-            egui::TopBottomPanel::top("waterfall_deck")
+            let waterfall_panel = egui::TopBottomPanel::top("waterfall_deck")
                 .resizable(true)
-                .default_height(260.0)
-                .height_range(80.0..=ctx.content_rect().height().max(240.0) * 0.75)
+                .default_height(self.waterfall_deck_height)
+                .height_range(170.0..=ctx.content_rect().height().max(240.0) * 0.75)
                 .show_separator_line(true)
                 .show(ctx, |ui| {
                     if radio_scope_visible {
@@ -6647,6 +6649,12 @@ impl eframe::App for QsonautGuiApp {
                         self.draw_audio_waterfall(ui, ctx, &snapshot);
                     }
                 });
+            let actual_height = waterfall_panel.response.rect.height();
+            if actual_height.is_finite() && (actual_height - self.waterfall_deck_height).abs() > 0.5
+            {
+                self.waterfall_deck_height = actual_height.clamp(170.0, 560.0);
+                self.profile_dirty = true;
+            }
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
