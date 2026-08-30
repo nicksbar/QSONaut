@@ -34,5 +34,5 @@ qsonaut-log = { path = "../qsonaut-log" }
 qsonaut-radio = { package = "rigwright", version = "0.1.14" }
 qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }
 qsonaut-server-client = { path = "../qsonaut-server-client" }
-qsonaut-modems = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "f7367ef" }
-qsonaut-third-party = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "e77cfdd" }
+qsonaut-modems = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "6cc26b8" }
+qsonaut-third-party = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "e3e5167" }

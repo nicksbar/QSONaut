@@ -3448,7 +3448,7 @@ dependencies = [
 [[package]]
 name = "qsonaut-modems"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=f7367ef#f7367ef60137fe9f1cef15d574066d676068a242"
+source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=6cc26b8#6cc26b8bc2b60a897b303e1f793dc10388f0485c"
 dependencies = [
  "thiserror 2.0.20",
 ]
@@ -3479,7 +3479,7 @@ dependencies = [
 [[package]]
 name = "qsonaut-third-party"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=e77cfdd#e77cfdd65d7210cfeb840b234e8f308c30e75339"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=e3e5167#e3e51678d53b4a062aa63414f7c4038260076f52"
 dependencies = [
  "cwdit-dsp",
  "cwdit-morse",
