@@ -18,6 +18,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Switched all QSONaut WSJT-family, SSTV, and CW modem paths to the pinned
   `qsonaut-third-party`/`qsonaut-modems` extraction and removed direct
   `mfsk-core`, SSTV, and CW-DIT dependency ownership from QSONaut.
+- Added structured JSON contributor/tester identities for the About panel and
+  null-radio simulator; empty `modes` enables an identity for every mode.
+- Made null-radio exchanges deterministic and real-time paced, with fallback
+  callsigns/grids for workflow validation when repository variables are absent
+  (#83).
+- Corrected simulated SSTV sequencing and mode timing, including a complete
+  Martin M1 transmission slot, guard time, sequential image frames, and safer
+  waterfall amplitude.
+
+### Added
+- Added a CW `AUTO TARGET` control that finds a stable carrier, retunes the
+  decoder, and disarms itself after acquisition.
 
 ## [0.3.13] - 2026-08-29
 
