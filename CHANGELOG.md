@@ -7,7 +7,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
-## [0.3.14] - 2026-08-29
+## [0.3.13] - 2026-08-29
 
 ### Added
 - Added independent audio and native CI-V waterfall controls and themes,
