@@ -1,5 +1,5 @@
 use super::super::*;
-use qsonaut_modems::AudioBlock;
+use qsonaut_modems::{extract_aligned_window, AudioBlock};
 use qsonaut_third_party::wsjt::{decode as decode_wsjt, Fst4Submode, WsjtDecodeConfig, WsjtMode};
 
 const FT8_SLOT_MS: u128 = 15_000;
@@ -23,21 +23,13 @@ pub(in super::super) fn prepare_early_ft8_slot(
     captured_samples: usize,
     alignment_s: f32,
 ) -> Vec<f32> {
-    let mut slot = vec![0.0; FT8_SLOT_SAMPLES];
-    let local_boundary = rolling.len() as isize - captured_samples.min(rolling.len()) as isize;
-    let alignment_samples = (alignment_s * 12_000.0).round() as isize;
-    let requested_start = local_boundary + alignment_samples;
-    let source_start = requested_start.max(0) as usize;
-    let destination_start = requested_start.min(0).unsigned_abs().min(FT8_SLOT_SAMPLES);
-    let copy_len = rolling
-        .len()
-        .saturating_sub(source_start)
-        .min(FT8_SLOT_SAMPLES.saturating_sub(destination_start));
-    if copy_len > 0 {
-        slot[destination_start..destination_start + copy_len]
-            .copy_from_slice(&rolling[source_start..source_start + copy_len]);
-    }
-    slot
+    extract_aligned_window(
+        rolling,
+        captured_samples,
+        FT8_SLOT_SAMPLES,
+        alignment_s,
+        12_000,
+    )
 }
 
 pub(in super::super) fn prepare_early_digital_slot(
@@ -46,21 +38,7 @@ pub(in super::super) fn prepare_early_digital_slot(
     slot_samples: usize,
     alignment_s: f32,
 ) -> Vec<f32> {
-    let mut slot = vec![0.0; slot_samples];
-    let local_boundary = rolling.len() as isize - captured_samples.min(rolling.len()) as isize;
-    let alignment_samples = (alignment_s * 12_000.0).round() as isize;
-    let requested_start = local_boundary + alignment_samples;
-    let source_start = requested_start.max(0) as usize;
-    let destination_start = requested_start.min(0).unsigned_abs().min(slot_samples);
-    let copy_len = rolling
-        .len()
-        .saturating_sub(source_start)
-        .min(slot_samples.saturating_sub(destination_start));
-    if copy_len > 0 {
-        slot[destination_start..destination_start + copy_len]
-            .copy_from_slice(&rolling[source_start..source_start + copy_len]);
-    }
-    slot
+    extract_aligned_window(rolling, captured_samples, slot_samples, alignment_s, 12_000)
 }
 
 #[allow(clippy::too_many_arguments)]
