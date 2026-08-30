@@ -18,6 +18,164 @@ use std::sync::atomic::AtomicU32;
 
 type CwRecording = (WavWriter<BufWriter<File>>, BufWriter<File>, PathBuf, u64);
 
+const NULL_SIM_EXCHANGES: &[(&str, &str, &str)] = &[
+    ("CQ N7UF CN87", "N7UF W1AW -10", "W1AW N7UF R-07"),
+    ("N7UF W1AW RR73", "W1AW N7UF 73", "CQ K6ABC DM13"),
+];
+
+struct NullAudioGenerator {
+    mode: Option<WorkspaceMode>,
+    waveforms: Vec<Vec<f32>>,
+    period_s: f64,
+    start_s: f64,
+    next_deadline: Option<Instant>,
+}
+
+impl Default for NullAudioGenerator {
+    fn default() -> Self {
+        Self {
+            mode: None,
+            waveforms: Vec::new(),
+            period_s: 15.0,
+            start_s: 0.5,
+            next_deadline: None,
+        }
+    }
+}
+
+impl NullAudioGenerator {
+    fn rebuild(&mut self, mode: WorkspaceMode, state: &GuiState) {
+        self.mode = Some(mode);
+        self.period_s = mode.slot_seconds(state.fst4_submode).unwrap_or(match mode {
+            WorkspaceMode::Sstv => 60.0,
+            _ => 15.0,
+        });
+        self.start_s = if mode == WorkspaceMode::Sstv {
+            1.0
+        } else {
+            0.5
+        };
+        self.waveforms.clear();
+
+        let messages: Vec<(&str, u32)> = match mode {
+            WorkspaceMode::Sstv => vec![("SSTV", 1_500)],
+            WorkspaceMode::Cw => vec![("CQ N7UF", 700), ("N7UF W1AW", 1_500)],
+            WorkspaceMode::Wspr => vec![("N7UF CN87 30", 1_000), ("W1AW FN31 30", 2_000)],
+            _ => NULL_SIM_EXCHANGES
+                .iter()
+                .flat_map(|(first, second, third)| [*first, *second, *third])
+                .enumerate()
+                .map(|(index, message)| (message, 700 + index as u32 % 3 * 700))
+                .collect(),
+        };
+        for (message, tone_hz) in messages {
+            let mut waveform = Vec::new();
+            let pcm = match mode {
+                WorkspaceMode::Ft8 => build_ft8_tx_pcm(message, tone_hz),
+                WorkspaceMode::Ft4
+                | WorkspaceMode::Fst4
+                | WorkspaceMode::Jt9
+                | WorkspaceMode::Jt65
+                | WorkspaceMode::Q65
+                | WorkspaceMode::Wspr => build_native_digital_tx_pcm(
+                    mode,
+                    message,
+                    tone_hz,
+                    state.fst4_submode,
+                    state.cw_wpm,
+                    state.selected_audio_hz as u16,
+                )
+                .map(|(pcm, _)| pcm),
+                WorkspaceMode::Cw => build_native_digital_tx_pcm(
+                    mode,
+                    message,
+                    tone_hz,
+                    state.fst4_submode,
+                    state.cw_wpm,
+                    tone_hz as u16,
+                )
+                .map(|(pcm, _)| pcm),
+                WorkspaceMode::Sstv => {
+                    let width = 320_usize;
+                    let height = 256_usize;
+                    let mut rgb = vec![0_u8; width * height * 3];
+                    for y in 0..height {
+                        for x in 0..width {
+                            let offset = (y * width + x) * 3;
+                            rgb[offset] = (x % 256) as u8;
+                            rgb[offset + 1] = (y % 256) as u8;
+                            rgb[offset + 2] = ((x + y) % 256) as u8;
+                        }
+                    }
+                    qsonaut_sstv::encode_rgb_mode_12k(
+                        qsonaut_sstv::SstvMode::MartinM1,
+                        width as u32,
+                        height as u32,
+                        &rgb,
+                    )
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))
+                }
+                _ => Err(anyhow::anyhow!("unsupported null audio mode")),
+            };
+            let Ok(pcm) = pcm else { continue };
+            if waveform.len() < pcm.len() {
+                waveform.resize(pcm.len(), 0.0);
+            }
+            for (target, sample) in waveform.iter_mut().zip(pcm) {
+                *target += sample as f32 / i16::MAX as f32
+                    * if mode == WorkspaceMode::Sstv {
+                        0.12
+                    } else {
+                        0.16
+                    };
+            }
+            self.waveforms.push(waveform);
+        }
+    }
+
+    fn read_chunk(&mut self, sample_count: usize, state: &Arc<Mutex<GuiState>>) -> Vec<f32> {
+        // A real CPAL stream blocks until the requested audio exists. Without
+        // the same pacing, the worker can consume the null source thousands
+        // of times faster than real time, making the waterfall race and
+        // over-driving the monitor output.
+        let chunk_duration =
+            Duration::from_secs_f64(sample_count as f64 / f64::from(CANONICAL_SAMPLE_RATE_HZ));
+        let now = Instant::now();
+        let deadline = self.next_deadline.get_or_insert(now);
+        if *deadline > now {
+            std::thread::sleep(*deadline - now);
+        }
+        let started = Instant::now();
+        self.next_deadline = Some(started + chunk_duration);
+        let snapshot = state.lock().expect("ui state lock poisoned").clone();
+        if self.mode != Some(snapshot.workspace_mode) {
+            self.rebuild(snapshot.workspace_mode, &snapshot);
+        }
+        let now_s = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64())
+            .unwrap_or_default();
+        let phase_s = now_s.rem_euclid(self.period_s);
+        let cycle = (now_s / self.period_s).floor() as usize;
+        let waveform = self
+            .waveforms
+            .get(cycle % self.waveforms.len().max(1))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        (0..sample_count)
+            .map(|offset| {
+                let sample_phase = phase_s + offset as f64 / f64::from(CANONICAL_SAMPLE_RATE_HZ);
+                let waveform_index = ((sample_phase - self.start_s) * 12_000.0).round() as isize;
+                if waveform_index < 0 || waveform_index as usize >= waveform.len() {
+                    0.0
+                } else {
+                    waveform[waveform_index as usize]
+                }
+            })
+            .collect()
+    }
+}
+
 fn save_received_sstv_image(
     image: &qsonaut_sstv::DecodedImage,
     mode: Option<qsonaut_sstv::SstvMode>,
@@ -129,40 +287,65 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 "Normalizing configured audio processing format"
             );
         }
+        let null_audio = preferred_device.as_deref() == Some(NULL_INPUT_DEVICE);
+        let mut null_generator = null_audio.then(NullAudioGenerator::default);
         let audio_service = AudioService::new(preferred_device, true);
-        let mut stream = match audio_service.open_stream(sample_rate_hz, CANONICAL_CHANNELS) {
-            Ok(stream) => stream,
-            Err(err) => {
-                tracing::error!(sample_rate_hz, channels = CANONICAL_CHANNELS, error = %err, "Audio input stream failed to open");
-                let mut s = state.lock().expect("ui state lock poisoned");
-                s.audio_spectrum_status = format!("NO INPUT ({err})");
-                return;
+        let mut stream = if null_audio {
+            None
+        } else {
+            match audio_service.open_stream(sample_rate_hz, CANONICAL_CHANNELS) {
+                Ok(stream) => Some(stream),
+                Err(err) => {
+                    tracing::error!(sample_rate_hz, channels = CANONICAL_CHANNELS, error = %err, "Audio input stream failed to open");
+                    let mut s = state.lock().expect("ui state lock poisoned");
+                    s.audio_spectrum_status = format!("NO INPUT ({err})");
+                    return;
+                }
             }
         };
-        let device_sample_rate_hz = stream.device_sample_rate_hz();
-        let device_channels = stream.device_channels();
-        let device_sample_format = format!("{:?}", stream.device_sample_format());
-        let resampling_input = device_sample_rate_hz != stream.output_sample_rate_hz();
+        let device_sample_rate_hz = stream
+            .as_ref()
+            .map(|stream| stream.device_sample_rate_hz())
+            .unwrap_or(sample_rate_hz);
+        let device_channels = stream
+            .as_ref()
+            .map(|stream| stream.device_channels())
+            .unwrap_or(CANONICAL_CHANNELS);
+        let device_sample_format = stream
+            .as_ref()
+            .map(|stream| format!("{:?}", stream.device_sample_format()))
+            .unwrap_or_else(|| "F32 (simulated)".to_string());
+        let resampling_input = !null_audio
+            && stream
+                .as_ref()
+                .is_some_and(|stream| device_sample_rate_hz != stream.output_sample_rate_hz());
         info!(
             canonical_sample_rate_hz = sample_rate_hz,
             device_sample_rate_hz,
-            device_channels = stream.device_channels(),
-            device_sample_format = ?stream.device_sample_format(),
+            device_channels,
+            device_sample_format = %device_sample_format,
             resampling_input,
+            null_audio,
             monitor_enabled,
             "Audio input worker started"
         );
-        for attempt in stream.fallback_attempts() {
-            warn!(attempt, "Audio input configuration fallback");
+        if let Some(stream) = &stream {
+            for attempt in stream.fallback_attempts() {
+                warn!(attempt, "Audio input configuration fallback");
+            }
         }
         {
             let mut shared = state.lock().expect("ui state lock poisoned");
             shared.audio_device_sample_rate_hz = Some(device_sample_rate_hz);
             shared.audio_device_channels = Some(device_channels);
             shared.audio_device_sample_format = Some(device_sample_format);
-            shared.audio_input_fallback_attempts = stream.fallback_attempts().to_vec();
+            shared.audio_input_fallback_attempts = stream
+                .as_ref()
+                .map(|stream| stream.fallback_attempts().to_vec())
+                .unwrap_or_default();
         }
-        let (monitor, monitor_status) = if monitor_enabled {
+        let null_output = monitor_output_device.as_deref() == Some(NULL_OUTPUT_DEVICE);
+        let (monitor, monitor_status) = if monitor_enabled && !null_output {
             match qsonaut_audio::AudioMonitor::open(
                 sample_rate_hz,
                 monitor_output_device.as_deref(),
@@ -185,6 +368,8 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                     (None, message)
                 }
             }
+        } else if null_output {
+            (None, " · NULL OUTPUT".to_string())
         } else {
             (None, String::new())
         };
@@ -274,7 +459,16 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 let interval_ms = effective_visual_profile(&t, &mode, false).0;
                 ((sample_rate_hz as u64 * interval_ms / 1_000) as usize).max(256)
             };
-            match stream.read_frames_f32_until_stopped(chunk_samples, &stop) {
+            match if let Some(stream) = stream.as_mut() {
+                stream.read_frames_f32_until_stopped(chunk_samples, &stop)
+            } else {
+                Ok(Some(
+                    null_generator
+                        .as_mut()
+                        .expect("null audio generator initialized")
+                        .read_chunk(chunk_samples, &state),
+                ))
+            } {
                 Ok(Some(samples)) => {
                     if last_audio_read_error.take().is_some() {
                         info!("Audio input stream recovered");
@@ -380,7 +574,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 .as_deref()
                                 .map(|error| format!("LIVE RX · MONITOR ERROR ({error})"))
                                 .unwrap_or_else(|| {
-                                    if resampling_input {
+                                    if null_audio {
+                                        "SIMULATED RX · NULL SOUND CARD".to_string()
+                                    } else if resampling_input {
                                         format!(
                                             "LIVE RX · RESAMPLED {} → {} Hz{monitor_status}{monitor_clock_status}",
                                             device_sample_rate_hz, sample_rate_hz
@@ -1353,6 +1549,60 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GuiState, NullAudioGenerator, WorkspaceMode};
+
+    #[test]
+    fn null_audio_generator_builds_waveforms_for_supported_demo_modes() {
+        for mode in [
+            WorkspaceMode::Ft8,
+            WorkspaceMode::Ft4,
+            WorkspaceMode::Cw,
+            WorkspaceMode::Sstv,
+        ] {
+            let state = GuiState {
+                workspace_mode: mode,
+                ..GuiState::default()
+            };
+            let mut generator = NullAudioGenerator::default();
+            generator.rebuild(mode, &state);
+            assert!(
+                !generator.waveforms.is_empty(),
+                "null source did not encode {mode:?}"
+            );
+            assert!(
+                generator
+                    .waveforms
+                    .iter()
+                    .flat_map(|waveform| waveform.iter())
+                    .any(|sample| *sample != 0.0),
+                "null source encoded an empty {mode:?} waveform"
+            );
+        }
+    }
+
+    #[test]
+    fn null_audio_generator_uses_mode_slots_and_cycles_exchange_frames() {
+        let state = GuiState {
+            workspace_mode: WorkspaceMode::Ft8,
+            ..GuiState::default()
+        };
+        let mut generator = NullAudioGenerator::default();
+        generator.rebuild(WorkspaceMode::Ft8, &state);
+        assert_eq!(generator.waveforms.len(), 6);
+        assert_eq!(generator.period_s, 15.0);
+
+        let state = GuiState {
+            workspace_mode: WorkspaceMode::Fst4,
+            ..GuiState::default()
+        };
+        generator.rebuild(WorkspaceMode::Fst4, &state);
+        assert_eq!(generator.period_s, 60.0);
+        assert_eq!(generator.waveforms.len(), 6);
+    }
 }
 
 fn snapshot_recording_frequency(state: &Arc<Mutex<GuiState>>) -> Option<u64> {

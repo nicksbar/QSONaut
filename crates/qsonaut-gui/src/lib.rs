@@ -22,7 +22,7 @@ use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOp
 use qsonaut_accelerate::{
     AccelerationReport, ActiveBackend, ComputePreference, DecodeTelemetry, DecodeTrace,
 };
-use qsonaut_audio::{play_pcm_blocking, AudioService};
+use qsonaut_audio::{play_pcm_blocking, AudioService, NULL_INPUT_DEVICE, NULL_OUTPUT_DEVICE};
 use qsonaut_automation::{
     Action, AutomationEvent, AutomationHost, Capability, CapabilitySet, EventKind,
     ExternalSourceConfig, RuleComponent, RuleComponentConfig,
@@ -82,6 +82,22 @@ fn qsonaut_testers() -> &'static str {
     match option_env!("QSONAUT_TESTERS") {
         Some(value) if !value.trim().is_empty() => value,
         _ => "None listed",
+    }
+}
+
+fn effective_audio_input_device(backend: &str, input: Option<String>) -> Option<String> {
+    if matches!(backend.to_ascii_lowercase().as_str(), "null" | "mock") {
+        Some(NULL_INPUT_DEVICE.to_string())
+    } else {
+        input
+    }
+}
+
+fn effective_audio_output_device(backend: &str, output: Option<String>) -> Option<String> {
+    if matches!(backend.to_ascii_lowercase().as_str(), "null" | "mock") {
+        Some(NULL_OUTPUT_DEVICE.to_string())
+    } else {
+        output
     }
 }
 
@@ -1423,8 +1439,12 @@ fn spawn_device_scan() -> mpsc::Receiver<DeviceInventory> {
         let (serial_ports, serial_port_labels, detected_models) =
             radio_port_inventory(enumerate_serial_port_descriptors().unwrap_or_default());
         let inventory = DeviceInventory {
-            audio_inputs: AudioService::input_devices().unwrap_or_default(),
-            audio_outputs: AudioService::output_devices().unwrap_or_default(),
+            audio_inputs: std::iter::once(NULL_INPUT_DEVICE.to_string())
+                .chain(AudioService::input_devices().unwrap_or_default())
+                .collect(),
+            audio_outputs: std::iter::once(NULL_OUTPUT_DEVICE.to_string())
+                .chain(AudioService::output_devices().unwrap_or_default())
+                .collect(),
             serial_ports,
             serial_port_labels,
             detected_models,
@@ -2085,12 +2105,18 @@ impl QsonautGuiApp {
                 session_audio_config.enabled,
                 session_audio_config.sample_rate_hz,
                 session_audio_config.channels,
-                session_audio_config.input_device.clone(),
+                effective_audio_input_device(
+                    &session_config.backend,
+                    session_audio_config.input_device.clone(),
+                ),
                 session_audio_config.monitor_enabled,
-                session_audio_config
-                    .monitor_output_device
-                    .clone()
-                    .or_else(|| session_audio_config.output_device.clone()),
+                effective_audio_output_device(
+                    &session_config.backend,
+                    session_audio_config
+                        .monitor_output_device
+                        .clone()
+                        .or_else(|| session_audio_config.output_device.clone()),
+                ),
                 session_monitor_volume.clone(),
                 repaint_ctx.clone(),
                 session_display_tuning.clone(),
@@ -2138,13 +2164,16 @@ impl QsonautGuiApp {
             config.audio.enabled,
             config.audio.sample_rate_hz,
             config.audio.channels,
-            config.audio.input_device.clone(),
+            effective_audio_input_device(&config.radio.backend, config.audio.input_device.clone()),
             config.audio.monitor_enabled,
-            config
-                .audio
-                .monitor_output_device
-                .clone()
-                .or_else(|| config.audio.output_device.clone()),
+            effective_audio_output_device(
+                &config.radio.backend,
+                config
+                    .audio
+                    .monitor_output_device
+                    .clone()
+                    .or_else(|| config.audio.output_device.clone()),
+            ),
             monitor_volume.clone(),
             repaint_ctx.clone(),
             display_tuning.clone(),
@@ -3395,13 +3424,19 @@ impl QsonautGuiApp {
                     true,
                     session.audio_config.sample_rate_hz,
                     session.audio_config.channels,
-                    session.audio_config.input_device.clone(),
+                    effective_audio_input_device(
+                        &session.config.backend,
+                        session.audio_config.input_device.clone(),
+                    ),
                     session.audio_config.monitor_enabled,
-                    session
-                        .audio_config
-                        .monitor_output_device
-                        .clone()
-                        .or_else(|| session.audio_config.output_device.clone()),
+                    effective_audio_output_device(
+                        &session.config.backend,
+                        session
+                            .audio_config
+                            .monitor_output_device
+                            .clone()
+                            .or_else(|| session.audio_config.output_device.clone()),
+                    ),
                     session.monitor_volume.clone(),
                     self.repaint_ctx.clone(),
                     session.display_tuning.clone(),
@@ -3498,13 +3533,19 @@ impl QsonautGuiApp {
                 self.config.audio.enabled,
                 self.config.audio.sample_rate_hz,
                 self.config.audio.channels,
-                self.config.audio.input_device.clone(),
+                effective_audio_input_device(
+                    &self.config.radio.backend,
+                    self.config.audio.input_device.clone(),
+                ),
                 self.config.audio.monitor_enabled,
-                self.config
-                    .audio
-                    .monitor_output_device
-                    .clone()
-                    .or_else(|| self.config.audio.output_device.clone()),
+                effective_audio_output_device(
+                    &self.config.radio.backend,
+                    self.config
+                        .audio
+                        .monitor_output_device
+                        .clone()
+                        .or_else(|| self.config.audio.output_device.clone()),
+                ),
                 self.monitor_volume.clone(),
                 self.repaint_ctx.clone(),
                 self.display_tuning.clone(),
@@ -7467,6 +7508,23 @@ mod tests {
         );
         assert!(native_radio_profile("rigctld", "IC-7300").is_none());
         assert!(native_radio_profile("null", "IC-7300").is_none());
+    }
+
+    #[test]
+    fn null_profiles_always_use_virtual_audio_devices() {
+        assert_eq!(
+            effective_audio_input_device("null", Some("Physical microphone".to_string())),
+            Some(NULL_INPUT_DEVICE.to_string())
+        );
+        assert_eq!(
+            effective_audio_output_device("mock", Some("Physical speakers".to_string())),
+            Some(NULL_OUTPUT_DEVICE.to_string())
+        );
+        assert_eq!(
+            effective_audio_input_device("native", Some("Physical microphone".to_string())),
+            Some("Physical microphone".to_string())
+        );
+        assert_eq!(effective_audio_output_device("native", None), None);
     }
 
     #[test]

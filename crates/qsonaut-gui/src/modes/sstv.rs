@@ -1461,7 +1461,10 @@ impl QsonautGuiApp {
                     pcm: Arc::new(pcm),
                     ptt_lead: Duration::from_millis(self.ptt_lead_ms),
                     ptt_tail: Duration::from_millis(self.ptt_tail_ms),
-                    output_device: self.config.audio.output_device.clone(),
+                    output_device: effective_audio_output_device(
+                        &self.config.radio.backend,
+                        self.config.audio.output_device.clone(),
+                    ),
                     abort: self.digital_tx_abort.clone(),
                     active: self.digital_tx_active.clone(),
                     command_tx,
