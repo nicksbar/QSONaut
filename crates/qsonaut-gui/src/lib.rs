@@ -3044,7 +3044,7 @@ impl QsonautGuiApp {
             .unwrap_or_else(|| format!("📻 {}", selected_activity.label()));
         let previous_interact_height = ui.spacing().interact_size.y;
         ui.spacing_mut().interact_size.y = 28.0;
-        ui.menu_button(
+        let activity_menu = ui.menu_button(
             RichText::new(activity_button_label)
                 .strong()
                 .color(Color32::from_rgb(255, 190, 105)),
@@ -3196,6 +3196,9 @@ impl QsonautGuiApp {
                 );
             },
         );
+        activity_menu
+            .response
+            .on_hover_text("Choose the operating activity and any active server event");
         ui.spacing_mut().interact_size.y = previous_interact_height;
     }
 
@@ -3208,7 +3211,9 @@ impl QsonautGuiApp {
             .corner_radius(8.0)
             .rotate(spin_angle, egui::Vec2::splat(0.5))
             .sense(egui::Sense::click());
-        let logo_response = ui.add(logo);
+        let logo_response = ui
+            .add(logo)
+            .on_hover_text("QSONaut mission control — click for the application animation");
         if logo_response.clicked() {
             self.handle_logo_click();
         }
@@ -5082,20 +5087,32 @@ impl QsonautGuiApp {
                 ui.spacing_mut().item_spacing.x = 7.0;
                 ui.spacing_mut().button_padding.x = 4.0;
                 ui.label(RichText::new("Radio").strong());
-                if ui.small_button("-1 kHz").clicked() {
+                if ui
+                    .small_button("-1 kHz")
+                    .on_hover_text("Tune the radio down by 1 kHz")
+                    .clicked()
+                {
                     self.send_command(GuiCommand::TuneDelta(-1_000));
                 }
-                if ui.small_button("+1 kHz").clicked() {
+                if ui
+                    .small_button("+1 kHz")
+                    .on_hover_text("Tune the radio up by 1 kHz")
+                    .clicked()
+                {
                     self.send_command(GuiCommand::TuneDelta(1_000));
                 }
                 if ui
                     .add_enabled(supports_levels, egui::Button::new("AF-").small())
+                    .on_disabled_hover_text("Audio receive gain is not supported by this radio")
+                    .on_hover_text("Decrease audio receive gain")
                     .clicked()
                 {
                     self.send_command(GuiCommand::AfGainDelta(-5));
                 }
                 if ui
                     .add_enabled(supports_levels, egui::Button::new("AF+").small())
+                    .on_disabled_hover_text("Audio receive gain is not supported by this radio")
+                    .on_hover_text("Increase audio receive gain")
                     .clicked()
                 {
                     self.send_command(GuiCommand::AfGainDelta(5));
@@ -5104,13 +5121,15 @@ impl QsonautGuiApp {
             ui.separator();
             ui.label(RichText::new("Op mode").strong());
             for mode in HF_WORKSPACE_MODES {
-                let response = ui.add(
-                    egui::Button::selectable(
-                        self.workspace_mode == mode,
-                        RichText::new(mode.label()).size(12.0),
+                let response = ui
+                    .add(
+                        egui::Button::selectable(
+                            self.workspace_mode == mode,
+                            RichText::new(mode.label()).size(12.0),
+                        )
+                        .small(),
                     )
-                    .small(),
-                );
+                    .on_hover_text(format!("Switch workspace to {}", mode.label()));
                 if response.clicked() {
                     self.workspace_mode = mode;
                     self.profile_dirty = true;
@@ -5124,14 +5143,23 @@ impl QsonautGuiApp {
             }
             for mode in OTHER_WORKSPACE_MODES {
                 let enabled = !mode.is_uhf();
-                let response = ui.add_enabled(
-                    enabled,
-                    egui::Button::selectable(
-                        self.workspace_mode == mode,
-                        RichText::new(mode.label()).size(12.0),
+                let response = ui
+                    .add_enabled(
+                        enabled,
+                        egui::Button::selectable(
+                            self.workspace_mode == mode,
+                            RichText::new(mode.label()).size(12.0),
+                        )
+                        .small(),
                     )
-                    .small(),
-                );
+                    .on_hover_text(if enabled {
+                        format!("Switch workspace to {}", mode.label())
+                    } else {
+                        format!(
+                            "{} is disabled without a configured UHF radio",
+                            mode.label()
+                        )
+                    });
                 if response.clicked() && enabled {
                     self.workspace_mode = mode;
                     self.profile_dirty = true;
@@ -5141,9 +5169,6 @@ impl QsonautGuiApp {
                     {
                         self.send_command(GuiCommand::ApplyWorkspace { mode, frequency_hz });
                     }
-                }
-                if !enabled {
-                    response.on_hover_text("Disabled: no UHF radio is configured for this station");
                 }
             }
         });
@@ -5915,6 +5940,11 @@ impl eframe::App for QsonautGuiApp {
                                         radio_ready && !snapshot.swr_sweep_active,
                                         egui::Button::new(if enabled { "Disable" } else { "Enable" }),
                                     )
+                                    .on_hover_text(if enabled {
+                                        "Disable the radio's antenna tuner"
+                                    } else {
+                                        "Enable the radio's antenna tuner"
+                                    })
                                     .clicked()
                                 {
                                     self.send_command(GuiCommand::SetControl(
@@ -6237,7 +6267,9 @@ impl eframe::App for QsonautGuiApp {
                                     ui.close();
                                 }
                             }
-                        });
+                        })
+                        .response
+                        .on_hover_text("Select the automatic gain-control level");
                     }
                     if !snapshot.supported_meters.is_empty() {
                         ui.menu_button(RichText::new("MTR").color(Color32::LIGHT_BLUE), |ui| {
@@ -6296,7 +6328,9 @@ impl eframe::App for QsonautGuiApp {
                                     ui.close();
                                 }
                             }
-                        });
+                        })
+                        .response
+                        .on_hover_text("Select the radio preamplifier level");
                     }
                     if supports_control(ControlId::Attenuator) {
                         let attenuator_values: &[u8] = match self.config.radio.model.as_str() {
@@ -6325,7 +6359,9 @@ impl eframe::App for QsonautGuiApp {
                                     ui.close();
                                 }
                             }
-                        });
+                        })
+                        .response
+                        .on_hover_text("Select the radio input attenuator level");
                     }
                     ui.separator();
                     self.draw_waterfall_buttons(ui, &snapshot);
