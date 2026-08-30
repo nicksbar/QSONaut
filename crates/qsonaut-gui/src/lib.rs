@@ -4536,14 +4536,29 @@ impl QsonautGuiApp {
                                                 RichText::new(meter_label(id)).monospace().strong(),
                                             )
                                             .on_hover_text(meter_tooltip(id));
+                                            let reading = meter_reading(id, value);
+                                            let reading_width = 88.0;
                                             ui.add(
                                                 egui::ProgressBar::new(
                                                     value.map(meter_percent).unwrap_or_default(),
                                                 )
-                                                .desired_width(ui.available_width().max(100.0))
+                                                .desired_width(
+                                                    (ui.available_width() - reading_width)
+                                                        .max(80.0),
+                                                )
                                                 .desired_height(14.0)
-                                                .fill(meter_color(id, value))
-                                                .text(meter_reading(id, value)),
+                                                .fill(meter_color(id, value)),
+                                            );
+                                            ui.allocate_ui_with_layout(
+                                                egui::vec2(reading_width, 14.0),
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    ui.label(
+                                                        RichText::new(reading)
+                                                            .monospace()
+                                                            .color(Color32::WHITE),
+                                                    );
+                                                },
                                             );
                                         });
                                     }
@@ -7080,6 +7095,14 @@ fn draw_primary_meter(
         painter.rect_filled(segment, egui::CornerRadius::same(2), fill);
     }
     if !label.is_empty() {
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 4.0, rect.top() + 2.0),
+                egui::pos2(rect.left() + 57.0, rect.bottom() - 2.0),
+            ),
+            egui::CornerRadius::same(3),
+            Color32::from_rgba_unmultiplied(10, 20, 29, 225),
+        );
         painter.text(
             egui::pos2(rect.left() + 8.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
@@ -7088,6 +7111,14 @@ fn draw_primary_meter(
             Color32::WHITE,
         );
     }
+    painter.rect_filled(
+        egui::Rect::from_min_max(
+            egui::pos2(rect.right() - 143.0, rect.top() + 2.0),
+            egui::pos2(rect.right() - 4.0, rect.bottom() - 2.0),
+        ),
+        egui::CornerRadius::same(3),
+        Color32::from_rgba_unmultiplied(10, 20, 29, 225),
+    );
     painter.text(
         egui::pos2(rect.right() - 8.0, rect.center().y),
         egui::Align2::RIGHT_CENTER,
