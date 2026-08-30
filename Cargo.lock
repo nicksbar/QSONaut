@@ -3414,7 +3414,7 @@ dependencies = [
  "qsonaut-automation",
  "qsonaut-core",
  "qsonaut-log",
- "qsonaut-modems 0.1.0 (git+https://github.com/nicksbar/qsonaut-modems.git?rev=f7367ef)",
+ "qsonaut-modems",
  "qsonaut-pskreporter",
  "qsonaut-server-client",
  "qsonaut-third-party",
@@ -3443,14 +3443,6 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "qsonaut-modems"
-version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=015d5a5#015d5a517837d2d150d3a3749c1fb37ad228bccc"
-dependencies = [
- "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -3487,14 +3479,14 @@ dependencies = [
 [[package]]
 name = "qsonaut-third-party"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=2c530af#2c530af0a0a30cafbd9887913e3357ab8efd5e3f"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=e77cfdd#e77cfdd65d7210cfeb840b234e8f308c30e75339"
 dependencies = [
  "cwdit-dsp",
  "cwdit-morse",
  "image",
  "komitoto-sstv",
  "mfsk-core",
- "qsonaut-modems 0.1.0 (git+https://github.com/nicksbar/qsonaut-modems.git?rev=015d5a5)",
+ "qsonaut-modems",
  "thiserror 2.0.20",
 ]
 
