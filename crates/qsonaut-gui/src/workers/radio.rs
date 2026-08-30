@@ -69,10 +69,12 @@ impl MeterPollScheduler {
         }
         if transmitting && now >= self.next_tx {
             self.next_tx = now + RADIO_TX_METER_INTERVAL;
-            let meter = match self.tx_index % 4 {
+            let meter = match self.tx_index % 6 {
                 0 => ScheduledMeter::Power,
                 1 => ScheduledMeter::Swr,
-                2 => ScheduledMeter::Alc,
+                2 => ScheduledMeter::Power,
+                3 => ScheduledMeter::Alc,
+                4 => ScheduledMeter::Power,
                 _ => ScheduledMeter::Compression,
             };
             self.tx_index = self.tx_index.wrapping_add(1);
@@ -177,6 +179,11 @@ pub(crate) fn spawn_radio_worker(
                 .copied()
                 .filter(|id| radio.supports_meter(*id))
                 .collect();
+            info!(
+                supported_meters = ?s.supported_meters,
+                temperature_supported = radio.supports_meter(MeterId::Temperature),
+                "Radio meter capabilities initialized"
+            );
         }
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1527,10 +1534,13 @@ fn poll_scheduled_icom_meter(
         return;
     }
     let started = Instant::now();
-    let value = rt
-        .block_on(radio.get_meter_with_timeout(id, RADIO_METER_RESPONSE_TIMEOUT))
-        .ok()
-        .flatten();
+    let value = match rt.block_on(radio.get_meter_with_timeout(id, RADIO_METER_RESPONSE_TIMEOUT)) {
+        Ok(value) => value,
+        Err(error) => {
+            debug!(meter = ?id, error = %error, "Scheduled CI-V meter read failed");
+            None
+        }
+    };
     let elapsed = started.elapsed();
     if elapsed >= Duration::from_millis(100) {
         debug!(meter = ?id, elapsed_ms = elapsed.as_millis(), "Slow scheduled CI-V meter read");
@@ -1544,7 +1554,10 @@ fn poll_scheduled_icom_meter(
             MeterId::Swr => s.swr = Some(value),
             MeterId::Compression => s.compression_meter = Some(value),
             MeterId::Current => s.current_meter = Some(value),
-            MeterId::Voltage => s.voltage_meter = Some(value),
+            MeterId::Voltage => {
+                s.voltage_meter = Some(value);
+                record_voltage_sample(&mut s.voltage_history, value);
+            }
             MeterId::Temperature => s.temperature_meter = Some(value),
         }
     }
@@ -1696,7 +1709,10 @@ fn poll_radio_level_state(
                 MeterId::Alc => s.alc_meter = Some(value),
                 MeterId::Compression => s.compression_meter = Some(value),
                 MeterId::Current => s.current_meter = Some(value),
-                MeterId::Voltage => s.voltage_meter = Some(value),
+                MeterId::Voltage => {
+                    s.voltage_meter = Some(value);
+                    record_voltage_sample(&mut s.voltage_history, value);
+                }
                 MeterId::Temperature => s.temperature_meter = Some(value),
             }
         }

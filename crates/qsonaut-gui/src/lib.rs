@@ -985,6 +985,7 @@ struct GuiState {
     compression_meter: Option<u8>,
     current_meter: Option<u8>,
     voltage_meter: Option<u8>,
+    voltage_history: VecDeque<u8>,
     temperature_meter: Option<u8>,
     supported_controls: HashSet<ControlId>,
     supported_meters: HashSet<MeterId>,
@@ -1099,6 +1100,7 @@ impl Default for GuiState {
             compression_meter: None,
             current_meter: None,
             voltage_meter: None,
+            voltage_history: VecDeque::with_capacity(VOLTAGE_HISTORY_CAPACITY),
             temperature_meter: None,
             supported_controls: HashSet::new(),
             supported_meters: HashSet::new(),
@@ -4462,6 +4464,7 @@ impl QsonautGuiApp {
         let primary_value = meter_value(snapshot, primary_id);
         let primary_label = if snapshot.ptt_on { "POWER" } else { "" };
         let primary_reading = meter_reading(primary_id, primary_value);
+        let radio_model = self.config.radio.model.as_str();
         let (primary_rect, primary_response) =
             ui.allocate_exact_size(egui::vec2(280.0, 24.0), egui::Sense::click());
         draw_primary_meter(
@@ -4487,11 +4490,10 @@ impl QsonautGuiApp {
                     egui::Frame::group(ui.style())
                         .fill(Color32::from_rgba_unmultiplied(18, 30, 42, 245))
                         .show(ui, |ui| {
-                            let phase = if snapshot.ptt_on { "TX" } else { "RX" };
                             ui.horizontal(|ui| {
                                 ui.label(
                                     RichText::new(format!(
-                                        "{phase} METER DRAWER · {}",
+                                        "TX / PA METERS · {}",
                                         radio_mode_label(&snapshot.mode, snapshot.data_mode)
                                     ))
                                     .strong()
@@ -4510,59 +4512,82 @@ impl QsonautGuiApp {
                                 }
                             });
                             ui.separator();
-                            egui::ScrollArea::vertical()
-                                .max_height(280.0)
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    if snapshot.ptt_on
-                                        && snapshot.supported_controls.contains(&ControlId::RfPower)
-                                    {
-                                        ui.horizontal(|ui| {
-                                            ui.label(RichText::new("TX SET").monospace().strong())
-                                                .on_hover_text(
-                                                "Configured RF transmit power, not measured output",
-                                            );
-                                            let value = snapshot.rf_power;
-                                            ui.label(meter_reading(MeterId::Power, value));
-                                        });
-                                    }
-                                    for id in mode_meter_order(snapshot.ptt_on) {
-                                        if !snapshot.supported_meters.contains(&id) {
-                                            continue;
-                                        }
-                                        let value = meter_value(snapshot, id);
-                                        ui.horizontal(|ui| {
-                                            ui.label(
-                                                RichText::new(meter_label(id)).monospace().strong(),
-                                            )
-                                            .on_hover_text(meter_tooltip(id));
-                                            let reading = meter_reading(id, value);
-                                            let reading_width = 88.0;
-                                            ui.add(
-                                                egui::ProgressBar::new(
-                                                    value.map(meter_percent).unwrap_or_default(),
-                                                )
-                                                .desired_width(
-                                                    (ui.available_width() - reading_width)
-                                                        .max(80.0),
-                                                )
-                                                .desired_height(14.0)
-                                                .fill(meter_color(id, value)),
-                                            );
-                                            ui.allocate_ui_with_layout(
-                                                egui::vec2(reading_width, 14.0),
-                                                egui::Layout::right_to_left(egui::Align::Center),
-                                                |ui| {
-                                                    ui.label(
-                                                        RichText::new(reading)
-                                                            .monospace()
-                                                            .color(Color32::WHITE),
-                                                    );
-                                                },
-                                            );
-                                        });
-                                    }
+                            if snapshot.ptt_on
+                                && snapshot.supported_controls.contains(&ControlId::RfPower)
+                            {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("TX SET").monospace().strong())
+                                        .on_hover_text(
+                                            "Configured RF transmit power, not measured output",
+                                        );
+                                    let value = snapshot.rf_power;
+                                    ui.label(meter_reading(MeterId::Power, value));
                                 });
+                            }
+                            for id in mode_meter_order(snapshot.ptt_on) {
+                                if id == MeterId::Signal {
+                                    continue;
+                                }
+                                if !snapshot.supported_meters.contains(&id) {
+                                    continue;
+                                }
+                                let value = meter_value(snapshot, id);
+                                ui.horizontal(|ui| {
+                                    let reading = meter_reading_for_model(id, value, radio_model);
+                                    let label_height =
+                                        if id == MeterId::Voltage { 28.0 } else { 18.0 };
+                                    let label_color = if id == MeterId::Current && snapshot.ptt_on {
+                                        Color32::from_rgb(150, 255, 225)
+                                    } else {
+                                        Color32::WHITE
+                                    };
+                                    ui.add_sized(
+                                        egui::vec2(METER_LABEL_WIDTH, label_height),
+                                        egui::Label::new(
+                                            RichText::new(meter_label(id))
+                                                .monospace()
+                                                .strong()
+                                                .color(label_color),
+                                        ),
+                                    )
+                                    .on_hover_text(meter_tooltip(id));
+                                    if id == MeterId::Voltage {
+                                        draw_voltage_graph(ui, &snapshot.voltage_history, &reading);
+                                        return;
+                                    }
+                                    let meter_response = ui.add(
+                                        egui::ProgressBar::new(
+                                            value.map(meter_percent).unwrap_or_default(),
+                                        )
+                                        .desired_width(ui.available_width().max(100.0))
+                                        .desired_height(14.0)
+                                        .fill(meter_color_for_context(id, value, snapshot.ptt_on)),
+                                    );
+                                    let reading_width = 136.0;
+                                    let reading_rect = egui::Rect::from_min_max(
+                                        egui::pos2(
+                                            meter_response.rect.right() - reading_width,
+                                            meter_response.rect.top() + 1.0,
+                                        ),
+                                        egui::pos2(
+                                            meter_response.rect.right() - 3.0,
+                                            meter_response.rect.bottom() - 1.0,
+                                        ),
+                                    );
+                                    ui.painter().rect_filled(
+                                        reading_rect,
+                                        egui::CornerRadius::same(3),
+                                        Color32::from_rgba_unmultiplied(10, 20, 29, 225),
+                                    );
+                                    ui.painter().text(
+                                        reading_rect.right_center() - egui::vec2(5.0, 0.0),
+                                        egui::Align2::RIGHT_CENTER,
+                                        reading,
+                                        egui::FontId::monospace(11.0),
+                                        Color32::WHITE,
+                                    );
+                                });
+                            }
                         });
                 });
         }
@@ -7009,13 +7034,13 @@ fn radio_port_inventory(
 
 fn general_meter_order() -> [MeterId; 8] {
     [
+        MeterId::Voltage,
+        MeterId::Current,
         MeterId::Signal,
         MeterId::Power,
         MeterId::Swr,
         MeterId::Alc,
         MeterId::Compression,
-        MeterId::Current,
-        MeterId::Voltage,
         MeterId::Temperature,
     ]
 }
@@ -7023,12 +7048,12 @@ fn general_meter_order() -> [MeterId; 8] {
 fn mode_meter_order(transmitting: bool) -> [MeterId; 8] {
     if transmitting {
         [
+            MeterId::Voltage,
+            MeterId::Current,
             MeterId::Power,
             MeterId::Swr,
             MeterId::Alc,
             MeterId::Compression,
-            MeterId::Current,
-            MeterId::Voltage,
             MeterId::Temperature,
             MeterId::Signal,
         ]
@@ -7052,6 +7077,97 @@ fn meter_value(snapshot: &GuiState, id: MeterId) -> Option<u8> {
 
 fn meter_percent(value: u8) -> f32 {
     f32::from(value) / 255.0
+}
+
+const VOLTAGE_HISTORY_CAPACITY: usize = 180;
+const METER_LABEL_WIDTH: f32 = 88.0;
+
+fn record_voltage_sample(history: &mut VecDeque<u8>, value: u8) {
+    history.push_back(value);
+    while history.len() > VOLTAGE_HISTORY_CAPACITY {
+        history.pop_front();
+    }
+}
+
+fn meter_color_for_context(id: MeterId, value: Option<u8>, transmitting: bool) -> Color32 {
+    if id == MeterId::Current && transmitting && value.is_some() {
+        return Color32::from_rgb(110, 245, 215);
+    }
+    meter_color(id, value)
+}
+
+fn draw_voltage_graph(ui: &mut egui::Ui, history: &VecDeque<u8>, reading: &str) {
+    let desired_size = egui::vec2(ui.available_width().max(100.0), 28.0);
+    let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+    let painter = ui.painter();
+    let outer = rect.expand(1.0);
+    painter.rect_filled(
+        outer,
+        egui::CornerRadius::same(7),
+        Color32::from_rgb(10, 20, 29),
+    );
+    painter.rect_stroke(
+        outer,
+        egui::CornerRadius::same(7),
+        egui::Stroke::new(1.0, Color32::from_rgb(45, 75, 88)),
+        egui::StrokeKind::Inside,
+    );
+    painter.rect_filled(
+        rect,
+        egui::CornerRadius::same(5),
+        Color32::from_rgb(7, 18, 25),
+    );
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(5),
+        egui::Stroke::new(1.0, Color32::from_rgb(28, 45, 57)),
+        egui::StrokeKind::Inside,
+    );
+
+    if !history.is_empty() {
+        let graph_rect = rect.shrink2(egui::vec2(3.0, 3.0));
+        let capacity = VOLTAGE_HISTORY_CAPACITY.max(history.len());
+        let points: Vec<egui::Pos2> = history
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let x = egui::lerp(
+                    graph_rect.left()..=graph_rect.right(),
+                    (index + 1) as f32 / capacity as f32,
+                );
+                let y = egui::lerp(
+                    graph_rect.bottom()..=graph_rect.top(),
+                    meter_percent(*value),
+                );
+                egui::pos2(x, y)
+            })
+            .collect();
+        painter.add(egui::Shape::line(
+            points.clone(),
+            egui::Stroke::new(2.0, Color32::from_rgb(100, 225, 165)),
+        ));
+        if let Some(last) = points.last() {
+            painter.circle_filled(*last, 3.0, Color32::from_rgb(150, 255, 205));
+        }
+    }
+
+    let reading_width = 90.0;
+    let reading_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.right() - reading_width, rect.top() + 2.0),
+        egui::pos2(rect.right() - 3.0, rect.bottom() - 2.0),
+    );
+    painter.rect_filled(
+        reading_rect,
+        egui::CornerRadius::same(3),
+        Color32::from_rgba_unmultiplied(10, 20, 29, 225),
+    );
+    painter.text(
+        reading_rect.right_center() - egui::vec2(5.0, 0.0),
+        egui::Align2::RIGHT_CENTER,
+        reading,
+        egui::FontId::monospace(11.0),
+        Color32::WHITE,
+    );
 }
 
 fn draw_primary_meter(
@@ -7170,6 +7286,28 @@ fn meter_reading(id: MeterId, value: Option<u8>) -> String {
     }
 }
 
+fn meter_reading_for_model(id: MeterId, value: Option<u8>, model: &str) -> String {
+    if id == MeterId::Voltage && model.eq_ignore_ascii_case("IC-7300") {
+        return value
+            .map(ic7300_voltage)
+            .map(|voltage| format!("{voltage:.1} V"))
+            .unwrap_or_else(|| "—".to_string());
+    }
+    meter_reading(id, value)
+}
+
+/// Convert the IC-7300's documented Vd meter anchors to volts. Rigwright
+/// intentionally exposes the raw CI-V meter level through its neutral HAL;
+/// this calibration belongs at the model-aware UI boundary.
+fn ic7300_voltage(value: u8) -> f32 {
+    let value = f32::from(value);
+    if value <= 13.0 {
+        (value * 10.0 / 13.0).clamp(0.0, 10.0)
+    } else {
+        (10.0 + (value - 13.0) * 6.0 / (241.0 - 13.0)).min(16.0)
+    }
+}
+
 fn meter_tooltip(id: MeterId) -> &'static str {
     match id {
         MeterId::Signal => {
@@ -7180,7 +7318,9 @@ fn meter_tooltip(id: MeterId) -> &'static str {
         MeterId::Alc => "Transmit ALC level",
         MeterId::Compression => "Transmit speech/data compression level",
         MeterId::Current => "PA drain/current meter level",
-        MeterId::Voltage => "Relative PA voltage level; this driver does not expose volts",
+        MeterId::Voltage => {
+            "PA voltage level; IC-7300 is shown in volts, other radios are relative"
+        }
         MeterId::Temperature => "PA temperature meter; exact units depend on the driver",
     }
 }
@@ -7217,10 +7357,31 @@ mod tests {
 
     #[test]
     fn meter_display_orders_rx_and_tx_values_for_operator_context() {
-        assert_eq!(mode_meter_order(false)[0], MeterId::Signal);
-        assert_eq!(mode_meter_order(true)[0], MeterId::Power);
-        assert_eq!(mode_meter_order(true)[1], MeterId::Swr);
+        assert_eq!(mode_meter_order(false)[0], MeterId::Voltage);
+        assert_eq!(mode_meter_order(false)[1], MeterId::Current);
+        assert_eq!(mode_meter_order(true)[0], MeterId::Voltage);
+        assert_eq!(mode_meter_order(true)[1], MeterId::Current);
+        assert_eq!(mode_meter_order(true)[2], MeterId::Power);
         assert_eq!(meter_label(MeterId::Temperature), "TEMP");
+    }
+
+    #[test]
+    fn voltage_history_keeps_a_long_rolling_window() {
+        let mut history = VecDeque::new();
+        for value in 0..=u8::MAX {
+            record_voltage_sample(&mut history, value);
+        }
+        assert_eq!(history.len(), VOLTAGE_HISTORY_CAPACITY);
+        assert_eq!(history.front(), Some(&76));
+        assert_eq!(history.back(), Some(&u8::MAX));
+    }
+
+    #[test]
+    fn current_meter_is_brighter_during_transmit() {
+        assert_ne!(
+            meter_color_for_context(MeterId::Current, Some(100), false),
+            meter_color_for_context(MeterId::Current, Some(100), true)
+        );
     }
 
     #[test]
@@ -7233,6 +7394,14 @@ mod tests {
         assert_eq!(meter_reading(MeterId::Signal, Some(120)), "S9 +6 dB · 47%");
         assert_eq!(meter_reading(MeterId::Power, Some(128)), "50%");
         assert_eq!(meter_reading(MeterId::Voltage, Some(128)), "REL 128/255");
+        assert_eq!(
+            meter_reading_for_model(MeterId::Voltage, Some(145), "IC-7300"),
+            "13.5 V"
+        );
+        assert_eq!(
+            meter_reading_for_model(MeterId::Voltage, Some(145), "FTDX10"),
+            "REL 145/255"
+        );
     }
 
     #[test]
