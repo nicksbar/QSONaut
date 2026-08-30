@@ -123,7 +123,6 @@ per-file source of truth.
 
 | Area | Covered / executable lines | Line coverage |
 | --- | ---: | ---: |
-| qsonaut-sstv | 776 / 855 | 90.76% |
 | qsonaut-automation | 217 / 264 | 82.20% |
 | qsonaut-log | 740 / 913 | 81.05% |
 | qsonaut-accelerate | 281 / 318 | 88.36% |
@@ -271,9 +270,9 @@ overrides the published dependency with `../rigwright` without changing
 committed manifests. CI does not use this override and does not need a
 Rigwright checkout.
 - `crates/qsonaut-audio` — real-time audio and high-quality 48→12 kHz decimation
-- `crates/qsonaut-sstv` — streaming VIS/AFC adapter plus pinned multi-mode SSTV codecs
+- `qsonaut-third-party` — pinned third-party modem adapters, including SSTV, CW, and WSJT-family modes
 - `mfsk-core` — WSJT-family modem encoding and decoding
-- [`cw-dit`](https://github.com/nicksbar/cw-dit) — reusable Rust CW DSP and streaming Morse components (`cwdit-dsp`, `cwdit-morse`), MIT OR Apache-2.0
+- [`cw-dit`](https://github.com/swilcox/cw-dit) — reusable Rust CW DSP and streaming Morse components consumed by `qsonaut-third-party` (`cwdit-dsp`, `cwdit-morse`), MIT OR Apache-2.0
 - `crates/qsonaut-log`, `qsonaut-pskreporter` — local logging and opt-in reporting
 - `crates/qsonaut-server-client` — optional authenticated WSS synchronization
 - `crates/qsonaut-accelerate` — measured compute-backend selection

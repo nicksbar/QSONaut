@@ -7,6 +7,8 @@ use super::decode::{
 use super::request_gui_repaint;
 use hound::{SampleFormat, WavSpec, WavWriter};
 use qsonaut_audio::{resample::Decimator, CANONICAL_CHANNELS, CANONICAL_SAMPLE_RATE_HZ};
+use qsonaut_third_party::cw::CwDecode;
+use qsonaut_third_party::sstv as qsonaut_sstv;
 use serde_json::json;
 use std::fs::File;
 use std::io::BufWriter;
@@ -599,11 +601,11 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                             state.lock().expect("ui state lock poisoned");
                                         for event in events {
                                             let text = match event {
-                                                cwdit_morse::Decoded::Char(character) => {
+                                                CwDecode::Character(character) => {
                                                     character.to_string()
                                                 }
-                                                cwdit_morse::Decoded::WordBreak => " ".to_string(),
-                                                cwdit_morse::Decoded::Unknown => continue,
+                                                CwDecode::WordBreak => " ".to_string(),
+                                                CwDecode::Unknown => continue,
                                             };
                                             shared.cw_live_text.push_str(&text);
                                             shared.digital_decode_status =
@@ -1057,11 +1059,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 }
                                 for event in events {
                                     let text = match event {
-                                        cwdit_morse::Decoded::Char(character) => {
-                                            character.to_string()
-                                        }
-                                        cwdit_morse::Decoded::WordBreak => " ".to_string(),
-                                        cwdit_morse::Decoded::Unknown => continue,
+                                        CwDecode::Character(character) => character.to_string(),
+                                        CwDecode::WordBreak => " ".to_string(),
+                                        CwDecode::Unknown => continue,
                                     };
                                     let mut shared = state.lock().expect("ui state lock poisoned");
                                     shared.cw_live_text.push_str(&text);

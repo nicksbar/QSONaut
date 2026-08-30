@@ -1,4 +1,6 @@
 use super::super::*;
+use qsonaut_modems::AudioBlock;
+use qsonaut_third_party::wsjt::{decode as decode_wsjt, Fst4Submode, WsjtDecodeConfig, WsjtMode};
 
 const FT8_SLOT_MS: u128 = 15_000;
 const FT8_DEEP_RUNTIME_BUDGET_MS: u128 = 12_000;
@@ -121,92 +123,116 @@ pub(in super::super) fn run_native_digital_decode(
                         push(result.snr_db, result.dt_sec, result.freq_hz, message);
                     }
                 }
-            } else {
-                macro_rules! decode_fst4 {
-                    ($submode:ty) => {
-                        for result in
-                            DecodeRequest::<$submode>::new(&audio, 100.0, 3_000.0, 0.8, 50)
-                                .decode()
-                                .results
-                        {
-                            if let Some(message) = unpack77(result.message77()) {
-                                push(result.snr_db, result.dt_sec, result.freq_hz, message);
-                            }
-                        }
-                    };
-                }
-                match fst4_submode {
-                    crate::modes::fst4::Submode::S15 => decode_fst4!(mfsk_core::fst4::Fst4s15),
-                    crate::modes::fst4::Submode::S30 => decode_fst4!(mfsk_core::fst4::Fst4s30),
-                    crate::modes::fst4::Submode::S60 => decode_fst4!(mfsk_core::fst4::Fst4s60),
-                    crate::modes::fst4::Submode::S120 => decode_fst4!(mfsk_core::fst4::Fst4s120),
-                    crate::modes::fst4::Submode::S300 => decode_fst4!(mfsk_core::fst4::Fst4s300),
+            } else if let Ok(batch) = decode_wsjt(
+                &AudioBlock::new(12_000, samples.clone()).expect("normalized audio is valid"),
+                WsjtMode::Fst4(match fst4_submode {
+                    crate::modes::fst4::Submode::S15 => Fst4Submode::S15,
+                    crate::modes::fst4::Submode::S30 => Fst4Submode::S30,
+                    crate::modes::fst4::Submode::S60 => Fst4Submode::S60,
+                    crate::modes::fst4::Submode::S120 => Fst4Submode::S120,
+                    crate::modes::fst4::Submode::S300 => Fst4Submode::S300,
+                }),
+                &WsjtDecodeConfig {
+                    frequency_min_hz: 100.0,
+                    frequency_max_hz: 3_000.0,
+                    sync_min: 0.8,
+                    max_candidates: 50,
+                    frequency_hint_hz: Some(selected_audio_hz as f32),
+                    deep_decode,
+                    ..WsjtDecodeConfig::default()
+                },
+            ) {
+                for event in batch.events {
+                    push(
+                        event.snr_db.unwrap_or_default(),
+                        event.delta_time_seconds.unwrap_or_default(),
+                        event.audio_frequency_hz.unwrap_or_default(),
+                        event.message,
+                    );
                 }
             }
         }
         WorkspaceMode::Wspr => {
-            for result in mfsk_core::wspr::decode::decode_scan_default(&samples, 12_000) {
-                push(
-                    result.snr_db,
-                    result.dt_sec,
-                    result.freq_hz,
-                    format!("{} · drift {:+.2} Hz", result.message, result.drift_hz),
-                );
+            if let Ok(batch) = decode_wsjt(
+                &AudioBlock::new(12_000, samples.clone()).expect("normalized audio is valid"),
+                WsjtMode::Wspr,
+                &WsjtDecodeConfig::default(),
+            ) {
+                for event in batch.events {
+                    push(
+                        event.snr_db.unwrap_or_default(),
+                        event.delta_time_seconds.unwrap_or_default(),
+                        event.audio_frequency_hz.unwrap_or_default(),
+                        event.message,
+                    );
+                }
             }
         }
         WorkspaceMode::Jt9 => {
-            for result in mfsk_core::jt9::decode_scan_default(&samples, 12_000) {
-                push(
-                    result.snr_db,
-                    result.start_sample as f32 / 12_000.0,
-                    result.freq_hz,
-                    result.message.to_string(),
-                );
+            if let Ok(batch) = decode_wsjt(
+                &AudioBlock::new(12_000, samples.clone()).expect("normalized audio is valid"),
+                WsjtMode::Jt9,
+                &WsjtDecodeConfig::default(),
+            ) {
+                for event in batch.events {
+                    push(
+                        event.snr_db.unwrap_or_default(),
+                        event.delta_time_seconds.unwrap_or_default(),
+                        event.audio_frequency_hz.unwrap_or_default(),
+                        event.message,
+                    );
+                }
             }
         }
         WorkspaceMode::Jt65 => {
-            for result in mfsk_core::jt65::decode_scan_chase_default(&samples, 12_000) {
-                push(
-                    result.snr_db,
-                    result.start_sample as f32 / 12_000.0,
-                    result.freq_hz,
-                    result.message.to_string(),
-                );
+            if let Ok(batch) = decode_wsjt(
+                &AudioBlock::new(12_000, samples.clone()).expect("normalized audio is valid"),
+                WsjtMode::Jt65,
+                &WsjtDecodeConfig::default(),
+            ) {
+                for event in batch.events {
+                    push(
+                        event.snr_db.unwrap_or_default(),
+                        event.delta_time_seconds.unwrap_or_default(),
+                        event.audio_frequency_hz.unwrap_or_default(),
+                        event.message,
+                    );
+                }
             }
         }
         WorkspaceMode::Q65 => {
-            let request = mfsk_core::q65::DecodeRequest::<mfsk_core::q65::Q65a30>::new(
-                &samples,
-                12_000,
-                0,
-                mfsk_core::q65::SearchParams::default(),
-            );
-            for result in request.decode() {
-                push(
-                    result.snr_db,
-                    result.start_sample as f32 / 12_000.0,
-                    result.freq_hz,
-                    result.message,
-                );
+            if let Ok(batch) = decode_wsjt(
+                &AudioBlock::new(12_000, samples.clone()).expect("normalized audio is valid"),
+                WsjtMode::Q65,
+                &WsjtDecodeConfig::default(),
+            ) {
+                for event in batch.events {
+                    push(
+                        event.snr_db.unwrap_or_default(),
+                        event.delta_time_seconds.unwrap_or_default(),
+                        event.audio_frequency_hz.unwrap_or_default(),
+                        event.message,
+                    );
+                }
             }
         }
         WorkspaceMode::Msk144 => {
-            let audio: Vec<i16> = samples
-                .iter()
-                .map(|sample| (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16)
-                .collect();
-            for result in mfsk_core::msk144::decode::decode_slot(
-                &audio,
-                selected_audio_hz as f32,
-                200.0,
-                mfsk_core::msk144::decode::Depth::Normal,
+            if let Ok(batch) = decode_wsjt(
+                &AudioBlock::new(12_000, samples.clone()).expect("normalized audio is valid"),
+                WsjtMode::Msk144,
+                &WsjtDecodeConfig {
+                    frequency_hint_hz: Some(selected_audio_hz as f32),
+                    ..WsjtDecodeConfig::default()
+                },
             ) {
-                push(
-                    result.snr_db as f32,
-                    result.tsec,
-                    result.freq_hz,
-                    result.message,
-                );
+                for event in batch.events {
+                    push(
+                        event.snr_db.unwrap_or_default(),
+                        event.delta_time_seconds.unwrap_or_default(),
+                        event.audio_frequency_hz.unwrap_or_default(),
+                        event.message,
+                    );
+                }
             }
         }
         WorkspaceMode::Ft8

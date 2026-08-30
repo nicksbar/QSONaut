@@ -3,6 +3,7 @@ use ab_glyph::PxScale;
 use image::imageops::FilterType;
 use imageproc::drawing::draw_text_mut;
 use imageproc::pixelops::weighted_sum;
+use qsonaut_third_party::sstv as qsonaut_sstv;
 use std::io::Cursor;
 
 pub(crate) const BAND_PLAN: &[(&str, u64)] = &[

@@ -60,6 +60,7 @@ use qsonaut_server_client::{
     log_idempotency_key, new_instance_id, ConnectionConfig as ServerConnectionConfig,
     ConnectionState as ServerConnectionState, Presence as ServerPresence, ServerClient,
 };
+use qsonaut_third_party::sstv as qsonaut_sstv;
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};

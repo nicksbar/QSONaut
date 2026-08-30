@@ -1,5 +1,6 @@
 use super::super::*;
 use crate::visuals::build_audio_waterfall_image_with_theme;
+use qsonaut_third_party::sstv as qsonaut_sstv;
 
 fn scope_attribution_layout(
     scope_rect: egui::Rect,
