@@ -4459,12 +4459,14 @@ impl QsonautGuiApp {
         };
         let primary_value = meter_value(snapshot, primary_id);
         let primary_label = if snapshot.ptt_on { "POWER" } else { "S-METER" };
+        let primary_reading = meter_reading(primary_id, primary_value);
         let (primary_rect, primary_response) =
             ui.allocate_exact_size(egui::vec2(280.0, 24.0), egui::Sense::click());
         draw_primary_meter(
             ui,
             primary_rect,
             primary_label,
+            &primary_reading,
             primary_value.map(meter_percent).unwrap_or_default(),
             meter_color(primary_id, primary_value),
         );
@@ -4519,7 +4521,8 @@ impl QsonautGuiApp {
                                         )
                                         .desired_width(ui.available_width().max(100.0))
                                         .desired_height(14.0)
-                                        .fill(meter_color(id, value)),
+                                        .fill(meter_color(id, value))
+                                        .text(meter_reading(id, value)),
                                     );
                                 });
                             }
@@ -4624,6 +4627,54 @@ impl QsonautGuiApp {
             "Radio power: ON · click to turn off"
         } else {
             "Radio power: OFF · click to turn on"
+        });
+    }
+
+    fn draw_rf_power_control(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        let supported = snapshot.supported_controls.contains(&ControlId::RfPower);
+        let ready = snapshot.radio_power_on == Some(true)
+            && !snapshot.radio_power_command_pending
+            && !snapshot.radio_power_settling;
+        let color = if supported && ready {
+            Color32::from_rgb(255, 190, 105)
+        } else {
+            Color32::GRAY
+        };
+        let power_button = ui
+            .add_enabled(
+                supported && ready,
+                egui::Button::new(RichText::new("⚡").size(17.0).color(color)),
+            )
+            .on_hover_text(if !supported {
+                "RF transmit power control is not supported by this radio profile"
+            } else if !ready {
+                "RF transmit power is unavailable while the radio is offline or waking"
+            } else {
+                "Open RF transmit power control"
+            });
+        egui::Popup::menu(&power_button).show(|ui| {
+            ui.set_min_width(130.0);
+            ui.vertical_centered(|ui| {
+                ui.label(RichText::new("TX POWER").strong());
+                let mut percent = snapshot
+                    .rf_power
+                    .map(|value| f32::from(value) * 100.0 / 255.0)
+                    .unwrap_or_default();
+                let response = ui.add(
+                    egui::Slider::new(&mut percent, 0.0..=100.0)
+                        .vertical()
+                        .show_value(false),
+                );
+                ui.label(format!("{percent:.0}%"));
+                if response.changed() && response.drag_stopped() {
+                    let normalized = (percent.clamp(0.0, 100.0) * 255.0 / 100.0).round() as u8;
+                    self.send_command(GuiCommand::SetControl(
+                        ControlId::RfPower,
+                        ControlValue::U8(normalized),
+                    ));
+                }
+                ui.label(RichText::new("Driver-normalized output level").small());
+            });
         });
     }
 
@@ -5585,7 +5636,7 @@ impl eframe::App for QsonautGuiApp {
                         .map(band_for_frequency)
                         .filter(|band| !band.is_empty())
                         .unwrap_or("—");
-                    ui.menu_button(
+                    let band_menu = ui.menu_button(
                         RichText::new(current_band)
                             .strong()
                             .color(Color32::from_rgb(220, 190, 100)),
@@ -5640,9 +5691,11 @@ impl eframe::App for QsonautGuiApp {
                             }
                         },
                     );
+                    band_menu.response.on_hover_text("Select the operating band");
+                    self.draw_rf_power_control(ui, &snapshot);
                     ui.separator();
                     let current_radio_mode = radio_mode_label(&snapshot.mode, snapshot.data_mode);
-                    ui.menu_button(
+                    let mode_menu = ui.menu_button(
                         RichText::new(current_radio_mode.clone())
                             .monospace()
                             .strong()
@@ -5676,12 +5729,13 @@ impl eframe::App for QsonautGuiApp {
                             }
                         },
                     );
+                    mode_menu.response.on_hover_text("Select the radio operating mode");
                     let supports_filter = snapshot.supported_controls.contains(&ControlId::Filter);
                     let filter_label = snapshot
                         .filter
                         .map(|filter| format!("FIL{filter}"))
                         .unwrap_or_else(|| "FIL?".to_string());
-                    ui.menu_button(
+                    let filter_menu = ui.menu_button(
                         RichText::new(filter_label).monospace().color(Color32::GRAY),
                         |ui| {
                             ui.label(RichText::new("FILTER").strong());
@@ -5702,6 +5756,7 @@ impl eframe::App for QsonautGuiApp {
                             }
                         },
                     );
+                    filter_menu.response.on_hover_text("Select the radio IF filter");
                     self.draw_banner_radio_controls(ui, &snapshot);
                     });
                     ui.horizontal(|ui| {
@@ -6958,7 +7013,14 @@ fn meter_percent(value: u8) -> f32 {
     f32::from(value) / 255.0
 }
 
-fn draw_primary_meter(ui: &egui::Ui, rect: egui::Rect, label: &str, fraction: f32, color: Color32) {
+fn draw_primary_meter(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    label: &str,
+    reading: &str,
+    fraction: f32,
+    color: Color32,
+) {
     let painter = ui.painter();
     let outer = rect.expand(1.0);
     painter.rect_filled(
@@ -6992,10 +7054,17 @@ fn draw_primary_meter(ui: &egui::Ui, rect: egui::Rect, label: &str, fraction: f3
         painter.rect_filled(segment, egui::CornerRadius::same(2), fill);
     }
     painter.text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
+        egui::pos2(rect.left() + 8.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
         label,
-        egui::FontId::monospace(12.0),
+        egui::FontId::monospace(11.0),
+        Color32::WHITE,
+    );
+    painter.text(
+        egui::pos2(rect.right() - 8.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        reading,
+        egui::FontId::monospace(11.0),
         Color32::WHITE,
     );
 }
@@ -7017,6 +7086,26 @@ fn meter_label(id: MeterId) -> &'static str {
         MeterId::Current => "CURRENT",
         MeterId::Voltage => "VOLTAGE",
         MeterId::Temperature => "TEMP",
+    }
+}
+
+fn meter_reading(id: MeterId, value: Option<u8>) -> String {
+    let Some(value) = value else {
+        return "—".to_string();
+    };
+    if id == MeterId::Signal {
+        let s_units = u16::from(value) / 12;
+        if s_units <= 9 {
+            format!("S{s_units} · {}%", u16::from(value) * 100 / 255)
+        } else {
+            format!(
+                "S9 +{} dB · {}%",
+                (s_units - 9) * 6,
+                u16::from(value) * 100 / 255
+            )
+        }
+    } else {
+        format!("{}%", u16::from(value) * 100 / 255)
     }
 }
 
@@ -7064,6 +7153,9 @@ mod tests {
         assert_eq!(meter_percent(255), 1.0);
         assert_eq!(format_meter_value(Some(128)), "50%");
         assert_eq!(format_meter_value(None), "—");
+        assert_eq!(meter_reading(MeterId::Signal, Some(72)), "S6 · 28%");
+        assert_eq!(meter_reading(MeterId::Signal, Some(120)), "S9 +6 dB · 47%");
+        assert_eq!(meter_reading(MeterId::Power, Some(128)), "50%");
     }
 
     #[test]
