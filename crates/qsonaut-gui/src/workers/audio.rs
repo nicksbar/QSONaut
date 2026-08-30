@@ -6,7 +6,8 @@ use super::decode::{
 };
 use super::request_gui_repaint;
 use hound::{SampleFormat, WavSpec, WavWriter};
-use qsonaut_audio::{resample::Decimator, CANONICAL_CHANNELS, CANONICAL_SAMPLE_RATE_HZ};
+use qsonaut_audio::{CANONICAL_CHANNELS, CANONICAL_SAMPLE_RATE_HZ};
+use qsonaut_modems::AudioNormalizer;
 use qsonaut_third_party::cw::CwDecode;
 use qsonaut_third_party::sstv as qsonaut_sstv;
 use serde_json::json;
@@ -202,7 +203,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         // 12 kHz decimation pipeline for FT8 decode
         let can_decode = sample_rate_hz == 48_000;
         let mut decimator = if can_decode {
-            Some(Decimator::new(sample_rate_hz))
+            Some(AudioNormalizer::new(sample_rate_hz).expect("validated 48 kHz input"))
         } else {
             None
         };
@@ -412,7 +413,8 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             last_sstv_vis = None;
                             sstv_receive_started = None;
                             sstv_progress_bucket = 0;
-                            *dec = Decimator::new(sample_rate_hz);
+                            *dec = AudioNormalizer::new(sample_rate_hz)
+                                .expect("validated 48 kHz input");
                             let mut s = state.lock().expect("ui state lock poisoned");
                             if active_workspace_mode == WorkspaceMode::Ft8 {
                                 s.ft8_decode_status =
@@ -453,7 +455,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 );
                             }
                         }
-                        let ds = dec.process(&samples_f32);
+                        let ds = dec
+                            .process_f32_mono(&samples_f32)
+                            .expect("audio capture samples are finite");
                         if active_workspace_mode == WorkspaceMode::Ft8 {
                             ft8_buf.extend_from_slice(&ds);
                             // Keep a full slot plus ±2.5 s timing headroom.

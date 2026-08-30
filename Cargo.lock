@@ -3414,7 +3414,7 @@ dependencies = [
  "qsonaut-automation",
  "qsonaut-core",
  "qsonaut-log",
- "qsonaut-modems",
+ "qsonaut-modems 0.1.0 (git+https://github.com/nicksbar/qsonaut-modems.git?rev=f7367ef)",
  "qsonaut-pskreporter",
  "qsonaut-server-client",
  "qsonaut-third-party",
@@ -3448,7 +3448,15 @@ dependencies = [
 [[package]]
 name = "qsonaut-modems"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=c79003dcf5c759a68cc51f6651ecd247cbebaaa0#c79003dcf5c759a68cc51f6651ecd247cbebaaa0"
+source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=015d5a5#015d5a517837d2d150d3a3749c1fb37ad228bccc"
+dependencies = [
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "qsonaut-modems"
+version = "0.1.0"
+source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=f7367ef#f7367ef60137fe9f1cef15d574066d676068a242"
 dependencies = [
  "thiserror 2.0.20",
 ]
@@ -3479,14 +3487,14 @@ dependencies = [
 [[package]]
 name = "qsonaut-third-party"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=af46b24#af46b2443ab0c53b80b3d261a957dfbdd96d20c9"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=2c530af#2c530af0a0a30cafbd9887913e3357ab8efd5e3f"
 dependencies = [
  "cwdit-dsp",
  "cwdit-morse",
  "image",
  "komitoto-sstv",
  "mfsk-core",
- "qsonaut-modems",
+ "qsonaut-modems 0.1.0 (git+https://github.com/nicksbar/qsonaut-modems.git?rev=015d5a5)",
  "thiserror 2.0.20",
 ]
 
