@@ -878,6 +878,15 @@ pub(crate) fn spawn_radio_worker(
                         };
                         match result {
                             Ok(()) => {
+                                if id == ControlId::RfPower {
+                                    if let ControlValue::U8(level) = &value {
+                                        let mut s = state.lock().expect("ui state lock poisoned");
+                                        if s.rf_power_write_pending == Some(*level) {
+                                            s.rf_power = Some(*level);
+                                            s.rf_power_write_pending = None;
+                                        }
+                                    }
+                                }
                                 if id == ControlId::Vfo {
                                     if let Some(vfo) = control_vfo_value(&value) {
                                         state.lock().expect("ui state lock poisoned").active_vfo =
@@ -888,8 +897,15 @@ pub(crate) fn spawn_radio_worker(
                             }
                             Err(error) => {
                                 error!(control = ?id, error = %error, "Radio control change failed");
-                                state.lock().expect("ui state lock poisoned").last_error =
-                                    Some(error.to_string());
+                                let mut s = state.lock().expect("ui state lock poisoned");
+                                if id == ControlId::RfPower {
+                                    if let ControlValue::U8(level) = &value {
+                                        if s.rf_power_write_pending == Some(*level) {
+                                            s.rf_power_write_pending = None;
+                                        }
+                                    }
+                                }
+                                s.last_error = Some(error.to_string());
                             }
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
@@ -1456,7 +1472,9 @@ fn poll_radio_core_state(
         s.rf_gain = Some(v);
     }
     if let Some(v) = pwr {
-        s.rf_power = Some(v);
+        if s.rf_power_write_pending.is_none() {
+            s.rf_power = Some(v);
+        }
     }
     if let Some(v) = squelch {
         s.squelch = Some(v);
@@ -1655,7 +1673,10 @@ fn poll_radio_level_state(
                 ControlId::AfGain => s.af_gain = Some(value),
                 ControlId::RfGain => s.rf_gain = Some(value),
                 ControlId::Squelch => s.squelch = Some(value),
-                ControlId::RfPower => s.rf_power = Some(value),
+                ControlId::RfPower if s.rf_power_write_pending.is_none() => {
+                    s.rf_power = Some(value)
+                }
+                ControlId::RfPower => {}
                 ControlId::Preamp => s.preamp = Some(value),
                 ControlId::Attenuator => s.attenuator = Some(value),
                 ControlId::Agc => s.agc = Some(value),

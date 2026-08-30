@@ -967,6 +967,7 @@ struct GuiState {
     af_gain: Option<u8>,
     rf_gain: Option<u8>,
     rf_power: Option<u8>,
+    rf_power_write_pending: Option<u8>,
     squelch: Option<u8>,
     preamp: Option<u8>,
     attenuator: Option<u8>,
@@ -1080,6 +1081,7 @@ impl Default for GuiState {
             af_gain: None,
             rf_gain: None,
             rf_power: None,
+            rf_power_write_pending: None,
             squelch: None,
             preamp: None,
             attenuator: None,
@@ -4458,7 +4460,7 @@ impl QsonautGuiApp {
             MeterId::Signal
         };
         let primary_value = meter_value(snapshot, primary_id);
-        let primary_label = if snapshot.ptt_on { "POWER" } else { "S-METER" };
+        let primary_label = if snapshot.ptt_on { "POWER" } else { "" };
         let primary_reading = meter_reading(primary_id, primary_value);
         let (primary_rect, primary_response) =
             ui.allocate_exact_size(egui::vec2(280.0, 24.0), egui::Sense::click());
@@ -4652,30 +4654,34 @@ impl QsonautGuiApp {
             } else {
                 "Open RF transmit power control"
             });
-        egui::Popup::menu(&power_button).show(|ui| {
-            ui.set_min_width(130.0);
-            ui.vertical_centered(|ui| {
-                ui.label(RichText::new("TX POWER").strong());
-                let mut percent = snapshot
-                    .rf_power
-                    .map(|value| f32::from(value) * 100.0 / 255.0)
-                    .unwrap_or_default();
-                let response = ui.add(
-                    egui::Slider::new(&mut percent, 0.0..=100.0)
-                        .vertical()
-                        .show_value(false),
-                );
-                ui.label(format!("{percent:.0}%"));
-                if response.changed() && response.drag_stopped() {
-                    let normalized = (percent.clamp(0.0, 100.0) * 255.0 / 100.0).round() as u8;
-                    self.send_command(GuiCommand::SetControl(
-                        ControlId::RfPower,
-                        ControlValue::U8(normalized),
-                    ));
-                }
-                ui.label(RichText::new("Driver-normalized output level").small());
+        egui::Popup::menu(&power_button)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.vertical_centered(|ui| {
+                    let mut percent = snapshot
+                        .rf_power
+                        .map(|value| f32::from(value) * 100.0 / 255.0)
+                        .unwrap_or_default();
+                    let response = ui.add(
+                        egui::Slider::new(&mut percent, 0.0..=100.0)
+                            .vertical()
+                            .show_value(false),
+                    );
+                    ui.label(format!("{percent:.0}%"));
+                    if response.changed() && response.drag_stopped() {
+                        let normalized = (percent.clamp(0.0, 100.0) * 255.0 / 100.0).round() as u8;
+                        {
+                            let mut state = self.state.lock().expect("ui state lock poisoned");
+                            state.rf_power = Some(normalized);
+                            state.rf_power_write_pending = Some(normalized);
+                        }
+                        self.send_command(GuiCommand::SetControl(
+                            ControlId::RfPower,
+                            ControlValue::U8(normalized),
+                        ));
+                    }
+                });
             });
-        });
     }
 
     fn draw_connection_status(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
@@ -7053,13 +7059,15 @@ fn draw_primary_meter(
         };
         painter.rect_filled(segment, egui::CornerRadius::same(2), fill);
     }
-    painter.text(
-        egui::pos2(rect.left() + 8.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        egui::FontId::monospace(11.0),
-        Color32::WHITE,
-    );
+    if !label.is_empty() {
+        painter.text(
+            egui::pos2(rect.left() + 8.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::monospace(11.0),
+            Color32::WHITE,
+        );
+    }
     painter.text(
         egui::pos2(rect.right() - 8.0, rect.center().y),
         egui::Align2::RIGHT_CENTER,
