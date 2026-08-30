@@ -2412,20 +2412,6 @@ dependencies = [
 [[package]]
 name = "mfsk-core"
 version = "0.10.1"
-source = "git+https://github.com/jl1nie/mfsk-core.git?rev=1ba4450#1ba44501a68cc736dea5b66b3fb1e56fbeeda8d1"
-dependencies = [
- "crc",
- "num-complex",
- "num-traits",
- "rayon",
- "realfft",
- "rustfft",
- "serde",
-]
-
-[[package]]
-name = "mfsk-core"
-version = "0.10.1"
 source = "git+https://github.com/jl1nie/mfsk-core.git?rev=a3fd6744df0a064e035df9b63ff76251ed0e2ec1#a3fd6744df0a064e035df9b63ff76251ed0e2ec1"
 dependencies = [
  "crc",
@@ -3423,7 +3409,6 @@ dependencies = [
  "hound",
  "image",
  "imageproc",
- "mfsk-core 0.10.1 (git+https://github.com/jl1nie/mfsk-core.git?rev=1ba4450)",
  "qsonaut-accelerate",
  "qsonaut-audio",
  "qsonaut-automation",
@@ -3494,13 +3479,13 @@ dependencies = [
 [[package]]
 name = "qsonaut-third-party"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=e5627c2d8d8f638294224ad1bbe81c0f0ded43c3#e5627c2d8d8f638294224ad1bbe81c0f0ded43c3"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=af46b24#af46b2443ab0c53b80b3d261a957dfbdd96d20c9"
 dependencies = [
  "cwdit-dsp",
  "cwdit-morse",
  "image",
  "komitoto-sstv",
- "mfsk-core 0.10.1 (git+https://github.com/jl1nie/mfsk-core.git?rev=a3fd6744df0a064e035df9b63ff76251ed0e2ec1)",
+ "mfsk-core",
  "qsonaut-modems",
  "thiserror 2.0.20",
 ]

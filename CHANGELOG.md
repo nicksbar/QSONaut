@@ -15,9 +15,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added the v0.4 maturity baseline and reference-station evidence boundary
   (#84), plus the deterministic regression-fixture catalog (#83) for release
   planning.
-- Switched QSONaut's SSTV, CW, and non-FT8/FT4 WSJT-family decode paths to the
-  pinned `qsonaut-third-party` extraction and removed obsolete in-tree SSTV/CW
-  adapter ownership.
+- Switched all QSONaut WSJT-family, SSTV, and CW modem paths to the pinned
+  `qsonaut-third-party`/`qsonaut-modems` extraction and removed direct
+  `mfsk-core`, SSTV, and CW-DIT dependency ownership from QSONaut.
 
 ## [0.3.13] - 2026-08-29
 

@@ -8,18 +8,10 @@ const FT8_DEEP_SYNC_MIN: f32 = 1.3;
 const FT8_DEEP_MAX_CAND: usize = 120;
 
 pub(in super::super) fn warm_ft8_decoder() {
-    let warmup_audio = vec![0i16; FT8_SLOT_SAMPLES];
+    let warmup_audio =
+        AudioBlock::new(12_000, vec![0.0; FT8_SLOT_SAMPLES]).expect("normalized audio is valid");
     let started = Instant::now();
-    let _ = DecodeRequest::<Ft8>::wsjtx_depth(
-        &warmup_audio,
-        100.0,
-        3_000.0,
-        1.6,
-        16,
-        WsjtxDepth::D1,
-        None,
-    )
-    .decode();
+    let _ = decode_wsjt(&warmup_audio, WsjtMode::Ft8, &WsjtDecodeConfig::default());
     info!(
         elapsed_ms = started.elapsed().as_millis() as u64,
         "FT8 decoder warmup complete"
@@ -103,40 +95,33 @@ pub(in super::super) fn run_native_digital_decode(
 
     trace.measure("protocol decode", || match mode {
         WorkspaceMode::Ft4 | WorkspaceMode::Fst4 => {
-            let audio: Vec<i16> = samples
-                .iter()
-                .map(|sample| (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16)
-                .collect();
-            if mode == WorkspaceMode::Ft4 {
-                let sync_min = if deep_decode { 0.45 } else { 0.6 };
-                let request = DecodeRequest::<mfsk_core::ft4::Ft4>::new(
-                    &audio, 100.0, 3_000.0, sync_min, 160,
-                )
-                .freq_hint(selected_audio_hz as f32);
-                let outcome = if deep_decode {
-                    request.sic_rounds(3).decode()
-                } else {
-                    request.decode()
-                };
-                for result in outcome.results {
-                    if let Some(message) = unpack77(result.message77()) {
-                        push(result.snr_db, result.dt_sec, result.freq_hz, message);
-                    }
-                }
-            } else if let Ok(batch) = decode_wsjt(
-                &AudioBlock::new(12_000, samples.clone()).expect("normalized audio is valid"),
+            let wsjt_mode = if mode == WorkspaceMode::Ft4 {
+                WsjtMode::Ft4
+            } else {
                 WsjtMode::Fst4(match fst4_submode {
                     crate::modes::fst4::Submode::S15 => Fst4Submode::S15,
                     crate::modes::fst4::Submode::S30 => Fst4Submode::S30,
                     crate::modes::fst4::Submode::S60 => Fst4Submode::S60,
                     crate::modes::fst4::Submode::S120 => Fst4Submode::S120,
                     crate::modes::fst4::Submode::S300 => Fst4Submode::S300,
-                }),
+                })
+            };
+            if let Ok(batch) = decode_wsjt(
+                &AudioBlock::new(12_000, samples.clone()).expect("normalized audio is valid"),
+                wsjt_mode,
                 &WsjtDecodeConfig {
                     frequency_min_hz: 100.0,
                     frequency_max_hz: 3_000.0,
-                    sync_min: 0.8,
-                    max_candidates: 50,
+                    sync_min: if mode == WorkspaceMode::Ft4 {
+                        if deep_decode {
+                            0.45
+                        } else {
+                            0.6
+                        }
+                    } else {
+                        0.8
+                    },
+                    max_candidates: if mode == WorkspaceMode::Ft4 { 160 } else { 50 },
                     frequency_hint_hz: Some(selected_audio_hz as f32),
                     deep_decode,
                     ..WsjtDecodeConfig::default()
@@ -364,70 +349,58 @@ fn run_ft8_decode(
         samples.len(),
         Duration::from_millis(FT8_SLOT_MS as u64),
     );
-    let audio_i16: Vec<i16> = trace.measure("prepare PCM", || {
-        samples
-            .iter()
-            .map(|&x| {
-                let s = x.clamp(-1.0, 1.0);
-                (s * i16::MAX as f32).round() as i16
-            })
-            .collect()
-    });
-
-    // mfsk-core FT8 decode (12 kHz slot-aligned audio), mapped to the
-    // library's WSJT-X depth presets for clearer latency/recall behavior.
+    let audio = AudioBlock::new(12_000, samples).expect("normalized audio is valid");
     let outcome = trace.measure("protocol decode", || {
-        if deep_decode {
-            // D2: staged early decode (`sic_early`) with WSJT-X-style profile.
-            DecodeRequest::<Ft8>::wsjtx_depth(
-                &audio_i16,
-                100.0,
-                3_000.0,
-                FT8_DEEP_SYNC_MIN,
-                FT8_DEEP_MAX_CAND,
-                WsjtxDepth::D2,
-                None,
-            )
-            .decode()
-        } else {
-            // D1: non-early SIC (`sic_rounds(2)`) for lower latency.
-            DecodeRequest::<Ft8>::wsjtx_depth(
-                &audio_i16,
-                100.0,
-                3_000.0,
-                FT8_FAST_SYNC_MIN,
-                FT8_FAST_MAX_CAND,
-                WsjtxDepth::D1,
-                None,
-            )
-            .decode()
-        }
+        decode_wsjt(
+            &audio,
+            WsjtMode::Ft8,
+            &WsjtDecodeConfig {
+                frequency_min_hz: 100.0,
+                frequency_max_hz: 3_000.0,
+                sync_min: if deep_decode {
+                    FT8_DEEP_SYNC_MIN
+                } else {
+                    FT8_FAST_SYNC_MIN
+                },
+                max_candidates: if deep_decode {
+                    FT8_DEEP_MAX_CAND
+                } else {
+                    FT8_FAST_MAX_CAND
+                },
+                deep_decode,
+                ..WsjtDecodeConfig::default()
+            },
+        )
+        .expect("normalized FT8 audio and mode are valid")
     });
 
     let results: Vec<Ft8DecodeEntry> = trace.measure("unpack results", || {
         let mut results = Vec::new();
-        for r in &outcome.results {
-            if let Some(msg) = unpack77(r.message77()) {
-                let is_cq = msg.starts_with("CQ");
-                let snr = r.snr_db.round() as i8;
-                let absolute_dt_s = alignment_s + r.dt_sec;
-                debug!(
-                    freq = r.freq_hz,
-                    dt_s = absolute_dt_s,
-                    snr,
-                    msg,
-                    "FT8 decode OK"
-                );
-                results.push(Ft8DecodeEntry {
-                    period,
-                    utc: utc.clone(),
-                    snr_db: snr,
-                    dt_s: absolute_dt_s,
-                    freq_hz: r.freq_hz.max(0.0).round() as u32,
-                    message: msg,
-                    is_cq,
-                });
-            }
+        for event in &outcome.events {
+            let msg = &event.message;
+            let is_cq = msg.starts_with("CQ");
+            let snr = event.snr_db.unwrap_or_default().round() as i8;
+            let absolute_dt_s = alignment_s + event.delta_time_seconds.unwrap_or_default();
+            debug!(
+                freq = event.audio_frequency_hz.unwrap_or_default(),
+                dt_s = absolute_dt_s,
+                snr,
+                msg,
+                "FT8 decode OK"
+            );
+            results.push(Ft8DecodeEntry {
+                period,
+                utc: utc.clone(),
+                snr_db: snr,
+                dt_s: absolute_dt_s,
+                freq_hz: event
+                    .audio_frequency_hz
+                    .unwrap_or_default()
+                    .max(0.0)
+                    .round() as u32,
+                message: msg.clone(),
+                is_cq,
+            });
         }
         results
     });

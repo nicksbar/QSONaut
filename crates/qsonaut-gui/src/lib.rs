@@ -19,15 +19,6 @@ mod workers;
 
 use anyhow::{anyhow, Context, Result};
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
-use mfsk_core::{
-    ft8::decode::WsjtxDepth,
-    ft8::wave_gen::{message_to_tones as ft8_message_to_tones, tones_to_i16 as ft8_tones_to_i16},
-    ft8::Ft8,
-    msg::{
-        decode_request::DecodeRequest,
-        wsjt77::{pack77, unpack77},
-    },
-};
 use qsonaut_accelerate::{
     AccelerationReport, ActiveBackend, ComputePreference, DecodeTelemetry, DecodeTrace,
 };
@@ -7819,25 +7810,23 @@ mod tests {
             *dst = sample as f32 / i16::MAX as f32;
         }
         let slot = prepare_early_ft8_slot(&rolling, captured, 0.0);
-        let audio: Vec<i16> = slot
-            .iter()
-            .map(|sample| (sample * i16::MAX as f32).round() as i16)
-            .collect();
-        let outcome = DecodeRequest::<Ft8>::wsjtx_depth(
+        let audio = qsonaut_modems::AudioBlock::new(12_000, slot).expect("normalized audio");
+        let outcome = qsonaut_third_party::wsjt::decode_ft8(
             &audio,
-            100.0,
-            3_000.0,
-            FT8_FAST_SYNC_MIN,
-            FT8_FAST_MAX_CAND,
-            WsjtxDepth::D1,
-            None,
+            &qsonaut_third_party::wsjt::WsjtDecodeConfig {
+                frequency_min_hz: 100.0,
+                frequency_max_hz: 3_000.0,
+                sync_min: FT8_FAST_SYNC_MIN,
+                max_candidates: FT8_FAST_MAX_CAND,
+                ..qsonaut_third_party::wsjt::WsjtDecodeConfig::default()
+            },
         )
-        .decode();
+        .expect("FT8 audio and mode are valid");
 
         let messages: Vec<String> = outcome
-            .results
-            .iter()
-            .filter_map(|result| unpack77(result.message77()))
+            .events
+            .into_iter()
+            .map(|event| event.message)
             .collect();
         assert!(
             messages.iter().any(|message| message == "CQ W1AW AA00"),
