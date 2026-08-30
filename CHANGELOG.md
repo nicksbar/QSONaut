@@ -7,6 +7,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+- Expanded automated coverage for core, mode, POTA, GUI utility, repaint, and
+  event-bus behavior; added changed-file coverage reporting and enforcement.
+- Corrected a strict floating-point literal lint issue and fixed the release
+  workflow checkout history handling.
+- Added the v0.4 maturity baseline and reference-station evidence boundary
+  (#84), plus the deterministic regression-fixture catalog (#83) for release
+  planning.
+
 ## [0.3.13] - 2026-08-29
 
 ### Added
