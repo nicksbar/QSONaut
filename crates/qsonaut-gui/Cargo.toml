@@ -31,7 +31,7 @@ qsonaut-accelerate = { path = "../qsonaut-accelerate" }
 qsonaut-core = { path = "../qsonaut-core" }
 qsonaut-automation = { path = "../qsonaut-automation" }
 qsonaut-log = { path = "../qsonaut-log" }
-qsonaut-radio = { package = "rigwright", version = "0.1.16" }
+qsonaut-radio = { package = "rigwright", version = "0.1.17" }
 qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }
 qsonaut-server-client = { path = "../qsonaut-server-client" }
 qsonaut-modems = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "6cc26b8" }

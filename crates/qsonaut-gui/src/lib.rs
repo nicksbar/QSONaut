@@ -6473,13 +6473,9 @@ impl eframe::App for QsonautGuiApp {
                             Some(_) => Color32::GRAY,
                             None => Color32::DARK_GRAY,
                         };
-                        let max_preamp = if self.config.radio.model == "IC-705"
-                            || self.config.radio.model == "IC-7610"
-                        {
-                            2
-                        } else {
-                            1
-                        };
+                        let max_preamp = native_radio_profile("native", &self.config.radio.model)
+                            .and_then(|profile| profile.control_max(ControlId::Preamp))
+                            .unwrap_or(0);
                         ui.menu_button(RichText::new("PRE").color(color), |ui| {
                             for value in 0_u8..=max_preamp {
                                 if ui
@@ -6501,11 +6497,14 @@ impl eframe::App for QsonautGuiApp {
                         .on_hover_text("Select the radio preamplifier level");
                     }
                     if supports_control(ControlId::Attenuator) {
-                        let attenuator_values: &[u8] = match self.config.radio.model.as_str() {
-                            "IC-7610" => &[0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45],
-                            "IC-9700" => &[0, 10],
-                            _ => &[0, 20],
-                        };
+                        let attenuator_values = native_radio_profile(
+                            "native",
+                            &self.config.radio.model,
+                        )
+                        .and_then(|profile| {
+                            profile.supported_control_values(ControlId::Attenuator)
+                        })
+                        .unwrap_or(&[]);
                         let color = match snapshot.attenuator {
                             Some(value) if value > 0 => Color32::from_rgb(255, 190, 105),
                             Some(_) => Color32::GRAY,

@@ -3,7 +3,6 @@ use eframe::egui::Color32;
 
 use qsonaut_radio::models::find_model;
 
-const ICOM_BAUD_RATES: &[u32] = &[4_800, 9_600, 19_200, 38_400, 57_600, 115_200];
 const GENERIC_YAESU_BAUD_RATES: &[u32] = &[4_800, 9_600, 19_200, 38_400];
 const GENERIC_CLASSIC_YAESU_BAUD_RATES: &[u32] = &[4_800, 9_600, 38_400];
 const GENERIC_KENWOOD_BAUD_RATES: &[u32] = &[4_800, 9_600, 19_200, 38_400, 57_600, 115_200];
@@ -174,7 +173,7 @@ pub(super) fn radio_baud_rates(model: &str) -> &'static [u32] {
         return GENERIC_KENWOOD_BAUD_RATES;
     };
     match profile.protocol {
-        Protocol::IcomCiV { .. } => ICOM_BAUD_RATES,
+        Protocol::IcomCiV { .. } => profile.supported_baud_rates(),
         Protocol::YaesuCat => YaesuCatModel::from_model_name(profile.model)
             .map(yaesu::profile_for_model)
             .map_or(GENERIC_YAESU_BAUD_RATES, |profile| profile.baud_rates),
@@ -186,6 +185,7 @@ pub(super) fn radio_baud_rates(model: &str) -> &'static [u32] {
         Protocol::KenwoodCat => KenwoodCatModel::from_model_name(profile.model)
             .map(kenwood::profile_for_model)
             .map_or(GENERIC_KENWOOD_BAUD_RATES, |profile| profile.baud_rates),
+        Protocol::ElecraftCat => profile.supported_baud_rates(),
     }
 }
 
