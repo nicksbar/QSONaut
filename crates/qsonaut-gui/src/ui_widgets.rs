@@ -1,7 +1,7 @@
 use eframe::egui;
 use eframe::egui::Color32;
 
-use qsonaut_radio::models::find_model;
+use qsonaut_radio::{models::find_model, MeterId};
 
 /// Paint the AI tab icon with egui primitives so it does not depend on an
 /// emoji or a platform font containing a particular Unicode glyph.
@@ -185,39 +185,33 @@ pub(super) fn format_swr_display(model: &str, normalized: Option<u8>) -> String 
         return "unavailable".to_string();
     };
     let meter_percent = (f32::from(level) * 100.0 / 255.0).round();
-    if model.eq_ignore_ascii_case("IC-7300") {
+    if let Some(profile) = find_model(model) {
         // The IC-7300 manual documents these CI-V meter anchors. Interpolate
         // only between known points; do not invent a ratio above the documented
         // 3.0:1 anchor.
-        let anchors = [(0_u8, 1.0_f32), (48, 1.5), (80, 2.0), (120, 3.0)];
-        if let Some(window) = anchors.windows(2).find(|window| level <= window[1].0) {
-            let (low_level, low_ratio) = window[0];
-            let (high_level, high_ratio) = window[1];
-            let fraction =
-                f32::from(level.saturating_sub(low_level)) / f32::from(high_level - low_level);
-            return format!(
-                "{:.2}:1 ({meter_percent:.0}% meter)",
-                low_ratio + fraction * (high_ratio - low_ratio)
-            );
+        if profile
+            .calibrated_meter_value(MeterId::Swr, level)
+            .is_some()
+        {
+            let ratio = profile
+                .calibrated_meter_value(MeterId::Swr, level)
+                .unwrap_or(3.0);
+            if level > 120 {
+                return format!(">3.00:1 ({meter_percent:.0}% meter)");
+            }
+            return format!("{ratio:.2}:1 ({meter_percent:.0}% meter)");
         }
-        return format!(">3.00:1 ({meter_percent:.0}% meter)");
     }
     format!("SWR meter {meter_percent:.0}%")
 }
 
 pub(super) fn swr_chart_value(model: &str, normalized: u8) -> f32 {
-    if !model.eq_ignore_ascii_case("IC-7300") {
-        return f32::from(normalized) * 100.0 / 255.0;
+    if let Some(profile) = find_model(model) {
+        if let Some(value) = profile.calibrated_meter_value(MeterId::Swr, normalized) {
+            return value;
+        }
     }
-    let anchors = [(0_u8, 1.0_f32), (48, 1.5), (80, 2.0), (120, 3.0)];
-    if let Some(window) = anchors.windows(2).find(|window| normalized <= window[1].0) {
-        let (low_level, low_ratio) = window[0];
-        let (high_level, high_ratio) = window[1];
-        let fraction =
-            f32::from(normalized.saturating_sub(low_level)) / f32::from(high_level - low_level);
-        return low_ratio + fraction * (high_ratio - low_ratio);
-    }
-    3.0
+    f32::from(normalized) * 100.0 / 255.0
 }
 
 #[cfg(test)]

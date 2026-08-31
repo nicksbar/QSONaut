@@ -6216,11 +6216,14 @@ impl eframe::App for QsonautGuiApp {
                                 egui::pos2(chart_left, chart_top),
                                 egui::pos2(chart_right, chart_bottom),
                             );
-                            let icom_swr_chart = self
-                                .config
-                                .radio
-                                .model
-                                .eq_ignore_ascii_case("IC-7300");
+                            let icom_swr_chart = native_radio_profile(
+                                "native",
+                                &self.config.radio.model,
+                            )
+                            .and_then(|profile| {
+                                profile.calibrated_meter_value(MeterId::Swr, 0)
+                            })
+                            .is_some();
                             let chart_axes = if icom_swr_chart {
                                 [(1.0_f32, "1.0:1"), (1.5, "1.5:1"), (2.0, "2.0:1"), (2.5, "2.5:1"), (3.0, "3.0:1")]
                             } else {
@@ -7509,25 +7512,14 @@ fn meter_reading(id: MeterId, value: Option<u8>) -> String {
 }
 
 fn meter_reading_for_model(id: MeterId, value: Option<u8>, model: &str) -> String {
-    if id == MeterId::Voltage && model.eq_ignore_ascii_case("IC-7300") {
-        return value
-            .map(ic7300_voltage)
-            .map(|voltage| format!("{voltage:.1} V"))
-            .unwrap_or_else(|| "—".to_string());
+    if id == MeterId::Voltage {
+        if let (Some(profile), Some(raw)) = (native_radio_profile("native", model), value) {
+            if let Some(voltage) = profile.calibrated_meter_value(id, raw) {
+                return format!("{voltage:.1} V");
+            }
+        }
     }
     meter_reading(id, value)
-}
-
-/// Convert the IC-7300's documented Vd meter anchors to volts. Rigwright
-/// intentionally exposes the raw CI-V meter level through its neutral HAL;
-/// this calibration belongs at the model-aware UI boundary.
-fn ic7300_voltage(value: u8) -> f32 {
-    let value = f32::from(value);
-    if value <= 13.0 {
-        (value * 10.0 / 13.0).clamp(0.0, 10.0)
-    } else {
-        (10.0 + (value - 13.0) * 6.0 / (241.0 - 13.0)).min(16.0)
-    }
 }
 
 fn meter_tooltip(id: MeterId) -> &'static str {
