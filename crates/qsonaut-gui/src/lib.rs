@@ -7332,7 +7332,7 @@ fn draw_voltage_graph(ui: &mut egui::Ui, history: &VecDeque<u8>, reading: &str) 
     painter.rect_stroke(
         outer,
         egui::CornerRadius::same(7),
-        egui::Stroke::new(1.0, Color32::from_rgb(45, 75, 88)),
+        egui::Stroke::new(1.0_f32, Color32::from_rgb(45, 75, 88)),
         egui::StrokeKind::Inside,
     );
     painter.rect_filled(
@@ -7343,7 +7343,7 @@ fn draw_voltage_graph(ui: &mut egui::Ui, history: &VecDeque<u8>, reading: &str) 
     painter.rect_stroke(
         rect,
         egui::CornerRadius::same(5),
-        egui::Stroke::new(1.0, Color32::from_rgb(28, 45, 57)),
+        egui::Stroke::new(1.0_f32, Color32::from_rgb(28, 45, 57)),
         egui::StrokeKind::Inside,
     );
 
@@ -7367,7 +7367,7 @@ fn draw_voltage_graph(ui: &mut egui::Ui, history: &VecDeque<u8>, reading: &str) 
             .collect();
         painter.add(egui::Shape::line(
             points.clone(),
-            egui::Stroke::new(2.0, Color32::from_rgb(100, 225, 165)),
+            egui::Stroke::new(2.0_f32, Color32::from_rgb(100, 225, 165)),
         ));
         if let Some(last) = points.last() {
             painter.circle_filled(*last, 3.0, Color32::from_rgb(150, 255, 205));
