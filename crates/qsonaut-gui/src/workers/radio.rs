@@ -98,42 +98,6 @@ impl MeterPollScheduler {
     }
 }
 
-const RADIO_CONTROL_IDS: &[ControlId] = &[
-    ControlId::AfGain,
-    ControlId::RfGain,
-    ControlId::Squelch,
-    ControlId::RfPower,
-    ControlId::Preamp,
-    ControlId::ExternalPreamp,
-    ControlId::Attenuator,
-    ControlId::NoiseBlanker,
-    ControlId::NoiseReduction,
-    ControlId::NoiseReductionLevel,
-    ControlId::IpPlus,
-    ControlId::Notch,
-    ControlId::ManualNotch,
-    ControlId::DataMode,
-    ControlId::Filter,
-    ControlId::Agc,
-    ControlId::Rit,
-    ControlId::Xit,
-    ControlId::Split,
-    ControlId::Tuner,
-    ControlId::Vfo,
-    ControlId::MainSub,
-];
-
-const RADIO_METER_IDS: &[MeterId] = &[
-    MeterId::Signal,
-    MeterId::Power,
-    MeterId::Swr,
-    MeterId::Alc,
-    MeterId::Compression,
-    MeterId::Current,
-    MeterId::Voltage,
-    MeterId::Temperature,
-];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RadioScopeStreamConfig {
     view: RadioScopeView,
@@ -169,16 +133,8 @@ pub(crate) fn spawn_radio_worker(
         {
             let mut s = state.lock().expect("ui state lock poisoned");
             s.radio_power_supported = radio.capabilities().can_set_power;
-            s.supported_controls = RADIO_CONTROL_IDS
-                .iter()
-                .copied()
-                .filter(|id| radio.supports_control(*id))
-                .collect();
-            s.supported_meters = RADIO_METER_IDS
-                .iter()
-                .copied()
-                .filter(|id| radio.supports_meter(*id))
-                .collect();
+            s.supported_controls = radio.supported_controls().into_iter().collect();
+            s.supported_meters = radio.supported_meters().into_iter().collect();
             info!(
                 supported_meters = ?s.supported_meters,
                 temperature_supported = radio.supports_meter(MeterId::Temperature),
