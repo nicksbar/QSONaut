@@ -26,6 +26,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Corrected simulated SSTV sequencing and mode timing, including a complete
   Martin M1 transmission slot, guard time, sequential image frames, and safer
   waterfall amplitude.
+- Moved signal recording into profile settings with per-mode selection and
+  separate full-width and normalized-stream captures; recording I/O now runs
+  asynchronously so slow storage cannot stall the audio or GUI workers (#72,
+  #74).
+- Expanded null-radio and decoder fixtures across FT8, FT4, CW, Q65, JT9, and
+  SSTV with amplitude, timing, chunk-boundary, noise, final-character, and
+  short-capture coverage (#26, #83).
+- Hardened CW operation with filtered-channel retargeting, a third
+  auto-target state that rescans after ten quiet seconds, visible countdown
+  feedback, stream finalization, and fresh recordings per acquired target
+  (#25, #72, #83).
+- Pinned QSONaut to the merged `qsonaut-third-party` main revision and removed
+  the local Cargo path override so CI and locked builds validate the published
+  shared adapter boundary (#79).
 
 ### Added
 - Added a CW `AUTO TARGET` control that finds a stable carrier, retunes the
