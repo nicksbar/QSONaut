@@ -5,9 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.14] - 2026-08-30
 
 ### Changed
+- Fixed current Rust/Clippy compatibility warnings in recording and profile
+  mode-selection paths, and added a temporary-directory recording lifecycle
+  regression test.
+- Aligned the application Rigwright requirement with the released `0.1.16`
+  driver and recalculated the coverage baseline after moving SSTV ownership
+  behind `qsonaut-third-party`.
 - Expanded automated coverage for core, mode, POTA, GUI utility, repaint, and
   event-bus behavior; added changed-file coverage reporting and enforcement.
 - Corrected a strict floating-point literal lint issue and fixed the release

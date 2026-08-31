@@ -2081,10 +2081,8 @@ impl QsonautGuiApp {
                 state.recording_modes = profile
                     .recording_modes
                     .iter()
-                    .filter_map(|(mode, enabled)| {
-                        (*enabled).then(|| parse_workspace_mode_token(mode))
-                    })
-                    .flatten()
+                    .filter(|(_, enabled)| **enabled)
+                    .filter_map(|(mode, _)| parse_workspace_mode_token(mode))
                     .collect();
                 state.recording_full_width = profile.recording_full_width;
                 state.recording_stream = profile.recording_stream;
@@ -2173,10 +2171,8 @@ impl QsonautGuiApp {
                 state.recording_modes = profile
                     .recording_modes
                     .iter()
-                    .filter_map(|(mode, enabled)| {
-                        (*enabled).then(|| parse_workspace_mode_token(mode))
-                    })
-                    .flatten()
+                    .filter(|(_, enabled)| **enabled)
+                    .filter_map(|(mode, _)| parse_workspace_mode_token(mode))
                     .collect();
                 state.recording_full_width = profile.recording_full_width;
                 state.recording_stream = profile.recording_stream;
@@ -3027,8 +3023,8 @@ impl QsonautGuiApp {
             state.recording_modes = self
                 .recording_modes
                 .iter()
-                .filter_map(|(mode, enabled)| (*enabled).then(|| parse_workspace_mode_token(mode)))
-                .flatten()
+                .filter(|(_, enabled)| **enabled)
+                .filter_map(|(mode, _)| parse_workspace_mode_token(mode))
                 .collect();
             state.recording_full_width = self.recording_full_width;
             state.recording_stream = self.recording_stream;

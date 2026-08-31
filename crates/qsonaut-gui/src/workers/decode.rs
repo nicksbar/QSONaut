@@ -282,6 +282,7 @@ pub(in super::super) fn run_native_digital_decode(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{q65_live_decode_config, WorkspaceMode};
     use crate::modes::fst4::Submode;

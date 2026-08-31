@@ -13,7 +13,7 @@ use qsonaut_third_party::sstv as qsonaut_sstv;
 use serde_json::json;
 use std::fs::File;
 use std::io::BufWriter;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU32;
 
 const CW_RETARGET_TIMEOUT_S: u64 = 10;
@@ -1570,11 +1570,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 shared.cw_wpm
                             };
                             if selected_tone_hz != cw_stream_tone_hz || cw_wpm != cw_stream_wpm {
-                                if cw_stream_tone_hz != 0 {
-                                    if recording_active {
-                                        let _ = recording_tx.try_send(RecordingMessage::Stop);
-                                        recording_active = false;
-                                    }
+                                if cw_stream_tone_hz != 0 && recording_active {
+                                    let _ = recording_tx.try_send(RecordingMessage::Stop);
+                                    recording_active = false;
                                 }
                                 cw_stream_decoder =
                                     Some(CwDitChannel::new(12_000, selected_tone_hz, cw_wpm));
@@ -1927,10 +1925,16 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::{strongest_cw_tone_hz, GuiState, NullAudioGenerator, WorkspaceMode};
+    use super::{
+        finish_signal_recording, open_signal_recording_in, strongest_cw_tone_hz, GuiState,
+        NullAudioGenerator, WorkspaceMode,
+    };
     use qsonaut_third_party::sstv as qsonaut_sstv;
     use rustfft::num_complex::Complex;
+    use std::sync::{Arc, Mutex};
+    use tempfile::tempdir;
 
     #[test]
     fn null_audio_generator_builds_waveforms_for_supported_demo_modes() {
@@ -2049,6 +2053,52 @@ mod tests {
         let tone_hz = strongest_cw_tone_hz(&spectrum, 12_000).expect("CW peak");
         assert_eq!(tone_hz, 1_500);
     }
+
+    #[test]
+    fn signal_recording_writes_session_audio_and_end_metadata() {
+        let directory = tempdir().expect("temporary recording directory");
+        let mut recording = Some(
+            open_signal_recording_in(
+                directory.path(),
+                WorkspaceMode::Cw,
+                48_000,
+                700,
+                Some(14_074_000),
+                true,
+                true,
+            )
+            .expect("recording should open"),
+        );
+        let path = recording.as_ref().expect("recording exists").path.clone();
+        let signal = recording.as_mut().expect("recording exists");
+        if let Some(writer) = signal.full_width.as_mut() {
+            writer.write_sample(i16::MAX).expect("full-width sample");
+        }
+        if let Some(writer) = signal.stream.as_mut() {
+            writer.write_sample(i16::MIN).expect("stream sample");
+        }
+        signal.samples = 12_000;
+
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        finish_signal_recording(&mut recording, &state);
+
+        let metadata = std::fs::read_to_string(path.with_extension("jsonl"))
+            .expect("recording metadata should exist");
+        assert!(metadata.contains("\"type\":\"session\""));
+        assert!(metadata.contains("\"type\":\"end\""));
+        assert!(metadata.contains("\"samples\":12000"));
+        assert!(path.with_extension("full.wav").exists());
+        assert!(path.with_extension("stream.wav").exists());
+        assert!(state
+            .lock()
+            .expect("state lock")
+            .cw_recording_status
+            .starts_with("Saved "));
+
+        std::fs::remove_file(path.with_extension("jsonl")).expect("metadata cleanup");
+        std::fs::remove_file(path.with_extension("full.wav")).expect("full cleanup");
+        std::fs::remove_file(path.with_extension("stream.wav")).expect("stream cleanup");
+    }
 }
 
 fn open_signal_recording(
@@ -2060,7 +2110,27 @@ fn open_signal_recording(
     record_stream: bool,
 ) -> anyhow::Result<SignalRecording> {
     let directory = qsonaut_log::app_config_dir().join("signal-recordings");
-    std::fs::create_dir_all(&directory)?;
+    open_signal_recording_in(
+        &directory,
+        mode,
+        full_width_sample_rate_hz,
+        tone_hz,
+        frequency_hz,
+        record_full_width,
+        record_stream,
+    )
+}
+
+fn open_signal_recording_in(
+    directory: &Path,
+    mode: WorkspaceMode,
+    full_width_sample_rate_hz: u32,
+    tone_hz: u32,
+    frequency_hz: Option<u64>,
+    record_full_width: bool,
+    record_stream: bool,
+) -> anyhow::Result<SignalRecording> {
+    std::fs::create_dir_all(directory)?;
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
     let path = directory.join(format!(
         "{}-{stamp}-{tone_hz}hz",

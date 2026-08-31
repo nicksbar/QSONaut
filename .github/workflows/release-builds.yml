@@ -39,13 +39,13 @@ jobs:
             os: windows
 
     steps:
-      # cw-dit and mfsk-core are resolved from pinned upstream Git dependencies.
+      # Shared modem dependencies are resolved from pinned upstream Git revisions.
       - name: Check out QSONaut
         uses: actions/checkout@v6
         with:
           path: QSONaut
 
-      # Rigwright v0.1.14 is resolved from crates.io by the Cargo manifests.
+      # Rigwright v0.1.16 is resolved from crates.io by the Cargo manifests.
 
       - name: Install Linux native libraries
         if: matrix.os == 'linux'

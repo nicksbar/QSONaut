@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      # cw-dit and mfsk-core are resolved from pinned upstream Git dependencies.
+      # Shared modem dependencies are resolved from pinned upstream Git revisions.
       - name: Check out QSONaut
         uses: actions/checkout@v6
         with:

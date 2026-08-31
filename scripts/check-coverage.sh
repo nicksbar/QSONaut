@@ -2,7 +2,7 @@
 set -euo pipefail
 
 summary_file="${1:-coverage-summary.txt}"
-minimum_percent="${2:-${QSONAUT_COVERAGE_MIN:-28}}"
+minimum_percent="${2:-${QSONAUT_COVERAGE_MIN:-26.6}}"
 
 if [[ ! -f "$summary_file" ]]; then
   echo "coverage summary not found: $summary_file" >&2
