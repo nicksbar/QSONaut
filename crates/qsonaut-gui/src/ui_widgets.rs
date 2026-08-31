@@ -3,7 +3,6 @@ use eframe::egui::Color32;
 
 use qsonaut_radio::models::find_model;
 
-
 /// Paint the AI tab icon with egui primitives so it does not depend on an
 /// emoji or a platform font containing a particular Unicode glyph.
 pub(super) fn draw_ai_icon(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
