@@ -7,6 +7,18 @@ const FT8_DEEP_RUNTIME_BUDGET_MS: u128 = 12_000;
 const FT8_DEEP_SYNC_MIN: f32 = 1.3;
 const FT8_DEEP_MAX_CAND: usize = 120;
 
+fn q65_live_decode_config() -> WsjtDecodeConfig {
+    // Q65's coarse search is substantially more expensive than the other
+    // native modes. Keep the live worker bounded unless a future explicit
+    // deep-decode control opts into a wider pass.
+    WsjtDecodeConfig {
+        score_threshold: 0.05,
+        max_candidates: 8,
+        time_tolerance_sec: 1.0,
+        ..WsjtDecodeConfig::default()
+    }
+}
+
 pub(in super::super) fn warm_ft8_decoder() {
     let warmup_audio =
         AudioBlock::new(12_000, vec![0.0; FT8_SLOT_SAMPLES]).expect("normalized audio is valid");
@@ -164,10 +176,11 @@ pub(in super::super) fn run_native_digital_decode(
             }
         }
         WorkspaceMode::Q65 => {
+            let config = q65_live_decode_config();
             if let Ok(batch) = decode_wsjt(
                 &AudioBlock::new(12_000, samples.clone()).expect("normalized audio is valid"),
                 WsjtMode::Q65,
-                &WsjtDecodeConfig::default(),
+                &config,
             ) {
                 for event in batch.events {
                     push(
@@ -265,6 +278,68 @@ pub(in super::super) fn run_native_digital_decode(
     shared.digital_decodes.extend(decoded);
     while shared.digital_decodes.len() > 300 {
         shared.digital_decodes.pop_front();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{q65_live_decode_config, WorkspaceMode};
+    use crate::modes::fst4::Submode;
+    use crate::tx_audio::build_native_digital_tx_pcm;
+    use qsonaut_modems::AudioBlock;
+    use qsonaut_third_party::wsjt::{decode as decode_wsjt, WsjtMode};
+    use std::time::Instant;
+
+    #[test]
+    fn q65_live_search_decodes_a_null_fixture_with_a_bounded_search() {
+        let (pcm, _) = build_native_digital_tx_pcm(
+            WorkspaceMode::Q65,
+            "CQ W1AW AA00",
+            1_500,
+            Submode::default(),
+            20,
+            600,
+        )
+        .expect("Q65 fixture synthesis");
+        let samples = pcm
+            .into_iter()
+            .map(|sample| sample as f32 / i16::MAX as f32 * 0.06)
+            .collect::<Vec<_>>();
+        let started = Instant::now();
+        let batch = decode_wsjt(
+            &AudioBlock::new(12_000, samples).expect("Q65 audio block"),
+            WsjtMode::Q65,
+            &q65_live_decode_config(),
+        )
+        .expect("Q65 decode");
+        assert!(
+            started.elapsed().as_secs() < 10,
+            "Q65 live search exceeded realtime safety bound"
+        );
+        assert!(
+            batch
+                .events
+                .iter()
+                .any(|event| event.message.contains("W1AW")),
+            "Q65 fixture did not decode: {:?}",
+            batch.events
+        );
+    }
+
+    #[test]
+    fn q65_live_search_handles_a_short_capture_without_hanging() {
+        let started = Instant::now();
+        let result = decode_wsjt(
+            &AudioBlock::new(12_000, vec![0.0; 12_000]).expect("short audio block"),
+            WsjtMode::Q65,
+            &q65_live_decode_config(),
+        );
+        assert!(
+            started.elapsed().as_secs() < 10,
+            "Q65 short-capture handling exceeded realtime safety bound"
+        );
+        assert!(result.is_ok(), "short Q65 capture should be a valid no-op");
+        assert!(result.expect("checked above").events.is_empty());
     }
 }
 

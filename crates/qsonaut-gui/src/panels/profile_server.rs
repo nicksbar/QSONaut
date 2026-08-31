@@ -276,6 +276,58 @@ impl QsonautGuiApp {
             });
         }
 
+        ui.add_space(8.0);
+        ui.group(|ui| {
+            ui.heading("Recording");
+            let mut changed = false;
+            changed |= ui
+                .checkbox(&mut self.recording_enabled, "Enable signal recording")
+                .changed();
+            ui.label(
+                RichText::new(
+                    "Each enabled mode starts a new session when selected or auto-targeted.",
+                )
+                .small()
+                .color(theme_muted(ui)),
+            );
+            ui.horizontal_wrapped(|ui| {
+                changed |= ui
+                    .checkbox(&mut self.recording_full_width, "Full-width capture")
+                    .on_hover_text("Save the complete captured audio stream")
+                    .changed();
+                changed |= ui
+                    .checkbox(&mut self.recording_stream, "Normalized stream")
+                    .on_hover_text("Save the 12 kHz normalized decoder stream")
+                    .changed();
+            });
+            ui.separator();
+            ui.label("Record these modes");
+            for mode in WORKSPACE_MODES {
+                let enabled = self
+                    .recording_modes
+                    .entry(mode.label().to_string())
+                    .or_insert(false);
+                changed |= ui.checkbox(enabled, mode.label()).changed();
+            }
+            if changed {
+                if let Ok(mut state) = self.state.lock() {
+                    state.recording_enabled = self.recording_enabled;
+                    state.recording_modes = self
+                        .recording_modes
+                        .iter()
+                        .filter_map(|(mode, enabled)| {
+                            (*enabled).then(|| parse_workspace_mode_token(mode))
+                        })
+                        .flatten()
+                        .collect();
+                    state.recording_full_width = self.recording_full_width;
+                    state.recording_stream = self.recording_stream;
+                }
+                self.profile_dirty = true;
+                self.persist_profile("Auto-saved");
+            }
+        });
+
         ui.add_space(4.0);
         ui.label(
             RichText::new(&self.profile_io_status)

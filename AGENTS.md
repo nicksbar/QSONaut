@@ -6,6 +6,10 @@ future agent changes:
 - Keep radio, audio, GUI, and server boundaries explicit. Generic behavior
   belongs in the shared layer; vendor/model-specific behavior belongs in the
   driver or profile that owns the capability.
+- Prefer logical, responsibility-based module separation. When a source file
+  starts becoming difficult to navigate, test, or fit into review context,
+  split it into focused modules with a small facade; do not allow a large
+  file to become a catch-all simply because the code is related.
 - Run `cargo fmt --all`, `cargo test --locked --workspace --all-targets`,
   `cargo clippy --locked --workspace --all-targets -- -D warnings`, and
   `git diff --check` before declaring a change complete.

@@ -135,6 +135,10 @@ fn synthesize_cw_pcm(text: &str, tone_hz: f32, wpm: f32) -> Result<Vec<i16>> {
             pcm.extend(std::iter::repeat_n(0, dot_samples * 7));
         }
     }
+    // Give the streaming decoder enough trailing carrier-off time to close
+    // the final character. Without this tail, the last character remains in
+    // the decoder's pending run (for example, N7U instead of N7UF).
+    pcm.extend(std::iter::repeat_n(0, FT8_TX_SAMPLE_RATE_HZ as usize * 2));
     Ok(pcm)
 }
 

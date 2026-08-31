@@ -1108,8 +1108,13 @@ struct GuiState {
     digital_decodes: VecDeque<DigitalDecodeEntry>,
     cw_live_text: String,
     cw_auto_target: bool,
+    cw_auto_retarget: bool,
+    cw_retarget_remaining_s: Option<u8>,
     cw_auto_target_tone_hz: Option<u32>,
-    cw_record_rx: bool,
+    recording_enabled: bool,
+    recording_modes: HashSet<WorkspaceMode>,
+    recording_full_width: bool,
+    recording_stream: bool,
     cw_recording_status: String,
     cw_wpm: u8,
     sstv_status: String,
@@ -1225,8 +1230,13 @@ impl Default for GuiState {
             digital_decodes: VecDeque::with_capacity(300),
             cw_live_text: String::new(),
             cw_auto_target: false,
+            cw_auto_retarget: false,
+            cw_retarget_remaining_s: None,
             cw_auto_target_tone_hz: None,
-            cw_record_rx: false,
+            recording_enabled: false,
+            recording_modes: HashSet::new(),
+            recording_full_width: true,
+            recording_stream: true,
             cw_recording_status: "Recording off".to_string(),
             cw_wpm: default_cw_wpm(),
             sstv_status: "READY: Auto (VIS) · waiting for a complete SSTV header".to_string(),
@@ -1888,6 +1898,10 @@ struct QsonautGuiApp {
     ptt_tail_ms: u64,
     cw_wpm: u8,
     cw_tone_hz: u16,
+    recording_enabled: bool,
+    recording_modes: std::collections::BTreeMap<String, bool>,
+    recording_full_width: bool,
+    recording_stream: bool,
     selected_profile_name: String,
     new_profile_name: String,
     new_profile_tab_editing: bool,
@@ -2061,6 +2075,21 @@ impl QsonautGuiApp {
             .unwrap_or_else(|| "Default".to_string());
 
         let state = Arc::new(Mutex::new(GuiState::default()));
+        if let Some(profile) = load_operator_profile_named(&selected_profile_name) {
+            if let Ok(mut state) = state.lock() {
+                state.recording_enabled = profile.recording_enabled;
+                state.recording_modes = profile
+                    .recording_modes
+                    .iter()
+                    .filter_map(|(mode, enabled)| {
+                        (*enabled).then(|| parse_workspace_mode_token(mode))
+                    })
+                    .flatten()
+                    .collect();
+                state.recording_full_width = profile.recording_full_width;
+                state.recording_stream = profile.recording_stream;
+            }
+        }
         let app_events = AppEventBus::new(256);
         let automation_event_rx = app_events.subscribe();
         let (automation_host, automation_status, automation_external_transports) =
@@ -2140,6 +2169,17 @@ impl QsonautGuiApp {
                 state.ft4_deep_decode = profile.ft4_deep_decode;
                 state.selected_audio_hz = profile.rx_tone_hz;
                 state.cw_wpm = profile.cw_wpm.clamp(5, 40);
+                state.recording_enabled = profile.recording_enabled;
+                state.recording_modes = profile
+                    .recording_modes
+                    .iter()
+                    .filter_map(|(mode, enabled)| {
+                        (*enabled).then(|| parse_workspace_mode_token(mode))
+                    })
+                    .flatten()
+                    .collect();
+                state.recording_full_width = profile.recording_full_width;
+                state.recording_stream = profile.recording_stream;
                 state.radio_spectrum_desired = profile.civ_spectrum_on;
                 state.radio_scope_vbw_wide = profile.radio_scope_vbw_wide;
                 state.radio_scope_view = profile.radio_scope_view;
@@ -2283,6 +2323,10 @@ impl QsonautGuiApp {
         let mut ptt_tail_ms = default_ptt_tail_ms();
         let mut cw_wpm = default_cw_wpm();
         let mut cw_tone_hz = default_cw_tone_hz();
+        let mut recording_enabled = false;
+        let mut recording_modes = std::collections::BTreeMap::new();
+        let mut recording_full_width = true;
+        let mut recording_stream = true;
         let mut gui_scale = default_gui_scale();
         let mut compute_preference = ComputePreference::Auto;
         let mut psk_reporter_enabled = false;
@@ -2360,6 +2404,10 @@ impl QsonautGuiApp {
             ptt_tail_ms = p.ptt_tail_ms.clamp(0, 500);
             cw_wpm = p.cw_wpm.clamp(5, 40);
             cw_tone_hz = p.cw_tone_hz.clamp(200, 3_000);
+            recording_enabled = p.recording_enabled;
+            recording_modes = p.recording_modes;
+            recording_full_width = p.recording_full_width;
+            recording_stream = p.recording_stream;
             gui_scale = if p.profile_version >= GUI_SCALE_PROFILE_VERSION {
                 p.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
             } else {
@@ -2479,6 +2527,10 @@ impl QsonautGuiApp {
                 ptt_tail_ms,
                 cw_wpm,
                 cw_tone_hz,
+                recording_enabled,
+                recording_modes: recording_modes.clone(),
+                recording_full_width,
+                recording_stream,
                 audio_input_device: config.audio.input_device.clone(),
                 audio_enabled: config.audio.enabled,
                 audio_output_device: config.audio.output_device.clone(),
@@ -2815,6 +2867,10 @@ impl QsonautGuiApp {
             ptt_tail_ms,
             cw_wpm,
             cw_tone_hz,
+            recording_enabled,
+            recording_modes,
+            recording_full_width,
+            recording_stream,
             selected_profile_name,
             new_profile_name: String::new(),
             new_profile_tab_editing: false,
@@ -2962,6 +3018,21 @@ impl QsonautGuiApp {
         self.ptt_tail_ms = profile.ptt_tail_ms.clamp(0, 500);
         self.cw_wpm = profile.cw_wpm.clamp(5, 40);
         self.cw_tone_hz = profile.cw_tone_hz.clamp(200, 3_000);
+        self.recording_enabled = profile.recording_enabled;
+        self.recording_modes = profile.recording_modes.clone();
+        self.recording_full_width = profile.recording_full_width;
+        self.recording_stream = profile.recording_stream;
+        if let Ok(mut state) = self.state.lock() {
+            state.recording_enabled = self.recording_enabled;
+            state.recording_modes = self
+                .recording_modes
+                .iter()
+                .filter_map(|(mode, enabled)| (*enabled).then(|| parse_workspace_mode_token(mode)))
+                .flatten()
+                .collect();
+            state.recording_full_width = self.recording_full_width;
+            state.recording_stream = self.recording_stream;
+        }
         self.contest_enabled = profile.contest_enabled;
         self.contest_operating_mode = profile.contest_operating_mode;
         self.contest_split_policy = profile.contest_split_policy;
@@ -4219,6 +4290,10 @@ impl QsonautGuiApp {
             ptt_tail_ms: self.ptt_tail_ms.clamp(0, 500),
             cw_wpm: self.cw_wpm.clamp(5, 40),
             cw_tone_hz: self.cw_tone_hz.clamp(200, 3_000),
+            recording_enabled: self.recording_enabled,
+            recording_modes: self.recording_modes.clone(),
+            recording_full_width: self.recording_full_width,
+            recording_stream: self.recording_stream,
             audio_input_device: self.config.audio.input_device.clone(),
             audio_enabled: self.config.audio.enabled,
             audio_output_device: self.config.audio.output_device.clone(),
@@ -8222,6 +8297,92 @@ mod tests {
         .expect("CW synthesis");
         assert_eq!(offset, 0.0);
         assert!(pcm.iter().any(|sample| *sample != 0));
+        assert!(pcm[pcm.len() - 12_000..].iter().all(|sample| *sample == 0));
+    }
+
+    #[test]
+    fn cw_builder_stream_decode_flushes_the_final_character() {
+        let (pcm, _) = build_native_digital_tx_pcm(
+            WorkspaceMode::Cw,
+            "N7UF",
+            700,
+            modes::fst4::Submode::default(),
+            20,
+            700,
+        )
+        .expect("CW synthesis");
+        let mut samples = vec![0.0_f32; 12_000];
+        samples.extend(
+            pcm.into_iter()
+                .map(|sample| sample as f32 / i16::MAX as f32)
+                .collect::<Vec<_>>(),
+        );
+        let mut decoder = qsonaut_third_party::cw::CwChannel::new(12_000, 700, 20);
+        let mut text = String::new();
+        for event in decoder.push_samples_with_audio(&samples).0 {
+            if let qsonaut_third_party::cw::CwDecode::Character(character) = event {
+                text.push(character);
+            }
+        }
+        for event in decoder.finish() {
+            if let qsonaut_third_party::cw::CwDecode::Character(character) = event {
+                text.push(character);
+            }
+        }
+        assert!(text.contains("N7UF"), "decoded CW text was {text:?}");
+    }
+
+    #[test]
+    fn cw_builder_survives_wpm_and_chunk_boundary_variation() {
+        for wpm in [5, 10, 20, 40] {
+            let (pcm, _) = build_native_digital_tx_pcm(
+                WorkspaceMode::Cw,
+                "CQ N7UF",
+                700,
+                modes::fst4::Submode::default(),
+                wpm,
+                700,
+            )
+            .expect("CW synthesis");
+            let mut samples = vec![0.0_f32; 12_000];
+            samples.extend(
+                pcm.into_iter()
+                    .map(|sample| sample as f32 / i16::MAX as f32),
+            );
+            let mut decoder = qsonaut_third_party::cw::CwChannel::new(12_000, 700, wpm);
+            let mut text = String::new();
+            let mut cursor = 0;
+            for width in [1, 7, 31, 127, 503, 1_001] {
+                let end = (cursor + width).min(samples.len());
+                for event in decoder.push_samples_with_audio(&samples[cursor..end]).0 {
+                    if let qsonaut_third_party::cw::CwDecode::Character(character) = event {
+                        text.push(character);
+                    }
+                }
+                cursor = end;
+                if cursor == samples.len() {
+                    break;
+                }
+            }
+            while cursor < samples.len() {
+                let end = (cursor + 257).min(samples.len());
+                for event in decoder.push_samples_with_audio(&samples[cursor..end]).0 {
+                    if let qsonaut_third_party::cw::CwDecode::Character(character) = event {
+                        text.push(character);
+                    }
+                }
+                cursor = end;
+            }
+            for event in decoder.finish() {
+                if let qsonaut_third_party::cw::CwDecode::Character(character) = event {
+                    text.push(character);
+                }
+            }
+            assert!(
+                text.contains("N7UF"),
+                "{wpm} WPM decoded CW text was {text:?}"
+            );
+        }
     }
 
     #[test]
@@ -8270,6 +8431,46 @@ mod tests {
             .digital_decodes
             .iter()
             .any(|entry| entry.message == "CQ W1AW AA00"));
+    }
+
+    #[test]
+    fn ft4_null_fixture_tolerates_level_and_timing_variation() {
+        let (pcm, offset_s) = build_native_digital_tx_pcm(
+            WorkspaceMode::Ft4,
+            "CQ W1AW AA00",
+            1_500,
+            modes::fst4::Submode::default(),
+            20,
+            600,
+        )
+        .expect("FT4 synthesis");
+        for (amplitude, start_s) in [(0.03_f32, 0.5_f64), (0.06, 0.9), (0.12, 1.2)] {
+            let mut slot = vec![0.0_f32; (7.5 * 12_000.0) as usize];
+            let start = ((offset_s + start_s - 0.5) * 12_000.0).round() as usize;
+            for (dst, sample) in slot[start..].iter_mut().zip(pcm.iter().copied()) {
+                *dst = sample as f32 / i16::MAX as f32 * amplitude;
+            }
+            let state = Arc::new(Mutex::new(GuiState::default()));
+            run_native_digital_decode(
+                WorkspaceMode::Ft4,
+                modes::fst4::Submode::default(),
+                slot,
+                10,
+                "00:01:15.000".to_string(),
+                1_500,
+                false,
+                state.clone(),
+            );
+            assert!(
+                state
+                    .lock()
+                    .expect("state")
+                    .digital_decodes
+                    .iter()
+                    .any(|entry| entry.message == "CQ W1AW AA00"),
+                "FT4 failed at amplitude {amplitude} and start {start_s}s"
+            );
+        }
     }
 
     #[test]
@@ -8410,6 +8611,55 @@ mod tests {
             messages.iter().any(|message| message == "CQ W1AW AA00"),
             "early decode messages: {messages:?}"
         );
+    }
+
+    fn add_deterministic_noise(samples: &mut [f32], amplitude: f32) {
+        let mut state = 0x6d2b_79f5_u32;
+        for sample in samples {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let unit = ((state >> 8) as f32 / 16_777_215.0) * 2.0 - 1.0;
+            *sample += unit * amplitude;
+        }
+    }
+
+    #[test]
+    fn ft8_fixture_tolerates_level_timing_and_low_noise_variation() {
+        let pcm = build_ft8_tx_pcm("CQ W1AW AA00", 1_500).expect("FT8 PCM");
+        for (amplitude, timing_offset_s, noise) in [
+            (0.03_f32, -0.2_f64, 0.0002_f32),
+            (0.06, 0.0, 0.0005),
+            (0.12, 0.2, 0.0008),
+        ] {
+            let mut slot = vec![0.0_f32; FT8_SLOT_SAMPLES];
+            let start = ((FT8_TX_AUDIO_START_S + timing_offset_s) * 12_000.0)
+                .round()
+                .max(0.0) as usize;
+            for (dst, sample) in slot[start..].iter_mut().zip(pcm.iter().copied()) {
+                *dst = sample as f32 / i16::MAX as f32 * amplitude;
+            }
+            add_deterministic_noise(&mut slot, noise);
+            let audio =
+                qsonaut_modems::AudioBlock::new(12_000, slot).expect("normalized FT8 audio");
+            let outcome = qsonaut_third_party::wsjt::decode_ft8(
+                &audio,
+                &qsonaut_third_party::wsjt::WsjtDecodeConfig {
+                    frequency_min_hz: 100.0,
+                    frequency_max_hz: 3_000.0,
+                    sync_min: FT8_FAST_SYNC_MIN,
+                    max_candidates: FT8_FAST_MAX_CAND,
+                    ..qsonaut_third_party::wsjt::WsjtDecodeConfig::default()
+                },
+            )
+            .expect("FT8 audio and mode are valid");
+            assert!(
+                outcome
+                    .events
+                    .iter()
+                    .any(|event| event.message == "CQ W1AW AA00"),
+                "FT8 failed at amplitude {amplitude}, timing {timing_offset_s}s, noise {noise}: {:?}",
+                outcome.events
+            );
+        }
     }
 
     #[test]
