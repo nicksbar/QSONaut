@@ -6325,6 +6325,9 @@ impl eframe::App for QsonautGuiApp {
                         }
                     }
                     if supports_control(ControlId::NoiseReductionLevel) {
+                        let max_level = native_radio_profile("native", &self.config.radio.model)
+                            .and_then(|profile| profile.control_max(ControlId::NoiseReductionLevel))
+                            .expect("supported NR level must have a profile bound");
                         ui.menu_button(
                             RichText::new("NRL").color(if snapshot.noise_reduction_level.is_some() {
                                 Color32::LIGHT_BLUE
@@ -6335,7 +6338,7 @@ impl eframe::App for QsonautGuiApp {
                                 ui.label("Noise reduction level");
                                 let mut level = snapshot.noise_reduction_level.unwrap_or(8) as f32;
                                 let response = ui.add(
-                                    egui::Slider::new(&mut level, 1.0..=15.0)
+                                    egui::Slider::new(&mut level, 1.0..=f32::from(max_level))
                                         .step_by(1.0)
                                         .show_value(true),
                                 );
@@ -6420,13 +6423,16 @@ impl eframe::App for QsonautGuiApp {
                         .on_hover_text("Select off, auto notch, or manual notch");
                     }
                     if supports_control(ControlId::Agc) {
+                        let max_agc = native_radio_profile("native", &self.config.radio.model)
+                            .and_then(|profile| profile.control_max(ControlId::Agc))
+                            .expect("supported AGC must have a profile bound");
                         let color = if snapshot.agc.is_some() {
                             Color32::LIGHT_BLUE
                         } else {
                             Color32::DARK_GRAY
                         };
                         ui.menu_button(RichText::new("AGC").color(color), |ui| {
-                            for value in 0_u8..=3 {
+                            for value in 0_u8..=max_agc {
                                 if ui
                                     .selectable_label(snapshot.agc == Some(value), format!("AGC {value}"))
                                     .clicked()

@@ -1240,7 +1240,16 @@ impl QsonautGuiApp {
                     edit_optional_u8(ui, value, 0, 255);
                 }
             });
-            if native_profile.is_some_and(|profile| profile.manufacturer == Manufacturer::Icom) {
+            if native_profile.is_some_and(|profile| {
+                [
+                    ControlId::Preamp,
+                    ControlId::Attenuator,
+                    ControlId::NoiseBlanker,
+                    ControlId::NoiseReduction,
+                ]
+                .into_iter()
+                .any(|id| profile.supports_control(id))
+            }) {
                 ui.add_space(4.0);
                 ui.label(RichText::new("Icom CI-V controls").strong());
                 ui.horizontal_wrapped(|ui| {
