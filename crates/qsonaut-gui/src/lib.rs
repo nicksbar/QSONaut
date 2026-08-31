@@ -19,19 +19,10 @@ mod workers;
 
 use anyhow::{anyhow, Context, Result};
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
-use mfsk_core::{
-    ft8::decode::WsjtxDepth,
-    ft8::wave_gen::{message_to_tones as ft8_message_to_tones, tones_to_i16 as ft8_tones_to_i16},
-    ft8::Ft8,
-    msg::{
-        decode_request::DecodeRequest,
-        wsjt77::{pack77, unpack77},
-    },
-};
 use qsonaut_accelerate::{
     AccelerationReport, ActiveBackend, ComputePreference, DecodeTelemetry, DecodeTrace,
 };
-use qsonaut_audio::{play_pcm_blocking, AudioService};
+use qsonaut_audio::{play_pcm_blocking, AudioService, NULL_INPUT_DEVICE, NULL_OUTPUT_DEVICE};
 use qsonaut_automation::{
     Action, AutomationEvent, AutomationHost, Capability, CapabilitySet, EventKind,
     ExternalSourceConfig, RuleComponent, RuleComponentConfig,
@@ -60,6 +51,7 @@ use qsonaut_server_client::{
     log_idempotency_key, new_instance_id, ConnectionConfig as ServerConnectionConfig,
     ConnectionState as ServerConnectionState, Presence as ServerPresence, ServerClient,
 };
+use qsonaut_third_party::sstv as qsonaut_sstv;
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -79,17 +71,85 @@ const QSONAUT_ISSUES_URL: &str = "https://github.com/nicksbar/QSONaut/issues";
 const QSONAUT_WEBSITE_URL: &str = "https://qsonaut.com";
 const AUDIO_FAQ: &str = include_str!("../../../docs/audio_faq.md");
 
-fn qsonaut_contributors() -> &'static str {
-    match option_env!("QSONAUT_CONTRIBUTORS") {
-        Some(value) if !value.trim().is_empty() => value,
-        _ => "None listed",
+#[derive(Clone, Debug, Default, Deserialize)]
+pub(crate) struct QsonautPerson {
+    pub(crate) name: Option<String>,
+    pub(crate) callsign: Option<String>,
+    pub(crate) grid: Option<String>,
+    pub(crate) power_dbm: Option<i8>,
+    pub(crate) role: Option<String>,
+    #[serde(default)]
+    pub(crate) modes: Vec<String>,
+    #[serde(default = "default_enabled")]
+    pub(crate) enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+fn qsonaut_people(raw: Option<&'static str>) -> Vec<QsonautPerson> {
+    let Some(raw) = raw.filter(|value| !value.trim().is_empty()) else {
+        return Vec::new();
+    };
+    serde_json::from_str(raw).unwrap_or_default()
+}
+
+pub(crate) fn qsonaut_demo_people() -> Vec<QsonautPerson> {
+    qsonaut_people(option_env!("QSONAUT_CONTRIBUTORS"))
+        .into_iter()
+        .chain(qsonaut_people(option_env!("QSONAUT_TESTERS")))
+        .filter(|person| person.enabled)
+        .collect()
+}
+
+fn qsonaut_credit_text(raw: Option<&'static str>) -> String {
+    let Some(raw) = raw.filter(|value| !value.trim().is_empty()) else {
+        return "None listed".to_string();
+    };
+    let people = qsonaut_people(Some(raw));
+    if people.is_empty() {
+        return raw.to_string();
+    }
+    people
+        .into_iter()
+        .filter(|person| person.enabled)
+        .map(|person| {
+            let identity = match (person.name, person.callsign) {
+                (Some(name), Some(callsign)) => format!("{name} ({callsign})"),
+                (Some(name), None) | (None, Some(name)) => name,
+                (None, None) => "Unnamed contributor".to_string(),
+            };
+            person
+                .role
+                .filter(|role| !role.trim().is_empty())
+                .map_or(identity.clone(), |role| format!("{identity} · {role}"))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn qsonaut_contributors() -> String {
+    qsonaut_credit_text(option_env!("QSONAUT_CONTRIBUTORS"))
+}
+
+fn qsonaut_testers() -> String {
+    qsonaut_credit_text(option_env!("QSONAUT_TESTERS"))
+}
+
+fn effective_audio_input_device(backend: &str, input: Option<String>) -> Option<String> {
+    if matches!(backend.to_ascii_lowercase().as_str(), "null" | "mock") {
+        Some(NULL_INPUT_DEVICE.to_string())
+    } else {
+        input
     }
 }
 
-fn qsonaut_testers() -> &'static str {
-    match option_env!("QSONAUT_TESTERS") {
-        Some(value) if !value.trim().is_empty() => value,
-        _ => "None listed",
+fn effective_audio_output_device(backend: &str, output: Option<String>) -> Option<String> {
+    if matches!(backend.to_ascii_lowercase().as_str(), "null" | "mock") {
+        Some(NULL_OUTPUT_DEVICE.to_string())
+    } else {
+        output
     }
 }
 
@@ -177,7 +237,7 @@ const HAMDB_CACHE_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
 // The generated waveform starts at +0.5 s and ends at about +13.14 s.
 const FT8_EARLY_DECODE_S: f64 = 13.2;
 const FT8_SLOT_SAMPLES: usize = 12_000 * 15;
-// mfsk-core's WSJT-X depth/recall ladder is calibrated at 1.3. In particular,
+// The shared WSJT adapter's WSJT-X depth/recall ladder is calibrated at 1.3. In particular,
 // D2 scales this to WSJT-X's 2.0 early-pass threshold; using 1.9 here had
 // unintentionally raised the early gate to ~2.92 and discarded weak signals.
 const FT8_FAST_SYNC_MIN: f32 = 1.3;
@@ -975,6 +1035,7 @@ struct GuiState {
     af_gain: Option<u8>,
     rf_gain: Option<u8>,
     rf_power: Option<u8>,
+    rf_power_write_pending: Option<u8>,
     squelch: Option<u8>,
     preamp: Option<u8>,
     attenuator: Option<u8>,
@@ -992,6 +1053,7 @@ struct GuiState {
     compression_meter: Option<u8>,
     current_meter: Option<u8>,
     voltage_meter: Option<u8>,
+    voltage_history: VecDeque<u8>,
     temperature_meter: Option<u8>,
     supported_controls: HashSet<ControlId>,
     supported_meters: HashSet<MeterId>,
@@ -1045,7 +1107,14 @@ struct GuiState {
     digital_decode_status: String,
     digital_decodes: VecDeque<DigitalDecodeEntry>,
     cw_live_text: String,
-    cw_record_rx: bool,
+    cw_auto_target: bool,
+    cw_auto_retarget: bool,
+    cw_retarget_remaining_s: Option<u8>,
+    cw_auto_target_tone_hz: Option<u32>,
+    recording_enabled: bool,
+    recording_modes: HashSet<WorkspaceMode>,
+    recording_full_width: bool,
+    recording_stream: bool,
     cw_recording_status: String,
     cw_wpm: u8,
     sstv_status: String,
@@ -1088,6 +1157,7 @@ impl Default for GuiState {
             af_gain: None,
             rf_gain: None,
             rf_power: None,
+            rf_power_write_pending: None,
             squelch: None,
             preamp: None,
             attenuator: None,
@@ -1105,6 +1175,7 @@ impl Default for GuiState {
             compression_meter: None,
             current_meter: None,
             voltage_meter: None,
+            voltage_history: VecDeque::with_capacity(VOLTAGE_HISTORY_CAPACITY),
             temperature_meter: None,
             supported_controls: HashSet::new(),
             supported_meters: HashSet::new(),
@@ -1158,7 +1229,14 @@ impl Default for GuiState {
             digital_decode_status: "Select a native digital mode".to_string(),
             digital_decodes: VecDeque::with_capacity(300),
             cw_live_text: String::new(),
-            cw_record_rx: false,
+            cw_auto_target: false,
+            cw_auto_retarget: false,
+            cw_retarget_remaining_s: None,
+            cw_auto_target_tone_hz: None,
+            recording_enabled: false,
+            recording_modes: HashSet::new(),
+            recording_full_width: true,
+            recording_stream: true,
             cw_recording_status: "Recording off".to_string(),
             cw_wpm: default_cw_wpm(),
             sstv_status: "READY: Auto (VIS) · waiting for a complete SSTV header".to_string(),
@@ -1427,8 +1505,12 @@ fn spawn_device_scan() -> mpsc::Receiver<DeviceInventory> {
         let (serial_ports, serial_port_labels, detected_models) =
             radio_port_inventory(enumerate_serial_port_descriptors().unwrap_or_default());
         let inventory = DeviceInventory {
-            audio_inputs: AudioService::input_devices().unwrap_or_default(),
-            audio_outputs: AudioService::output_devices().unwrap_or_default(),
+            audio_inputs: std::iter::once(NULL_INPUT_DEVICE.to_string())
+                .chain(AudioService::input_devices().unwrap_or_default())
+                .collect(),
+            audio_outputs: std::iter::once(NULL_OUTPUT_DEVICE.to_string())
+                .chain(AudioService::output_devices().unwrap_or_default())
+                .collect(),
             serial_ports,
             serial_port_labels,
             detected_models,
@@ -1816,6 +1898,10 @@ struct QsonautGuiApp {
     ptt_tail_ms: u64,
     cw_wpm: u8,
     cw_tone_hz: u16,
+    recording_enabled: bool,
+    recording_modes: std::collections::BTreeMap<String, bool>,
+    recording_full_width: bool,
+    recording_stream: bool,
     selected_profile_name: String,
     new_profile_name: String,
     new_profile_tab_editing: bool,
@@ -1989,6 +2075,19 @@ impl QsonautGuiApp {
             .unwrap_or_else(|| "Default".to_string());
 
         let state = Arc::new(Mutex::new(GuiState::default()));
+        if let Some(profile) = load_operator_profile_named(&selected_profile_name) {
+            if let Ok(mut state) = state.lock() {
+                state.recording_enabled = profile.recording_enabled;
+                state.recording_modes = profile
+                    .recording_modes
+                    .iter()
+                    .filter(|(_, enabled)| **enabled)
+                    .filter_map(|(mode, _)| parse_workspace_mode_token(mode))
+                    .collect();
+                state.recording_full_width = profile.recording_full_width;
+                state.recording_stream = profile.recording_stream;
+            }
+        }
         let app_events = AppEventBus::new(256);
         let automation_event_rx = app_events.subscribe();
         let (automation_host, automation_status, automation_external_transports) =
@@ -2068,6 +2167,15 @@ impl QsonautGuiApp {
                 state.ft4_deep_decode = profile.ft4_deep_decode;
                 state.selected_audio_hz = profile.rx_tone_hz;
                 state.cw_wpm = profile.cw_wpm.clamp(5, 40);
+                state.recording_enabled = profile.recording_enabled;
+                state.recording_modes = profile
+                    .recording_modes
+                    .iter()
+                    .filter(|(_, enabled)| **enabled)
+                    .filter_map(|(mode, _)| parse_workspace_mode_token(mode))
+                    .collect();
+                state.recording_full_width = profile.recording_full_width;
+                state.recording_stream = profile.recording_stream;
                 state.radio_spectrum_desired = profile.civ_spectrum_on;
                 state.radio_scope_vbw_wide = profile.radio_scope_vbw_wide;
                 state.radio_scope_view = profile.radio_scope_view;
@@ -2089,12 +2197,18 @@ impl QsonautGuiApp {
                 session_audio_config.enabled,
                 session_audio_config.sample_rate_hz,
                 session_audio_config.channels,
-                session_audio_config.input_device.clone(),
+                effective_audio_input_device(
+                    &session_config.backend,
+                    session_audio_config.input_device.clone(),
+                ),
                 session_audio_config.monitor_enabled,
-                session_audio_config
-                    .monitor_output_device
-                    .clone()
-                    .or_else(|| session_audio_config.output_device.clone()),
+                effective_audio_output_device(
+                    &session_config.backend,
+                    session_audio_config
+                        .monitor_output_device
+                        .clone()
+                        .or_else(|| session_audio_config.output_device.clone()),
+                ),
                 session_monitor_volume.clone(),
                 repaint_ctx.clone(),
                 session_display_tuning.clone(),
@@ -2142,13 +2256,16 @@ impl QsonautGuiApp {
             config.audio.enabled,
             config.audio.sample_rate_hz,
             config.audio.channels,
-            config.audio.input_device.clone(),
+            effective_audio_input_device(&config.radio.backend, config.audio.input_device.clone()),
             config.audio.monitor_enabled,
-            config
-                .audio
-                .monitor_output_device
-                .clone()
-                .or_else(|| config.audio.output_device.clone()),
+            effective_audio_output_device(
+                &config.radio.backend,
+                config
+                    .audio
+                    .monitor_output_device
+                    .clone()
+                    .or_else(|| config.audio.output_device.clone()),
+            ),
             monitor_volume.clone(),
             repaint_ctx.clone(),
             display_tuning.clone(),
@@ -2202,6 +2319,10 @@ impl QsonautGuiApp {
         let mut ptt_tail_ms = default_ptt_tail_ms();
         let mut cw_wpm = default_cw_wpm();
         let mut cw_tone_hz = default_cw_tone_hz();
+        let mut recording_enabled = false;
+        let mut recording_modes = std::collections::BTreeMap::new();
+        let mut recording_full_width = true;
+        let mut recording_stream = true;
         let mut gui_scale = default_gui_scale();
         let mut compute_preference = ComputePreference::Auto;
         let mut psk_reporter_enabled = false;
@@ -2279,6 +2400,10 @@ impl QsonautGuiApp {
             ptt_tail_ms = p.ptt_tail_ms.clamp(0, 500);
             cw_wpm = p.cw_wpm.clamp(5, 40);
             cw_tone_hz = p.cw_tone_hz.clamp(200, 3_000);
+            recording_enabled = p.recording_enabled;
+            recording_modes = p.recording_modes;
+            recording_full_width = p.recording_full_width;
+            recording_stream = p.recording_stream;
             gui_scale = if p.profile_version >= GUI_SCALE_PROFILE_VERSION {
                 p.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
             } else {
@@ -2398,6 +2523,10 @@ impl QsonautGuiApp {
                 ptt_tail_ms,
                 cw_wpm,
                 cw_tone_hz,
+                recording_enabled,
+                recording_modes: recording_modes.clone(),
+                recording_full_width,
+                recording_stream,
                 audio_input_device: config.audio.input_device.clone(),
                 audio_enabled: config.audio.enabled,
                 audio_output_device: config.audio.output_device.clone(),
@@ -2734,6 +2863,10 @@ impl QsonautGuiApp {
             ptt_tail_ms,
             cw_wpm,
             cw_tone_hz,
+            recording_enabled,
+            recording_modes,
+            recording_full_width,
+            recording_stream,
             selected_profile_name,
             new_profile_name: String::new(),
             new_profile_tab_editing: false,
@@ -2864,7 +2997,9 @@ impl QsonautGuiApp {
         self.radio_scope_view = profile.radio_scope_view;
         self.waterfall_theme = profile.waterfall_theme;
         self.radio_waterfall_theme = profile.radio_waterfall_theme;
-        self.waterfall_deck_height = profile.waterfall_deck_height.clamp(170.0, 560.0);
+        // Waterfall geometry is application-wide. Do not reload the profile's
+        // historical value when switching radio tabs; doing so makes a tab
+        // switch snap the shared deck back to that profile's default.
         if let Ok(mut tuning) = self.display_tuning.lock() {
             tuning.audio_auto_visual = profile.waterfall_auto_visual;
             tuning.audio_waterfall_speed = profile.waterfall_speed;
@@ -2879,6 +3014,21 @@ impl QsonautGuiApp {
         self.ptt_tail_ms = profile.ptt_tail_ms.clamp(0, 500);
         self.cw_wpm = profile.cw_wpm.clamp(5, 40);
         self.cw_tone_hz = profile.cw_tone_hz.clamp(200, 3_000);
+        self.recording_enabled = profile.recording_enabled;
+        self.recording_modes = profile.recording_modes.clone();
+        self.recording_full_width = profile.recording_full_width;
+        self.recording_stream = profile.recording_stream;
+        if let Ok(mut state) = self.state.lock() {
+            state.recording_enabled = self.recording_enabled;
+            state.recording_modes = self
+                .recording_modes
+                .iter()
+                .filter(|(_, enabled)| **enabled)
+                .filter_map(|(mode, _)| parse_workspace_mode_token(mode))
+                .collect();
+            state.recording_full_width = self.recording_full_width;
+            state.recording_stream = self.recording_stream;
+        }
         self.contest_enabled = profile.contest_enabled;
         self.contest_operating_mode = profile.contest_operating_mode;
         self.contest_split_policy = profile.contest_split_policy;
@@ -3046,7 +3196,7 @@ impl QsonautGuiApp {
             .unwrap_or_else(|| format!("📻 {}", selected_activity.label()));
         let previous_interact_height = ui.spacing().interact_size.y;
         ui.spacing_mut().interact_size.y = 28.0;
-        ui.menu_button(
+        let activity_menu = ui.menu_button(
             RichText::new(activity_button_label)
                 .strong()
                 .color(Color32::from_rgb(255, 190, 105)),
@@ -3198,6 +3348,9 @@ impl QsonautGuiApp {
                 );
             },
         );
+        activity_menu
+            .response
+            .on_hover_text("Choose the operating activity and any active server event");
         ui.spacing_mut().interact_size.y = previous_interact_height;
     }
 
@@ -3210,7 +3363,9 @@ impl QsonautGuiApp {
             .corner_radius(8.0)
             .rotate(spin_angle, egui::Vec2::splat(0.5))
             .sense(egui::Sense::click());
-        let logo_response = ui.add(logo);
+        let logo_response = ui
+            .add(logo)
+            .on_hover_text("QSONaut mission control — click for the application animation");
         if logo_response.clicked() {
             self.handle_logo_click();
         }
@@ -3392,13 +3547,19 @@ impl QsonautGuiApp {
                     true,
                     session.audio_config.sample_rate_hz,
                     session.audio_config.channels,
-                    session.audio_config.input_device.clone(),
+                    effective_audio_input_device(
+                        &session.config.backend,
+                        session.audio_config.input_device.clone(),
+                    ),
                     session.audio_config.monitor_enabled,
-                    session
-                        .audio_config
-                        .monitor_output_device
-                        .clone()
-                        .or_else(|| session.audio_config.output_device.clone()),
+                    effective_audio_output_device(
+                        &session.config.backend,
+                        session
+                            .audio_config
+                            .monitor_output_device
+                            .clone()
+                            .or_else(|| session.audio_config.output_device.clone()),
+                    ),
                     session.monitor_volume.clone(),
                     self.repaint_ctx.clone(),
                     session.display_tuning.clone(),
@@ -3495,13 +3656,19 @@ impl QsonautGuiApp {
                 self.config.audio.enabled,
                 self.config.audio.sample_rate_hz,
                 self.config.audio.channels,
-                self.config.audio.input_device.clone(),
+                effective_audio_input_device(
+                    &self.config.radio.backend,
+                    self.config.audio.input_device.clone(),
+                ),
                 self.config.audio.monitor_enabled,
-                self.config
-                    .audio
-                    .monitor_output_device
-                    .clone()
-                    .or_else(|| self.config.audio.output_device.clone()),
+                effective_audio_output_device(
+                    &self.config.radio.backend,
+                    self.config
+                        .audio
+                        .monitor_output_device
+                        .clone()
+                        .or_else(|| self.config.audio.output_device.clone()),
+                ),
                 self.monitor_volume.clone(),
                 self.repaint_ctx.clone(),
                 self.display_tuning.clone(),
@@ -4119,6 +4286,10 @@ impl QsonautGuiApp {
             ptt_tail_ms: self.ptt_tail_ms.clamp(0, 500),
             cw_wpm: self.cw_wpm.clamp(5, 40),
             cw_tone_hz: self.cw_tone_hz.clamp(200, 3_000),
+            recording_enabled: self.recording_enabled,
+            recording_modes: self.recording_modes.clone(),
+            recording_full_width: self.recording_full_width,
+            recording_stream: self.recording_stream,
             audio_input_device: self.config.audio.input_device.clone(),
             audio_enabled: self.config.audio.enabled,
             audio_output_device: self.config.audio.output_device.clone(),
@@ -4464,13 +4635,16 @@ impl QsonautGuiApp {
             MeterId::Signal
         };
         let primary_value = meter_value(snapshot, primary_id);
-        let primary_label = if snapshot.ptt_on { "POWER" } else { "S-METER" };
+        let primary_label = if snapshot.ptt_on { "POWER" } else { "" };
+        let primary_reading = meter_reading(primary_id, primary_value);
+        let radio_model = self.config.radio.model.as_str();
         let (primary_rect, primary_response) =
             ui.allocate_exact_size(egui::vec2(280.0, 24.0), egui::Sense::click());
         draw_primary_meter(
             ui,
             primary_rect,
             primary_label,
+            &primary_reading,
             primary_value.map(meter_percent).unwrap_or_default(),
             meter_color(primary_id, primary_value),
         );
@@ -4489,11 +4663,10 @@ impl QsonautGuiApp {
                     egui::Frame::group(ui.style())
                         .fill(Color32::from_rgba_unmultiplied(18, 30, 42, 245))
                         .show(ui, |ui| {
-                            let phase = if snapshot.ptt_on { "TX" } else { "RX" };
                             ui.horizontal(|ui| {
                                 ui.label(
                                     RichText::new(format!(
-                                        "{phase} METER DRAWER · {}",
+                                        "TX / PA METERS · {}",
                                         radio_mode_label(&snapshot.mode, snapshot.data_mode)
                                     ))
                                     .strong()
@@ -4512,20 +4685,79 @@ impl QsonautGuiApp {
                                 }
                             });
                             ui.separator();
+                            if snapshot.ptt_on
+                                && snapshot.supported_controls.contains(&ControlId::RfPower)
+                            {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("TX SET").monospace().strong())
+                                        .on_hover_text(
+                                            "Configured RF transmit power, not measured output",
+                                        );
+                                    let value = snapshot.rf_power;
+                                    ui.label(meter_reading(MeterId::Power, value));
+                                });
+                            }
                             for id in mode_meter_order(snapshot.ptt_on) {
+                                if id == MeterId::Signal {
+                                    continue;
+                                }
                                 if !snapshot.supported_meters.contains(&id) {
                                     continue;
                                 }
                                 let value = meter_value(snapshot, id);
                                 ui.horizontal(|ui| {
-                                    ui.label(RichText::new(meter_label(id)).monospace().strong());
-                                    ui.add(
+                                    let reading = meter_reading_for_model(id, value, radio_model);
+                                    let label_height =
+                                        if id == MeterId::Voltage { 28.0 } else { 18.0 };
+                                    let label_color = if id == MeterId::Current && snapshot.ptt_on {
+                                        Color32::from_rgb(150, 255, 225)
+                                    } else {
+                                        Color32::WHITE
+                                    };
+                                    ui.add_sized(
+                                        egui::vec2(METER_LABEL_WIDTH, label_height),
+                                        egui::Label::new(
+                                            RichText::new(meter_label(id))
+                                                .monospace()
+                                                .strong()
+                                                .color(label_color),
+                                        ),
+                                    )
+                                    .on_hover_text(meter_tooltip(id));
+                                    if id == MeterId::Voltage {
+                                        draw_voltage_graph(ui, &snapshot.voltage_history, &reading);
+                                        return;
+                                    }
+                                    let meter_response = ui.add(
                                         egui::ProgressBar::new(
                                             value.map(meter_percent).unwrap_or_default(),
                                         )
                                         .desired_width(ui.available_width().max(100.0))
                                         .desired_height(14.0)
-                                        .fill(meter_color(id, value)),
+                                        .fill(meter_color_for_context(id, value, snapshot.ptt_on)),
+                                    );
+                                    let reading_width = 136.0;
+                                    let reading_rect = egui::Rect::from_min_max(
+                                        egui::pos2(
+                                            meter_response.rect.right() - reading_width,
+                                            meter_response.rect.top() + 1.0,
+                                        ),
+                                        egui::pos2(
+                                            meter_response.rect.right() - 3.0,
+                                            meter_response.rect.bottom() - 1.0,
+                                        ),
+                                    );
+                                    ui.painter().rect_filled(
+                                        reading_rect,
+                                        egui::CornerRadius::same(3),
+                                        Color32::from_rgba_unmultiplied(10, 20, 29, 225),
+                                    );
+                                    ui.painter().text(
+                                        reading_rect.right_center() - egui::vec2(5.0, 0.0),
+                                        egui::Align2::RIGHT_CENTER,
+                                        reading,
+                                        egui::FontId::monospace(11.0),
+                                        Color32::WHITE,
                                     );
                                 });
                             }
@@ -4631,6 +4863,58 @@ impl QsonautGuiApp {
         } else {
             "Radio power: OFF · click to turn on"
         });
+    }
+
+    fn draw_rf_power_control(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        let supported = snapshot.supported_controls.contains(&ControlId::RfPower);
+        let ready = snapshot.radio_power_on == Some(true)
+            && !snapshot.radio_power_command_pending
+            && !snapshot.radio_power_settling;
+        let color = if supported && ready {
+            Color32::from_rgb(255, 190, 105)
+        } else {
+            Color32::GRAY
+        };
+        let power_button = ui
+            .add_enabled(
+                supported && ready,
+                egui::Button::new(RichText::new("⚡").size(17.0).color(color)),
+            )
+            .on_hover_text(if !supported {
+                "RF transmit power control is not supported by this radio profile"
+            } else if !ready {
+                "RF transmit power is unavailable while the radio is offline or waking"
+            } else {
+                "Open RF transmit power control"
+            });
+        egui::Popup::menu(&power_button)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.vertical_centered(|ui| {
+                    let mut percent = snapshot
+                        .rf_power
+                        .map(|value| f32::from(value) * 100.0 / 255.0)
+                        .unwrap_or_default();
+                    let response = ui.add(
+                        egui::Slider::new(&mut percent, 0.0..=100.0)
+                            .vertical()
+                            .show_value(false),
+                    );
+                    ui.label(format!("{percent:.0}%"));
+                    if response.changed() && response.drag_stopped() {
+                        let normalized = (percent.clamp(0.0, 100.0) * 255.0 / 100.0).round() as u8;
+                        {
+                            let mut state = self.state.lock().expect("ui state lock poisoned");
+                            state.rf_power = Some(normalized);
+                            state.rf_power_write_pending = Some(normalized);
+                        }
+                        self.send_command(GuiCommand::SetControl(
+                            ControlId::RfPower,
+                            ControlValue::U8(normalized),
+                        ));
+                    }
+                });
+            });
     }
 
     fn draw_connection_status(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
@@ -4971,20 +5255,32 @@ impl QsonautGuiApp {
                 ui.spacing_mut().item_spacing.x = 7.0;
                 ui.spacing_mut().button_padding.x = 4.0;
                 ui.label(RichText::new("Radio").strong());
-                if ui.small_button("-1 kHz").clicked() {
+                if ui
+                    .small_button("-1 kHz")
+                    .on_hover_text("Tune the radio down by 1 kHz")
+                    .clicked()
+                {
                     self.send_command(GuiCommand::TuneDelta(-1_000));
                 }
-                if ui.small_button("+1 kHz").clicked() {
+                if ui
+                    .small_button("+1 kHz")
+                    .on_hover_text("Tune the radio up by 1 kHz")
+                    .clicked()
+                {
                     self.send_command(GuiCommand::TuneDelta(1_000));
                 }
                 if ui
                     .add_enabled(supports_levels, egui::Button::new("AF-").small())
+                    .on_disabled_hover_text("Audio receive gain is not supported by this radio")
+                    .on_hover_text("Decrease audio receive gain")
                     .clicked()
                 {
                     self.send_command(GuiCommand::AfGainDelta(-5));
                 }
                 if ui
                     .add_enabled(supports_levels, egui::Button::new("AF+").small())
+                    .on_disabled_hover_text("Audio receive gain is not supported by this radio")
+                    .on_hover_text("Increase audio receive gain")
                     .clicked()
                 {
                     self.send_command(GuiCommand::AfGainDelta(5));
@@ -4993,13 +5289,15 @@ impl QsonautGuiApp {
             ui.separator();
             ui.label(RichText::new("Op mode").strong());
             for mode in HF_WORKSPACE_MODES {
-                let response = ui.add(
-                    egui::Button::selectable(
-                        self.workspace_mode == mode,
-                        RichText::new(mode.label()).size(12.0),
+                let response = ui
+                    .add(
+                        egui::Button::selectable(
+                            self.workspace_mode == mode,
+                            RichText::new(mode.label()).size(12.0),
+                        )
+                        .small(),
                     )
-                    .small(),
-                );
+                    .on_hover_text(format!("Switch workspace to {}", mode.label()));
                 if response.clicked() {
                     self.workspace_mode = mode;
                     self.profile_dirty = true;
@@ -5013,14 +5311,23 @@ impl QsonautGuiApp {
             }
             for mode in OTHER_WORKSPACE_MODES {
                 let enabled = !mode.is_uhf();
-                let response = ui.add_enabled(
-                    enabled,
-                    egui::Button::selectable(
-                        self.workspace_mode == mode,
-                        RichText::new(mode.label()).size(12.0),
+                let response = ui
+                    .add_enabled(
+                        enabled,
+                        egui::Button::selectable(
+                            self.workspace_mode == mode,
+                            RichText::new(mode.label()).size(12.0),
+                        )
+                        .small(),
                     )
-                    .small(),
-                );
+                    .on_hover_text(if enabled {
+                        format!("Switch workspace to {}", mode.label())
+                    } else {
+                        format!(
+                            "{} is disabled without a configured UHF radio",
+                            mode.label()
+                        )
+                    });
                 if response.clicked() && enabled {
                     self.workspace_mode = mode;
                     self.profile_dirty = true;
@@ -5030,9 +5337,6 @@ impl QsonautGuiApp {
                     {
                         self.send_command(GuiCommand::ApplyWorkspace { mode, frequency_hz });
                     }
-                }
-                if !enabled {
-                    response.on_hover_text("Disabled: no UHF radio is configured for this station");
                 }
             }
         });
@@ -5309,16 +5613,24 @@ impl eframe::App for QsonautGuiApp {
             };
             self.handle_native_sequence(mode, &native_decodes, None);
         }
-        self.handle_ft8_decodes(&new_decodes, completed_decode_period);
-        self.ft8_log.extend(new_decodes);
-        // Keep the log bounded.
         let max_entries = self.ft8_max_log_entries.max(80);
-        if self.ft8_log.len() > max_entries {
-            let removed = self.ft8_log.len() - max_entries;
+        self.handle_ft8_decodes(&new_decodes, completed_decode_period);
+        let removed = append_ft8_log_entries(&mut self.ft8_log, &new_decodes, max_entries);
+        if removed > 0 {
             self.ft8_log.drain(..removed);
             if let Some(sel) = self.ft8_selected {
                 self.ft8_selected = sel.checked_sub(removed);
             }
+        }
+        if !new_decodes.is_empty() {
+            info!(
+                received = new_decodes.len(),
+                visible_log_entries = self.ft8_log.len(),
+                "FT8 decodes transferred to GUI log"
+            );
+        }
+        if removed > 0 {
+            debug!(removed, max_entries, "FT8 GUI log bounded");
         }
 
         let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
@@ -5583,7 +5895,7 @@ impl eframe::App for QsonautGuiApp {
                         .map(band_for_frequency)
                         .filter(|band| !band.is_empty())
                         .unwrap_or("—");
-                    ui.menu_button(
+                    let band_menu = ui.menu_button(
                         RichText::new(current_band)
                             .strong()
                             .color(Color32::from_rgb(220, 190, 100)),
@@ -5638,9 +5950,11 @@ impl eframe::App for QsonautGuiApp {
                             }
                         },
                     );
+                    band_menu.response.on_hover_text("Select the operating band");
+                    self.draw_rf_power_control(ui, &snapshot);
                     ui.separator();
                     let current_radio_mode = radio_mode_label(&snapshot.mode, snapshot.data_mode);
-                    ui.menu_button(
+                    let mode_menu = ui.menu_button(
                         RichText::new(current_radio_mode.clone())
                             .monospace()
                             .strong()
@@ -5674,12 +5988,13 @@ impl eframe::App for QsonautGuiApp {
                             }
                         },
                     );
+                    mode_menu.response.on_hover_text("Select the radio operating mode");
                     let supports_filter = snapshot.supported_controls.contains(&ControlId::Filter);
                     let filter_label = snapshot
                         .filter
                         .map(|filter| format!("FIL{filter}"))
                         .unwrap_or_else(|| "FIL?".to_string());
-                    ui.menu_button(
+                    let filter_menu = ui.menu_button(
                         RichText::new(filter_label).monospace().color(Color32::GRAY),
                         |ui| {
                             ui.label(RichText::new("FILTER").strong());
@@ -5700,6 +6015,7 @@ impl eframe::App for QsonautGuiApp {
                             }
                         },
                     );
+                    filter_menu.response.on_hover_text("Select the radio IF filter");
                     self.draw_banner_radio_controls(ui, &snapshot);
                     });
                     ui.horizontal(|ui| {
@@ -5792,6 +6108,11 @@ impl eframe::App for QsonautGuiApp {
                                         radio_ready && !snapshot.swr_sweep_active,
                                         egui::Button::new(if enabled { "Disable" } else { "Enable" }),
                                     )
+                                    .on_hover_text(if enabled {
+                                        "Disable the radio's antenna tuner"
+                                    } else {
+                                        "Enable the radio's antenna tuner"
+                                    })
                                     .clicked()
                                 {
                                     self.send_command(GuiCommand::SetControl(
@@ -6114,7 +6435,9 @@ impl eframe::App for QsonautGuiApp {
                                     ui.close();
                                 }
                             }
-                        });
+                        })
+                        .response
+                        .on_hover_text("Select the automatic gain-control level");
                     }
                     if !snapshot.supported_meters.is_empty() {
                         ui.menu_button(RichText::new("MTR").color(Color32::LIGHT_BLUE), |ui| {
@@ -6173,7 +6496,9 @@ impl eframe::App for QsonautGuiApp {
                                     ui.close();
                                 }
                             }
-                        });
+                        })
+                        .response
+                        .on_hover_text("Select the radio preamplifier level");
                     }
                     if supports_control(ControlId::Attenuator) {
                         let attenuator_values: &[u8] = match self.config.radio.model.as_str() {
@@ -6202,7 +6527,9 @@ impl eframe::App for QsonautGuiApp {
                                     ui.close();
                                 }
                             }
-                        });
+                        })
+                        .response
+                        .on_hover_text("Select the radio input attenuator level");
                     }
                     ui.separator();
                     self.draw_waterfall_buttons(ui, &snapshot);
@@ -6625,28 +6952,53 @@ impl eframe::App for QsonautGuiApp {
             // The waterfall deck is a real user-resizable panel. Its height
             // must not track incoming rows or silently change the workspace
             // layout while a radio is running.
-            egui::TopBottomPanel::top("waterfall_deck")
+            let resize_id = egui::Id::new("waterfall_deck").with("__resize");
+            let resize_in_progress = ctx
+                .read_response(resize_id)
+                .is_some_and(|response| response.dragged());
+            let mut waterfall_panel = egui::TopBottomPanel::top("waterfall_deck")
                 .resizable(true)
-                .default_height(260.0)
-                .height_range(80.0..=ctx.content_rect().height().max(240.0) * 0.75)
-                .show_separator_line(true)
-                .show(ctx, |ui| {
-                    if radio_scope_visible {
-                        let total_width = ui.available_width();
-                        let radio_default_width = total_width * 0.5;
-                        let radio_max_width = (total_width - 260.0).max(280.0);
-                        egui::SidePanel::left("radio_waterfall_split")
-                            .resizable(true)
-                            .default_width(radio_default_width)
-                            .width_range(280.0..=radio_max_width)
-                            .show_inside(ui, |ui| {
-                                self.draw_radio_waterfall(ui, ctx, &snapshot);
-                            });
-                        self.draw_audio_waterfall(ui, ctx, &snapshot);
-                    } else {
-                        self.draw_audio_waterfall(ui, ctx, &snapshot);
-                    }
-                });
+                .default_height(self.waterfall_deck_height)
+                .height_range(170.0..=ctx.content_rect().height().max(240.0) * 0.75)
+                .show_separator_line(true);
+            // egui keeps its own panel size between frames. Reassert the
+            // application's last chosen height whenever the resize handle is
+            // idle, otherwise a stale/clamped panel state can feed a smaller
+            // rectangle back to the waterfall after an empty-input transition.
+            if !resize_in_progress {
+                waterfall_panel = waterfall_panel.min_height(self.waterfall_deck_height);
+            }
+            let waterfall_panel = waterfall_panel.show(ctx, |ui| {
+                if radio_scope_visible {
+                    let total_width = ui.available_width();
+                    let radio_default_width = total_width * 0.5;
+                    let radio_max_width = (total_width - 260.0).max(280.0);
+                    egui::SidePanel::left("radio_waterfall_split")
+                        .resizable(true)
+                        .default_width(radio_default_width)
+                        .width_range(280.0..=radio_max_width)
+                        .show_inside(ui, |ui| {
+                            self.draw_radio_waterfall(ui, ctx, &snapshot);
+                        });
+                    self.draw_audio_waterfall(ui, ctx, &snapshot);
+                } else {
+                    self.draw_audio_waterfall(ui, ctx, &snapshot);
+                }
+            });
+            // Only accept a new height while the panel resize handle is being
+            // dragged. The panel response also reflects layout constraints, so
+            // copying its height every frame lets changing/empty waterfall
+            // content overwrite the user's chosen height and creates a
+            // shrink-to-minimum feedback loop.
+            if resize_in_progress {
+                let actual_height = waterfall_panel.response.rect.height();
+                if actual_height.is_finite()
+                    && (actual_height - self.waterfall_deck_height).abs() > 0.5
+                {
+                    self.waterfall_deck_height = actual_height.clamp(170.0, 560.0);
+                    self.profile_dirty = true;
+                }
+            }
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -6905,13 +7257,13 @@ fn radio_port_inventory(
 
 fn general_meter_order() -> [MeterId; 8] {
     [
+        MeterId::Voltage,
+        MeterId::Current,
         MeterId::Signal,
         MeterId::Power,
         MeterId::Swr,
         MeterId::Alc,
         MeterId::Compression,
-        MeterId::Current,
-        MeterId::Voltage,
         MeterId::Temperature,
     ]
 }
@@ -6919,12 +7271,12 @@ fn general_meter_order() -> [MeterId; 8] {
 fn mode_meter_order(transmitting: bool) -> [MeterId; 8] {
     if transmitting {
         [
+            MeterId::Voltage,
+            MeterId::Current,
             MeterId::Power,
             MeterId::Swr,
             MeterId::Alc,
             MeterId::Compression,
-            MeterId::Current,
-            MeterId::Voltage,
             MeterId::Temperature,
             MeterId::Signal,
         ]
@@ -6950,7 +7302,105 @@ fn meter_percent(value: u8) -> f32 {
     f32::from(value) / 255.0
 }
 
-fn draw_primary_meter(ui: &egui::Ui, rect: egui::Rect, label: &str, fraction: f32, color: Color32) {
+const VOLTAGE_HISTORY_CAPACITY: usize = 180;
+const METER_LABEL_WIDTH: f32 = 88.0;
+
+fn record_voltage_sample(history: &mut VecDeque<u8>, value: u8) {
+    history.push_back(value);
+    while history.len() > VOLTAGE_HISTORY_CAPACITY {
+        history.pop_front();
+    }
+}
+
+fn meter_color_for_context(id: MeterId, value: Option<u8>, transmitting: bool) -> Color32 {
+    if id == MeterId::Current && transmitting && value.is_some() {
+        return Color32::from_rgb(110, 245, 215);
+    }
+    meter_color(id, value)
+}
+
+fn draw_voltage_graph(ui: &mut egui::Ui, history: &VecDeque<u8>, reading: &str) {
+    let desired_size = egui::vec2(ui.available_width().max(100.0), 28.0);
+    let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+    let painter = ui.painter();
+    let outer = rect.expand(1.0);
+    painter.rect_filled(
+        outer,
+        egui::CornerRadius::same(7),
+        Color32::from_rgb(10, 20, 29),
+    );
+    painter.rect_stroke(
+        outer,
+        egui::CornerRadius::same(7),
+        egui::Stroke::new(1.0_f32, Color32::from_rgb(45, 75, 88)),
+        egui::StrokeKind::Inside,
+    );
+    painter.rect_filled(
+        rect,
+        egui::CornerRadius::same(5),
+        Color32::from_rgb(7, 18, 25),
+    );
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(5),
+        egui::Stroke::new(1.0_f32, Color32::from_rgb(28, 45, 57)),
+        egui::StrokeKind::Inside,
+    );
+
+    if !history.is_empty() {
+        let graph_rect = rect.shrink2(egui::vec2(3.0, 3.0));
+        let capacity = VOLTAGE_HISTORY_CAPACITY.max(history.len());
+        let points: Vec<egui::Pos2> = history
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let x = egui::lerp(
+                    graph_rect.left()..=graph_rect.right(),
+                    (index + 1) as f32 / capacity as f32,
+                );
+                let y = egui::lerp(
+                    graph_rect.bottom()..=graph_rect.top(),
+                    meter_percent(*value),
+                );
+                egui::pos2(x, y)
+            })
+            .collect();
+        painter.add(egui::Shape::line(
+            points.clone(),
+            egui::Stroke::new(2.0_f32, Color32::from_rgb(100, 225, 165)),
+        ));
+        if let Some(last) = points.last() {
+            painter.circle_filled(*last, 3.0, Color32::from_rgb(150, 255, 205));
+        }
+    }
+
+    let reading_width = 90.0;
+    let reading_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.right() - reading_width, rect.top() + 2.0),
+        egui::pos2(rect.right() - 3.0, rect.bottom() - 2.0),
+    );
+    painter.rect_filled(
+        reading_rect,
+        egui::CornerRadius::same(3),
+        Color32::from_rgba_unmultiplied(10, 20, 29, 225),
+    );
+    painter.text(
+        reading_rect.right_center() - egui::vec2(5.0, 0.0),
+        egui::Align2::RIGHT_CENTER,
+        reading,
+        egui::FontId::monospace(11.0),
+        Color32::WHITE,
+    );
+}
+
+fn draw_primary_meter(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    label: &str,
+    reading: &str,
+    fraction: f32,
+    color: Color32,
+) {
     let painter = ui.painter();
     let outer = rect.expand(1.0);
     painter.rect_filled(
@@ -6983,11 +7433,36 @@ fn draw_primary_meter(ui: &egui::Ui, rect: egui::Rect, label: &str, fraction: f3
         };
         painter.rect_filled(segment, egui::CornerRadius::same(2), fill);
     }
+    if !label.is_empty() {
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 4.0, rect.top() + 2.0),
+                egui::pos2(rect.left() + 57.0, rect.bottom() - 2.0),
+            ),
+            egui::CornerRadius::same(3),
+            Color32::from_rgba_unmultiplied(10, 20, 29, 225),
+        );
+        painter.text(
+            egui::pos2(rect.left() + 8.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::monospace(11.0),
+            Color32::WHITE,
+        );
+    }
+    painter.rect_filled(
+        egui::Rect::from_min_max(
+            egui::pos2(rect.right() - 143.0, rect.top() + 2.0),
+            egui::pos2(rect.right() - 4.0, rect.bottom() - 2.0),
+        ),
+        egui::CornerRadius::same(3),
+        Color32::from_rgba_unmultiplied(10, 20, 29, 225),
+    );
     painter.text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        label,
-        egui::FontId::monospace(12.0),
+        egui::pos2(rect.right() - 8.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        reading,
+        egui::FontId::monospace(11.0),
         Color32::WHITE,
     );
 }
@@ -7012,6 +7487,67 @@ fn meter_label(id: MeterId) -> &'static str {
     }
 }
 
+fn meter_reading(id: MeterId, value: Option<u8>) -> String {
+    let Some(value) = value else {
+        return "—".to_string();
+    };
+    if id == MeterId::Signal {
+        let s_units = u16::from(value) / 12;
+        if s_units <= 9 {
+            format!("S{s_units} · {}%", u16::from(value) * 100 / 255)
+        } else {
+            format!(
+                "S9 +{} dB · {}%",
+                (s_units - 9) * 6,
+                u16::from(value) * 100 / 255
+            )
+        }
+    } else if id == MeterId::Voltage {
+        format!("REL {value}/255")
+    } else {
+        format!("{}%", u16::from(value) * 100 / 255)
+    }
+}
+
+fn meter_reading_for_model(id: MeterId, value: Option<u8>, model: &str) -> String {
+    if id == MeterId::Voltage && model.eq_ignore_ascii_case("IC-7300") {
+        return value
+            .map(ic7300_voltage)
+            .map(|voltage| format!("{voltage:.1} V"))
+            .unwrap_or_else(|| "—".to_string());
+    }
+    meter_reading(id, value)
+}
+
+/// Convert the IC-7300's documented Vd meter anchors to volts. Rigwright
+/// intentionally exposes the raw CI-V meter level through its neutral HAL;
+/// this calibration belongs at the model-aware UI boundary.
+fn ic7300_voltage(value: u8) -> f32 {
+    let value = f32::from(value);
+    if value <= 13.0 {
+        (value * 10.0 / 13.0).clamp(0.0, 10.0)
+    } else {
+        (10.0 + (value - 13.0) * 6.0 / (241.0 - 13.0)).min(16.0)
+    }
+}
+
+fn meter_tooltip(id: MeterId) -> &'static str {
+    match id {
+        MeterId::Signal => {
+            "Receive signal level; S-unit display is derived from the normalized driver level"
+        }
+        MeterId::Power => "Measured relative RF output level",
+        MeterId::Swr => "Transmit SWR meter level; exact ratio is model-specific",
+        MeterId::Alc => "Transmit ALC level",
+        MeterId::Compression => "Transmit speech/data compression level",
+        MeterId::Current => "PA drain/current meter level",
+        MeterId::Voltage => {
+            "PA voltage level; IC-7300 is shown in volts, other radios are relative"
+        }
+        MeterId::Temperature => "PA temperature meter; exact units depend on the driver",
+    }
+}
+
 fn meter_color(id: MeterId, value: Option<u8>) -> Color32 {
     if value.is_none() {
         return Color32::GRAY;
@@ -7027,16 +7563,48 @@ fn meter_color(id: MeterId, value: Option<u8>) -> Color32 {
     }
 }
 
+/// Append completed FT8 results to the UI-owned log and report how many old
+/// rows must be removed to enforce the configured limit.
+fn append_ft8_log_entries(
+    log: &mut Vec<Ft8DecodeEntry>,
+    decodes: &[Ft8DecodeEntry],
+    max_entries: usize,
+) -> usize {
+    log.extend_from_slice(decodes);
+    log.len().saturating_sub(max_entries)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn meter_display_orders_rx_and_tx_values_for_operator_context() {
-        assert_eq!(mode_meter_order(false)[0], MeterId::Signal);
-        assert_eq!(mode_meter_order(true)[0], MeterId::Power);
-        assert_eq!(mode_meter_order(true)[1], MeterId::Swr);
+        assert_eq!(mode_meter_order(false)[0], MeterId::Voltage);
+        assert_eq!(mode_meter_order(false)[1], MeterId::Current);
+        assert_eq!(mode_meter_order(true)[0], MeterId::Voltage);
+        assert_eq!(mode_meter_order(true)[1], MeterId::Current);
+        assert_eq!(mode_meter_order(true)[2], MeterId::Power);
         assert_eq!(meter_label(MeterId::Temperature), "TEMP");
+    }
+
+    #[test]
+    fn voltage_history_keeps_a_long_rolling_window() {
+        let mut history = VecDeque::new();
+        for value in 0..=u8::MAX {
+            record_voltage_sample(&mut history, value);
+        }
+        assert_eq!(history.len(), VOLTAGE_HISTORY_CAPACITY);
+        assert_eq!(history.front(), Some(&76));
+        assert_eq!(history.back(), Some(&u8::MAX));
+    }
+
+    #[test]
+    fn current_meter_is_brighter_during_transmit() {
+        assert_ne!(
+            meter_color_for_context(MeterId::Current, Some(100), false),
+            meter_color_for_context(MeterId::Current, Some(100), true)
+        );
     }
 
     #[test]
@@ -7045,6 +7613,18 @@ mod tests {
         assert_eq!(meter_percent(255), 1.0);
         assert_eq!(format_meter_value(Some(128)), "50%");
         assert_eq!(format_meter_value(None), "—");
+        assert_eq!(meter_reading(MeterId::Signal, Some(72)), "S6 · 28%");
+        assert_eq!(meter_reading(MeterId::Signal, Some(120)), "S9 +6 dB · 47%");
+        assert_eq!(meter_reading(MeterId::Power, Some(128)), "50%");
+        assert_eq!(meter_reading(MeterId::Voltage, Some(128)), "REL 128/255");
+        assert_eq!(
+            meter_reading_for_model(MeterId::Voltage, Some(145), "IC-7300"),
+            "13.5 V"
+        );
+        assert_eq!(
+            meter_reading_for_model(MeterId::Voltage, Some(145), "FTDX10"),
+            "REL 145/255"
+        );
     }
 
     #[test]
@@ -7055,6 +7635,23 @@ mod tests {
         );
         assert!(native_radio_profile("rigctld", "IC-7300").is_none());
         assert!(native_radio_profile("null", "IC-7300").is_none());
+    }
+
+    #[test]
+    fn null_profiles_always_use_virtual_audio_devices() {
+        assert_eq!(
+            effective_audio_input_device("null", Some("Physical microphone".to_string())),
+            Some(NULL_INPUT_DEVICE.to_string())
+        );
+        assert_eq!(
+            effective_audio_output_device("mock", Some("Physical speakers".to_string())),
+            Some(NULL_OUTPUT_DEVICE.to_string())
+        );
+        assert_eq!(
+            effective_audio_input_device("native", Some("Physical microphone".to_string())),
+            Some("Physical microphone".to_string())
+        );
+        assert_eq!(effective_audio_output_device("native", None), None);
     }
 
     #[test]
@@ -7190,6 +7787,50 @@ mod tests {
         assert_eq!(stats.unique_stations, 2);
         assert_eq!(stats.most_heard, Some(("K1ABC".to_string(), 3)));
         assert_eq!(stats.median_snr, Some(-8));
+    }
+
+    #[test]
+    fn completed_ft8_results_are_appended_to_the_visible_log() {
+        let entry = |period, message: &str| Ft8DecodeEntry {
+            period,
+            utc: "12:00:00".to_string(),
+            snr_db: -12,
+            dt_s: 0.1,
+            freq_hz: 1_500,
+            message: message.to_string(),
+            is_cq: message.starts_with("CQ "),
+        };
+        let mut log = Vec::new();
+
+        let removed = append_ft8_log_entries(
+            &mut log,
+            &[entry(42, "CQ K1ABC FN42"), entry(42, "W1AW K1ABC -12")],
+            80,
+        );
+
+        assert_eq!(removed, 0);
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].message, "CQ K1ABC FN42");
+        assert_eq!(log[1].message, "W1AW K1ABC -12");
+    }
+
+    #[test]
+    fn completed_ft8_results_keep_the_newest_rows_when_log_is_full() {
+        let entry = |period| Ft8DecodeEntry {
+            period,
+            utc: format!("12:00:{period:02}"),
+            snr_db: -12,
+            dt_s: 0.1,
+            freq_hz: 1_500,
+            message: format!("CQ K{period}ABC FN42"),
+            is_cq: true,
+        };
+        let mut log = vec![entry(1), entry(2)];
+
+        let removed = append_ft8_log_entries(&mut log, &[entry(3)], 2);
+        log.drain(..removed);
+
+        assert_eq!(log.iter().map(|row| row.period).collect::<Vec<_>>(), [2, 3]);
     }
 
     #[test]
@@ -7652,6 +8293,92 @@ mod tests {
         .expect("CW synthesis");
         assert_eq!(offset, 0.0);
         assert!(pcm.iter().any(|sample| *sample != 0));
+        assert!(pcm[pcm.len() - 12_000..].iter().all(|sample| *sample == 0));
+    }
+
+    #[test]
+    fn cw_builder_stream_decode_flushes_the_final_character() {
+        let (pcm, _) = build_native_digital_tx_pcm(
+            WorkspaceMode::Cw,
+            "N7UF",
+            700,
+            modes::fst4::Submode::default(),
+            20,
+            700,
+        )
+        .expect("CW synthesis");
+        let mut samples = vec![0.0_f32; 12_000];
+        samples.extend(
+            pcm.into_iter()
+                .map(|sample| sample as f32 / i16::MAX as f32)
+                .collect::<Vec<_>>(),
+        );
+        let mut decoder = qsonaut_third_party::cw::CwChannel::new(12_000, 700, 20);
+        let mut text = String::new();
+        for event in decoder.push_samples_with_audio(&samples).0 {
+            if let qsonaut_third_party::cw::CwDecode::Character(character) = event {
+                text.push(character);
+            }
+        }
+        for event in decoder.finish() {
+            if let qsonaut_third_party::cw::CwDecode::Character(character) = event {
+                text.push(character);
+            }
+        }
+        assert!(text.contains("N7UF"), "decoded CW text was {text:?}");
+    }
+
+    #[test]
+    fn cw_builder_survives_wpm_and_chunk_boundary_variation() {
+        for wpm in [5, 10, 20, 40] {
+            let (pcm, _) = build_native_digital_tx_pcm(
+                WorkspaceMode::Cw,
+                "CQ N7UF",
+                700,
+                modes::fst4::Submode::default(),
+                wpm,
+                700,
+            )
+            .expect("CW synthesis");
+            let mut samples = vec![0.0_f32; 12_000];
+            samples.extend(
+                pcm.into_iter()
+                    .map(|sample| sample as f32 / i16::MAX as f32),
+            );
+            let mut decoder = qsonaut_third_party::cw::CwChannel::new(12_000, 700, wpm);
+            let mut text = String::new();
+            let mut cursor = 0;
+            for width in [1, 7, 31, 127, 503, 1_001] {
+                let end = (cursor + width).min(samples.len());
+                for event in decoder.push_samples_with_audio(&samples[cursor..end]).0 {
+                    if let qsonaut_third_party::cw::CwDecode::Character(character) = event {
+                        text.push(character);
+                    }
+                }
+                cursor = end;
+                if cursor == samples.len() {
+                    break;
+                }
+            }
+            while cursor < samples.len() {
+                let end = (cursor + 257).min(samples.len());
+                for event in decoder.push_samples_with_audio(&samples[cursor..end]).0 {
+                    if let qsonaut_third_party::cw::CwDecode::Character(character) = event {
+                        text.push(character);
+                    }
+                }
+                cursor = end;
+            }
+            for event in decoder.finish() {
+                if let qsonaut_third_party::cw::CwDecode::Character(character) = event {
+                    text.push(character);
+                }
+            }
+            assert!(
+                text.contains("N7UF"),
+                "{wpm} WPM decoded CW text was {text:?}"
+            );
+        }
     }
 
     #[test]
@@ -7700,6 +8427,46 @@ mod tests {
             .digital_decodes
             .iter()
             .any(|entry| entry.message == "CQ W1AW AA00"));
+    }
+
+    #[test]
+    fn ft4_null_fixture_tolerates_level_and_timing_variation() {
+        let (pcm, offset_s) = build_native_digital_tx_pcm(
+            WorkspaceMode::Ft4,
+            "CQ W1AW AA00",
+            1_500,
+            modes::fst4::Submode::default(),
+            20,
+            600,
+        )
+        .expect("FT4 synthesis");
+        for (amplitude, start_s) in [(0.03_f32, 0.5_f64), (0.06, 0.9), (0.12, 1.2)] {
+            let mut slot = vec![0.0_f32; (7.5 * 12_000.0) as usize];
+            let start = ((offset_s + start_s - 0.5) * 12_000.0).round() as usize;
+            for (dst, sample) in slot[start..].iter_mut().zip(pcm.iter().copied()) {
+                *dst = sample as f32 / i16::MAX as f32 * amplitude;
+            }
+            let state = Arc::new(Mutex::new(GuiState::default()));
+            run_native_digital_decode(
+                WorkspaceMode::Ft4,
+                modes::fst4::Submode::default(),
+                slot,
+                10,
+                "00:01:15.000".to_string(),
+                1_500,
+                false,
+                state.clone(),
+            );
+            assert!(
+                state
+                    .lock()
+                    .expect("state")
+                    .digital_decodes
+                    .iter()
+                    .any(|entry| entry.message == "CQ W1AW AA00"),
+                "FT4 failed at amplitude {amplitude} and start {start_s}s"
+            );
+        }
     }
 
     #[test]
@@ -7818,30 +8585,77 @@ mod tests {
             *dst = sample as f32 / i16::MAX as f32;
         }
         let slot = prepare_early_ft8_slot(&rolling, captured, 0.0);
-        let audio: Vec<i16> = slot
-            .iter()
-            .map(|sample| (sample * i16::MAX as f32).round() as i16)
-            .collect();
-        let outcome = DecodeRequest::<Ft8>::wsjtx_depth(
+        let audio = qsonaut_modems::AudioBlock::new(12_000, slot).expect("normalized audio");
+        let outcome = qsonaut_third_party::wsjt::decode_ft8(
             &audio,
-            100.0,
-            3_000.0,
-            FT8_FAST_SYNC_MIN,
-            FT8_FAST_MAX_CAND,
-            WsjtxDepth::D1,
-            None,
+            &qsonaut_third_party::wsjt::WsjtDecodeConfig {
+                frequency_min_hz: 100.0,
+                frequency_max_hz: 3_000.0,
+                sync_min: FT8_FAST_SYNC_MIN,
+                max_candidates: FT8_FAST_MAX_CAND,
+                ..qsonaut_third_party::wsjt::WsjtDecodeConfig::default()
+            },
         )
-        .decode();
+        .expect("FT8 audio and mode are valid");
 
         let messages: Vec<String> = outcome
-            .results
-            .iter()
-            .filter_map(|result| unpack77(result.message77()))
+            .events
+            .into_iter()
+            .map(|event| event.message)
             .collect();
         assert!(
             messages.iter().any(|message| message == "CQ W1AW AA00"),
             "early decode messages: {messages:?}"
         );
+    }
+
+    fn add_deterministic_noise(samples: &mut [f32], amplitude: f32) {
+        let mut state = 0x6d2b_79f5_u32;
+        for sample in samples {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let unit = ((state >> 8) as f32 / 16_777_215.0) * 2.0 - 1.0;
+            *sample += unit * amplitude;
+        }
+    }
+
+    #[test]
+    fn ft8_fixture_tolerates_level_timing_and_low_noise_variation() {
+        let pcm = build_ft8_tx_pcm("CQ W1AW AA00", 1_500).expect("FT8 PCM");
+        for (amplitude, timing_offset_s, noise) in [
+            (0.03_f32, -0.2_f64, 0.0002_f32),
+            (0.06, 0.0, 0.0005),
+            (0.12, 0.2, 0.0008),
+        ] {
+            let mut slot = vec![0.0_f32; FT8_SLOT_SAMPLES];
+            let start = ((FT8_TX_AUDIO_START_S + timing_offset_s) * 12_000.0)
+                .round()
+                .max(0.0) as usize;
+            for (dst, sample) in slot[start..].iter_mut().zip(pcm.iter().copied()) {
+                *dst = sample as f32 / i16::MAX as f32 * amplitude;
+            }
+            add_deterministic_noise(&mut slot, noise);
+            let audio =
+                qsonaut_modems::AudioBlock::new(12_000, slot).expect("normalized FT8 audio");
+            let outcome = qsonaut_third_party::wsjt::decode_ft8(
+                &audio,
+                &qsonaut_third_party::wsjt::WsjtDecodeConfig {
+                    frequency_min_hz: 100.0,
+                    frequency_max_hz: 3_000.0,
+                    sync_min: FT8_FAST_SYNC_MIN,
+                    max_candidates: FT8_FAST_MAX_CAND,
+                    ..qsonaut_third_party::wsjt::WsjtDecodeConfig::default()
+                },
+            )
+            .expect("FT8 audio and mode are valid");
+            assert!(
+                outcome
+                    .events
+                    .iter()
+                    .any(|event| event.message == "CQ W1AW AA00"),
+                "FT8 failed at amplitude {amplitude}, timing {timing_offset_s}s, noise {noise}: {:?}",
+                outcome.events
+            );
+        }
     }
 
     #[test]

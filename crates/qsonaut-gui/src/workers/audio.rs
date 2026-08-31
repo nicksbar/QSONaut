@@ -6,14 +6,404 @@ use super::decode::{
 };
 use super::request_gui_repaint;
 use hound::{SampleFormat, WavSpec, WavWriter};
-use qsonaut_audio::{resample::Decimator, CANONICAL_CHANNELS, CANONICAL_SAMPLE_RATE_HZ};
+use qsonaut_audio::{CANONICAL_CHANNELS, CANONICAL_SAMPLE_RATE_HZ};
+use qsonaut_modems::AudioNormalizer;
+use qsonaut_third_party::cw::CwDecode;
+use qsonaut_third_party::sstv as qsonaut_sstv;
 use serde_json::json;
 use std::fs::File;
 use std::io::BufWriter;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU32;
 
-type CwRecording = (WavWriter<BufWriter<File>>, BufWriter<File>, PathBuf, u64);
+const CW_RETARGET_TIMEOUT_S: u64 = 10;
+
+struct SignalRecording {
+    full_width: Option<WavWriter<BufWriter<File>>>,
+    stream: Option<WavWriter<BufWriter<File>>>,
+    metadata: BufWriter<File>,
+    path: PathBuf,
+    samples: u64,
+}
+
+enum RecordingMessage {
+    Start {
+        mode: WorkspaceMode,
+        sample_rate_hz: u32,
+        tone_hz: u32,
+        frequency_hz: Option<u64>,
+        full_width: bool,
+        stream: bool,
+    },
+    Audio {
+        full_width: Vec<f32>,
+        stream: Vec<f32>,
+        samples: u64,
+        mode: WorkspaceMode,
+    },
+    Stop,
+}
+
+fn spawn_recording_writer(
+    state: Arc<Mutex<GuiState>>,
+) -> std::sync::mpsc::SyncSender<RecordingMessage> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(8);
+    thread::spawn(move || {
+        let mut recording = None;
+        while let Ok(message) = rx.recv() {
+            match message {
+                RecordingMessage::Start {
+                    mode,
+                    sample_rate_hz,
+                    tone_hz,
+                    frequency_hz,
+                    full_width,
+                    stream,
+                } => {
+                    finish_signal_recording(&mut recording, &state);
+                    match open_signal_recording(
+                        mode,
+                        sample_rate_hz,
+                        tone_hz,
+                        frequency_hz,
+                        full_width,
+                        stream,
+                    ) {
+                        Ok(next) => {
+                            let path = next.path.clone();
+                            recording = Some(next);
+                            if let Ok(mut shared) = state.lock() {
+                                shared.cw_recording_status =
+                                    format!("Recording {}", path.display());
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "signal recording could not start");
+                        }
+                    }
+                }
+                RecordingMessage::Audio {
+                    full_width,
+                    stream,
+                    samples,
+                    mode,
+                } => {
+                    let mut should_finish = false;
+                    if let Some(recording) = recording.as_mut() {
+                        if let Some(writer) = recording.full_width.as_mut() {
+                            for sample in full_width {
+                                let value = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                                let _ = writer.write_sample(value);
+                            }
+                        }
+                        if let Some(writer) = recording.stream.as_mut() {
+                            for sample in stream {
+                                let value = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                                let _ = writer.write_sample(value);
+                            }
+                        }
+                        recording.samples = recording.samples.saturating_add(samples);
+                        let _ = serde_json::to_writer(
+                            &mut recording.metadata,
+                            &json!({ "type": "audio_block", "samples": samples, "mode": mode.label() }),
+                        );
+                        use std::io::Write;
+                        let _ = recording.metadata.write_all(b"\n");
+                        should_finish = recording.samples >= 12_000 * 600;
+                    }
+                    if should_finish {
+                        finish_signal_recording(&mut recording, &state);
+                    }
+                }
+                RecordingMessage::Stop => finish_signal_recording(&mut recording, &state),
+            }
+        }
+        finish_signal_recording(&mut recording, &state);
+    });
+    tx
+}
+
+fn strongest_cw_tone_hz(buffer: &[Complex<f32>], sample_rate_hz: u32) -> Option<u32> {
+    if buffer.len() < 4 || sample_rate_hz == 0 {
+        return None;
+    }
+    let low = ((300.0 * buffer.len() as f32) / sample_rate_hz as f32).ceil() as usize;
+    let high = ((3_000.0 * buffer.len() as f32) / sample_rate_hz as f32).floor() as usize;
+    let high = high.min(buffer.len() / 2);
+    if low >= high {
+        return None;
+    }
+    let magnitudes: Vec<f32> = (low..=high).map(|index| buffer[index].norm()).collect();
+    let average = magnitudes.iter().sum::<f32>() / magnitudes.len() as f32;
+    let (peak_offset, peak) = magnitudes
+        .iter()
+        .enumerate()
+        .max_by(|(_, left), (_, right)| left.total_cmp(right))?;
+    if !peak.is_finite() || *peak < 1e-4 || *peak < average * 8.0 {
+        return None;
+    }
+    let bin = low + peak_offset;
+    Some((bin as f32 * sample_rate_hz as f32 / buffer.len() as f32).round() as u32)
+}
+
+fn null_sim_stations(mode: WorkspaceMode) -> Vec<QsonautPerson> {
+    let mut stations = qsonaut_demo_people()
+        .into_iter()
+        .filter(|person| {
+            person.modes.is_empty()
+                || person
+                    .modes
+                    .iter()
+                    .any(|supported| supported.eq_ignore_ascii_case(mode.label()))
+        })
+        .filter(|person| person.callsign.as_deref().is_some_and(is_probable_callsign))
+        .collect::<Vec<_>>();
+    if stations.is_empty() {
+        stations.push(QsonautPerson {
+            name: Some("QSONaut".to_string()),
+            callsign: Some("N7UF".to_string()),
+            grid: Some("CN87".to_string()),
+            power_dbm: Some(30),
+            ..QsonautPerson::default()
+        });
+    }
+    if stations.len() < 2 {
+        stations.push(QsonautPerson {
+            name: Some("Test Station".to_string()),
+            callsign: Some("W1AW".to_string()),
+            grid: Some("FN31".to_string()),
+            power_dbm: Some(30),
+            ..QsonautPerson::default()
+        });
+    }
+    if stations.len() < 3 {
+        stations.push(QsonautPerson {
+            name: Some("Demo Station".to_string()),
+            callsign: Some("K6ABC".to_string()),
+            grid: Some("DM13".to_string()),
+            power_dbm: Some(30),
+            ..QsonautPerson::default()
+        });
+    }
+    stations
+}
+
+struct NullAudioGenerator {
+    mode: Option<WorkspaceMode>,
+    waveforms: Vec<Vec<f32>>,
+    period_s: f64,
+    start_s: f64,
+    next_deadline: Option<Instant>,
+}
+
+impl Default for NullAudioGenerator {
+    fn default() -> Self {
+        Self {
+            mode: None,
+            waveforms: Vec::new(),
+            period_s: 15.0,
+            start_s: 0.5,
+            next_deadline: None,
+        }
+    }
+}
+
+impl NullAudioGenerator {
+    fn rebuild(&mut self, mode: WorkspaceMode, state: &GuiState) {
+        self.mode = Some(mode);
+        self.period_s = mode.slot_seconds(state.fst4_submode).unwrap_or(match mode {
+            WorkspaceMode::Sstv => 60.0,
+            _ => 15.0,
+        });
+        self.start_s = if mode == WorkspaceMode::Sstv {
+            1.0
+        } else {
+            0.5
+        };
+        self.waveforms.clear();
+
+        let stations = null_sim_stations(mode);
+        let first = &stations[0];
+        let second = &stations[1];
+        let first_call = first.callsign.as_deref().unwrap_or("N7UF");
+        let second_call = second.callsign.as_deref().unwrap_or("W1AW");
+        let first_grid = first.grid.as_deref().unwrap_or("CN87");
+        let second_grid = second.grid.as_deref().unwrap_or("FN31");
+        let first_power = first.power_dbm.unwrap_or(30);
+        let second_power = second.power_dbm.unwrap_or(30);
+        let messages: Vec<(String, u32)> = match mode {
+            WorkspaceMode::Sstv => stations
+                .iter()
+                .take(3)
+                .map(|station| {
+                    (
+                        format!(
+                            "{} {}",
+                            station.callsign.as_deref().unwrap_or("N7UF"),
+                            station.name.as_deref().unwrap_or("IMAGE")
+                        ),
+                        1_500,
+                    )
+                })
+                .collect(),
+            WorkspaceMode::Cw => vec![
+                (format!("CQ {first_call}"), 700),
+                (format!("{first_call} DE {second_call}"), 1_500),
+            ],
+            WorkspaceMode::Wspr => vec![
+                (format!("{first_call} {first_grid} {first_power}"), 1_000),
+                (format!("{second_call} {second_grid} {second_power}"), 2_000),
+            ],
+            _ => vec![
+                (format!("CQ {first_call} {first_grid}"), 700),
+                (format!("{first_call} {second_call} -10"), 1_400),
+                (format!("{second_call} {first_call} R-07"), 2_100),
+                (format!("{first_call} {second_call} RR73"), 700),
+                (format!("{second_call} {first_call} 73"), 1_400),
+                (format!("CQ {second_call} {second_grid}"), 2_100),
+            ],
+        };
+        for (frame_index, (message, tone_hz)) in messages.into_iter().enumerate() {
+            let mut waveform = Vec::new();
+            let pcm = match mode {
+                WorkspaceMode::Ft8 => build_ft8_tx_pcm(&message, tone_hz),
+                WorkspaceMode::Ft4
+                | WorkspaceMode::Fst4
+                | WorkspaceMode::Jt9
+                | WorkspaceMode::Jt65
+                | WorkspaceMode::Q65
+                | WorkspaceMode::Wspr => build_native_digital_tx_pcm(
+                    mode,
+                    &message,
+                    tone_hz,
+                    state.fst4_submode,
+                    state.cw_wpm,
+                    state.selected_audio_hz as u16,
+                )
+                .map(|(pcm, _)| pcm),
+                WorkspaceMode::Cw => build_native_digital_tx_pcm(
+                    mode,
+                    &message,
+                    tone_hz,
+                    state.fst4_submode,
+                    state.cw_wpm,
+                    tone_hz as u16,
+                )
+                .map(|(pcm, _)| pcm),
+                WorkspaceMode::Sstv => {
+                    let width = 320_usize;
+                    let height = 256_usize;
+                    let mut rgb = vec![0_u8; width * height * 3];
+                    for y in 0..height {
+                        for x in 0..width {
+                            let offset = (y * width + x) * 3;
+                            rgb[offset] = ((x + frame_index * 47) % 256) as u8;
+                            rgb[offset + 1] = ((y + frame_index * 71) % 256) as u8;
+                            rgb[offset + 2] = ((x + y + frame_index * 29) % 256) as u8;
+                        }
+                    }
+                    qsonaut_sstv::encode_rgb_mode_12k(
+                        qsonaut_sstv::SstvMode::MartinM1,
+                        width as u32,
+                        height as u32,
+                        &rgb,
+                    )
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))
+                }
+                _ => Err(anyhow::anyhow!("unsupported null audio mode")),
+            };
+            let Ok(pcm) = pcm else { continue };
+            if waveform.len() < pcm.len() {
+                waveform.resize(pcm.len(), 0.0);
+            }
+            for (target, sample) in waveform.iter_mut().zip(pcm) {
+                *target += sample as f32 / i16::MAX as f32
+                    * if mode == WorkspaceMode::Sstv {
+                        0.04
+                    } else {
+                        0.06
+                    };
+            }
+            self.waveforms.push(waveform);
+        }
+        if mode == WorkspaceMode::Sstv {
+            // Martin M1 is approximately 114 seconds at 320x256. Leave a
+            // small guard interval so the next image cannot truncate the
+            // current VIS/image transmission.
+            let longest_s = self
+                .waveforms
+                .iter()
+                .map(|waveform| waveform.len() as f64 / f64::from(CANONICAL_SAMPLE_RATE_HZ))
+                .fold(0.0, f64::max);
+            self.period_s = self
+                .period_s
+                .max(
+                    f64::from(qsonaut_sstv::mode_duration_seconds(
+                        qsonaut_sstv::SstvMode::MartinM1,
+                    )) + 2.0,
+                )
+                .max(longest_s + 2.0);
+        }
+    }
+
+    fn status(&self) -> String {
+        let now_s = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64())
+            .unwrap_or_default();
+        let cycle = (now_s / self.period_s).floor() as usize;
+        let frame_count = self.waveforms.len().max(1);
+        let frame = cycle % frame_count + 1;
+        let until_next = self.period_s - now_s.rem_euclid(self.period_s);
+        format!(
+            "SIMULATED RX · {} · frame {frame}/{frame_count} · next slot in {:.1}s",
+            self.mode.map(WorkspaceMode::label).unwrap_or("starting"),
+            until_next
+        )
+    }
+
+    fn read_chunk(&mut self, sample_count: usize, state: &Arc<Mutex<GuiState>>) -> Vec<f32> {
+        // A real CPAL stream blocks until the requested audio exists. Without
+        // the same pacing, the worker can consume the null source thousands
+        // of times faster than real time, making the waterfall race and
+        // over-driving the monitor output.
+        let chunk_duration =
+            Duration::from_secs_f64(sample_count as f64 / f64::from(CANONICAL_SAMPLE_RATE_HZ));
+        let now = Instant::now();
+        let deadline = self.next_deadline.get_or_insert(now);
+        if *deadline > now {
+            std::thread::sleep(*deadline - now);
+        }
+        let started = Instant::now();
+        self.next_deadline = Some(started + chunk_duration);
+        let snapshot = state.lock().expect("ui state lock poisoned").clone();
+        if self.mode != Some(snapshot.workspace_mode) {
+            self.rebuild(snapshot.workspace_mode, &snapshot);
+        }
+        let now_s = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64())
+            .unwrap_or_default();
+        let phase_s = now_s.rem_euclid(self.period_s);
+        let cycle = (now_s / self.period_s).floor() as usize;
+        let waveform = self
+            .waveforms
+            .get(cycle % self.waveforms.len().max(1))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        (0..sample_count)
+            .map(|offset| {
+                let sample_phase = phase_s + offset as f64 / f64::from(CANONICAL_SAMPLE_RATE_HZ);
+                let waveform_index = ((sample_phase - self.start_s) * 12_000.0).round() as isize;
+                if waveform_index < 0 || waveform_index as usize >= waveform.len() {
+                    0.0
+                } else {
+                    waveform[waveform_index as usize]
+                }
+            })
+            .collect()
+    }
+}
 
 fn save_received_sstv_image(
     image: &qsonaut_sstv::DecodedImage,
@@ -126,40 +516,65 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 "Normalizing configured audio processing format"
             );
         }
+        let null_audio = preferred_device.as_deref() == Some(NULL_INPUT_DEVICE);
+        let mut null_generator = null_audio.then(NullAudioGenerator::default);
         let audio_service = AudioService::new(preferred_device, true);
-        let mut stream = match audio_service.open_stream(sample_rate_hz, CANONICAL_CHANNELS) {
-            Ok(stream) => stream,
-            Err(err) => {
-                tracing::error!(sample_rate_hz, channels = CANONICAL_CHANNELS, error = %err, "Audio input stream failed to open");
-                let mut s = state.lock().expect("ui state lock poisoned");
-                s.audio_spectrum_status = format!("NO INPUT ({err})");
-                return;
+        let mut stream = if null_audio {
+            None
+        } else {
+            match audio_service.open_stream(sample_rate_hz, CANONICAL_CHANNELS) {
+                Ok(stream) => Some(stream),
+                Err(err) => {
+                    tracing::error!(sample_rate_hz, channels = CANONICAL_CHANNELS, error = %err, "Audio input stream failed to open");
+                    let mut s = state.lock().expect("ui state lock poisoned");
+                    s.audio_spectrum_status = format!("NO INPUT ({err})");
+                    return;
+                }
             }
         };
-        let device_sample_rate_hz = stream.device_sample_rate_hz();
-        let device_channels = stream.device_channels();
-        let device_sample_format = format!("{:?}", stream.device_sample_format());
-        let resampling_input = device_sample_rate_hz != stream.output_sample_rate_hz();
+        let device_sample_rate_hz = stream
+            .as_ref()
+            .map(|stream| stream.device_sample_rate_hz())
+            .unwrap_or(sample_rate_hz);
+        let device_channels = stream
+            .as_ref()
+            .map(|stream| stream.device_channels())
+            .unwrap_or(CANONICAL_CHANNELS);
+        let device_sample_format = stream
+            .as_ref()
+            .map(|stream| format!("{:?}", stream.device_sample_format()))
+            .unwrap_or_else(|| "F32 (simulated)".to_string());
+        let resampling_input = !null_audio
+            && stream
+                .as_ref()
+                .is_some_and(|stream| device_sample_rate_hz != stream.output_sample_rate_hz());
         info!(
             canonical_sample_rate_hz = sample_rate_hz,
             device_sample_rate_hz,
-            device_channels = stream.device_channels(),
-            device_sample_format = ?stream.device_sample_format(),
+            device_channels,
+            device_sample_format = %device_sample_format,
             resampling_input,
+            null_audio,
             monitor_enabled,
             "Audio input worker started"
         );
-        for attempt in stream.fallback_attempts() {
-            warn!(attempt, "Audio input configuration fallback");
+        if let Some(stream) = &stream {
+            for attempt in stream.fallback_attempts() {
+                warn!(attempt, "Audio input configuration fallback");
+            }
         }
         {
             let mut shared = state.lock().expect("ui state lock poisoned");
             shared.audio_device_sample_rate_hz = Some(device_sample_rate_hz);
             shared.audio_device_channels = Some(device_channels);
             shared.audio_device_sample_format = Some(device_sample_format);
-            shared.audio_input_fallback_attempts = stream.fallback_attempts().to_vec();
+            shared.audio_input_fallback_attempts = stream
+                .as_ref()
+                .map(|stream| stream.fallback_attempts().to_vec())
+                .unwrap_or_default();
         }
-        let (monitor, monitor_status) = if monitor_enabled {
+        let null_output = monitor_output_device.as_deref() == Some(NULL_OUTPUT_DEVICE);
+        let (monitor, monitor_status) = if monitor_enabled && !null_output {
             match qsonaut_audio::AudioMonitor::open(
                 sample_rate_hz,
                 monitor_output_device.as_deref(),
@@ -182,6 +597,8 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                     (None, message)
                 }
             }
+        } else if null_output {
+            (None, " · NULL OUTPUT".to_string())
         } else {
             (None, String::new())
         };
@@ -200,7 +617,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         // 12 kHz decimation pipeline for FT8 decode
         let can_decode = sample_rate_hz == 48_000;
         let mut decimator = if can_decode {
-            Some(Decimator::new(sample_rate_hz))
+            Some(AudioNormalizer::new(sample_rate_hz).expect("validated 48 kHz input"))
         } else {
             None
         };
@@ -232,9 +649,15 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut cw_stream_decoder: Option<CwDitChannel> = None;
         let mut cw_stream_tone_hz = 0_u32;
         let mut cw_stream_wpm = 0_u8;
+        let mut cw_auto_target_candidate: Option<u32> = None;
+        let mut cw_auto_target_observations = 0_u8;
+        let mut cw_retarget_last_signal = Instant::now();
+        let mut cw_filtered_signal_present = false;
+        let mut cw_silence_samples = 0_usize;
         let mut last_cw_diagnostics = Instant::now();
         let mut last_cw_status = Instant::now() - Duration::from_secs(1);
-        let mut cw_recording: Option<CwRecording> = None;
+        let recording_tx = spawn_recording_writer(state.clone());
+        let mut recording_active = false;
         let mut sstv_receiver = qsonaut_sstv::MultiModeReceiver::default();
         let mut sstv_tuning_offset_hz = 0_i32;
         let mut last_sstv_vis: Option<u8> = None;
@@ -271,7 +694,16 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 let interval_ms = effective_visual_profile(&t, &mode, false).0;
                 ((sample_rate_hz as u64 * interval_ms / 1_000) as usize).max(256)
             };
-            match stream.read_frames_f32_until_stopped(chunk_samples, &stop) {
+            match if let Some(stream) = stream.as_mut() {
+                stream.read_frames_f32_until_stopped(chunk_samples, &stop)
+            } else {
+                Ok(Some(
+                    null_generator
+                        .as_mut()
+                        .expect("null audio generator initialized")
+                        .read_chunk(chunk_samples, &state),
+                ))
+            } {
                 Ok(Some(samples)) => {
                     if last_audio_read_error.take().is_some() {
                         info!("Audio input stream recovered");
@@ -377,7 +809,14 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 .as_deref()
                                 .map(|error| format!("LIVE RX · MONITOR ERROR ({error})"))
                                 .unwrap_or_else(|| {
-                                    if resampling_input {
+                                    if null_audio {
+                                        null_generator
+                                            .as_ref()
+                                            .map(NullAudioGenerator::status)
+                                            .unwrap_or_else(|| {
+                                                "SIMULATED RX · NULL SOUND CARD".to_string()
+                                            })
+                                    } else if resampling_input {
                                         format!(
                                             "LIVE RX · RESAMPLED {} → {} Hz{monitor_status}{monitor_clock_status}",
                                             device_sample_rate_hz, sample_rate_hz
@@ -397,12 +836,21 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             state.lock().expect("ui state lock poisoned").workspace_mode;
                         if decode_workspace_last != Some(active_workspace_mode) {
                             info!(workspace = %active_workspace_mode.label(), "Audio decoder workspace changed");
+                            if recording_active {
+                                let _ = recording_tx.try_send(RecordingMessage::Stop);
+                                recording_active = false;
+                            }
                             decode_workspace_last = Some(active_workspace_mode);
                             ft8_buf.clear();
                             digital_buf.clear();
                             cw_stream_decoder = None;
                             cw_stream_tone_hz = 0;
                             cw_stream_wpm = 0;
+                            cw_auto_target_candidate = None;
+                            cw_auto_target_observations = 0;
+                            cw_retarget_last_signal = Instant::now();
+                            cw_filtered_signal_present = false;
+                            cw_silence_samples = 0;
                             ft8_slot_gate.reset();
                             ft4_slot_gate.reset();
                             digital_slot_gate.reset();
@@ -410,7 +858,8 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             last_sstv_vis = None;
                             sstv_receive_started = None;
                             sstv_progress_bucket = 0;
-                            *dec = Decimator::new(sample_rate_hz);
+                            *dec = AudioNormalizer::new(sample_rate_hz)
+                                .expect("validated 48 kHz input");
                             let mut s = state.lock().expect("ui state lock poisoned");
                             if active_workspace_mode == WorkspaceMode::Ft8 {
                                 s.ft8_decode_status =
@@ -419,6 +868,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 s.digital_decode_status =
                                     "READY: live CW decode starts after 3 seconds".to_string();
                                 s.cw_live_text.clear();
+                                s.cw_retarget_remaining_s = None;
                             } else if active_workspace_mode == WorkspaceMode::Sstv {
                                 s.sstv_status = format!(
                                     "READY: {} · {}",
@@ -451,7 +901,61 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 );
                             }
                         }
-                        let ds = dec.process(&samples_f32);
+                        let ds = dec
+                            .process_f32_mono(&samples_f32)
+                            .expect("audio capture samples are finite");
+                        let (
+                            recording_enabled,
+                            recording_mode,
+                            recording_full_width,
+                            recording_stream,
+                        ) = {
+                            let shared = state.lock().expect("ui state lock poisoned");
+                            (
+                                shared.recording_enabled,
+                                shared.recording_modes.contains(&active_workspace_mode),
+                                shared.recording_full_width,
+                                shared.recording_stream,
+                            )
+                        };
+                        if !recording_enabled
+                            || !recording_mode
+                            || (!recording_full_width && !recording_stream)
+                        {
+                            if recording_active {
+                                let _ = recording_tx.try_send(RecordingMessage::Stop);
+                                recording_active = false;
+                            }
+                        } else {
+                            if !recording_active {
+                                let shared = state.lock().expect("ui state lock poisoned");
+                                let _ = recording_tx.try_send(RecordingMessage::Start {
+                                    mode: active_workspace_mode,
+                                    sample_rate_hz,
+                                    tone_hz: shared.selected_audio_hz,
+                                    frequency_hz: shared.frequency_hz,
+                                    full_width: recording_full_width,
+                                    stream: recording_stream,
+                                });
+                                recording_active = true;
+                            }
+                            let _ = recording_tx.try_send(RecordingMessage::Audio {
+                                full_width: if recording_full_width {
+                                    samples_f32.clone()
+                                } else {
+                                    Vec::new()
+                                },
+                                stream: if active_workspace_mode == WorkspaceMode::Cw
+                                    || !recording_stream
+                                {
+                                    Vec::new()
+                                } else {
+                                    ds.clone()
+                                },
+                                samples: ds.len() as u64,
+                                mode: active_workspace_mode,
+                            });
+                        }
                         if active_workspace_mode == WorkspaceMode::Ft8 {
                             ft8_buf.extend_from_slice(&ds);
                             // Keep a full slot plus ±2.5 s timing headroom.
@@ -599,11 +1103,11 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                             state.lock().expect("ui state lock poisoned");
                                         for event in events {
                                             let text = match event {
-                                                cwdit_morse::Decoded::Char(character) => {
+                                                CwDecode::Character(character) => {
                                                     character.to_string()
                                                 }
-                                                cwdit_morse::Decoded::WordBreak => " ".to_string(),
-                                                cwdit_morse::Decoded::Unknown => continue,
+                                                CwDecode::WordBreak => " ".to_string(),
+                                                CwDecode::Unknown => continue,
                                             };
                                             shared.cw_live_text.push_str(&text);
                                             shared.digital_decode_status =
@@ -996,6 +1500,67 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     "CW TX active; receive window reset".to_string();
                                 continue;
                             }
+                            let (mut auto_target, auto_retarget) = {
+                                let shared = state.lock().expect("ui state lock poisoned");
+                                (shared.cw_auto_target, shared.cw_auto_retarget)
+                            };
+                            let candidate = strongest_cw_tone_hz(&fft_buf, sample_rate_hz);
+                            if auto_retarget && !auto_target {
+                                if cw_filtered_signal_present {
+                                    cw_retarget_last_signal = Instant::now();
+                                } else if cw_retarget_last_signal.elapsed()
+                                    >= Duration::from_secs(CW_RETARGET_TIMEOUT_S)
+                                {
+                                    if recording_active {
+                                        let _ = recording_tx.try_send(RecordingMessage::Stop);
+                                        recording_active = false;
+                                    }
+                                    let mut shared = state.lock().expect("ui state lock poisoned");
+                                    shared.cw_auto_target = true;
+                                    shared.cw_retarget_remaining_s = None;
+                                    shared.cw_auto_target_tone_hz = None;
+                                    shared.digital_decode_status =
+                                        "CW AUTO TARGET: no signal for 10 seconds; scanning"
+                                            .to_string();
+                                    auto_target = true;
+                                    cw_auto_target_candidate = None;
+                                    cw_auto_target_observations = 0;
+                                    cw_retarget_last_signal = Instant::now();
+                                    info!(
+                                        "CW auto target resumed after 10 seconds without a signal"
+                                    );
+                                }
+                            }
+                            if auto_target {
+                                if candidate == cw_auto_target_candidate {
+                                    cw_auto_target_observations =
+                                        cw_auto_target_observations.saturating_add(1);
+                                } else {
+                                    cw_auto_target_candidate = candidate;
+                                    cw_auto_target_observations = candidate.map_or(0, |_| 1);
+                                }
+                                if let Some(tone_hz) =
+                                    candidate.filter(|_| cw_auto_target_observations >= 3)
+                                {
+                                    let mut shared = state.lock().expect("ui state lock poisoned");
+                                    shared.selected_audio_hz = tone_hz;
+                                    shared.cw_auto_target = false;
+                                    shared.cw_retarget_remaining_s = if auto_retarget {
+                                        Some(CW_RETARGET_TIMEOUT_S as u8)
+                                    } else {
+                                        None
+                                    };
+                                    shared.cw_auto_target_tone_hz = Some(tone_hz);
+                                    shared.digital_decode_status =
+                                        format!("CW AUTO TARGET: locked {tone_hz} Hz");
+                                    cw_auto_target_candidate = None;
+                                    cw_auto_target_observations = 0;
+                                    cw_retarget_last_signal = Instant::now();
+                                }
+                            } else {
+                                cw_auto_target_candidate = None;
+                                cw_auto_target_observations = 0;
+                            }
                             let selected_tone_hz = state
                                 .lock()
                                 .expect("ui state lock poisoned")
@@ -1004,64 +1569,72 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 let shared = state.lock().expect("ui state lock poisoned");
                                 shared.cw_wpm
                             };
-                            let record_rx =
-                                state.lock().expect("ui state lock poisoned").cw_record_rx;
-                            if record_rx && cw_recording.is_none() {
-                                if let Ok((writer, metadata, wav_path)) = open_cw_recording(
-                                    selected_tone_hz,
-                                    snapshot_recording_frequency(&state),
-                                ) {
-                                    cw_recording = Some((writer, metadata, wav_path.clone(), 0));
-                                    state
-                                        .lock()
-                                        .expect("ui state lock poisoned")
-                                        .cw_recording_status =
-                                        format!("Recording {}", wav_path.display());
-                                }
-                            } else if !record_rx {
-                                finish_cw_recording(&mut cw_recording, &state);
-                            }
-                            if let Some((writer, metadata, _, recorded_samples)) =
-                                cw_recording.as_mut()
-                            {
-                                for sample in &ds {
-                                    let value = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-                                    let _ = writer.write_sample(value);
-                                }
-                                *recorded_samples =
-                                    recorded_samples.saturating_add(ds.len() as u64);
-                                let _ = serde_json::to_writer(
-                                    &mut *metadata,
-                                    &json!({
-                                        "type": "audio_block",
-                                        "samples": ds.len(),
-                                        "selected_tone_hz": selected_tone_hz,
-                                    }),
-                                );
-                                use std::io::Write;
-                                let _ = metadata.write_all(b"\n");
-                                if *recorded_samples >= 12_000 * 600 {
-                                    finish_cw_recording(&mut cw_recording, &state);
-                                }
-                            }
                             if selected_tone_hz != cw_stream_tone_hz || cw_wpm != cw_stream_wpm {
+                                if cw_stream_tone_hz != 0 && recording_active {
+                                    let _ = recording_tx.try_send(RecordingMessage::Stop);
+                                    recording_active = false;
+                                }
                                 cw_stream_decoder =
                                     Some(CwDitChannel::new(12_000, selected_tone_hz, cw_wpm));
                                 cw_stream_tone_hz = selected_tone_hz;
                                 cw_stream_wpm = cw_wpm;
                             }
                             if let Some(decoder) = cw_stream_decoder.as_mut() {
-                                let (events, channel_audio) = decoder.push_samples_with_audio(&ds);
+                                let (mut events, channel_audio) =
+                                    decoder.push_samples_with_audio(&ds);
                                 if let Some(monitor) = &monitor {
                                     monitor.push_f32_at_sample_rate(&channel_audio, 12_000);
                                 }
+                                if recording_active {
+                                    let _ = recording_tx.try_send(RecordingMessage::Audio {
+                                        full_width: Vec::new(),
+                                        stream: if recording_stream {
+                                            channel_audio.clone()
+                                        } else {
+                                            Vec::new()
+                                        },
+                                        samples: 0,
+                                        mode: WorkspaceMode::Cw,
+                                    });
+                                }
+                                let channel_rms = if channel_audio.is_empty() {
+                                    0.0
+                                } else {
+                                    (channel_audio
+                                        .iter()
+                                        .map(|sample| sample * sample)
+                                        .sum::<f32>()
+                                        / channel_audio.len() as f32)
+                                        .sqrt()
+                                };
+                                cw_filtered_signal_present = channel_rms >= 0.002;
+                                if auto_retarget && !auto_target {
+                                    let elapsed = cw_retarget_last_signal.elapsed().as_secs();
+                                    let remaining = CW_RETARGET_TIMEOUT_S.saturating_sub(elapsed);
+                                    let remaining = u8::try_from(remaining).unwrap_or(u8::MAX);
+                                    let mut shared = state.lock().expect("ui state lock poisoned");
+                                    shared.cw_retarget_remaining_s = Some(remaining);
+                                    if remaining > 0 {
+                                        shared.digital_decode_status = format!(
+                                            "CW AUTO TARGET: locked; retarget in {remaining}s"
+                                        );
+                                    }
+                                }
+                                if channel_rms < 0.002 {
+                                    cw_silence_samples =
+                                        cw_silence_samples.saturating_add(channel_audio.len());
+                                    if cw_silence_samples >= 12_000 {
+                                        events.extend(decoder.finish());
+                                        cw_silence_samples = 0;
+                                    }
+                                } else {
+                                    cw_silence_samples = 0;
+                                }
                                 for event in events {
                                     let text = match event {
-                                        cwdit_morse::Decoded::Char(character) => {
-                                            character.to_string()
-                                        }
-                                        cwdit_morse::Decoded::WordBreak => " ".to_string(),
-                                        cwdit_morse::Decoded::Unknown => continue,
+                                        CwDecode::Character(character) => character.to_string(),
+                                        CwDecode::WordBreak => " ".to_string(),
+                                        CwDecode::Unknown => continue,
                                     };
                                     let mut shared = state.lock().expect("ui state lock poisoned");
                                     shared.cw_live_text.push_str(&text);
@@ -1351,26 +1924,245 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
     })
 }
 
-fn snapshot_recording_frequency(state: &Arc<Mutex<GuiState>>) -> Option<u64> {
-    state.lock().expect("ui state lock poisoned").frequency_hz
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::{
+        finish_signal_recording, open_signal_recording_in, strongest_cw_tone_hz, GuiState,
+        NullAudioGenerator, WorkspaceMode,
+    };
+    use qsonaut_third_party::sstv as qsonaut_sstv;
+    use rustfft::num_complex::Complex;
+    use std::sync::{Arc, Mutex};
+    use tempfile::tempdir;
+
+    #[test]
+    fn null_audio_generator_builds_waveforms_for_supported_demo_modes() {
+        for mode in [
+            WorkspaceMode::Ft8,
+            WorkspaceMode::Ft4,
+            WorkspaceMode::Fst4,
+            WorkspaceMode::Wspr,
+            WorkspaceMode::Jt9,
+            WorkspaceMode::Jt65,
+            WorkspaceMode::Q65,
+            WorkspaceMode::Cw,
+            WorkspaceMode::Sstv,
+        ] {
+            let state = GuiState {
+                workspace_mode: mode,
+                ..GuiState::default()
+            };
+            let mut generator = NullAudioGenerator::default();
+            generator.rebuild(mode, &state);
+            assert!(
+                !generator.waveforms.is_empty(),
+                "null source did not encode {mode:?}"
+            );
+            assert!(
+                generator
+                    .waveforms
+                    .iter()
+                    .flat_map(|waveform| waveform.iter())
+                    .any(|sample| *sample != 0.0),
+                "null source encoded an empty {mode:?} waveform"
+            );
+        }
+    }
+
+    #[test]
+    fn null_audio_generator_uses_mode_slots_and_cycles_exchange_frames() {
+        let state = GuiState {
+            workspace_mode: WorkspaceMode::Ft8,
+            ..GuiState::default()
+        };
+        let mut generator = NullAudioGenerator::default();
+        generator.rebuild(WorkspaceMode::Ft8, &state);
+        assert_eq!(generator.waveforms.len(), 6);
+        assert_eq!(generator.period_s, 15.0);
+
+        let state = GuiState {
+            workspace_mode: WorkspaceMode::Fst4,
+            ..GuiState::default()
+        };
+        generator.rebuild(WorkspaceMode::Fst4, &state);
+        assert_eq!(generator.period_s, 60.0);
+        assert_eq!(generator.waveforms.len(), 6);
+
+        let state = GuiState {
+            workspace_mode: WorkspaceMode::Wspr,
+            ..GuiState::default()
+        };
+        generator.rebuild(WorkspaceMode::Wspr, &state);
+        assert_eq!(generator.period_s, 120.0);
+        assert_eq!(generator.waveforms.len(), 2);
+
+        let state = GuiState {
+            workspace_mode: WorkspaceMode::Sstv,
+            ..GuiState::default()
+        };
+        generator.rebuild(WorkspaceMode::Sstv, &state);
+        assert!(generator.period_s > 60.0);
+        assert!(generator.period_s >= generator.waveforms[0].len() as f64 / 12_000.0 + 2.0);
+        assert_eq!(generator.waveforms.len(), 3);
+        assert!(generator.waveforms[0] != generator.waveforms[1]);
+        assert!(generator.waveforms[1] != generator.waveforms[2]);
+        let status = generator.status();
+        assert!(status.contains("SSTV"));
+        assert!(
+            status.contains("frame 1/3")
+                || status.contains("frame 2/3")
+                || status.contains("frame 3/3")
+        );
+        assert!(status.contains("next slot in"));
+    }
+
+    #[test]
+    fn null_sstv_signal_remains_auto_target_decodable_at_simulation_level() {
+        let state = GuiState {
+            workspace_mode: WorkspaceMode::Sstv,
+            ..GuiState::default()
+        };
+        let mut generator = NullAudioGenerator::default();
+        generator.rebuild(WorkspaceMode::Sstv, &state);
+
+        let mut audio = vec![0.0_f32; 12_000];
+        audio.extend_from_slice(&generator.waveforms[0]);
+        audio.extend(std::iter::repeat_n(0.0, 12_000));
+        let mut receiver = qsonaut_sstv::MultiModeReceiver::default();
+        receiver.set_auto_target(true);
+        let mut decoded = None;
+        for chunk in audio.chunks(4096) {
+            decoded = receiver.push(chunk).or(decoded);
+        }
+        assert!(
+            decoded.is_some(),
+            "null SSTV signal should auto-target and decode"
+        );
+        assert_eq!(
+            receiver.take_completed_mode(),
+            Some(qsonaut_sstv::SstvMode::MartinM1)
+        );
+    }
+
+    #[test]
+    fn strongest_cw_tone_requires_a_prominent_audio_peak() {
+        let mut spectrum = vec![Complex::new(0.001, 0.0); 2_048];
+        assert_eq!(strongest_cw_tone_hz(&spectrum, 12_000), None);
+        spectrum[256] = Complex::new(1.0, 0.0);
+        let tone_hz = strongest_cw_tone_hz(&spectrum, 12_000).expect("CW peak");
+        assert_eq!(tone_hz, 1_500);
+    }
+
+    #[test]
+    fn signal_recording_writes_session_audio_and_end_metadata() {
+        let directory = tempdir().expect("temporary recording directory");
+        let mut recording = Some(
+            open_signal_recording_in(
+                directory.path(),
+                WorkspaceMode::Cw,
+                48_000,
+                700,
+                Some(14_074_000),
+                true,
+                true,
+            )
+            .expect("recording should open"),
+        );
+        let path = recording.as_ref().expect("recording exists").path.clone();
+        let signal = recording.as_mut().expect("recording exists");
+        if let Some(writer) = signal.full_width.as_mut() {
+            writer.write_sample(i16::MAX).expect("full-width sample");
+        }
+        if let Some(writer) = signal.stream.as_mut() {
+            writer.write_sample(i16::MIN).expect("stream sample");
+        }
+        signal.samples = 12_000;
+
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        finish_signal_recording(&mut recording, &state);
+
+        let metadata = std::fs::read_to_string(path.with_extension("jsonl"))
+            .expect("recording metadata should exist");
+        assert!(metadata.contains("\"type\":\"session\""));
+        assert!(metadata.contains("\"type\":\"end\""));
+        assert!(metadata.contains("\"samples\":12000"));
+        assert!(path.with_extension("full.wav").exists());
+        assert!(path.with_extension("stream.wav").exists());
+        assert!(state
+            .lock()
+            .expect("state lock")
+            .cw_recording_status
+            .starts_with("Saved "));
+
+        std::fs::remove_file(path.with_extension("jsonl")).expect("metadata cleanup");
+        std::fs::remove_file(path.with_extension("full.wav")).expect("full cleanup");
+        std::fs::remove_file(path.with_extension("stream.wav")).expect("stream cleanup");
+    }
 }
 
-fn open_cw_recording(
+fn open_signal_recording(
+    mode: WorkspaceMode,
+    full_width_sample_rate_hz: u32,
     tone_hz: u32,
     frequency_hz: Option<u64>,
-) -> anyhow::Result<(WavWriter<BufWriter<File>>, BufWriter<File>, PathBuf)> {
-    let directory = qsonaut_log::app_config_dir().join("cw-recordings");
-    std::fs::create_dir_all(&directory)?;
+    record_full_width: bool,
+    record_stream: bool,
+) -> anyhow::Result<SignalRecording> {
+    let directory = qsonaut_log::app_config_dir().join("signal-recordings");
+    open_signal_recording_in(
+        &directory,
+        mode,
+        full_width_sample_rate_hz,
+        tone_hz,
+        frequency_hz,
+        record_full_width,
+        record_stream,
+    )
+}
+
+fn open_signal_recording_in(
+    directory: &Path,
+    mode: WorkspaceMode,
+    full_width_sample_rate_hz: u32,
+    tone_hz: u32,
+    frequency_hz: Option<u64>,
+    record_full_width: bool,
+    record_stream: bool,
+) -> anyhow::Result<SignalRecording> {
+    std::fs::create_dir_all(directory)?;
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-    let wav_path = directory.join(format!("cw-{stamp}-{tone_hz}hz.wav"));
-    let metadata_path = wav_path.with_extension("jsonl");
-    let spec = WavSpec {
-        channels: 1,
-        sample_rate: 12_000,
-        bits_per_sample: 16,
-        sample_format: SampleFormat::Int,
-    };
-    let writer = WavWriter::create(&wav_path, spec)?;
+    let path = directory.join(format!(
+        "{}-{stamp}-{tone_hz}hz",
+        mode.label().to_ascii_lowercase()
+    ));
+    let metadata_path = path.with_extension("jsonl");
+    let full_width = record_full_width
+        .then(|| {
+            WavWriter::create(
+                path.with_extension("full.wav"),
+                WavSpec {
+                    channels: 1,
+                    sample_rate: full_width_sample_rate_hz,
+                    bits_per_sample: 16,
+                    sample_format: SampleFormat::Int,
+                },
+            )
+        })
+        .transpose()?;
+    let stream = record_stream
+        .then(|| {
+            WavWriter::create(
+                path.with_extension("stream.wav"),
+                WavSpec {
+                    channels: 1,
+                    sample_rate: CANONICAL_SAMPLE_RATE_HZ,
+                    bits_per_sample: 16,
+                    sample_format: SampleFormat::Int,
+                },
+            )
+        })
+        .transpose()?;
     let mut metadata = BufWriter::new(File::create(&metadata_path)?);
     use std::io::Write;
     writeln!(
@@ -1378,35 +2170,50 @@ fn open_cw_recording(
         "{}",
         serde_json::to_string(&json!({
             "type": "session",
-            "sample_rate_hz": 12_000,
+            "mode": mode.label(),
+            "full_width_sample_rate_hz": full_width_sample_rate_hz,
+            "stream_sample_rate_hz": CANONICAL_SAMPLE_RATE_HZ,
             "tone_hz": tone_hz,
             "frequency_hz": frequency_hz,
+            "full_width": record_full_width,
+            "stream": record_stream,
         }))?
     )?;
-    Ok((writer, metadata, wav_path))
+    Ok(SignalRecording {
+        full_width,
+        stream,
+        metadata,
+        path,
+        samples: 0,
+    })
 }
 
-fn finish_cw_recording(recording: &mut Option<CwRecording>, state: &Arc<Mutex<GuiState>>) {
-    if let Some((writer, mut metadata, path, samples)) = recording.take() {
-        let _ = writer.finalize();
+fn finish_signal_recording(recording: &mut Option<SignalRecording>, state: &Arc<Mutex<GuiState>>) {
+    if let Some(mut recording) = recording.take() {
+        if let Some(writer) = recording.full_width.take() {
+            let _ = writer.finalize();
+        }
+        if let Some(writer) = recording.stream.take() {
+            let _ = writer.finalize();
+        }
         use std::io::Write;
         let _ = writeln!(
-            metadata,
+            recording.metadata,
             "{}",
             serde_json::json!({
                 "type": "end",
-                "samples": samples,
-                "duration_s": samples as f64 / 12_000.0,
+                "samples": recording.samples,
+                "duration_s": recording.samples as f64 / CANONICAL_SAMPLE_RATE_HZ as f64,
             })
         );
-        let _ = metadata.flush();
+        let _ = recording.metadata.flush();
         state
             .lock()
             .expect("ui state lock poisoned")
             .cw_recording_status = format!(
             "Saved {} ({:.1}s)",
-            path.display(),
-            samples as f64 / 12_000.0
+            recording.path.display(),
+            recording.samples as f64 / CANONICAL_SAMPLE_RATE_HZ as f64
         );
     }
 }

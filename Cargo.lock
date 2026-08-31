@@ -2412,7 +2412,7 @@ dependencies = [
 [[package]]
 name = "mfsk-core"
 version = "0.10.1"
-source = "git+https://github.com/jl1nie/mfsk-core.git?rev=1ba4450#1ba44501a68cc736dea5b66b3fb1e56fbeeda8d1"
+source = "git+https://github.com/jl1nie/mfsk-core.git?rev=a3fd6744df0a064e035df9b63ff76251ed0e2ec1#a3fd6744df0a064e035df9b63ff76251ed0e2ec1"
 dependencies = [
  "crc",
  "num-complex",
@@ -3404,22 +3404,20 @@ dependencies = [
  "ab_glyph",
  "anyhow",
  "base64",
- "cwdit-dsp",
- "cwdit-morse",
  "eframe",
  "egui-file-dialog",
  "hound",
  "image",
  "imageproc",
- "mfsk-core",
  "qsonaut-accelerate",
  "qsonaut-audio",
  "qsonaut-automation",
  "qsonaut-core",
  "qsonaut-log",
+ "qsonaut-modems",
  "qsonaut-pskreporter",
  "qsonaut-server-client",
- "qsonaut-sstv",
+ "qsonaut-third-party",
  "reqwest",
  "rigwright",
  "rusqlite",
@@ -3448,6 +3446,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "qsonaut-modems"
+version = "0.1.0"
+source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=6cc26b8#6cc26b8bc2b60a897b303e1f793dc10388f0485c"
+dependencies = [
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "qsonaut-pskreporter"
 version = "0.3.14"
 dependencies = [
@@ -3471,11 +3477,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "qsonaut-sstv"
-version = "0.3.14"
+name = "qsonaut-third-party"
+version = "0.1.0"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=5810c4f#5810c4fb100a45e920c46a185de1ae6741a11d7b"
 dependencies = [
+ "cwdit-dsp",
+ "cwdit-morse",
  "image",
  "komitoto-sstv",
+ "mfsk-core",
+ "qsonaut-modems",
  "thiserror 2.0.20",
 ]
 
@@ -3894,9 +3905,9 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rigwright"
-version = "0.1.14"
+version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89ecb8a11f72c50fc63de4c8164116b3d140427cba4e57d026745d7cc09e20d7"
+checksum = "b7d8aecb832df7ba4b66d399befa40e710f73edead3c1752a0f16b86300c0446"
 dependencies = [
  "anyhow",
  "async-trait",

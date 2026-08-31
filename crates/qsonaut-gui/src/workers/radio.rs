@@ -69,21 +69,25 @@ impl MeterPollScheduler {
         }
         if transmitting && now >= self.next_tx {
             self.next_tx = now + RADIO_TX_METER_INTERVAL;
-            let meter = match self.tx_index % 4 {
+            let meter = match self.tx_index % 6 {
                 0 => ScheduledMeter::Power,
                 1 => ScheduledMeter::Swr,
-                2 => ScheduledMeter::Alc,
+                2 => ScheduledMeter::Power,
+                3 => ScheduledMeter::Alc,
+                4 => ScheduledMeter::Power,
                 _ => ScheduledMeter::Compression,
             };
             self.tx_index = self.tx_index.wrapping_add(1);
             return Some(meter);
         }
         if now >= self.next_aux {
-            const AUXILIARY: [ScheduledMeter; 4] = [
+            // Signal is an RX reading. Keep the last useful RX value visible
+            // during TX instead of replacing it with a radio's often-zero
+            // transmit-side response.
+            const AUXILIARY: [ScheduledMeter; 3] = [
                 ScheduledMeter::Current,
                 ScheduledMeter::Voltage,
                 ScheduledMeter::Temperature,
-                ScheduledMeter::Signal,
             ];
             let meter = AUXILIARY[self.aux_index % AUXILIARY.len()];
             self.aux_index = self.aux_index.wrapping_add(1);
@@ -175,6 +179,11 @@ pub(crate) fn spawn_radio_worker(
                 .copied()
                 .filter(|id| radio.supports_meter(*id))
                 .collect();
+            info!(
+                supported_meters = ?s.supported_meters,
+                temperature_supported = radio.supports_meter(MeterId::Temperature),
+                "Radio meter capabilities initialized"
+            );
         }
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -878,6 +887,15 @@ pub(crate) fn spawn_radio_worker(
                         };
                         match result {
                             Ok(()) => {
+                                if id == ControlId::RfPower {
+                                    if let ControlValue::U8(level) = &value {
+                                        let mut s = state.lock().expect("ui state lock poisoned");
+                                        if s.rf_power_write_pending == Some(*level) {
+                                            s.rf_power = Some(*level);
+                                            s.rf_power_write_pending = None;
+                                        }
+                                    }
+                                }
                                 if id == ControlId::Vfo {
                                     if let Some(vfo) = control_vfo_value(&value) {
                                         state.lock().expect("ui state lock poisoned").active_vfo =
@@ -888,8 +906,15 @@ pub(crate) fn spawn_radio_worker(
                             }
                             Err(error) => {
                                 error!(control = ?id, error = %error, "Radio control change failed");
-                                state.lock().expect("ui state lock poisoned").last_error =
-                                    Some(error.to_string());
+                                let mut s = state.lock().expect("ui state lock poisoned");
+                                if id == ControlId::RfPower {
+                                    if let ControlValue::U8(level) = &value {
+                                        if s.rf_power_write_pending == Some(*level) {
+                                            s.rf_power_write_pending = None;
+                                        }
+                                    }
+                                }
+                                s.last_error = Some(error.to_string());
                             }
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
@@ -1456,7 +1481,9 @@ fn poll_radio_core_state(
         s.rf_gain = Some(v);
     }
     if let Some(v) = pwr {
-        s.rf_power = Some(v);
+        if s.rf_power_write_pending.is_none() {
+            s.rf_power = Some(v);
+        }
     }
     if let Some(v) = squelch {
         s.squelch = Some(v);
@@ -1507,10 +1534,13 @@ fn poll_scheduled_icom_meter(
         return;
     }
     let started = Instant::now();
-    let value = rt
-        .block_on(radio.get_meter_with_timeout(id, RADIO_METER_RESPONSE_TIMEOUT))
-        .ok()
-        .flatten();
+    let value = match rt.block_on(radio.get_meter_with_timeout(id, RADIO_METER_RESPONSE_TIMEOUT)) {
+        Ok(value) => value,
+        Err(error) => {
+            debug!(meter = ?id, error = %error, "Scheduled CI-V meter read failed");
+            None
+        }
+    };
     let elapsed = started.elapsed();
     if elapsed >= Duration::from_millis(100) {
         debug!(meter = ?id, elapsed_ms = elapsed.as_millis(), "Slow scheduled CI-V meter read");
@@ -1524,7 +1554,10 @@ fn poll_scheduled_icom_meter(
             MeterId::Swr => s.swr = Some(value),
             MeterId::Compression => s.compression_meter = Some(value),
             MeterId::Current => s.current_meter = Some(value),
-            MeterId::Voltage => s.voltage_meter = Some(value),
+            MeterId::Voltage => {
+                s.voltage_meter = Some(value);
+                record_voltage_sample(&mut s.voltage_history, value);
+            }
             MeterId::Temperature => s.temperature_meter = Some(value),
         }
     }
@@ -1655,7 +1688,10 @@ fn poll_radio_level_state(
                 ControlId::AfGain => s.af_gain = Some(value),
                 ControlId::RfGain => s.rf_gain = Some(value),
                 ControlId::Squelch => s.squelch = Some(value),
-                ControlId::RfPower => s.rf_power = Some(value),
+                ControlId::RfPower if s.rf_power_write_pending.is_none() => {
+                    s.rf_power = Some(value)
+                }
+                ControlId::RfPower => {}
                 ControlId::Preamp => s.preamp = Some(value),
                 ControlId::Attenuator => s.attenuator = Some(value),
                 ControlId::Agc => s.agc = Some(value),
@@ -1673,7 +1709,10 @@ fn poll_radio_level_state(
                 MeterId::Alc => s.alc_meter = Some(value),
                 MeterId::Compression => s.compression_meter = Some(value),
                 MeterId::Current => s.current_meter = Some(value),
-                MeterId::Voltage => s.voltage_meter = Some(value),
+                MeterId::Voltage => {
+                    s.voltage_meter = Some(value);
+                    record_voltage_sample(&mut s.voltage_history, value);
+                }
                 MeterId::Temperature => s.temperature_meter = Some(value),
             }
         }
@@ -1776,6 +1815,13 @@ mod tests {
         assert_eq!(scheduler.next_due(now, false), Some(ScheduledMeter::Signal));
         assert_eq!(scheduler.next_due(now, true), Some(ScheduledMeter::Power));
         assert_eq!(scheduler.next_due(now, true), Some(ScheduledMeter::Current));
+        scheduler.next_aux = now;
+        assert_eq!(scheduler.next_due(now, true), Some(ScheduledMeter::Voltage));
+        scheduler.next_aux = now;
+        assert_eq!(
+            scheduler.next_due(now, true),
+            Some(ScheduledMeter::Temperature)
+        );
     }
 
     #[test]
@@ -1794,6 +1840,11 @@ mod tests {
         assert_eq!(
             scheduler.next_due(now, false),
             Some(ScheduledMeter::Voltage)
+        );
+        scheduler.next_aux = now;
+        assert_eq!(
+            scheduler.next_due(now, true),
+            Some(ScheduledMeter::Temperature)
         );
     }
 

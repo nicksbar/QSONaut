@@ -6,6 +6,16 @@
 
 [![CI](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml)
 [![Coverage gate](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml)
+[![Line coverage 26.67%](https://img.shields.io/badge/line%20coverage-26.67%25-yellow)](#coverage-area-snapshot)
+[![GUI core 26.87%](https://img.shields.io/badge/GUI%20core-26.87%25-yellow)](#coverage-area-snapshot)
+[![GUI workers 27.12%](https://img.shields.io/badge/GUI%20workers-27.12%25-yellow)](#coverage-area-snapshot)
+[![GUI modes 12.95%](https://img.shields.io/badge/GUI%20modes-12.95%25-red)](#coverage-area-snapshot)
+[![GUI panels 4.02%](https://img.shields.io/badge/GUI%20panels-4.02%25-red)](#coverage-area-snapshot)
+[![Audio 36.28%](https://img.shields.io/badge/audio-36.28%25-yellow)](#coverage-area-snapshot)
+[![Core 85.98%](https://img.shields.io/badge/core-85.98%25-brightgreen)](#coverage-area-snapshot)
+[![Server client 84.25%](https://img.shields.io/badge/server%20client-84.25%25-brightgreen)](#coverage-area-snapshot)
+[![PSK Reporter 81.85%](https://img.shields.io/badge/PSK%20Reporter-81.85%25-brightgreen)](#coverage-area-snapshot)
+[![Logging 81.05%](https://img.shields.io/badge/logging-81.05%25-brightgreen)](#coverage-area-snapshot)
 [![Release builds](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml/badge.svg)](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml)
 [![Latest release](https://img.shields.io/github/v/release/nicksbar/QSONaut?display_name=tag&sort=semver)](https://github.com/nicksbar/QSONaut/releases)
 
@@ -74,9 +84,10 @@ validation above.
 
 ## Build and run
 
-QSONaut uses the upstream
-[`mfsk-core`](https://github.com/jl1nie/mfsk-core) Git dependency. No local
-`mfsk-core` checkout is required:
+QSONaut uses pinned Git revisions of the shared
+[`qsonaut-modems`](https://github.com/nicksbar/qsonaut-modems) and
+[`qsonaut-third-party`](https://github.com/nicksbar/qsonaut-third-party)
+components. No local shared-modem checkout is required:
 
 ```bash
 git clone https://github.com/nicksbar/QSONaut.git
@@ -84,8 +95,8 @@ cd QSONaut
 cargo run --release -p qsonaut -- --gui
 ```
 
-Cargo resolves a pinned upstream revision and records that source in
-`Cargo.lock` for reproducible builds.
+Cargo resolves the pinned revisions and records those sources in `Cargo.lock`
+for reproducible builds.
 
 Use a release build for live decoding. Debug builds are substantially slower.
 
@@ -108,39 +119,40 @@ cargo llvm-cov --locked --all-features --workspace --summary-only
 
 To generate the browsable report, use `--html`; it is written beneath
 `target/llvm-cov/html`. Pull requests and pushes to `main` run the same
-coverage workflow, enforce the current 28% workspace line-coverage baseline,
-enforce changed-file coverage on pull requests, and upload the HTML report as
-an artifact. The baseline is intentionally
+coverage workflow, enforce the current 26.6% post-extraction workspace
+line-coverage baseline, enforce changed-file coverage on pull requests, and
+upload the HTML report as an artifact. The baseline is intentionally
 conservative while GUI and hardware-facing paths gain dedicated harnesses;
 the per-file report is the source of truth for those areas.
 
 ### Coverage area snapshot
 
-The current baseline was measured on 2026-08-29 with 251 tests and 28.06%
-workspace line coverage. These are grouped line-coverage figures from the
-same LLVM report; the downloadable HTML artifact remains the detailed,
-per-file source of truth.
+The current post-extraction baseline was measured on 2026-08-30 with 250 tests
+and 26.67% workspace line coverage. The high-coverage `qsonaut-sstv` crate is
+now maintained behind the pinned `qsonaut-third-party` boundary and is covered
+by that repository's workflow rather than this workspace. These are grouped
+line-coverage figures from the same LLVM report; the downloadable HTML artifact
+remains the detailed, per-file source of truth.
 
 | Area | Covered / executable lines | Line coverage |
 | --- | ---: | ---: |
-| qsonaut-sstv | 776 / 855 | 90.76% |
 | qsonaut-automation | 217 / 264 | 82.20% |
 | qsonaut-log | 740 / 913 | 81.05% |
 | qsonaut-accelerate | 281 / 318 | 88.36% |
 | qsonaut-pskreporter | 275 / 336 | 81.85% |
 | qsonaut-server-client | 733 / 870 | 84.25% |
-| qsonaut-audio | 405 / 961 | 42.14% |
+| qsonaut-audio | 316 / 871 | 36.28% |
 | qsonaut-core | 368 / 428 | 85.98% |
-| GUI core | 2,615 / 10,093 | 25.91% |
-| GUI workers | 321 / 1,747 | 18.37% |
-| GUI modes | 715 / 5,549 | 12.89% |
-| GUI panels | 118 / 2,881 | 4.10% |
-| Rigwright integration | 197 / 2,137 | 9.22% |
+| GUI core | 2,874 / 10,695 | 26.87% |
+| GUI workers | 618 / 2,279 | 27.12% |
+| GUI modes | 727 / 5,614 | 12.95% |
+| GUI panels | 118 / 2,938 | 4.02% |
+| Rigwright integration | 205 / 2,189 | 9.37% |
 | Application entry point | 53 / 495 | 10.71% |
 
 The first improvement targets are the application entry point and GUI panels,
 modes, and workers. Changes to these areas should add deterministic seams or
-focused tests rather than weakening the 28% gate.
+focused tests rather than weakening the post-extraction gate.
 
 Changed-file coverage is enforced with `scripts/check-changed-coverage.sh`.
 The small set of pre-existing zero-coverage files is explicitly tracked in
@@ -271,9 +283,9 @@ overrides the published dependency with `../rigwright` without changing
 committed manifests. CI does not use this override and does not need a
 Rigwright checkout.
 - `crates/qsonaut-audio` — real-time audio and high-quality 48→12 kHz decimation
-- `crates/qsonaut-sstv` — streaming VIS/AFC adapter plus pinned multi-mode SSTV codecs
-- `mfsk-core` — WSJT-family modem encoding and decoding
-- [`cw-dit`](https://github.com/nicksbar/cw-dit) — reusable Rust CW DSP and streaming Morse components (`cwdit-dsp`, `cwdit-morse`), MIT OR Apache-2.0
+- `qsonaut-modems` — shared consumer-neutral modem contracts
+- `qsonaut-third-party` — pinned third-party modem adapters, including SSTV, CW, and WSJT-family modes
+- `mfsk-core` and [`cw-dit`](https://github.com/swilcox/cw-dit) — transitive implementations owned and maintained behind `qsonaut-third-party`
 - `crates/qsonaut-log`, `qsonaut-pskreporter` — local logging and opt-in reporting
 - `crates/qsonaut-server-client` — optional authenticated WSS synchronization
 - `crates/qsonaut-accelerate` — measured compute-backend selection
@@ -288,6 +300,11 @@ from those tags and changelog entries.
 
 See [`docs/versioning-and-releases.md`](docs/versioning-and-releases.md) for
 the concrete policy and release checklist.
+
+For the current consolidation baseline, see the [v0.4 maturity and feature
+matrix](docs/feature-matrix.md) and the [deterministic regression fixture
+catalog](docs/regression-fixtures.md). These documents distinguish software
+test evidence from physical-station validation.
 
 ## Before transmitting
 
@@ -311,11 +328,39 @@ logs, recordings, or proprietary manuals.
 ### About credits
 
 The About panel credits the original author, plus optional contributors and
-testers. Release builds read the comma-separated repository Actions variables
+testers. Release builds read the repository Actions variables
 `QSONAUT_CONTRIBUTORS` and `QSONAUT_TESTERS`; unset or empty variables display
-`None listed`. Set them under the repository's **Settings → Secrets and
-variables → Actions → Variables** page so credit names or callsigns can be
-updated without changing source code.
+`None listed`. The preferred value is a JSON array, which also supplies
+identities to the null radio simulator:
+
+```json
+[
+  {
+    "name": "Nick",
+    "callsign": "N7UF",
+    "grid": "CN87",
+    "power_dbm": 30,
+    "role": "maintainer",
+    "modes": ["ft8", "ft4", "sstv", "wspr"]
+  },
+  {
+    "name": "Example Tester",
+    "callsign": "W1AW",
+    "grid": "FN31",
+    "power_dbm": 30,
+    "role": "tester",
+    "modes": ["ft8", "sstv"],
+    "enabled": true
+  }
+]
+```
+
+Only `callsign` is required for simulated exchanges. `grid` and `power_dbm`
+are used by WSPR, while `name`, `role`, and `modes` are available for credit
+and future simulator presentation. Set the variables under the repository's
+**Settings → Secrets and variables → Actions → Variables** page so identities
+can be updated without changing source code. Plain text remains accepted for
+the About panel, but it cannot provide structured simulator metadata.
 
 ## Acknowledgements
 

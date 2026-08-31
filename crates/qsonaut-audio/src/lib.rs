@@ -19,6 +19,10 @@ pub mod resample;
 
 pub const CANONICAL_SAMPLE_RATE_HZ: u32 = 48_000;
 pub const CANONICAL_CHANNELS: u16 = 1;
+/// Selects QSONaut's deterministic development audio source instead of a
+/// physical capture device. The GUI recognizes this as a virtual input.
+pub const NULL_INPUT_DEVICE: &str = "QSONaut Null Sound Card";
+pub const NULL_OUTPUT_DEVICE: &str = NULL_INPUT_DEVICE;
 const MONITOR_TARGET_LATENCY_MS: u32 = 120;
 const MONITOR_MAX_ADJUSTMENT_PPM: i32 = 2_500;
 
@@ -550,6 +554,9 @@ pub fn play_pcm_blocking(
     preferred_device_name: Option<&str>,
     abort: Arc<AtomicBool>,
 ) -> Result<()> {
+    if preferred_device_name == Some(NULL_OUTPUT_DEVICE) {
+        return Ok(());
+    }
     let host = cpal::default_host();
     let device = select_device(&host, AudioDeviceKind::Output, preferred_device_name)?;
     let source_pcm = pcm

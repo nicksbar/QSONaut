@@ -1,5 +1,6 @@
 use super::super::*;
 use crate::visuals::build_audio_waterfall_image_with_theme;
+use qsonaut_third_party::sstv as qsonaut_sstv;
 
 fn scope_attribution_layout(
     scope_rect: egui::Rect,
@@ -661,6 +662,10 @@ impl QsonautGuiApp {
                         };
                         if is_cw {
                             self.cw_tone_hz = selected_hz as u16;
+                            self.state
+                                .lock()
+                                .expect("ui state lock poisoned")
+                                .cw_auto_target_tone_hz = None;
                         }
                         self.rx_tone_hz = selected_hz;
                         if is_cw || !self.ft8_hold_tx_freq {
@@ -681,6 +686,10 @@ impl QsonautGuiApp {
                     if is_cw {
                         self.cw_tone_hz = selected_hz as u16;
                         self.rx_tone_hz = selected_hz;
+                        self.state
+                            .lock()
+                            .expect("ui state lock poisoned")
+                            .cw_auto_target_tone_hz = None;
                     }
                     self.tx_tone_hz = selected_hz;
                     self.profile_dirty = true;

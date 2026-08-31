@@ -5,7 +5,51 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.14] - 2026-08-30
+
+### Changed
+- Fixed current Rust/Clippy compatibility warnings in recording and profile
+  mode-selection paths, and added a temporary-directory recording lifecycle
+  regression test.
+- Aligned the application Rigwright requirement with the released `0.1.16`
+  driver and recalculated the coverage baseline after moving SSTV ownership
+  behind `qsonaut-third-party`.
+- Expanded automated coverage for core, mode, POTA, GUI utility, repaint, and
+  event-bus behavior; added changed-file coverage reporting and enforcement.
+- Corrected a strict floating-point literal lint issue and fixed the release
+  workflow checkout history handling.
+- Added the v0.4 maturity baseline and reference-station evidence boundary
+  (#84), plus the deterministic regression-fixture catalog (#83) for release
+  planning.
+- Switched all QSONaut WSJT-family, SSTV, and CW modem paths to the pinned
+  `qsonaut-third-party`/`qsonaut-modems` extraction and removed direct
+  `mfsk-core`, SSTV, and CW-DIT dependency ownership from QSONaut.
+- Added structured JSON contributor/tester identities for the About panel and
+  null-radio simulator; empty `modes` enables an identity for every mode.
+- Made null-radio exchanges deterministic and real-time paced, with fallback
+  callsigns/grids for workflow validation when repository variables are absent
+  (#83).
+- Corrected simulated SSTV sequencing and mode timing, including a complete
+  Martin M1 transmission slot, guard time, sequential image frames, and safer
+  waterfall amplitude.
+- Moved signal recording into profile settings with per-mode selection and
+  separate full-width and normalized-stream captures; recording I/O now runs
+  asynchronously so slow storage cannot stall the audio or GUI workers (#72,
+  #74).
+- Expanded null-radio and decoder fixtures across FT8, FT4, CW, Q65, JT9, and
+  SSTV with amplitude, timing, chunk-boundary, noise, final-character, and
+  short-capture coverage (#26, #83).
+- Hardened CW operation with filtered-channel retargeting, a third
+  auto-target state that rescans after ten quiet seconds, visible countdown
+  feedback, stream finalization, and fresh recordings per acquired target
+  (#25, #72, #83).
+- Pinned QSONaut to the merged `qsonaut-third-party` main revision and removed
+  the local Cargo path override so CI and locked builds validate the published
+  shared adapter boundary (#79).
+
+### Added
+- Added a CW `AUTO TARGET` control that finds a stable carrier, retunes the
+  decoder, and disarms itself after acquisition.
 
 ## [0.3.13] - 2026-08-29
 

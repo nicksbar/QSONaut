@@ -68,7 +68,7 @@ impl QsonautGuiApp {
         self.draw_mfsk_mode_workspace(ui, snapshot, WorkspaceMode::Fst4);
         ui.label(
             RichText::new(
-                "FST4 submodes use the matching mfsk-core decoder and waveform configuration.",
+                "FST4 submodes use the matching shared WSJT decoder and waveform configuration.",
             )
             .small()
             .color(theme_muted(ui)),

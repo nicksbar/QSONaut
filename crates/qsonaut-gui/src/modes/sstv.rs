@@ -3,6 +3,7 @@ use ab_glyph::PxScale;
 use image::imageops::FilterType;
 use imageproc::drawing::draw_text_mut;
 use imageproc::pixelops::weighted_sum;
+use qsonaut_third_party::sstv as qsonaut_sstv;
 use std::io::Cursor;
 
 pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
@@ -1460,7 +1461,10 @@ impl QsonautGuiApp {
                     pcm: Arc::new(pcm),
                     ptt_lead: Duration::from_millis(self.ptt_lead_ms),
                     ptt_tail: Duration::from_millis(self.ptt_tail_ms),
-                    output_device: self.config.audio.output_device.clone(),
+                    output_device: effective_audio_output_device(
+                        &self.config.radio.backend,
+                        self.config.audio.output_device.clone(),
+                    ),
                     abort: self.digital_tx_abort.clone(),
                     active: self.digital_tx_active.clone(),
                     command_tx,

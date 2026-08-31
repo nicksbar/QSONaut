@@ -6,6 +6,10 @@ future agent changes:
 - Keep radio, audio, GUI, and server boundaries explicit. Generic behavior
   belongs in the shared layer; vendor/model-specific behavior belongs in the
   driver or profile that owns the capability.
+- Prefer logical, responsibility-based module separation. When a source file
+  starts becoming difficult to navigate, test, or fit into review context,
+  split it into focused modules with a small facade; do not allow a large
+  file to become a catch-all simply because the code is related.
 - Run `cargo fmt --all`, `cargo test --locked --workspace --all-targets`,
   `cargo clippy --locked --workspace --all-targets -- -D warnings`, and
   `git diff --check` before declaring a change complete.
@@ -30,6 +34,12 @@ future agent changes:
   each entry when its focused tests land.
 - Keep release/version documentation synchronized with `Cargo.toml`, the
   current release branch/tag, and `CHANGELOG.md`.
+- Treat README status badges as maintained release documentation. When adding,
+  renaming, or removing CI, coverage, release, or dependency workflows, verify
+  that every README badge points to a real workflow or authoritative status
+  source, uses the correct branch/tag, and still describes the checked-in
+  gates. Add useful coverage badges only when their source is stable and can be
+  kept current; do not add decorative or stale badges.
 
 Coverage areas are grouped as follows: application entry point; GUI core,
 modes, panels, workers, and the QSONaut-to-Rigwright integration boundary; and

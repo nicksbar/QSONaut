@@ -1,4 +1,9 @@
 use super::*;
+use qsonaut_third_party::wsjt::{
+    synthesize_fst4_standard, synthesize_ft4_standard, synthesize_ft8_standard,
+    synthesize_jt65_standard, synthesize_jt9_standard, synthesize_q65_standard,
+    synthesize_wspr_type1, Fst4Submode,
+};
 
 const FT8_TX_AMPLITUDE_I16: i16 = 18_000;
 const FT8_TX_SAMPLE_RATE_HZ: u32 = 12_000;
@@ -9,23 +14,8 @@ const FT8_MAX_AUDIO_LATE_S: f64 = 1.75;
 const DIGITAL_MAX_AUDIO_LATE_S: f64 = 1.0;
 
 pub(super) fn build_ft8_tx_pcm(compose: &str, tx_tone_hz: u32) -> Result<Vec<i16>> {
-    let tokens: Vec<&str> = compose.split_whitespace().collect();
-    if tokens.len() != 3 {
-        anyhow::bail!("standard FT8 TX needs exactly 3 fields (DESTINATION SOURCE GRID/REPORT)");
-    }
-    let msg77 = if tokens[0].eq_ignore_ascii_case("CQ") {
-        pack77("CQ", tokens[1], tokens[2])
-            .ok_or_else(|| anyhow!("unable to pack FT8 CQ message: {compose}"))?
-    } else {
-        pack77(tokens[0], tokens[1], tokens[2])
-            .ok_or_else(|| anyhow!("unable to pack FT8 standard message: {compose}"))?
-    };
-    let tones = ft8_message_to_tones(&msg77);
-    Ok(ft8_tones_to_i16(
-        &tones,
-        tx_tone_hz as f32,
-        FT8_TX_AMPLITUDE_I16,
-    ))
+    synthesize_ft8_standard(compose, tx_tone_hz as f32, FT8_TX_AMPLITUDE_I16)
+        .ok_or_else(|| anyhow!("unable to pack FT8 standard message: {compose}"))
 }
 
 pub(super) fn build_native_digital_tx_pcm(
@@ -40,67 +30,25 @@ pub(super) fn build_native_digital_tx_pcm(
     if mode != WorkspaceMode::Cw && tokens.len() != 3 {
         anyhow::bail!("{} TX needs exactly 3 message fields", mode.label());
     }
-    let to_i16 = |audio: Vec<f32>| {
-        audio
-            .into_iter()
-            .map(|sample| (sample.clamp(-1.0, 1.0) * FT8_TX_AMPLITUDE_I16 as f32).round() as i16)
-            .collect::<Vec<_>>()
-    };
     let tone = tx_tone_hz as f32;
     match mode {
         WorkspaceMode::Ft4 | WorkspaceMode::Fst4 => {
-            let bits = pack77(tokens[0], tokens[1], tokens[2])
-                .ok_or_else(|| anyhow!("unable to pack {} message", mode.label()))?;
             if mode == WorkspaceMode::Ft4 {
-                let tones = mfsk_core::ft4::encode::message_to_tones(&bits);
                 Ok((
-                    mfsk_core::ft4::encode::tones_to_i16(&tones, tone, FT8_TX_AMPLITUDE_I16),
+                    synthesize_ft4_standard(compose, tone, FT8_TX_AMPLITUDE_I16)
+                        .ok_or_else(|| anyhow!("unable to pack FT4 message"))?,
                     0.5,
                 ))
             } else {
-                let tones = mfsk_core::fst4::encode::message_to_tones(&bits);
-                let pcm = match fst4_submode {
-                    crate::modes::fst4::Submode::S15 => {
-                        mfsk_core::fst4::encode::tones_to_i16_with_gfsk(
-                            &tones,
-                            tone,
-                            FT8_TX_AMPLITUDE_I16,
-                            &mfsk_core::fst4::encode::FST4_15_GFSK,
-                        )
-                    }
-                    crate::modes::fst4::Submode::S30 => {
-                        mfsk_core::fst4::encode::tones_to_i16_with_gfsk(
-                            &tones,
-                            tone,
-                            FT8_TX_AMPLITUDE_I16,
-                            &mfsk_core::fst4::encode::FST4_30_GFSK,
-                        )
-                    }
-                    crate::modes::fst4::Submode::S60 => {
-                        mfsk_core::fst4::encode::tones_to_i16_with_gfsk(
-                            &tones,
-                            tone,
-                            FT8_TX_AMPLITUDE_I16,
-                            &mfsk_core::fst4::encode::FST4_60A_GFSK,
-                        )
-                    }
-                    crate::modes::fst4::Submode::S120 => {
-                        mfsk_core::fst4::encode::tones_to_i16_with_gfsk(
-                            &tones,
-                            tone,
-                            FT8_TX_AMPLITUDE_I16,
-                            &mfsk_core::fst4::encode::FST4_120_GFSK,
-                        )
-                    }
-                    crate::modes::fst4::Submode::S300 => {
-                        mfsk_core::fst4::encode::tones_to_i16_with_gfsk(
-                            &tones,
-                            tone,
-                            FT8_TX_AMPLITUDE_I16,
-                            &mfsk_core::fst4::encode::FST4_300_GFSK,
-                        )
-                    }
+                let submode = match fst4_submode {
+                    crate::modes::fst4::Submode::S15 => Fst4Submode::S15,
+                    crate::modes::fst4::Submode::S30 => Fst4Submode::S30,
+                    crate::modes::fst4::Submode::S60 => Fst4Submode::S60,
+                    crate::modes::fst4::Submode::S120 => Fst4Submode::S120,
+                    crate::modes::fst4::Submode::S300 => Fst4Submode::S300,
                 };
+                let pcm = synthesize_fst4_standard(compose, submode, tone, FT8_TX_AMPLITUDE_I16)
+                    .ok_or_else(|| anyhow!("unable to pack FST4 message"))?;
                 Ok((
                     pcm,
                     match fst4_submode {
@@ -110,45 +58,24 @@ pub(super) fn build_native_digital_tx_pcm(
                 ))
             }
         }
-        WorkspaceMode::Jt9 => {
-            mfsk_core::jt9::synthesize_standard(tokens[0], tokens[1], tokens[2], 12_000, tone, 1.0)
-                .map(|audio| (to_i16(audio), 0.0))
-                .ok_or_else(|| anyhow!("unable to pack JT9 message"))
-        }
-        WorkspaceMode::Jt65 => {
-            mfsk_core::jt65::synthesize_standard(tokens[0], tokens[1], tokens[2], 12_000, tone, 1.0)
-                .map(|audio| (to_i16(audio), 0.0))
-                .ok_or_else(|| anyhow!("unable to pack JT65 message"))
-        }
-        WorkspaceMode::Q65 => {
-            mfsk_core::q65::synthesize_standard(tokens[0], tokens[1], tokens[2], 12_000, tone, 1.0)
-                .map(|audio| (to_i16(audio), 1.0))
-                .ok_or_else(|| anyhow!("unable to pack Q65 message"))
-        }
+        WorkspaceMode::Jt9 => synthesize_jt9_standard(compose, tone, FT8_TX_AMPLITUDE_I16)
+            .map(|audio| (audio, 0.0))
+            .ok_or_else(|| anyhow!("unable to pack JT9 message")),
+        WorkspaceMode::Jt65 => synthesize_jt65_standard(compose, tone, FT8_TX_AMPLITUDE_I16)
+            .map(|audio| (audio, 0.0))
+            .ok_or_else(|| anyhow!("unable to pack JT65 message")),
+        WorkspaceMode::Q65 => synthesize_q65_standard(compose, tone, FT8_TX_AMPLITUDE_I16)
+            .map(|audio| (audio, 1.0))
+            .ok_or_else(|| anyhow!("unable to pack Q65 message")),
         WorkspaceMode::Wspr => {
-            let callsign = tokens
-                .first()
-                .copied()
-                .ok_or_else(|| anyhow!("WSPR TX requires CALL GRID POWER_DBM"))?;
-            let grid = tokens
-                .get(1)
-                .copied()
-                .ok_or_else(|| anyhow!("WSPR TX requires CALL GRID POWER_DBM"))?;
-            let power_dbm = tokens
+            tokens
                 .get(2)
                 .ok_or_else(|| anyhow!("WSPR TX requires CALL GRID POWER_DBM"))?
                 .parse::<i32>()
                 .map_err(|_| anyhow!("WSPR power must be an integer dBm value"))?;
-            let audio = mfsk_core::wspr::synthesize_type1(
-                callsign,
-                grid,
-                power_dbm,
-                FT8_TX_SAMPLE_RATE_HZ,
-                tone,
-                0.8,
-            )
-            .ok_or_else(|| anyhow!("invalid WSPR callsign, locator, or power"))?;
-            Ok((to_i16(audio), 0.0))
+            let audio = synthesize_wspr_type1(compose, tone, FT8_TX_AMPLITUDE_I16)
+                .ok_or_else(|| anyhow!("invalid WSPR callsign, locator, or power"))?;
+            Ok((audio, 0.0))
         }
         WorkspaceMode::Cw => {
             let text = compose.trim().to_ascii_uppercase();
@@ -208,6 +135,10 @@ fn synthesize_cw_pcm(text: &str, tone_hz: f32, wpm: f32) -> Result<Vec<i16>> {
             pcm.extend(std::iter::repeat_n(0, dot_samples * 7));
         }
     }
+    // Give the streaming decoder enough trailing carrier-off time to close
+    // the final character. Without this tail, the last character remains in
+    // the decoder's pending run (for example, N7U instead of N7UF).
+    pcm.extend(std::iter::repeat_n(0, FT8_TX_SAMPLE_RATE_HZ as usize * 2));
     Ok(pcm)
 }
 

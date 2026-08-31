@@ -14,7 +14,7 @@ use super::{
 };
 
 pub(super) const OPERATOR_PROFILE_FILE: &str = "profile.toml";
-pub(super) const OPERATOR_PROFILE_VERSION: u32 = 16;
+pub(super) const OPERATOR_PROFILE_VERSION: u32 = 17;
 const RADIO_PROFILE_LIBRARY_FILE: &str = "radio-profiles.toml";
 const LEGACY_OPERATOR_PROFILE_FILE: &str = ".rigforge_profile.toml";
 const DEFAULT_PROFILE_NAME: &str = "Default";
@@ -120,6 +120,14 @@ pub(super) struct OperatorProfile {
     pub(super) audio_sample_rate_hz: u32,
     #[serde(default = "default_audio_channels")]
     pub(super) audio_channels: u8,
+    #[serde(default)]
+    pub(super) recording_enabled: bool,
+    #[serde(default = "default_recording_modes")]
+    pub(super) recording_modes: std::collections::BTreeMap<String, bool>,
+    #[serde(default = "default_recording_full_width")]
+    pub(super) recording_full_width: bool,
+    #[serde(default = "default_recording_stream")]
+    pub(super) recording_stream: bool,
     #[serde(default = "default_radio_enabled")]
     pub(super) radio_enabled: bool,
     #[serde(default)]
@@ -191,6 +199,21 @@ pub(super) struct OperatorProfile {
     pub(super) mode_radio_profile: std::collections::BTreeMap<String, String>,
     #[serde(default = "default_workspace_mode")]
     pub(super) workspace_mode: String,
+}
+
+fn default_recording_modes() -> std::collections::BTreeMap<String, bool> {
+    super::WORKSPACE_MODES
+        .into_iter()
+        .map(|mode| (mode.label().to_string(), false))
+        .collect()
+}
+
+fn default_recording_full_width() -> bool {
+    true
+}
+
+fn default_recording_stream() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

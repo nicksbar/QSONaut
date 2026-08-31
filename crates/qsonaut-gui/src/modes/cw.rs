@@ -20,8 +20,21 @@ pub(crate) fn workspace_description() -> &'static str {
     "CW · Software Audio"
 }
 
+fn next_auto_target_state(scanning: bool, retarget: bool) -> (bool, bool) {
+    if !scanning && !retarget {
+        (true, false)
+    } else if scanning && !retarget {
+        (false, true)
+    } else {
+        (false, false)
+    }
+}
+
 impl QsonautGuiApp {
     pub(crate) fn draw_cw_workspace(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        if let Some(tone_hz) = snapshot.cw_auto_target_tone_hz {
+            self.cw_tone_hz = tone_hz.clamp(200, 3_000) as u16;
+        }
         let preset = workspace_radio_preset(WorkspaceMode::Cw);
         ui.horizontal_wrapped(|ui| {
             ui.heading(workspace_description());
@@ -55,22 +68,72 @@ impl QsonautGuiApp {
                 ui.label(format!("Input {level:.0} dBFS"));
             }
         });
+        ui.horizontal(|ui| {
+            let target_label = if snapshot.cw_auto_target {
+                if snapshot.cw_auto_retarget {
+                    "🎯 RETARGETING".to_string()
+                } else {
+                    "🎯 AUTO TARGET".to_string()
+                }
+            } else if snapshot.cw_auto_retarget {
+                match snapshot.cw_retarget_remaining_s {
+                    Some(seconds) => "🎯 RETARGET".to_string() + &format!(" {seconds}s"),
+                    None => "🎯 RETARGET AFTER 10s".to_string(),
+                }
+            } else {
+                "🎯 AUTO TARGET".to_string()
+            };
+            let auto_target = ui
+                .add(
+                    egui::Button::new(&target_label)
+                        .selected(snapshot.cw_auto_target || snapshot.cw_auto_retarget),
+                )
+                .on_hover_text(
+                    "Click cycles: off → scan and lock → keep locked, then scan again after 10 seconds without a signal",
+                );
+            if auto_target.clicked() {
+                let mut state = self.state.lock().expect("ui state lock poisoned");
+                (state.cw_auto_target, state.cw_auto_retarget) =
+                    next_auto_target_state(state.cw_auto_target, state.cw_auto_retarget);
+                state.cw_auto_target_tone_hz = None;
+                state.cw_retarget_remaining_s = if state.cw_auto_retarget {
+                    Some(10)
+                } else {
+                    None
+                };
+                state.digital_decode_status = if state.cw_auto_target {
+                    "CW AUTO TARGET: scanning for a stable carrier".to_string()
+                } else if state.cw_auto_retarget {
+                    "CW AUTO TARGET: locked; will rescan after 10 seconds without a signal"
+                        .to_string()
+                } else {
+                    "CW auto target disarmed".to_string()
+                };
+                info!(
+                    scanning = state.cw_auto_target,
+                    retarget = state.cw_auto_retarget,
+                    "CW auto target changed"
+                );
+            }
+            if let Some(tone_hz) = snapshot.cw_auto_target_tone_hz {
+                ui.label(
+                    RichText::new(format!("LOCKED {tone_hz} Hz"))
+                        .small()
+                        .color(theme_success(ui)),
+                );
+            }
+        });
         ui.horizontal_wrapped(|ui| {
-            let mut record_rx = self
+            let recording = self
                 .state
                 .lock()
                 .expect("ui state lock poisoned")
-                .cw_record_rx;
-            if ui.checkbox(&mut record_rx, "Record RX stream").changed() {
-                info!(enabled = record_rx, "CW RX recording preference changed");
-                let mut state = self.state.lock().expect("ui state lock poisoned");
-                state.cw_record_rx = record_rx;
-                state.cw_recording_status = if record_rx {
-                    "Recording will start on next audio block".to_string()
-                } else {
-                    "Recording stopping".to_string()
-                };
-            }
+                .recording_enabled;
+            ui.label(if recording {
+                "Recording is controlled by Profile → Recording"
+            } else {
+                "Recording disabled · configure it in Profile → Recording"
+            });
             ui.label(
                 RichText::new(&snapshot.cw_recording_status)
                     .small()
@@ -161,6 +224,10 @@ impl QsonautGuiApp {
                 .changed()
             {
                 info!(tone_hz = self.cw_tone_hz, "CW operating tone changed");
+                self.state
+                    .lock()
+                    .expect("ui state lock poisoned")
+                    .cw_auto_target_tone_hz = None;
                 self.profile_dirty = true;
                 self.persist_profile("CW tone saved to");
             }
@@ -236,7 +303,7 @@ impl QsonautGuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{workspace_description, BAND_PLAN};
+    use super::{next_auto_target_state, workspace_description, BAND_PLAN};
 
     #[test]
     fn exposes_the_complete_cw_band_plan() {
@@ -249,5 +316,12 @@ mod tests {
     #[test]
     fn identifies_the_software_cw_workspace() {
         assert_eq!(workspace_description(), "CW · Software Audio");
+    }
+
+    #[test]
+    fn auto_target_cycles_off_scan_retarget_off() {
+        assert_eq!(next_auto_target_state(false, false), (true, false));
+        assert_eq!(next_auto_target_state(true, false), (false, true));
+        assert_eq!(next_auto_target_state(false, true), (false, false));
     }
 }

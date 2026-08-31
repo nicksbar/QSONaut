@@ -14,8 +14,9 @@ This project is intentionally moving toward **integration-first** modem strategy
   (MIT, pinned Git revision)
   - Complete-frame codecs and timing definitions for 13 Martin, Scottie,
     Robot, and PD modes.
-  - Wrapped by `qsonaut-sstv`; QSONaut keeps the live streaming receiver,
-    audio-window alignment, VIS/AFC diagnostics, and TX safety boundary.
+  - The reusable streaming receiver, audio-window alignment, and VIS/AFC
+    diagnostics now live in `qsonaut-third-party`; QSONaut owns the GUI and TX
+    safety boundary.
   - The UI exposes all 13 modes for experimental TX and receive. RX can select
     the codec automatically from VIS or filter for an explicitly selected mode.
   - A QSONaut-owned single-channel acquisition layer scans shifted VIS headers

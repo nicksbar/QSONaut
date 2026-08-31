@@ -8,7 +8,6 @@ members = [
     "crates/qsonaut-automation",
     "crates/qsonaut-pskreporter",
     "crates/qsonaut-server-client",
-    "crates/qsonaut-sstv",
     "crates/qsonaut-gui",
 ]
 resolver = "2"
@@ -48,9 +47,3 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
-
-[profile.dev.package."mfsk-core"]
-opt-level = 3
-debug = false
-debug-assertions = false
-overflow-checks = false
