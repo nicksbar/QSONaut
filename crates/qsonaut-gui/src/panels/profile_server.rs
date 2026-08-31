@@ -1220,7 +1220,14 @@ impl QsonautGuiApp {
                 ui.text_edit_singleline(profile.mode.get_or_insert_with(String::new));
                 ui.checkbox(profile.data_mode.get_or_insert(false), "Data mode");
                 ui.label("Filter");
-                edit_optional_u8(ui, &mut profile.filter, 1, 3);
+                let filter_bounds = native_profile
+                    .and_then(|radio| {
+                        radio
+                            .supported_control_values(ControlId::Filter)
+                            .and_then(|values| Some((*values.first()?, *values.last()?)))
+                    })
+                    .unwrap_or((0, 255));
+                edit_optional_u8(ui, &mut profile.filter, filter_bounds.0, filter_bounds.1);
             });
             ui.horizontal_wrapped(|ui| {
                 for (label, value) in [
