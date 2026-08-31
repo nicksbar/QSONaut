@@ -72,6 +72,11 @@ This supports many commands without hardcoding every one into the trait.
   protocol labels, support maturity, preferred baud rates, and implemented controls.
 - QSONaut keeps only app-owned connection settings and presents Rigwright metadata;
   external rigctld and DX Lab backends negotiate their own radio capabilities.
+- QSONaut must not duplicate driver-owned baud choices, control ranges or
+  discrete values, meter calibration, supported controls, or model capability
+  flags. Those come from the selected Rigwright `RadioModelProfile`/`Radio`
+  implementation. QSONaut may retain display labels, help-document routing,
+  band-plan policy, and other operator-facing presentation decisions.
 - Common frequency, mode, and PTT operations route through the selected protocol driver.
 - Native window geometry and expanded/collapsed section state persist between launches.
 - IC-7300 scope data is accepted only as complete ordered 475-bin USB sweeps; narrow center and active-band fixed views apply documented CI-V settings with acknowledgement.
@@ -82,6 +87,9 @@ This supports many commands without hardcoding every one into the trait.
 - Added registry-backed control dispatch (first batch scaffolded):
    - Preamp, Attenuator, NB, NR, AGC, Split
 - Added `protocol_write_read()` escape hatch for full/raw CI-V frames.
+- QSONaut now consumes Rigwright profile-owned baud choices, preamp limits,
+  attenuator/filter values, and documented meter calibration instead of keeping
+  parallel Icom/Yaesu/Kenwood tables.
 
 ## Known gaps
 
