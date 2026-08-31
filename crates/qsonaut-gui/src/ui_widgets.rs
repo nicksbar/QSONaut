@@ -3,9 +3,6 @@ use eframe::egui::Color32;
 
 use qsonaut_radio::models::find_model;
 
-const GENERIC_YAESU_BAUD_RATES: &[u32] = &[4_800, 9_600, 19_200, 38_400];
-const GENERIC_CLASSIC_YAESU_BAUD_RATES: &[u32] = &[4_800, 9_600, 38_400];
-const GENERIC_KENWOOD_BAUD_RATES: &[u32] = &[4_800, 9_600, 19_200, 38_400, 57_600, 115_200];
 
 /// Paint the AI tab icon with egui primitives so it does not depend on an
 /// emoji or a platform font containing a particular Unicode glyph.
@@ -162,31 +159,10 @@ pub(super) fn native_radio_profile(
 }
 
 pub(super) fn radio_baud_rates(model: &str) -> &'static [u32] {
-    use qsonaut_radio::{
-        kenwood::profile as kenwood,
-        models::Protocol,
-        yaesu::{legacy_profile as yaesu_legacy, profile as yaesu},
-        KenwoodCatModel, YaesuCatModel, YaesuLegacyModel,
-    };
-
     let Some(profile) = find_model(model) else {
-        return GENERIC_KENWOOD_BAUD_RATES;
+        return &[];
     };
-    match profile.protocol {
-        Protocol::IcomCiV { .. } => profile.supported_baud_rates(),
-        Protocol::YaesuCat => YaesuCatModel::from_model_name(profile.model)
-            .map(yaesu::profile_for_model)
-            .map_or(GENERIC_YAESU_BAUD_RATES, |profile| profile.baud_rates),
-        Protocol::YaesuLegacyCat => YaesuLegacyModel::from_model_name(profile.model)
-            .map(yaesu_legacy::profile_for_model)
-            .map_or(GENERIC_CLASSIC_YAESU_BAUD_RATES, |profile| {
-                profile.baud_rates
-            }),
-        Protocol::KenwoodCat => KenwoodCatModel::from_model_name(profile.model)
-            .map(kenwood::profile_for_model)
-            .map_or(GENERIC_KENWOOD_BAUD_RATES, |profile| profile.baud_rates),
-        Protocol::ElecraftCat => profile.supported_baud_rates(),
-    }
+    profile.supported_baud_rates()
 }
 
 pub(super) fn radio_supports_band(
