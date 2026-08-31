@@ -1,4 +1,5 @@
 use crate::egui::{Color32, RichText};
+use qsonaut_radio::models::{find_model, Manufacturer, Protocol};
 
 pub(super) struct RadioHelp {
     pub title: &'static str,
@@ -31,11 +32,6 @@ macro_rules! model_docs {
     };
 }
 
-const ICOM_MODELS: &[&str] = &["IC-705", "IC-7610", "IC-9700"];
-const YAESU_CLASSIC_MODELS: &[&str] = &["FT-817ND", "FT-818", "FT-857D", "FT-897D"];
-const YAESU_MODELS: &[&str] = &["FT-710", "FTDX10", "FTDX101D", "FTDX101MP", "FT-991A"];
-const KENWOOD_MODELS: &[&str] = &["TS-590SG", "TS-890S", "TS-2000"];
-
 fn model_docs_for(model: &str) -> (&'static str, &'static str) {
     macro_rules! choose {
         ($($name:literal => $slug:literal),+ $(,)?) => {
@@ -56,29 +52,30 @@ fn model_docs_for(model: &str) -> (&'static str, &'static str) {
 
 pub(super) fn help_for_model(model: &str) -> RadioHelp {
     let model = model.trim();
+    let catalog_profile = find_model(model);
     let (title, blurb, manufacturer_faq, manufacturer_guide, model_faq, model_guide) = if model
         .eq_ignore_ascii_case("IC-7300")
     {
         ("Icom IC-7300", "Start with the USB CI-V device and Auto baud; it is the normal recommendation. For the scope, the radio must be able to emit scope data, the scope must be visible, and 115200 may be required by the radio firmware.", ICOM_FAQ, ICOM_GUIDE, IC7300_FAQ, IC7300_GUIDE)
-    } else if model.eq_ignore_ascii_case("CI-V (generic)")
-        || ICOM_MODELS.iter().any(|m| model.eq_ignore_ascii_case(m))
+    } else if catalog_profile.is_some_and(|profile| profile.manufacturer == Manufacturer::Icom)
+        || model.eq_ignore_ascii_case("CI-V (generic)")
     {
         let (faq, guide) = model_docs_for(model);
         ("Icom CI-V", "Start with the radio's USB/serial CI-V device and Auto baud. Select the exact model when available; use a fixed matching baud only when the radio or a troubleshooting step calls for it.", ICOM_FAQ, ICOM_GUIDE, faq, guide)
-    } else if model.eq_ignore_ascii_case("classic CAT (generic)")
-        || YAESU_CLASSIC_MODELS
-            .iter()
-            .any(|m| model.eq_ignore_ascii_case(m))
+    } else if catalog_profile.is_some_and(|profile| {
+        profile.manufacturer == Manufacturer::Yaesu && profile.protocol == Protocol::YaesuLegacyCat
+    }) || model.eq_ignore_ascii_case("classic CAT (generic)")
     {
         let (faq, guide) = model_docs_for(model);
         ("Yaesu classic CAT", "Select the CAT device and start with Auto baud when supported. If CAT is unreliable, choose a fixed rate supported by the radio and match it in QSONaut.", YAESU_CLASSIC_FAQ, YAESU_CLASSIC_GUIDE, faq, guide)
-    } else if model.eq_ignore_ascii_case("CAT (generic)")
-        || YAESU_MODELS.iter().any(|m| model.eq_ignore_ascii_case(m))
+    } else if catalog_profile.is_some_and(|profile| {
+        profile.manufacturer == Manufacturer::Yaesu && profile.protocol == Protocol::YaesuCat
+    }) || model.eq_ignore_ascii_case("CAT (generic)")
     {
         let (faq, guide) = model_docs_for(model);
         ("Yaesu CAT", "Select the radio's CAT/USB device and start with Auto baud. Select the exact model when available; use a fixed matching rate if CAT needs troubleshooting.", YAESU_FAQ, YAESU_GUIDE, faq, guide)
-    } else if model.eq_ignore_ascii_case("PC control (generic)")
-        || KENWOOD_MODELS.iter().any(|m| model.eq_ignore_ascii_case(m))
+    } else if catalog_profile.is_some_and(|profile| profile.manufacturer == Manufacturer::Kenwood)
+        || model.eq_ignore_ascii_case("PC control (generic)")
     {
         let (faq, guide) = model_docs_for(model);
         ("Kenwood PC control", "Select the PC control device and start with Auto baud when supported. Select the exact model when available; use a fixed matching rate if CAT needs troubleshooting.", KENWOOD_FAQ, KENWOOD_GUIDE, faq, guide)
