@@ -3,4 +3,5 @@
 # QSONaut. The copied file is ignored by Git; CI and other users resolve the
 # published Rigwright dependency declared in Cargo.toml.
 
-paths = ["../rigwright"]
+[patch.crates-io]
+rigwright = { path = "../rigwright" }

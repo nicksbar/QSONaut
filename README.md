@@ -279,7 +279,7 @@ QSONaut resolves the published `rigwright` crate from crates.io, and
 `Cargo.lock` pins the exact release for reproducible CI and release builds.
 For local development against the paired sibling checkout, copy
 `.cargo/config.toml.example` to `.cargo/config.toml`; the ignored local file
-overrides the published dependency with `../rigwright` without changing
+patches the unpublished dependency with `../rigwright` without changing
 committed manifests. CI does not use this override and does not need a
 Rigwright checkout.
 - `crates/qsonaut-audio` — real-time audio and high-quality 48→12 kHz decimation
