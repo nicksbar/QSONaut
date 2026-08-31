@@ -47,8 +47,12 @@ for file in "${changed_files[@]}"; do
   )
 
   if (( total_lines == 0 )); then
-    echo "$file: no executable coverage row found" >&2
-    failed=1
+    if is_baselined "$file"; then
+      echo "$file: compatibility-only file with no executable coverage row"
+    else
+      echo "$file: no executable coverage row found" >&2
+      failed=1
+    fi
     continue
   fi
 

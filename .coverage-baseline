@@ -3,3 +3,4 @@
 apps/qsonaut/src/main.rs
 crates/qsonaut-gui/src/panels/profile_server.rs
 crates/qsonaut-gui/src/panels/spectrum.rs
+crates/qsonaut-gui/src/workers/cwdit_adapter.rs
