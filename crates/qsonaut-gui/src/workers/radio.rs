@@ -2843,6 +2843,39 @@ mod level_poll_tests {
     }
 
     #[test]
+    fn scheduled_icom_meter_failures_and_unsupported_profiles_are_non_fatal() {
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let failed_radio = IcomCiVRadio::with_transport(
+            Some(qsonaut_radio::IcomCivModel::Ic7300),
+            0xE0,
+            0x94,
+            ScriptedCiVTransport::with_frames([]),
+        );
+        let failed_state = Arc::new(Mutex::new(GuiState::default()));
+        poll_scheduled_icom_meter(&rt, &failed_radio, &failed_state, ScheduledMeter::Signal);
+        assert!(failed_state
+            .lock()
+            .expect("state lock")
+            .signal_meter
+            .is_none());
+
+        let unsupported_radio =
+            IcomCiVRadio::with_transport(None, 0xE0, 0x94, ScriptedCiVTransport::with_frames([]));
+        let unsupported_state = Arc::new(Mutex::new(GuiState::default()));
+        poll_scheduled_icom_meter(
+            &rt,
+            &unsupported_radio,
+            &unsupported_state,
+            ScheduledMeter::Signal,
+        );
+        assert!(unsupported_state
+            .lock()
+            .expect("state lock")
+            .signal_meter
+            .is_none());
+    }
+
+    #[test]
     fn rigctld_loopback_exercises_worker_hal_commands_without_transmit() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
         listener
