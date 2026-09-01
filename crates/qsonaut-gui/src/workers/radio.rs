@@ -1943,8 +1943,10 @@ mod tests {
 
     #[test]
     fn waterfall_application_downsamples_scales_and_caps_history() {
-        let mut state = GuiState::default();
-        state.radio_scope_contrast = 2.0;
+        let mut state = GuiState {
+            radio_scope_contrast: 2.0,
+            ..GuiState::default()
+        };
 
         for _ in 0..(RADIO_WF_HEIGHT + 1) {
             apply_waterfall_bins(
