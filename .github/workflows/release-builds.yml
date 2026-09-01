@@ -70,7 +70,7 @@ jobs:
         with:
           path: QSONaut
 
-      # Rigwright v0.1.18 is resolved from crates.io by the Cargo manifests.
+      # Rigwright v0.1.19 is resolved from crates.io by the Cargo manifests.
 
       - name: Install Linux native libraries
         if: matrix.os == 'linux'

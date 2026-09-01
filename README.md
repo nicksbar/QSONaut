@@ -6,11 +6,11 @@
 
 [![CI](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml)
 [![Coverage gate](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml)
-[![Line coverage 51.65%](https://img.shields.io/badge/line%20coverage-51.65%25-green)](#coverage-area-snapshot)
-[![GUI core 49.16%](https://img.shields.io/badge/GUI%20core-49.16%25-yellow)](#coverage-area-snapshot)
-[![GUI workers 35.60%](https://img.shields.io/badge/GUI%20workers-35.60%25-yellow)](#coverage-area-snapshot)
-[![GUI modes 36.75%](https://img.shields.io/badge/GUI%20modes-36.75%25-yellow)](#coverage-area-snapshot)
-[![GUI panels 16.42%](https://img.shields.io/badge/GUI%20panels-16.42%25-yellow)](#coverage-area-snapshot)
+[![Line coverage 60.05%](https://img.shields.io/badge/line%20coverage-60.05%25-green)](#coverage-area-snapshot)
+[![GUI core 55.46%](https://img.shields.io/badge/GUI%20core-55.46%25-yellow)](#coverage-area-snapshot)
+[![GUI workers 57.85%](https://img.shields.io/badge/GUI%20workers-57.85%25-yellow)](#coverage-area-snapshot)
+[![GUI modes 53.12%](https://img.shields.io/badge/GUI%20modes-53.12%25-yellow)](#coverage-area-snapshot)
+[![GUI panels 69.58%](https://img.shields.io/badge/GUI%20panels-69.58%25-yellow)](#coverage-area-snapshot)
 [![Audio 36.28%](https://img.shields.io/badge/audio-36.28%25-yellow)](#coverage-area-snapshot)
 [![Core 87.07%](https://img.shields.io/badge/core-87.07%25-brightgreen)](#coverage-area-snapshot)
 [![Server client 84.25%](https://img.shields.io/badge/server%20client-84.25%25-brightgreen)](#coverage-area-snapshot)
@@ -69,6 +69,9 @@ implementation-level status of radio controls, normalized meters, SWR/tuner
 workflows, digital modes, SSTV, station tools, server integration, automation,
 and deliberate gaps.
 
+The [project roadmap](docs/project-roadmap.md) is the current v0.4.0 through
+v1 planning source across QSONaut and its sibling repositories.
+
 For the settings split between application-wide station state, independent
 radio tabs, and shared radio-tuning definitions, see
 [Settings ownership](docs/settings-ownership.md).
@@ -121,7 +124,7 @@ cargo llvm-cov --locked --all-features --workspace \
 
 To generate the browsable report, use `--html`; it is written beneath
 `target/llvm-cov/html`. Pull requests and pushes to `main` run the same
-coverage workflow, enforce a 50% executable-contract line-coverage gate,
+coverage workflow, enforce a 60% executable-contract line-coverage gate,
 enforce changed-file coverage on pull requests, and upload the HTML report as
 an artifact. The report intentionally excludes rendering-heavy UI and callback paths that
 are unsuitable for deterministic unit coverage (`panels/devices.rs`,
@@ -134,10 +137,11 @@ truth for included areas.
 ### Coverage area snapshot
 
 The current contract-coverage baseline was measured on 2026-09-01 with the
-workspace tests available in the validation environment and 51.65% executable
-line coverage (12,816 / 24,814 lines). The local sandbox used for this baseline
-cannot bind TCP listeners, so the two `rigctld` loopback tests were skipped
-locally; CI runs the complete suite without that environment limitation.
+workspace tests available in the validation environment and 60.05% executable
+line coverage (15,237 / 38,139 lines). The coverage gate's grouped executable
+contract report is 60.95% (15,603 / 25,599 reported lines). The local sandbox used for this baseline
+completed the available loopback and null-backend tests; physical-radio behavior
+still requires the documented hardware validation runs.
 The high-coverage `qsonaut-sstv` crate is
 now maintained behind the pinned `qsonaut-third-party` boundary and is covered
 by that repository's workflow rather than this workspace. These are grouped
@@ -153,19 +157,17 @@ remains the detailed, per-file source of truth.
 | qsonaut-server-client | 733 / 870 | 84.25% |
 | qsonaut-audio | 316 / 871 | 36.28% |
 | qsonaut-core | 404 / 464 | 87.07% |
-| GUI core | 5,729 / 11,654 | 49.16% |
-| GUI workers | 860 / 2,416 | 35.60% |
-| GUI modes | 689 / 1,875 | 36.75% |
-| GUI panels | 237 / 1,443 | 16.42% |
-| Rigwright integration | 2,089 / 2,810 | 74.34% |
+| GUI core | 6,779 / 12,224 | 55.46% |
+| GUI workers | 1,481 / 2,560 | 57.85% |
+| GUI modes | 1,020 / 1,920 | 53.12% |
+| GUI panels | 1,018 / 1,463 | 69.58% |
+| Rigwright integration | 2,093 / 2,816 | 74.33% |
 | Application entry point | 195 / 551 | 35.39% |
 
 The Rigwright integration target is 80%+ and is enforced by the CI coverage
-gate. The local snapshot above is lower when the environment cannot execute
-the two loopback tests; a CI runner with TCP listeners must execute those
-tests for the integration gate to pass. Changes to these areas should add
-deterministic seams or focused tests rather than
-weakening the contract gate.
+gate. The current 74.33% snapshot is below that release gate and remains a
+v0.4 project blocker. Changes to these areas should add deterministic seams or
+focused tests rather than weakening the contract gate.
 
 Changed-file coverage is enforced with `scripts/check-changed-coverage.sh`.
 The small set of pre-existing zero-coverage files is explicitly tracked in

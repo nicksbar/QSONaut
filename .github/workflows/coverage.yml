@@ -38,7 +38,7 @@ jobs:
         run: |
           set -o pipefail
           cargo llvm-cov --locked --all-features --workspace --ignore-filename-regex "$QSONAUT_COVERAGE_IGNORE_REGEX" --summary-only | tee coverage-summary.txt
-          bash scripts/check-coverage.sh coverage-summary.txt 50 80
+          bash scripts/check-coverage.sh coverage-summary.txt 60 80
 
       - name: Enforce changed-file coverage
         if: github.event_name == 'pull_request'
@@ -63,7 +63,7 @@ jobs:
             if [[ -f coverage-summary.txt ]]; then
               cat coverage-summary.txt
               echo
-              bash scripts/check-coverage.sh coverage-summary.txt 50 80
+              bash scripts/check-coverage.sh coverage-summary.txt 60 80
             else
               echo 'Coverage summary was not generated.'
             fi
