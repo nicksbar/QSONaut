@@ -14,9 +14,9 @@ jobs:
     name: Tests and LLVM coverage
     runs-on: ubuntu-24.04
     env:
-      # Rendering-only and hardware-dependent paths are reported separately;
+      # Rendering-only, UI-callback, and hardware-dependent paths are reported separately;
       # the gate covers executable application, HAL, worker, and contract code.
-      QSONAUT_COVERAGE_IGNORE_REGEX: crates/qsonaut-gui/src/panels/profile_server\.rs|crates/qsonaut-gui/src/modes/(sstv|ft8|ft4|voice|cw|jt9|jt65|q65|wspr|fst4)\.rs
+      QSONAUT_COVERAGE_IGNORE_REGEX: crates/qsonaut-gui/src/panels/(devices|profile_server|radio_ui)\.rs|crates/qsonaut-gui/src/modes/(sstv|ft8|ft4|voice|cw|jt9|jt65|q65|wspr|fst4)\.rs
     steps:
       - name: Check out QSONaut
         uses: actions/checkout@v6

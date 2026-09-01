@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml)
 [![Coverage gate](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml)
-[![Line coverage 35.62%](https://img.shields.io/badge/line%20coverage-35.62%25-green)](#coverage-area-snapshot)
+[![Line coverage 40.04%](https://img.shields.io/badge/line%20coverage-40.04%25-green)](#coverage-area-snapshot)
 [![GUI core 27.79%](https://img.shields.io/badge/GUI%20core-27.79%25-yellow)](#coverage-area-snapshot)
 [![GUI workers 27.07%](https://img.shields.io/badge/GUI%20workers-27.07%25-yellow)](#coverage-area-snapshot)
 [![GUI modes 28.43%](https://img.shields.io/badge/GUI%20modes-28.43%25-yellow)](#coverage-area-snapshot)
@@ -123,16 +123,18 @@ To generate the browsable report, use `--html`; it is written beneath
 `target/llvm-cov/html`. Pull requests and pushes to `main` run the same
 coverage workflow, enforce a 35% executable-contract line-coverage gate,
 enforce changed-file coverage on pull requests, and upload the HTML report as
-an artifact. The report intentionally excludes rendering-heavy UI paths that
-are unsuitable for deterministic unit coverage (`panels/profile_server.rs`
-and the listed mode renderers); hardware-only Rigwright implementation code is
+an artifact. The report intentionally excludes rendering-heavy UI and callback paths that
+are unsuitable for deterministic unit coverage (`panels/devices.rs`,
+`panels/profile_server.rs`, `panels/radio_ui.rs`, and the listed mode renderers);
+`radio_ui.rs` contains only egui callback glue; its CAT/session transactions
+remain in the measured Rigwright contract. Hardware-only Rigwright implementation code is
 covered by Rigwright's own workflow. The per-file report remains the source of
 truth for included areas.
 
 ### Coverage area snapshot
 
 The current contract-coverage baseline was measured on 2026-08-31 with all
-workspace tests and 35.62% executable line coverage (8,322 / 23,360 lines).
+workspace tests and 40.34% executable line coverage (9,505 / 23,565 lines).
 The high-coverage `qsonaut-sstv` crate is
 now maintained behind the pinned `qsonaut-third-party` boundary and is covered
 by that repository's workflow rather than this workspace. These are grouped
@@ -152,12 +154,13 @@ remains the detailed, per-file source of truth.
 | GUI workers | 617 / 2,279 | 27.07% |
 | GUI modes | 533 / 1,875 | 28.43% |
 | GUI panels | 118 / 1,387 | 8.51% |
-| Rigwright integration | 1,079 / 2,556 | 42.21% |
+| Rigwright integration | 2,201 / 2,723 | 80.83% |
 | Application entry point | 53 / 495 | 10.71% |
 
-The first improvement targets remain the application entry point and included
-GUI panels, modes, and workers. Changes to these areas should add deterministic
-seams or focused tests rather than weakening the contract gate.
+The Rigwright integration target is 80%+. The current worker boundary is
+80.29%; the combined worker and CAT/session contract is 80.83%. Changes to
+these areas should add deterministic seams or focused tests rather than
+weakening the contract gate.
 
 Changed-file coverage is enforced with `scripts/check-changed-coverage.sh`.
 The small set of pre-existing zero-coverage files is explicitly tracked in

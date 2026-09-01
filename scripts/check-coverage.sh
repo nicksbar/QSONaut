@@ -39,7 +39,7 @@ awk '
 $1 ~ /^(apps|crates)\// && $8 ~ /^[0-9]+$/ && $9 ~ /^[0-9]+$/ {
   path = $1
   if (path ~ /^apps\/qsonaut\//) area = "Application entry point"
-  else if (path == "crates/qsonaut-gui/src/panels/devices.rs" || path == "crates/qsonaut-gui/src/workers/radio.rs") area = "Rigwright integration"
+  else if (path == "crates/qsonaut-gui/src/panels/radio_contract.rs" || path == "crates/qsonaut-gui/src/workers/radio.rs") area = "Rigwright integration"
   else if (path ~ /^crates\/qsonaut-gui\/src\/modes\//) area = "GUI modes"
   else if (path ~ /^crates\/qsonaut-gui\/src\/panels\//) area = "GUI panels"
   else if (path ~ /^crates\/qsonaut-gui\/src\/workers\//) area = "GUI workers"

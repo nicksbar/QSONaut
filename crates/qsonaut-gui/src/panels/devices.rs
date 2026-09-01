@@ -36,48 +36,6 @@ impl QsonautGuiApp {
         }
     }
 
-    pub(in super::super) fn reconnect_radio(&mut self) {
-        info!(backend = %self.config.radio.backend, model = %self.config.radio.model, "Radio reconnect requested");
-        if let Some(tx) = &self.command_tx {
-            let _ = tx.send(GuiCommand::Quit);
-        }
-        self.radio_worker_stop.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.radio_worker_handle.take() {
-            let _ = handle.join();
-        }
-        self.command_tx = None;
-        self.radio_worker_stop = Arc::new(AtomicBool::new(false));
-
-        if !self.config.radio.enabled {
-            info!("Radio reconnect skipped: radio is disabled");
-            self.radio_init_rx = None;
-            self.radio_init_attempted = true;
-            let mut state = self.state.lock().expect("ui state lock poisoned");
-            state.radio_waterfall_status = "UNAVAILABLE (radio disabled)".to_string();
-            return;
-        }
-
-        let port = self.config.radio.serial_port.clone().unwrap_or_default();
-        self.radio_init_rx = Some(spawn_radio_init(
-            self.config.radio.backend.clone(),
-            self.config.radio.model.clone(),
-            port,
-            self.config.radio.endpoint.clone(),
-            self.config.radio.baud_rate,
-            self.config.radio.controller_civ_address,
-            self.config.radio.civ_address,
-        ));
-        self.radio_init_attempted = false;
-        self.device_restart_required = false;
-        if self.config.audio.enabled && self.audio_worker_handle.is_none() {
-            self.restart_audio();
-        }
-        info!(port = %self.config.radio.serial_port.as_deref().unwrap_or("auto"), "Radio reconnect initialization queued");
-        let mut state = self.state.lock().expect("ui state lock poisoned");
-        state.radio_waterfall_status = "CONNECTING…".to_string();
-        state.last_error = None;
-    }
-
     pub(in super::super) fn restart_audio(&mut self) {
         info!(enabled = self.config.audio.enabled, input = ?self.config.audio.input_device, "Audio worker restart requested");
         self.audio_worker_stop.store(true, Ordering::Relaxed);
@@ -771,6 +729,10 @@ fn selected_radio_label(model: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panels::radio_contract::{
+        apply_radio_reconnect, mark_radio_reconnect_disabled, spawn_cat_connection_test,
+        stop_radio_worker_for_reconnect,
+    };
 
     #[test]
     fn native_radio_labels_and_controls_follow_rigwright_profiles() {
@@ -849,6 +811,134 @@ mod tests {
         .expect_err("missing serial device");
         assert!(missing_device.contains("CAT probe failed"));
         assert!(missing_device.contains("IC-7300"));
+    }
+
+    #[test]
+    fn cat_probe_projects_each_configured_vendor_result() {
+        let null = QsonautGuiApp::cat_probe_result(
+            "offline",
+            115_200,
+            ConfiguredRadio::Null(qsonaut_radio::NullRadio::new()),
+        )
+        .expect_err("offline profile has no CAT verification");
+        assert!(null.contains("not implemented"));
+
+        let yaesu = QsonautGuiApp::cat_probe_result(
+            "FT-818",
+            38_400,
+            ConfiguredRadio::Yaesu(qsonaut_radio::yaesu::YaesuCatRadio::new_generic(
+                "/definitely-not-a-real-serial-device",
+                38_400,
+            )),
+        )
+        .expect_err("unavailable Yaesu transport");
+        assert!(yaesu.contains("CAT probe failed for FT-818"));
+
+        let kenwood = QsonautGuiApp::cat_probe_result(
+            "TS-890S",
+            115_200,
+            ConfiguredRadio::Kenwood(qsonaut_radio::kenwood::KenwoodCatRadio::new_generic(
+                "/definitely-not-a-real-serial-device",
+                115_200,
+            )),
+        )
+        .expect_err("unavailable Kenwood transport");
+        assert!(kenwood.contains("CAT probe failed for TS-890S"));
+    }
+
+    #[test]
+    fn cat_connection_worker_propagates_validation_and_transport_errors() {
+        let invalid_backend = spawn_cat_connection_test(
+            "rigctld".to_string(),
+            "IC-7300".to_string(),
+            "/dev/null".to_string(),
+            115_200,
+            0xE0,
+            0x94,
+        )
+        .recv()
+        .expect("CAT worker result");
+        assert!(invalid_backend
+            .expect_err("non-native backend must be rejected")
+            .contains("Native Rigwright backend"));
+
+        let missing_port = spawn_cat_connection_test(
+            "native".to_string(),
+            "IC-7300".to_string(),
+            String::new(),
+            115_200,
+            0xE0,
+            0x94,
+        )
+        .recv()
+        .expect("CAT worker result");
+        assert!(missing_port
+            .expect_err("missing port must be rejected")
+            .contains("specific serial port"));
+    }
+
+    #[test]
+    fn radio_session_stop_clears_command_and_replaces_stop_token() {
+        let (tx, rx) = mpsc::channel();
+        let old_stop = Arc::new(AtomicBool::new(false));
+        let old_stop_identity = Arc::as_ptr(&old_stop);
+        let mut stop = old_stop;
+        let mut command_tx = Some(tx);
+        let mut worker_handle = Some(thread::spawn(|| {}));
+
+        stop_radio_worker_for_reconnect(&mut command_tx, &mut stop, &mut worker_handle);
+
+        assert!(command_tx.is_none());
+        assert!(worker_handle.is_none());
+        assert!(!stop.load(Ordering::Relaxed));
+        assert_ne!(Arc::as_ptr(&stop), old_stop_identity);
+        assert!(matches!(rx.try_recv(), Ok(GuiCommand::Quit)));
+    }
+
+    #[test]
+    fn disabled_radio_reconnect_clears_init_and_reports_unavailable() {
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let (_tx, rx) = mpsc::channel();
+        let mut init_rx = Some(rx);
+        let mut attempted = false;
+
+        mark_radio_reconnect_disabled(&state, &mut init_rx, &mut attempted);
+
+        assert!(init_rx.is_none());
+        assert!(attempted);
+        assert_eq!(
+            state.lock().expect("state lock").radio_waterfall_status,
+            "UNAVAILABLE (radio disabled)"
+        );
+    }
+
+    #[test]
+    fn enabled_radio_reconnect_queues_init_and_restarts_audio_when_requested() {
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let (_tx, rx) = mpsc::channel();
+        let mut init_rx = None;
+        let mut attempted = true;
+        let mut restart_count = 0;
+        let mut device_restart_required = true;
+
+        apply_radio_reconnect(
+            &mut init_rx,
+            &mut attempted,
+            &mut device_restart_required,
+            &state,
+            true,
+            || rx,
+            || restart_count += 1,
+        );
+
+        assert!(init_rx.is_some());
+        assert!(!attempted);
+        assert!(!device_restart_required);
+        assert_eq!(restart_count, 1);
+        assert_eq!(
+            state.lock().expect("state lock").radio_waterfall_status,
+            "CONNECTING…"
+        );
     }
 
     #[test]
