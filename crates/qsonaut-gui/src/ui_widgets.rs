@@ -216,7 +216,7 @@ pub(super) fn swr_chart_value(model: &str, normalized: u8) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::radio_baud_rates;
+    use super::{format_swr_display, radio_baud_rates, radio_supports_band, swr_chart_value};
 
     #[test]
     fn baud_rates_follow_the_selected_radio_profile() {
@@ -225,5 +225,29 @@ mod tests {
         assert_eq!(radio_baud_rates("FT-857D"), &[4_800, 9_600, 38_400]);
         assert!(!radio_baud_rates("TS-2000").contains(&115_200));
         assert!(radio_baud_rates("IC-7300").contains(&115_200));
+    }
+
+    #[test]
+    fn swr_display_uses_model_calibration_and_safe_generic_fallbacks() {
+        assert_eq!(format_swr_display("IC-7300", None), "unavailable");
+        assert_eq!(format_swr_display("unknown", Some(128)), "SWR meter 50%");
+        assert!(format_swr_display("IC-7300", Some(80)).ends_with("meter)"));
+        assert!(format_swr_display("IC-7300", Some(121)).starts_with(">3.00:1"));
+        assert_eq!(swr_chart_value("unknown", 128), 128.0 * 100.0 / 255.0);
+        assert!(swr_chart_value("IC-7300", 80) > 1.0);
+    }
+
+    #[test]
+    fn band_capability_filtering_is_conservative_for_unknown_models() {
+        assert!(radio_supports_band(None, "20m"));
+        assert!(radio_supports_band(None, "2m"));
+        assert!(radio_supports_band(
+            super::native_radio_profile("native", "IC-7300"),
+            "20m"
+        ));
+        assert!(!radio_supports_band(
+            super::native_radio_profile("native", "IC-7300"),
+            "2m"
+        ));
     }
 }
