@@ -1805,6 +1805,24 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_meter_ids_cover_every_hal_meter() {
+        let meters = [
+            (ScheduledMeter::Signal, MeterId::Signal),
+            (ScheduledMeter::Power, MeterId::Power),
+            (ScheduledMeter::Swr, MeterId::Swr),
+            (ScheduledMeter::Alc, MeterId::Alc),
+            (ScheduledMeter::Compression, MeterId::Compression),
+            (ScheduledMeter::Current, MeterId::Current),
+            (ScheduledMeter::Voltage, MeterId::Voltage),
+            (ScheduledMeter::Temperature, MeterId::Temperature),
+        ];
+
+        for (scheduled, expected) in meters {
+            assert_eq!(scheduled.meter_id(), expected);
+        }
+    }
+
+    #[test]
     fn scope_vbw_respects_checkbox_in_narrow_and_overview_views() {
         for view in [RadioScopeView::Narrow, RadioScopeView::Overview] {
             assert!(!scope_vbw_wide_for_view(view, false));
@@ -1872,6 +1890,54 @@ mod tests {
         assert_eq!(state.mode, "USB");
         assert_eq!(state.data_mode, Some(false));
         assert_eq!(state.filter, Some(2));
+    }
+
+    #[test]
+    fn control_vfo_value_accepts_only_the_two_hal_vfos() {
+        assert_eq!(control_vfo_value(&ControlValue::U8(0)), Some(0));
+        assert_eq!(control_vfo_value(&ControlValue::Vfo(1)), Some(1));
+        assert_eq!(control_vfo_value(&ControlValue::U8(2)), None);
+        assert_eq!(control_vfo_value(&ControlValue::Bool(true)), None);
+    }
+
+    #[test]
+    fn icom_base_mode_labels_cover_known_and_unknown_modes() {
+        let modes = [
+            (BaseMode::Lsb, "LSB"),
+            (BaseMode::Usb, "USB"),
+            (BaseMode::Am, "AM"),
+            (BaseMode::Cw, "CW"),
+            (BaseMode::Rtty, "RTTY"),
+            (BaseMode::Fm, "FM"),
+            (BaseMode::Wfm, "WFM"),
+            (BaseMode::CwR, "CW-R"),
+            (BaseMode::RttyR, "RTTY-R"),
+            (BaseMode::Unknown(99), "UNKNOWN"),
+        ];
+
+        for (mode, label) in modes {
+            assert_eq!(icom_base_mode_label(mode), label);
+        }
+    }
+
+    #[test]
+    fn waterfall_application_downsamples_scales_and_caps_history() {
+        let mut state = GuiState::default();
+        state.radio_scope_contrast = 2.0;
+
+        for _ in 0..(RADIO_WF_HEIGHT + 1) {
+            apply_waterfall_bins(
+                &mut state,
+                &(0..1_400).map(|value| value as u8).collect::<Vec<_>>(),
+            );
+        }
+
+        assert_eq!(state.radio_waterfall_rows.len(), RADIO_WF_HEIGHT);
+        assert_eq!(
+            state.radio_waterfall_rows.back().map(Vec::len),
+            Some(MAX_RADIO_WF_BINS)
+        );
+        assert_eq!(state.radio_waterfall_revision, (RADIO_WF_HEIGHT + 1) as u64);
     }
 }
 
