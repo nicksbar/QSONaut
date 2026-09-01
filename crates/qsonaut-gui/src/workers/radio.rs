@@ -2012,6 +2012,8 @@ mod level_poll_tests {
     use async_trait::async_trait;
     use qsonaut_radio::RadioCapabilities;
     use std::collections::HashMap;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
 
     struct CoverageRadio {
         controls: HashMap<ControlId, ControlValue>,
@@ -2294,6 +2296,85 @@ mod level_poll_tests {
         assert_eq!(state.radio_power_on, Some(false));
         assert!(state.last_error.is_some());
         assert!(state.frequency_hz.is_none());
+    }
+
+    #[test]
+    fn rigctld_loopback_exercises_worker_hal_commands_without_transmit() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let address = listener.local_addr().expect("loopback address");
+        let server_stop = Arc::new(AtomicBool::new(false));
+        let server_stop_thread = server_stop.clone();
+        let server = std::thread::spawn(move || {
+            while !server_stop_thread.load(Ordering::Relaxed) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(Duration::from_millis(1));
+                    continue;
+                };
+                let mut command = String::new();
+                if BufReader::new(stream.try_clone().expect("clone loopback stream"))
+                    .read_line(&mut command)
+                    .is_ok()
+                {
+                    let response = match command.trim() {
+                        "f" => "14074000\n",
+                        "m" => "USB 0\n",
+                        _ => "RPRT 0\n",
+                    };
+                    stream
+                        .write_all(response.as_bytes())
+                        .expect("loopback response");
+                }
+            }
+        });
+
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let sweep_abort = Arc::new(AtomicBool::new(false));
+        let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
+        let repaint = Arc::new(OnceLock::new());
+        let ptt_allowed = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker(
+            ConfiguredRadio::Rigctld(qsonaut_radio::rigctld::RigctldRadio::new(
+                address.to_string(),
+            )),
+            state.clone(),
+            stop,
+            sweep_abort,
+            display_tuning,
+            rx,
+            repaint,
+            ptt_allowed,
+        );
+
+        tx.send(GuiCommand::TuneDelta(1_000)).expect("tune delta");
+        tx.send(GuiCommand::TuneTo(14_075_000)).expect("tune to");
+        tx.send(GuiCommand::CycleMode).expect("cycle mode");
+        tx.send(GuiCommand::SetRadioMode(Mode::Usb))
+            .expect("set mode");
+        tx.send(GuiCommand::SetPtt(false)).expect("safe PTT off");
+        let (ack_tx, ack_rx) = mpsc::channel();
+        tx.send(GuiCommand::SetPttWithAck(false, ack_tx))
+            .expect("safe acknowledged PTT off");
+        tx.send(GuiCommand::SetPower(false)).expect("power command");
+        assert_eq!(
+            ack_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("PTT ack"),
+            Ok(())
+        );
+        tx.send(GuiCommand::Quit).expect("quit loopback worker");
+        handle.join().expect("loopback worker join");
+        server_stop.store(true, Ordering::Relaxed);
+        server.join().expect("loopback server join");
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.frequency_hz, Some(14_074_000));
+        assert_eq!(state.mode, "USB");
+        assert!(!state.ptt_on);
     }
 
     #[test]
