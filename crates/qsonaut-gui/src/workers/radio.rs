@@ -1578,7 +1578,7 @@ fn read_vfo_control<R: Radio + ?Sized>(rt: &tokio::runtime::Runtime, radio: &R) 
 
 fn poll_radio_level_state(
     rt: &tokio::runtime::Runtime,
-    radio: &ConfiguredRadio,
+    radio: &dyn Radio,
     state: &Arc<Mutex<GuiState>>,
 ) {
     let read_meter = |id| {
@@ -1980,5 +1980,196 @@ mod workspace_tests {
         assert_eq!(nr_value, ControlValue::Bool(false));
         assert_eq!(nb_id, ControlId::NoiseBlanker);
         assert_eq!(nb_value, ControlValue::Bool(false));
+    }
+}
+
+#[cfg(test)]
+mod level_poll_tests {
+    use super::*;
+    use async_trait::async_trait;
+    use qsonaut_radio::RadioCapabilities;
+    use std::collections::HashMap;
+
+    struct CoverageRadio {
+        controls: HashMap<ControlId, ControlValue>,
+        meters: HashMap<MeterId, u8>,
+    }
+
+    #[async_trait]
+    impl Radio for CoverageRadio {
+        async fn get_frequency_hz(&self) -> Result<u64> {
+            Ok(7_074_000)
+        }
+
+        async fn set_frequency_hz(&self, _hz: u64) -> Result<()> {
+            Ok(())
+        }
+
+        async fn get_mode(&self) -> Result<Mode> {
+            Ok(Mode::Usb)
+        }
+
+        async fn set_mode(&self, _mode: Mode) -> Result<()> {
+            Ok(())
+        }
+
+        async fn set_ptt(&self, _enabled: bool) -> Result<()> {
+            Ok(())
+        }
+
+        async fn get_control(&self, id: ControlId) -> Result<Option<ControlValue>> {
+            Ok(self.controls.get(&id).cloned())
+        }
+
+        async fn get_meter(&self, id: MeterId) -> Result<Option<u8>> {
+            Ok(self.meters.get(&id).copied())
+        }
+
+        fn supports_control(&self, id: ControlId) -> bool {
+            self.controls.contains_key(&id)
+        }
+
+        fn supports_meter(&self, id: MeterId) -> bool {
+            self.meters.contains_key(&id)
+        }
+
+        fn capabilities(&self) -> RadioCapabilities {
+            RadioCapabilities::default()
+        }
+    }
+
+    #[test]
+    fn level_poll_applies_supported_controls_meters_and_voltage_history() {
+        let controls = HashMap::from([
+            (ControlId::AfGain, ControlValue::U8(11)),
+            (ControlId::RfGain, ControlValue::U8(22)),
+            (ControlId::Squelch, ControlValue::U8(33)),
+            (ControlId::RfPower, ControlValue::U8(44)),
+            (ControlId::Preamp, ControlValue::U8(55)),
+            (ControlId::Attenuator, ControlValue::U8(66)),
+            (ControlId::Agc, ControlValue::U8(77)),
+            (ControlId::NoiseReductionLevel, ControlValue::U8(88)),
+            (ControlId::NoiseBlanker, ControlValue::Bool(true)),
+            (ControlId::NoiseReduction, ControlValue::Bool(true)),
+            (ControlId::IpPlus, ControlValue::Bool(true)),
+            (ControlId::Notch, ControlValue::Bool(true)),
+            (ControlId::ManualNotch, ControlValue::Bool(true)),
+        ]);
+        let meters = HashMap::from([
+            (MeterId::Signal, 101),
+            (MeterId::Power, 102),
+            (MeterId::Swr, 103),
+            (MeterId::Alc, 104),
+            (MeterId::Compression, 105),
+            (MeterId::Current, 106),
+            (MeterId::Voltage, 107),
+            (MeterId::Temperature, 108),
+        ]);
+        let radio = CoverageRadio { controls, meters };
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+
+        poll_radio_level_state(&rt, &radio, &state);
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.af_gain, Some(11));
+        assert_eq!(state.rf_gain, Some(22));
+        assert_eq!(state.squelch, Some(33));
+        assert_eq!(state.rf_power, Some(44));
+        assert_eq!(state.preamp, Some(55));
+        assert_eq!(state.attenuator, Some(66));
+        assert_eq!(state.agc, Some(77));
+        assert_eq!(state.noise_reduction_level, Some(88));
+        assert_eq!(state.noise_blank, Some(true));
+        assert_eq!(state.noise_reduction, Some(true));
+        assert_eq!(state.ip_plus, Some(true));
+        assert_eq!(state.notch_auto, Some(true));
+        assert_eq!(state.notch_manual, Some(true));
+        assert_eq!(state.signal_meter, Some(101));
+        assert_eq!(state.power_meter, Some(102));
+        assert_eq!(state.swr, Some(103));
+        assert_eq!(state.alc_meter, Some(104));
+        assert_eq!(state.compression_meter, Some(105));
+        assert_eq!(state.current_meter, Some(106));
+        assert_eq!(state.voltage_meter, Some(107));
+        assert_eq!(state.temperature_meter, Some(108));
+        assert_eq!(state.voltage_history.back(), Some(&107));
+    }
+
+    #[test]
+    fn core_poll_maps_every_null_radio_mode_and_marks_connection_ready() {
+        let modes = [
+            (Mode::Usb, "USB"),
+            (Mode::Lsb, "LSB"),
+            (Mode::Cw, "CW"),
+            (Mode::Data, "DATA"),
+            (Mode::Am, "AM"),
+            (Mode::Fm, "FM"),
+            (Mode::Wfm, "WFM"),
+            (Mode::Rtty, "RTTY"),
+            (Mode::CwReverse, "CW-R"),
+            (Mode::RttyReverse, "RTTY-R"),
+        ];
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+
+        for (mode, label) in modes {
+            let radio = ConfiguredRadio::Null(qsonaut_radio::NullRadio::with_frequency_mode(
+                7_074_000, mode,
+            ));
+            let state = Arc::new(Mutex::new(GuiState::default()));
+            poll_radio_core_state(&rt, &radio, &state, true);
+
+            let state = state.lock().expect("state lock");
+            assert_eq!(state.frequency_hz, Some(7_074_000));
+            assert_eq!(state.mode, label);
+            assert_eq!(state.data_mode, Some(mode == Mode::Data));
+            assert_eq!(state.radio_power_on, Some(true));
+            assert!(state.last_update.is_some());
+            assert!(state.last_error.is_none());
+        }
+    }
+
+    #[test]
+    fn null_radio_worker_handles_safe_control_commands_without_transmit() {
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let sweep_abort = Arc::new(AtomicBool::new(false));
+        let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
+        let repaint = Arc::new(OnceLock::new());
+        let ptt_allowed = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker(
+            ConfiguredRadio::Null(qsonaut_radio::NullRadio::with_frequency_mode(
+                7_074_000,
+                Mode::Usb,
+            )),
+            state.clone(),
+            stop,
+            sweep_abort,
+            display_tuning,
+            rx,
+            repaint,
+            ptt_allowed,
+        );
+
+        tx.send(GuiCommand::TuneDelta(1_000)).expect("tune delta");
+        tx.send(GuiCommand::TuneTo(7_100_000)).expect("tune to");
+        tx.send(GuiCommand::CycleMode).expect("cycle mode");
+        tx.send(GuiCommand::SetRadioMode(Mode::Data))
+            .expect("set mode");
+        tx.send(GuiCommand::SetControl(
+            ControlId::RfPower,
+            ControlValue::U8(50),
+        ))
+        .expect("set control");
+        tx.send(GuiCommand::SetPtt(false)).expect("disable ptt");
+        tx.send(GuiCommand::StartTuner).expect("start tuner");
+        tx.send(GuiCommand::Quit).expect("quit");
+        handle.join().expect("radio worker should stop cleanly");
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.frequency_hz, Some(7_100_000));
+        assert_eq!(state.mode, "DATA");
+        assert!(!state.ptt_on);
     }
 }

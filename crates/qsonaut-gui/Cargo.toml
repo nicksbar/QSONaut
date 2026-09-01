@@ -36,3 +36,6 @@ qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }
 qsonaut-server-client = { path = "../qsonaut-server-client" }
 qsonaut-modems = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "6cc26b8" }
 qsonaut-third-party = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "5810c4f" }
+
+[dev-dependencies]
+async-trait = "0.1"

@@ -3430,6 +3430,7 @@ version = "0.3.15"
 dependencies = [
  "ab_glyph",
  "anyhow",
+ "async-trait",
  "base64",
  "eframe",
  "egui-file-dialog",
