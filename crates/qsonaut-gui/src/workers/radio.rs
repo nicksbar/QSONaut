@@ -5,6 +5,7 @@ const RADIO_CORE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const RADIO_LEVEL_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const RADIO_COMMAND_WAKE_INTERVAL: Duration = Duration::from_millis(50);
 const RADIO_SCOPE_READ_SLICE: Duration = Duration::from_millis(25);
+const RADIO_SCOPE_STALL_TIMEOUT: Duration = Duration::from_secs(2);
 const RADIO_SIGNAL_METER_INTERVAL: Duration = Duration::from_millis(400);
 const RADIO_TX_METER_INTERVAL: Duration = Duration::from_millis(300);
 const RADIO_AUX_METER_INTERVAL: Duration = Duration::from_millis(1_500);
@@ -409,6 +410,24 @@ pub(crate) fn spawn_radio_worker(
                         }
                     }
                     _ => {}
+                }
+
+                // A scope connection can remain open while the radio stops
+                // producing complete sweeps. Let Rigwright distinguish that
+                // stalled-stream case from a stream that has never started,
+                // then cycle the stream so the next loop re-arms it.
+                let scope_health = stream_radio.scope_stream_health();
+                if scope_health.is_stalled(RADIO_SCOPE_STALL_TIMEOUT) {
+                    warn!(
+                        completed_sweeps = scope_health.completed_sweeps,
+                        last_sweep_age = ?scope_health.last_sweep_age,
+                        "Radio scope stream stalled; re-arming"
+                    );
+                    let mut s = stream_state.lock().expect("ui state lock poisoned");
+                    s.radio_spectrum_enabled = false;
+                    s.radio_waterfall_status = "STALLED · retrying".to_string();
+                    latest_scope_bins = None;
+                    continue;
                 }
 
                 // CI-V scope traffic owns the connection's fast path. Read at
@@ -1196,6 +1215,19 @@ fn poll_radio_core_state(
     state: &Arc<Mutex<GuiState>>,
     poll_levels: bool,
 ) {
+    let link_health = radio.link_health();
+    if link_health.is_degraded() {
+        warn!(
+            consecutive_timeouts = ?link_health.consecutive_timeouts,
+            response_timeouts = ?link_health.response_timeouts,
+            "Radio link health degraded"
+        );
+        let mut s = state.lock().expect("ui state lock poisoned");
+        s.radio_waterfall_status = format!(
+            "LINK DEGRADED · {} consecutive timeouts",
+            link_health.consecutive_timeouts.unwrap_or(0)
+        );
+    }
     let reported_vfo = read_vfo_control(rt, radio);
     if radio.as_icom().is_none() {
         let instrument_poll = FIRST_RADIO_CORE_POLL.swap(false, Ordering::Relaxed);
