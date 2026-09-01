@@ -7603,6 +7603,34 @@ mod tests {
         .expect("mock backend result");
         assert!(null.is_some());
 
+        for backend in ["rigctld", "dxlab", "rigctl", "commander"] {
+            let configured = spawn_radio_init(
+                backend.to_string(),
+                "IC-7300".to_string(),
+                String::new(),
+                "127.0.0.1:4532".to_string(),
+                115_200,
+                0xE0,
+                0x94,
+            )
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("external backend result");
+            assert!(configured.is_some(), "backend {backend} should configure");
+        }
+
+        let unknown_model = spawn_radio_init(
+            "native".to_string(),
+            "not-a-real-model".to_string(),
+            String::new(),
+            String::new(),
+            115_200,
+            0xE0,
+            0x94,
+        )
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("unknown model result");
+        assert!(unknown_model.is_none());
+
         let unsupported = spawn_radio_init(
             "vendor-specific-backend".to_string(),
             "IC-7300".to_string(),

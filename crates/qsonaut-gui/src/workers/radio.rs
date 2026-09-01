@@ -1995,6 +1995,8 @@ mod level_poll_tests {
         meters: HashMap<MeterId, u8>,
     }
 
+    struct ErrorRadio;
+
     #[async_trait]
     impl Radio for CoverageRadio {
         async fn get_frequency_hz(&self) -> Result<u64> {
@@ -2031,6 +2033,41 @@ mod level_poll_tests {
 
         fn supports_meter(&self, id: MeterId) -> bool {
             self.meters.contains_key(&id)
+        }
+
+        fn capabilities(&self) -> RadioCapabilities {
+            RadioCapabilities::default()
+        }
+    }
+
+    #[async_trait]
+    impl Radio for ErrorRadio {
+        async fn get_frequency_hz(&self) -> Result<u64> {
+            Err(anyhow::anyhow!("frequency read failed"))
+        }
+
+        async fn set_frequency_hz(&self, _hz: u64) -> Result<()> {
+            Err(anyhow::anyhow!("frequency write failed"))
+        }
+
+        async fn get_mode(&self) -> Result<Mode> {
+            Err(anyhow::anyhow!("mode read failed"))
+        }
+
+        async fn set_mode(&self, _mode: Mode) -> Result<()> {
+            Err(anyhow::anyhow!("mode write failed"))
+        }
+
+        async fn set_ptt(&self, _enabled: bool) -> Result<()> {
+            Err(anyhow::anyhow!("PTT write failed"))
+        }
+
+        async fn get_control(&self, _id: ControlId) -> Result<Option<ControlValue>> {
+            Err(anyhow::anyhow!("control read failed"))
+        }
+
+        async fn get_meter(&self, _id: MeterId) -> Result<Option<u8>> {
+            Err(anyhow::anyhow!("meter read failed"))
         }
 
         fn capabilities(&self) -> RadioCapabilities {
@@ -2127,6 +2164,31 @@ mod level_poll_tests {
             assert!(state.last_update.is_some());
             assert!(state.last_error.is_none());
         }
+    }
+
+    #[test]
+    fn level_poll_handles_failed_control_and_meter_reads_without_state_corruption() {
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let radio = ConfiguredRadio::Null(qsonaut_radio::NullRadio::new());
+        {
+            let mut state = state.lock().expect("state lock");
+            state.radio_power_on = Some(true);
+            state.frequency_hz = Some(14_074_000);
+        }
+        // NullRadio is healthy and confirms that the ready state is populated
+        // before the error contract is checked below.
+        poll_radio_core_state(&rt, &radio, &state, true);
+        assert_eq!(state.lock().expect("state lock").radio_power_on, Some(true));
+
+        // The configured wrapper's non-Icom path is driven by the underlying
+        // Radio implementation; exercise the error policy with a direct fake
+        // through the same level-poll boundary.
+        let failed_state = Arc::new(Mutex::new(GuiState::default()));
+        poll_radio_level_state(&rt, &ErrorRadio, &failed_state);
+        let failed_state = failed_state.lock().expect("state lock");
+        assert!(failed_state.frequency_hz.is_none());
+        assert!(failed_state.signal_meter.is_none());
     }
 
     #[test]
