@@ -2398,6 +2398,38 @@ mod level_poll_tests {
     }
 
     #[test]
+    fn scope_configuration_validates_each_view_shape_before_hardware_use() {
+        let radio =
+            IcomCiVRadio::new_generic("/definitely-not-a-real-serial-device", 115_200, 0xE0, 0x94);
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let base = RadioScopeStreamConfig {
+            view: RadioScopeView::Narrow,
+            span_code: 1,
+            vbw_wide: false,
+            edges: None,
+            sweep_code: 1,
+            hold: false,
+            reference_tenths_db: 0,
+        };
+
+        let narrow = configure_radio_scope(&rt, &radio, &base, None, None);
+        assert!(narrow.is_err(), "invalid serial path must fail safely");
+
+        let mut fixed = base;
+        fixed.edges = Some((14_070_000, 14_080_000));
+        assert!(configure_radio_scope(&rt, &radio, &fixed, Some(true), Some(-20)).is_err());
+
+        let overview = RadioScopeStreamConfig {
+            view: RadioScopeView::Overview,
+            edges: None,
+            ..base
+        };
+        let error = configure_radio_scope(&rt, &radio, &overview, None, None)
+            .expect_err("overview requires band edges");
+        assert!(error.to_string().contains("active band edges unavailable"));
+    }
+
+    #[test]
     fn rigctld_loopback_exercises_worker_hal_commands_without_transmit() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
         listener
