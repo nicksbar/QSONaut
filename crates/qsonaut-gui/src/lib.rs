@@ -6392,7 +6392,10 @@ impl eframe::App for QsonautGuiApp {
                     if supports_control(ControlId::NoiseReductionLevel) {
                         let max_level = native_radio_profile("native", &self.config.radio.model)
                             .and_then(|profile| profile.control_max(ControlId::NoiseReductionLevel))
-                            .expect("supported NR level must have a profile bound");
+                            // External/legacy radios can expose this control
+                            // without having a Rigwright model profile. Keep
+                            // the UI usable with the protocol's generic range.
+                            .unwrap_or(15);
                         ui.menu_button(
                             RichText::new("NRL").color(if snapshot.noise_reduction_level.is_some() {
                                 Color32::LIGHT_BLUE
@@ -6490,7 +6493,9 @@ impl eframe::App for QsonautGuiApp {
                     if supports_control(ControlId::Agc) {
                         let max_agc = native_radio_profile("native", &self.config.radio.model)
                             .and_then(|profile| profile.control_max(ControlId::Agc))
-                            .expect("supported AGC must have a profile bound");
+                            // External/legacy radios can expose this control
+                            // without having a Rigwright model profile.
+                            .unwrap_or(4);
                         let color = if snapshot.agc.is_some() {
                             Color32::LIGHT_BLUE
                         } else {
