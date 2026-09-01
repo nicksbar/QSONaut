@@ -2155,15 +2155,35 @@ mod level_poll_tests {
         tx.send(GuiCommand::TuneDelta(1_000)).expect("tune delta");
         tx.send(GuiCommand::TuneTo(7_100_000)).expect("tune to");
         tx.send(GuiCommand::CycleMode).expect("cycle mode");
-        tx.send(GuiCommand::SetRadioMode(Mode::Data))
-            .expect("set mode");
         tx.send(GuiCommand::SetControl(
             ControlId::RfPower,
             ControlValue::U8(50),
         ))
         .expect("set control");
+        tx.send(GuiCommand::ApplyWorkspace {
+            mode: WorkspaceMode::Voice,
+            frequency_hz: 7_100_000,
+        })
+        .expect("apply workspace");
+        tx.send(GuiCommand::SetRadioMode(Mode::Data))
+            .expect("set mode");
+        tx.send(GuiCommand::SetFilter(3)).expect("set filter");
+        tx.send(GuiCommand::AfGainDelta(-10))
+            .expect("adjust AF gain");
         tx.send(GuiCommand::SetPtt(false)).expect("disable ptt");
+        let (ack_tx, ack_rx) = mpsc::channel();
+        tx.send(GuiCommand::SetPttWithAck(false, ack_tx))
+            .expect("disable ptt with ack");
+        tx.send(GuiCommand::StartSwrSweep {
+            start_hz: 7_100_000,
+            stop_hz: 7_100_000,
+            step_hz: 0,
+            interval_ms: 100,
+        })
+        .expect("reject invalid sweep");
         tx.send(GuiCommand::StartTuner).expect("start tuner");
+        tx.send(GuiCommand::SetPower(false)).expect("power off");
+        assert_eq!(ack_rx.recv().expect("PTT acknowledgement"), Ok(()));
         tx.send(GuiCommand::Quit).expect("quit");
         handle.join().expect("radio worker should stop cleanly");
 
