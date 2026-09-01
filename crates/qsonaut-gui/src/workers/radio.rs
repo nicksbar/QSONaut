@@ -2355,6 +2355,16 @@ mod level_poll_tests {
         tx.send(GuiCommand::CycleMode).expect("cycle mode");
         tx.send(GuiCommand::SetRadioMode(Mode::Usb))
             .expect("set mode");
+        tx.send(GuiCommand::SetFilter(2))
+            .expect("unsupported filter is handled");
+        tx.send(GuiCommand::SetControl(ControlId::Vfo, ControlValue::Vfo(1)))
+            .expect("unsupported VFO control is handled");
+        tx.send(GuiCommand::AfGainDelta(5))
+            .expect("unsupported AF gain is handled");
+        tx.send(GuiCommand::StartTuner)
+            .expect("unsupported tuner is handled");
+        tx.send(GuiCommand::SetPower(true))
+            .expect("unsupported power-on is handled");
         tx.send(GuiCommand::SetPtt(false)).expect("safe PTT off");
         let (ack_tx, ack_rx) = mpsc::channel();
         tx.send(GuiCommand::SetPttWithAck(false, ack_tx))
