@@ -2529,6 +2529,58 @@ mod level_poll_tests {
     }
 
     #[test]
+    fn null_radio_swr_sweep_restores_state_without_hardware_transmit() {
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let sweep_abort = Arc::new(AtomicBool::new(false));
+        let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
+        let repaint = Arc::new(OnceLock::new());
+        let ptt_allowed = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker(
+            ConfiguredRadio::Null(qsonaut_radio::NullRadio::with_frequency_mode(
+                7_074_000,
+                Mode::Usb,
+            )),
+            state.clone(),
+            stop,
+            sweep_abort,
+            display_tuning,
+            rx,
+            repaint,
+            ptt_allowed,
+        );
+
+        tx.send(GuiCommand::StartSwrSweep {
+            start_hz: 7_074_000,
+            stop_hz: 7_074_000,
+            step_hz: 1_000,
+            interval_ms: 100,
+        })
+        .expect("simulated SWR sweep");
+        for _ in 0..500 {
+            if state
+                .lock()
+                .expect("state lock")
+                .swr_sweep_status
+                .contains("read failures")
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        tx.send(GuiCommand::Quit).expect("quit simulated sweep");
+        handle.join().expect("simulated sweep worker join");
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.frequency_hz, Some(7_074_000));
+        assert_eq!(state.mode, "USB");
+        assert!(!state.ptt_on);
+        assert!(!state.swr_sweep_active);
+        assert_eq!(state.swr_sweep_status, "Low-power setup failed");
+    }
+
+    #[test]
     fn worker_rejects_ptt_when_radio_is_unavailable_or_profile_is_inactive() {
         let state = Arc::new(Mutex::new(GuiState::default()));
         let stop = Arc::new(AtomicBool::new(false));
