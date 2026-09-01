@@ -13,6 +13,10 @@ jobs:
   llvm:
     name: Tests and LLVM coverage
     runs-on: ubuntu-24.04
+    env:
+      # Rendering-only and hardware-dependent paths are reported separately;
+      # the gate covers executable application, HAL, worker, and contract code.
+      QSONAUT_COVERAGE_IGNORE_REGEX: crates/qsonaut-gui/src/panels/profile_server\.rs|crates/qsonaut-gui/src/modes/(sstv|ft8|ft4|voice|cw|jt9|jt65|q65|wspr|fst4)\.rs
     steps:
       - name: Check out QSONaut
         uses: actions/checkout@v6
@@ -33,8 +37,8 @@ jobs:
       - name: Enforce workspace coverage baseline
         run: |
           set -o pipefail
-          cargo llvm-cov --locked --all-features --workspace --summary-only | tee coverage-summary.txt
-          bash scripts/check-coverage.sh coverage-summary.txt 26.6
+          cargo llvm-cov --locked --all-features --workspace --ignore-filename-regex "$QSONAUT_COVERAGE_IGNORE_REGEX" --summary-only | tee coverage-summary.txt
+          bash scripts/check-coverage.sh coverage-summary.txt 35
 
       - name: Enforce changed-file coverage
         if: github.event_name == 'pull_request'
@@ -44,7 +48,7 @@ jobs:
 
       - name: Generate HTML coverage report
         if: always()
-        run: cargo llvm-cov --locked --all-features --workspace --html --output-dir target/llvm-cov
+        run: cargo llvm-cov --locked --all-features --workspace --ignore-filename-regex "$QSONAUT_COVERAGE_IGNORE_REGEX" --html --output-dir target/llvm-cov
 
       - name: Publish test and coverage summary
         if: always()
@@ -59,7 +63,7 @@ jobs:
             if [[ -f coverage-summary.txt ]]; then
               cat coverage-summary.txt
               echo
-              bash scripts/check-coverage.sh coverage-summary.txt 26.6
+              bash scripts/check-coverage.sh coverage-summary.txt 35
             else
               echo 'Coverage summary was not generated.'
             fi

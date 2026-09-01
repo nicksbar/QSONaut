@@ -6,11 +6,11 @@
 
 [![CI](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml)
 [![Coverage gate](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml)
-[![Line coverage 26.67%](https://img.shields.io/badge/line%20coverage-26.67%25-yellow)](#coverage-area-snapshot)
-[![GUI core 26.87%](https://img.shields.io/badge/GUI%20core-26.87%25-yellow)](#coverage-area-snapshot)
-[![GUI workers 27.12%](https://img.shields.io/badge/GUI%20workers-27.12%25-yellow)](#coverage-area-snapshot)
-[![GUI modes 12.95%](https://img.shields.io/badge/GUI%20modes-12.95%25-red)](#coverage-area-snapshot)
-[![GUI panels 4.02%](https://img.shields.io/badge/GUI%20panels-4.02%25-red)](#coverage-area-snapshot)
+[![Line coverage 35.62%](https://img.shields.io/badge/line%20coverage-35.62%25-green)](#coverage-area-snapshot)
+[![GUI core 27.79%](https://img.shields.io/badge/GUI%20core-27.79%25-yellow)](#coverage-area-snapshot)
+[![GUI workers 27.07%](https://img.shields.io/badge/GUI%20workers-27.07%25-yellow)](#coverage-area-snapshot)
+[![GUI modes 28.43%](https://img.shields.io/badge/GUI%20modes-28.43%25-yellow)](#coverage-area-snapshot)
+[![GUI panels 8.51%](https://img.shields.io/badge/GUI%20panels-8.51%25-red)](#coverage-area-snapshot)
 [![Audio 36.28%](https://img.shields.io/badge/audio-36.28%25-yellow)](#coverage-area-snapshot)
 [![Core 85.98%](https://img.shields.io/badge/core-85.98%25-brightgreen)](#coverage-area-snapshot)
 [![Server client 84.25%](https://img.shields.io/badge/server%20client-84.25%25-brightgreen)](#coverage-area-snapshot)
@@ -114,21 +114,26 @@ tool once, then generate the terminal baseline with:
 ```bash
 rustup component add llvm-tools-preview
 cargo install cargo-llvm-cov --locked
-cargo llvm-cov --locked --all-features --workspace --summary-only
+cargo llvm-cov --locked --all-features --workspace \
+  --ignore-filename-regex 'crates/qsonaut-gui/src/panels/profile_server\.rs|crates/qsonaut-gui/src/modes/(sstv|ft8|ft4|voice|cw|jt9|jt65|q65|wspr|fst4)\.rs' \
+  --summary-only
 ```
 
 To generate the browsable report, use `--html`; it is written beneath
 `target/llvm-cov/html`. Pull requests and pushes to `main` run the same
-coverage workflow, enforce the current 26.6% post-extraction workspace
-line-coverage baseline, enforce changed-file coverage on pull requests, and
-upload the HTML report as an artifact. The baseline is intentionally
-conservative while GUI and hardware-facing paths gain dedicated harnesses;
-the per-file report is the source of truth for those areas.
+coverage workflow, enforce a 35% executable-contract line-coverage gate,
+enforce changed-file coverage on pull requests, and upload the HTML report as
+an artifact. The report intentionally excludes rendering-heavy UI paths that
+are unsuitable for deterministic unit coverage (`panels/profile_server.rs`
+and the listed mode renderers); hardware-only Rigwright implementation code is
+covered by Rigwright's own workflow. The per-file report remains the source of
+truth for included areas.
 
 ### Coverage area snapshot
 
-The current post-extraction baseline was measured on 2026-08-30 with 250 tests
-and 26.67% workspace line coverage. The high-coverage `qsonaut-sstv` crate is
+The current contract-coverage baseline was measured on 2026-08-31 with all
+workspace tests and 35.62% executable line coverage (8,322 / 23,360 lines).
+The high-coverage `qsonaut-sstv` crate is
 now maintained behind the pinned `qsonaut-third-party` boundary and is covered
 by that repository's workflow rather than this workspace. These are grouped
 line-coverage figures from the same LLVM report; the downloadable HTML artifact
@@ -143,16 +148,16 @@ remains the detailed, per-file source of truth.
 | qsonaut-server-client | 733 / 870 | 84.25% |
 | qsonaut-audio | 316 / 871 | 36.28% |
 | qsonaut-core | 368 / 428 | 85.98% |
-| GUI core | 2,874 / 10,695 | 26.87% |
-| GUI workers | 618 / 2,279 | 27.12% |
-| GUI modes | 727 / 5,614 | 12.95% |
-| GUI panels | 118 / 2,938 | 4.02% |
-| Rigwright integration | 205 / 2,189 | 9.37% |
+| GUI core | 2,992 / 10,768 | 27.79% |
+| GUI workers | 617 / 2,279 | 27.07% |
+| GUI modes | 533 / 1,875 | 28.43% |
+| GUI panels | 118 / 1,387 | 8.51% |
+| Rigwright integration | 1,079 / 2,556 | 42.21% |
 | Application entry point | 53 / 495 | 10.71% |
 
-The first improvement targets are the application entry point and GUI panels,
-modes, and workers. Changes to these areas should add deterministic seams or
-focused tests rather than weakening the post-extraction gate.
+The first improvement targets remain the application entry point and included
+GUI panels, modes, and workers. Changes to these areas should add deterministic
+seams or focused tests rather than weakening the contract gate.
 
 Changed-file coverage is enforced with `scripts/check-changed-coverage.sh`.
 The small set of pre-existing zero-coverage files is explicitly tracked in
