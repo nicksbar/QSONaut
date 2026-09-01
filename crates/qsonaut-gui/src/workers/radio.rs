@@ -2027,12 +2027,18 @@ mod level_poll_tests {
     }
 
     impl ScriptedCiVTransport {
-        fn acknowledgements(count: usize) -> Self {
+        fn with_frames(frames: impl IntoIterator<Item = Vec<u8>>) -> Self {
             Self {
-                reads: (0..count)
-                    .map(|_| vec![0xFE, 0xFE, 0xE0, 0x94, 0xFB, 0xFD])
-                    .collect(),
+                reads: frames.into_iter().collect(),
             }
+        }
+
+        fn acknowledgements(count: usize) -> Self {
+            Self::with_frames((0..count).map(|_| vec![0xFE, 0xFE, 0xE0, 0x94, 0xFB, 0xFD]))
+        }
+
+        fn meter_response(command: u8) -> Vec<u8> {
+            vec![0xFE, 0xFE, 0xE0, 0x94, 0x15, command, 0x00, 0x48, 0xFD]
         }
     }
 
@@ -2521,6 +2527,51 @@ mod level_poll_tests {
             ..narrow
         };
         assert!(configure_radio_scope(&rt, &overview_radio, &overview, Some(false), None).is_ok());
+    }
+
+    #[test]
+    fn scheduled_icom_meters_normalize_each_hal_meter_destination() {
+        let meters = [
+            (ScheduledMeter::Signal, MeterId::Signal, 0x02),
+            (ScheduledMeter::Power, MeterId::Power, 0x11),
+            (ScheduledMeter::Swr, MeterId::Swr, 0x12),
+            (ScheduledMeter::Alc, MeterId::Alc, 0x13),
+            (ScheduledMeter::Compression, MeterId::Compression, 0x14),
+            (ScheduledMeter::Current, MeterId::Current, 0x16),
+            (ScheduledMeter::Voltage, MeterId::Voltage, 0x15),
+            (ScheduledMeter::Temperature, MeterId::Temperature, 0x17),
+        ];
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+
+        for (scheduled, id, command) in meters {
+            let model = if id == MeterId::Temperature {
+                qsonaut_radio::IcomCivModel::Ic7610
+            } else {
+                qsonaut_radio::IcomCivModel::Ic7300
+            };
+            let radio = IcomCiVRadio::with_transport(
+                Some(model),
+                0xE0,
+                0x94,
+                ScriptedCiVTransport::with_frames([ScriptedCiVTransport::meter_response(command)]),
+            );
+            let state = Arc::new(Mutex::new(GuiState::default()));
+
+            poll_scheduled_icom_meter(&rt, &radio, &state, scheduled);
+
+            let state = state.lock().expect("state lock");
+            let value = match id {
+                MeterId::Signal => state.signal_meter,
+                MeterId::Power => state.power_meter,
+                MeterId::Swr => state.swr,
+                MeterId::Alc => state.alc_meter,
+                MeterId::Compression => state.compression_meter,
+                MeterId::Current => state.current_meter,
+                MeterId::Voltage => state.voltage_meter,
+                MeterId::Temperature => state.temperature_meter,
+            };
+            assert_eq!(value, Some(48), "scheduled meter destination for {id:?}");
+        }
     }
 
     #[test]
