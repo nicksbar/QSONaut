@@ -153,6 +153,12 @@ fn effective_audio_output_device(backend: &str, output: Option<String>) -> Optio
     }
 }
 
+fn radio_control_max(model: &str, control: ControlId, fallback: u8) -> u8 {
+    native_radio_profile("native", model)
+        .and_then(|profile| profile.control_max(control))
+        .unwrap_or(fallback)
+}
+
 use activity::{draw_activity_icon, OperatingActivity};
 use automation_hunter::{
     AchievementKind, CustomAchievementRule, ExternalSendRecord, HunterAlert, HunterMetric,
@@ -6390,12 +6396,11 @@ impl eframe::App for QsonautGuiApp {
                         }
                     }
                     if supports_control(ControlId::NoiseReductionLevel) {
-                        let max_level = native_radio_profile("native", &self.config.radio.model)
-                            .and_then(|profile| profile.control_max(ControlId::NoiseReductionLevel))
-                            // External/legacy radios can expose this control
-                            // without having a Rigwright model profile. Keep
-                            // the UI usable with the protocol's generic range.
-                            .unwrap_or(15);
+                        let max_level = radio_control_max(
+                            &self.config.radio.model,
+                            ControlId::NoiseReductionLevel,
+                            15,
+                        );
                         ui.menu_button(
                             RichText::new("NRL").color(if snapshot.noise_reduction_level.is_some() {
                                 Color32::LIGHT_BLUE
@@ -6491,11 +6496,7 @@ impl eframe::App for QsonautGuiApp {
                         .on_hover_text("Select off, auto notch, or manual notch");
                     }
                     if supports_control(ControlId::Agc) {
-                        let max_agc = native_radio_profile("native", &self.config.radio.model)
-                            .and_then(|profile| profile.control_max(ControlId::Agc))
-                            // External/legacy radios can expose this control
-                            // without having a Rigwright model profile.
-                            .unwrap_or(4);
+                        let max_agc = radio_control_max(&self.config.radio.model, ControlId::Agc, 4);
                         let color = if snapshot.agc.is_some() {
                             Color32::LIGHT_BLUE
                         } else {
@@ -8102,6 +8103,20 @@ mod tests {
         );
         assert!(native_radio_profile("rigctld", "IC-7300").is_none());
         assert!(native_radio_profile("null", "IC-7300").is_none());
+    }
+
+    #[test]
+    fn unprofiled_radio_controls_use_safe_generic_limits() {
+        assert_eq!(
+            super::radio_control_max("mcHF", ControlId::NoiseReductionLevel, 15),
+            15
+        );
+        assert_eq!(super::radio_control_max("mcHF", ControlId::Agc, 4), 4);
+        assert_eq!(
+            super::radio_control_max("FTDX10", ControlId::NoiseReductionLevel, 15),
+            15
+        );
+        assert_eq!(super::radio_control_max("FTDX10", ControlId::Agc, 4), 4);
     }
 
     #[test]
