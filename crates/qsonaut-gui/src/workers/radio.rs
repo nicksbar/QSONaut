@@ -3024,6 +3024,13 @@ mod level_poll_tests {
             interval_ms: 100,
         })
         .expect("reject invalid sweep");
+        tx.send(GuiCommand::StartSwrSweep {
+            start_hz: 7_101_000,
+            stop_hz: 7_100_000,
+            step_hz: 1_000,
+            interval_ms: 100,
+        })
+        .expect("reject reversed sweep");
         tx.send(GuiCommand::StartTuner).expect("start tuner");
         tx.send(GuiCommand::SetPower(false)).expect("power off");
         assert_eq!(ack_rx.recv().expect("PTT acknowledgement"), Ok(()));
