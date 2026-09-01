@@ -661,10 +661,7 @@ pub(crate) fn spawn_radio_worker(
                             Err(error) => {
                                 error!(power_on = target, error = %error, "Radio power command failed");
                                 let mut s = state.lock().expect("ui state lock poisoned");
-                                s.last_error = Some(error.to_string());
-                                s.radio_power_command_pending = false;
-                                s.radio_power_settling = false;
-                                s.radio_power_wake_deadline = None;
+                                reject_power_command(&mut s, error.to_string());
                             }
                         }
                         if target {
@@ -1566,6 +1563,13 @@ fn accept_power_command(state: &mut GuiState, target: bool, now: Instant) {
     state.last_error = None;
 }
 
+fn reject_power_command(state: &mut GuiState, error: String) {
+    state.last_error = Some(error);
+    state.radio_power_command_pending = false;
+    state.radio_power_settling = false;
+    state.radio_power_wake_deadline = None;
+}
+
 fn apply_icom_mode_details(
     state: &mut GuiState,
     details: OperatingMode,
@@ -1986,6 +1990,23 @@ mod tests {
         assert!(!off.radio_power_settling);
         assert!(off.radio_power_wake_deadline.is_none());
         assert!(off.last_error.is_none());
+    }
+
+    #[test]
+    fn rejected_power_command_clears_all_pending_wake_state() {
+        let mut state = GuiState {
+            radio_power_command_pending: true,
+            radio_power_settling: true,
+            radio_power_wake_deadline: Some(Instant::now() + Duration::from_secs(12)),
+            ..GuiState::default()
+        };
+
+        reject_power_command(&mut state, "transport unavailable".to_string());
+
+        assert_eq!(state.last_error.as_deref(), Some("transport unavailable"));
+        assert!(!state.radio_power_command_pending);
+        assert!(!state.radio_power_settling);
+        assert!(state.radio_power_wake_deadline.is_none());
     }
 
     #[test]
