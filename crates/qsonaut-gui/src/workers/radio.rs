@@ -2479,6 +2479,59 @@ mod level_poll_tests {
     }
 
     #[test]
+    fn icom_scope_worker_reports_disable_failure_without_hardware() {
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        {
+            let mut state = state.lock().expect("state lock");
+            state.radio_power_on = Some(true);
+            state.radio_spectrum_desired = false;
+            state.radio_spectrum_enabled = true;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let sweep_abort = Arc::new(AtomicBool::new(false));
+        let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
+        let repaint = Arc::new(OnceLock::new());
+        let ptt_allowed = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker(
+            ConfiguredRadio::Icom(IcomCiVRadio::new_generic(
+                "/definitely-not-a-real-serial-device",
+                115_200,
+                0xE0,
+                0x94,
+            )),
+            state.clone(),
+            stop,
+            sweep_abort,
+            display_tuning,
+            rx,
+            repaint,
+            ptt_allowed,
+        );
+
+        for _ in 0..250 {
+            let status = state
+                .lock()
+                .expect("state lock")
+                .radio_waterfall_status
+                .clone();
+            if status == "DISABLE ERROR" || status == "OFF (radio off)" {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        tx.send(GuiCommand::Quit).expect("quit scope worker");
+        handle.join().expect("scope worker join");
+
+        let state = state.lock().expect("state lock");
+        assert!(
+            state.radio_waterfall_status == "DISABLE ERROR"
+                || state.radio_waterfall_status == "OFF (radio off)"
+        );
+        assert!(!state.ptt_on);
+    }
+
+    #[test]
     fn scope_configuration_validates_each_view_shape_before_hardware_use() {
         let radio =
             IcomCiVRadio::new_generic("/definitely-not-a-real-serial-device", 115_200, 0xE0, 0x94);
