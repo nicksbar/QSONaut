@@ -2011,8 +2011,8 @@ mod level_poll_tests {
     use super::*;
     use async_trait::async_trait;
     use qsonaut_radio::RadioCapabilities;
-    use std::collections::HashMap;
-    use std::io::{BufRead, BufReader, Write};
+    use std::collections::{HashMap, VecDeque};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
 
     struct CoverageRadio {
@@ -2021,6 +2021,54 @@ mod level_poll_tests {
     }
 
     struct ErrorRadio;
+
+    struct ScriptedCiVTransport {
+        reads: VecDeque<Vec<u8>>,
+    }
+
+    impl ScriptedCiVTransport {
+        fn acknowledgements(count: usize) -> Self {
+            Self {
+                reads: (0..count)
+                    .map(|_| vec![0xFE, 0xFE, 0xE0, 0x94, 0xFB, 0xFD])
+                    .collect(),
+            }
+        }
+    }
+
+    impl Read for ScriptedCiVTransport {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let Some(mut frame) = self.reads.pop_front() else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "scripted CI-V transport has no response",
+                ));
+            };
+            let count = buffer.len().min(frame.len());
+            buffer[..count].copy_from_slice(&frame[..count]);
+            if count < frame.len() {
+                frame.drain(..count);
+                self.reads.push_front(frame);
+            }
+            Ok(count)
+        }
+    }
+
+    impl Write for ScriptedCiVTransport {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl qsonaut_radio::RadioTransport for ScriptedCiVTransport {
+        fn set_timeout(&mut self, _timeout: Duration) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[async_trait]
     impl Radio for CoverageRadio {
@@ -2427,6 +2475,52 @@ mod level_poll_tests {
         let error = configure_radio_scope(&rt, &radio, &overview, None, None)
             .expect_err("overview requires band edges");
         assert!(error.to_string().contains("active band edges unavailable"));
+    }
+
+    #[test]
+    fn scope_configuration_applies_narrow_fixed_and_overview_profiles() {
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let narrow_radio = IcomCiVRadio::with_transport(
+            Some(qsonaut_radio::IcomCivModel::Ic7300),
+            0xE0,
+            0x94,
+            ScriptedCiVTransport::acknowledgements(4),
+        );
+        let narrow = RadioScopeStreamConfig {
+            view: RadioScopeView::Narrow,
+            span_code: 1,
+            vbw_wide: true,
+            edges: None,
+            sweep_code: 2,
+            hold: false,
+            reference_tenths_db: 0,
+        };
+        assert!(configure_radio_scope(&rt, &narrow_radio, &narrow, None, None).is_ok());
+
+        let fixed_radio = IcomCiVRadio::with_transport(
+            Some(qsonaut_radio::IcomCivModel::Ic7300),
+            0xE0,
+            0x94,
+            ScriptedCiVTransport::acknowledgements(7),
+        );
+        let fixed = RadioScopeStreamConfig {
+            edges: Some((14_070_000, 14_080_000)),
+            ..narrow
+        };
+        assert!(configure_radio_scope(&rt, &fixed_radio, &fixed, Some(true), Some(10)).is_ok());
+
+        let overview_radio = IcomCiVRadio::with_transport(
+            Some(qsonaut_radio::IcomCivModel::Ic7300),
+            0xE0,
+            0x94,
+            ScriptedCiVTransport::acknowledgements(6),
+        );
+        let overview = RadioScopeStreamConfig {
+            view: RadioScopeView::Overview,
+            edges: Some((14_070_000, 14_080_000)),
+            ..narrow
+        };
+        assert!(configure_radio_scope(&rt, &overview_radio, &overview, Some(false), None).is_ok());
     }
 
     #[test]
