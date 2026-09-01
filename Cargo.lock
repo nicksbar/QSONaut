@@ -3372,7 +3372,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut"
-version = "0.3.14"
+version = "0.3.15"
 dependencies = [
  "anyhow",
  "clap",
@@ -3390,14 +3390,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-accelerate"
-version = "0.3.14"
+version = "0.3.15"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "qsonaut-audio"
-version = "0.3.14"
+version = "0.3.15"
 dependencies = [
  "anyhow",
  "cpal",
@@ -3406,7 +3406,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-automation"
-version = "0.3.14"
+version = "0.3.15"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -3415,7 +3415,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-core"
-version = "0.3.14"
+version = "0.3.15"
 dependencies = [
  "anyhow",
  "dotenvy",
@@ -3426,7 +3426,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-gui"
-version = "0.3.14"
+version = "0.3.15"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3461,7 +3461,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-log"
-version = "0.3.14"
+version = "0.3.15"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -3482,14 +3482,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-pskreporter"
-version = "0.3.14"
+version = "0.3.15"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "qsonaut-server-client"
-version = "0.3.14"
+version = "0.3.15"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -3932,7 +3932,7 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rigwright"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "anyhow",
  "async-trait",

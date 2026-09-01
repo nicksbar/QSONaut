@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.15] - 2026-08-31
+
+### Changed
+- Update the application and GUI to Rigwright `0.1.18`, including the
+  driver-owned radio profiles, normalized controls, meters, and session
+  behavior.
+- Align all workspace package metadata and release documentation with QSONaut
+  `0.3.15`.
+- Restrict release builds to manually pushed matching version tags.
+
 ## [0.3.14] - 2026-08-30
 
 ### Changed
