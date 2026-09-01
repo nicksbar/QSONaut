@@ -656,15 +656,7 @@ pub(crate) fn spawn_radio_worker(
                             Ok(()) => {
                                 info!(power_on = target, "Radio power command accepted");
                                 let mut s = state.lock().expect("ui state lock poisoned");
-                                // A successful write only means the command was
-                                // accepted. Do not show ON until a status probe
-                                // confirms that the radio has actually woken.
-                                s.radio_power_on = if target { None } else { Some(false) };
-                                s.radio_power_command_pending = target;
-                                s.radio_power_settling = target;
-                                s.radio_power_wake_deadline =
-                                    target.then_some(Instant::now() + Duration::from_secs(12));
-                                s.last_error = None;
+                                accept_power_command(&mut s, target, Instant::now());
                             }
                             Err(error) => {
                                 error!(power_on = target, error = %error, "Radio power command failed");
@@ -1564,6 +1556,16 @@ fn expire_power_on_wake(state: &mut GuiState, now: Instant) -> bool {
     }
 }
 
+fn accept_power_command(state: &mut GuiState, target: bool, now: Instant) {
+    // A successful write only means the command was accepted. Do not show ON
+    // until a status probe confirms that the radio has actually woken.
+    state.radio_power_on = if target { None } else { Some(false) };
+    state.radio_power_command_pending = target;
+    state.radio_power_settling = target;
+    state.radio_power_wake_deadline = target.then_some(now + Duration::from_secs(12));
+    state.last_error = None;
+}
+
 fn apply_icom_mode_details(
     state: &mut GuiState,
     details: OperatingMode,
@@ -1955,6 +1957,35 @@ mod tests {
         assert!(!expire_power_on_wake(&mut waiting, now));
         assert!(waiting.radio_power_command_pending);
         assert!(waiting.last_error.is_none());
+    }
+
+    #[test]
+    fn accepted_power_command_projects_on_and_off_states_conservatively() {
+        let now = Instant::now();
+        let mut waking = GuiState::default();
+        accept_power_command(&mut waking, true, now);
+        assert_eq!(waking.radio_power_on, None);
+        assert!(waking.radio_power_command_pending);
+        assert!(waking.radio_power_settling);
+        assert_eq!(
+            waking
+                .radio_power_wake_deadline
+                .expect("wake deadline")
+                .duration_since(now),
+            Duration::from_secs(12)
+        );
+
+        let mut off = GuiState {
+            radio_power_on: Some(true),
+            last_error: Some("stale error".to_string()),
+            ..GuiState::default()
+        };
+        accept_power_command(&mut off, false, now);
+        assert_eq!(off.radio_power_on, Some(false));
+        assert!(!off.radio_power_command_pending);
+        assert!(!off.radio_power_settling);
+        assert!(off.radio_power_wake_deadline.is_none());
+        assert!(off.last_error.is_none());
     }
 
     #[test]
