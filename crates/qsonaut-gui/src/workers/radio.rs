@@ -2276,6 +2276,25 @@ mod level_poll_tests {
     }
 
     #[test]
+    fn icom_core_poll_isolates_serial_probe_failure() {
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let radio = ConfiguredRadio::Icom(IcomCiVRadio::new_generic(
+            "/definitely-not-a-real-serial-device",
+            115_200,
+            0xE0,
+            0x94,
+        ));
+
+        poll_radio_core_state(&rt, &radio, &state, false);
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.radio_power_on, Some(false));
+        assert!(state.last_error.is_some());
+        assert!(state.frequency_hz.is_none());
+    }
+
+    #[test]
     fn null_radio_worker_handles_safe_control_commands_without_transmit() {
         let state = Arc::new(Mutex::new(GuiState::default()));
         let stop = Arc::new(AtomicBool::new(false));
