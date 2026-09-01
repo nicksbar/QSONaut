@@ -2262,6 +2262,20 @@ mod level_poll_tests {
     }
 
     #[test]
+    fn core_poll_marks_external_transport_failure_as_unavailable() {
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let radio =
+            ConfiguredRadio::Rigctld(qsonaut_radio::rigctld::RigctldRadio::new("127.0.0.1:1"));
+
+        poll_radio_core_state(&rt, &radio, &state, false);
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.radio_power_on, Some(false));
+        assert!(state.last_error.is_some());
+    }
+
+    #[test]
     fn null_radio_worker_handles_safe_control_commands_without_transmit() {
         let state = Arc::new(Mutex::new(GuiState::default()));
         let stop = Arc::new(AtomicBool::new(false));
