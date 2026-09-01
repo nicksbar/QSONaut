@@ -1805,6 +1805,27 @@ mod tests {
     }
 
     #[test]
+    fn meter_scheduler_waits_when_no_class_is_due_and_wraps_auxiliary_cycles() {
+        let now = Instant::now();
+        let mut scheduler = MeterPollScheduler::new();
+        scheduler.next_signal = now + Duration::from_secs(1);
+        scheduler.next_tx = now + Duration::from_secs(1);
+        scheduler.next_aux = now + Duration::from_secs(1);
+        assert_eq!(scheduler.next_due(now, false), None);
+
+        scheduler.next_aux = now;
+        for expected in [
+            ScheduledMeter::Current,
+            ScheduledMeter::Voltage,
+            ScheduledMeter::Temperature,
+        ] {
+            assert_eq!(scheduler.next_due(now, false), Some(expected));
+            scheduler.next_aux = now;
+        }
+        assert_eq!(scheduler.aux_index, 3);
+    }
+
+    #[test]
     fn scheduled_meter_ids_cover_every_hal_meter() {
         let meters = [
             (ScheduledMeter::Signal, MeterId::Signal),
