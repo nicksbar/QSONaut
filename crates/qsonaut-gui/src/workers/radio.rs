@@ -2452,6 +2452,36 @@ mod level_poll_tests {
             }
             std::thread::sleep(Duration::from_millis(2));
         }
+        // Exercise the worker's error handling for every non-transmit CAT
+        // command while the loopback server is returning RPRT -1.  This is
+        // deliberately a local rigctld endpoint; no hardware and no PTT-on
+        // operation are involved.
+        tx.send(GuiCommand::TuneDelta(1_000))
+            .expect("failing tune delta");
+        tx.send(GuiCommand::CycleMode).expect("failing mode cycle");
+        tx.send(GuiCommand::SetRadioMode(Mode::Usb))
+            .expect("failing mode write");
+        tx.send(GuiCommand::SetPtt(false)).expect("failing PTT off");
+        let (ack_tx, ack_rx) = mpsc::channel();
+        tx.send(GuiCommand::SetPttWithAck(false, ack_tx))
+            .expect("failing acknowledged PTT off");
+        tx.send(GuiCommand::SetPower(true))
+            .expect("failing power command");
+        tx.send(GuiCommand::SetFilter(2))
+            .expect("failing filter command");
+        tx.send(GuiCommand::SetControl(
+            ControlId::AfGain,
+            ControlValue::U8(20),
+        ))
+        .expect("failing control command");
+        tx.send(GuiCommand::StartTuner)
+            .expect("failing tuner command");
+        tx.send(GuiCommand::AfGainDelta(1))
+            .expect("failing AF gain command");
+        assert!(ack_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("failing PTT ack")
+            .is_err());
         tx.send(GuiCommand::Quit).expect("quit error worker");
         handle.join().expect("error worker join");
         server.join().expect("error server join");
