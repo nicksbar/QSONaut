@@ -448,6 +448,52 @@ backend = "none"
     }
 
     #[test]
+    fn config_value_parsers_cover_aliases_invalid_values_and_defaults() {
+        assert!(parse_bool(" yes "));
+        assert!(parse_bool("ON"));
+        assert!(!parse_bool("no"));
+        assert!(!parse_bool("unknown"));
+        assert_eq!(
+            nonempty("  station  ".to_string()).as_deref(),
+            Some("station")
+        );
+        assert_eq!(nonempty("   ".to_string()), None);
+        assert_eq!(default_radio_baud_rate(), 115_200);
+        assert_eq!(default_radio_model(), "IC-7300");
+        assert_eq!(default_radio_endpoint(), "127.0.0.1:4532");
+        assert_eq!(default_radio_civ_address(), 0x94);
+        assert_eq!(default_controller_civ_address(), 0xE0);
+        assert_eq!(default_serial_start(), 1);
+        assert_eq!(default_serial_step(), 1);
+        assert!(default_dupe_check());
+
+        assert_eq!(
+            parse_contest_operating_mode("run"),
+            Some(ContestOperatingMode::Run)
+        );
+        assert_eq!(
+            parse_contest_operating_mode("search-and-pounce"),
+            Some(ContestOperatingMode::SearchAndPounce)
+        );
+        assert_eq!(parse_contest_operating_mode("invalid"), None);
+        assert_eq!(parse_split_policy("none"), Some(SplitPolicy::Off));
+        assert_eq!(parse_split_policy("fake_split"), Some(SplitPolicy::Fake));
+        assert_eq!(parse_split_policy("rig-split"), Some(SplitPolicy::Rig));
+        assert_eq!(parse_split_policy("invalid"), None);
+        assert_eq!(parse_fox_hound_role("off"), Some(FoxHoundRole::Disabled));
+        assert_eq!(parse_fox_hound_role("fox"), Some(FoxHoundRole::Fox));
+        assert_eq!(parse_fox_hound_role("hound"), Some(FoxHoundRole::Hound));
+        assert_eq!(parse_fox_hound_role("invalid"), None);
+
+        assert_eq!(parse_u8_flexible("148"), Some(148));
+        assert_eq!(parse_u8_flexible("0xE0"), Some(224));
+        assert_eq!(parse_u8_flexible("e0h"), Some(224));
+        assert_eq!(parse_u8_flexible("E0"), Some(224));
+        assert_eq!(parse_u8_flexible(""), None);
+        assert_eq!(parse_u8_flexible("1000"), None);
+    }
+
+    #[test]
     fn app_config_serializes_contest_profile_section() {
         let cfg = AppConfig::default();
         let body = toml::to_string(&cfg).expect("serialize config");

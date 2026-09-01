@@ -216,7 +216,12 @@ pub(super) fn swr_chart_value(model: &str, normalized: u8) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_swr_display, radio_baud_rates, radio_supports_band, swr_chart_value};
+    use super::{
+        draw_ai_icon, draw_radio_about_icon, draw_speaker_icon, format_swr_display,
+        native_radio_profile, radio_baud_rates, radio_supports_band, styled_selection_button,
+        swr_chart_value,
+    };
+    use eframe::egui::{self, Color32};
 
     #[test]
     fn baud_rates_follow_the_selected_radio_profile() {
@@ -249,5 +254,30 @@ mod tests {
             super::native_radio_profile("native", "IC-7300"),
             "2m"
         ));
+    }
+
+    #[test]
+    fn native_profile_selection_is_backend_and_model_aware() {
+        assert!(native_radio_profile("native", "IC-7300").is_some());
+        assert!(native_radio_profile(" NATIVE ", "IC-7300").is_some());
+        assert!(native_radio_profile("rigctld", "IC-7300").is_none());
+        assert!(native_radio_profile("native", "not-a-model").is_none());
+        assert!(radio_baud_rates("not-a-model").is_empty());
+    }
+
+    #[test]
+    fn widget_painters_and_selection_states_render_without_panicking() {
+        let context = egui::Context::default();
+        let color = Color32::from_rgb(20, 200, 240);
+        let _ = context.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let rect = ui.allocate_space(egui::vec2(32.0, 32.0)).1;
+                draw_ai_icon(ui.painter(), rect, color);
+                draw_speaker_icon(ui.painter(), rect, color);
+                draw_radio_about_icon(ui.painter(), rect, color);
+                let _ = styled_selection_button(ui, "ON", true, color, true);
+                let _ = styled_selection_button(ui, "OFF", false, color, false);
+            });
+        });
     }
 }

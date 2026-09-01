@@ -412,6 +412,16 @@ fn save_received_sstv_image(
 ) -> anyhow::Result<PathBuf> {
     let directory = qsonaut_log::app_config_dir().join("sstv-images");
     std::fs::create_dir_all(&directory)?;
+    save_received_sstv_image_in(&directory, image, mode, radio_frequency_hz)
+}
+
+fn save_received_sstv_image_in(
+    directory: &Path,
+    image: &qsonaut_sstv::DecodedImage,
+    mode: Option<qsonaut_sstv::SstvMode>,
+    radio_frequency_hz: Option<u64>,
+) -> anyhow::Result<PathBuf> {
+    std::fs::create_dir_all(directory)?;
     let timestamp_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -440,6 +450,30 @@ fn save_sstv_debug_capture(
 ) -> anyhow::Result<(PathBuf, PathBuf)> {
     let directory = qsonaut_log::app_config_dir().join("sstv-images");
     std::fs::create_dir_all(&directory)?;
+    save_sstv_debug_capture_in(
+        &directory,
+        samples,
+        sample_rate_hz,
+        received_id,
+        mode,
+        frequency_hz,
+        frequency_offset_hz,
+        received_unix_ms,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn save_sstv_debug_capture_in(
+    directory: &Path,
+    samples: &[f32],
+    sample_rate_hz: u32,
+    received_id: &str,
+    mode: Option<qsonaut_sstv::SstvMode>,
+    frequency_hz: Option<u64>,
+    frequency_offset_hz: f32,
+    received_unix_ms: u128,
+) -> anyhow::Result<(PathBuf, PathBuf)> {
+    std::fs::create_dir_all(directory)?;
     let stem = format!("{received_id}-debug");
     let wav_path = directory.join(format!("{stem}.wav"));
     let metadata_path = directory.join(format!("{stem}.jsonl"));
@@ -1928,8 +1962,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        finish_signal_recording, open_signal_recording_in, strongest_cw_tone_hz, GuiState,
-        NullAudioGenerator, WorkspaceMode,
+        finish_signal_recording, open_signal_recording_in, save_received_sstv_image_in,
+        save_sstv_debug_capture_in, strongest_cw_tone_hz, GuiState, NullAudioGenerator,
+        WorkspaceMode,
     };
     use qsonaut_third_party::sstv as qsonaut_sstv;
     use rustfft::num_complex::Complex;
@@ -2018,6 +2053,23 @@ mod tests {
     }
 
     #[test]
+    fn null_audio_generator_read_chunk_rebuilds_on_mode_change_and_tracks_deadline() {
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let mut generator = NullAudioGenerator::default();
+
+        assert!(generator.status().contains("starting"));
+        assert!(generator.read_chunk(0, &state).is_empty());
+        assert_eq!(generator.mode, Some(WorkspaceMode::Ft8));
+        assert!(generator.next_deadline.is_some());
+
+        state.lock().expect("state lock").workspace_mode = WorkspaceMode::Wspr;
+        let chunk = generator.read_chunk(1, &state);
+        assert_eq!(chunk.len(), 1);
+        assert_eq!(generator.mode, Some(WorkspaceMode::Wspr));
+        assert!(generator.next_deadline.is_some());
+    }
+
+    #[test]
     fn null_sstv_signal_remains_auto_target_decodable_at_simulation_level() {
         let state = GuiState {
             workspace_mode: WorkspaceMode::Sstv,
@@ -2049,9 +2101,90 @@ mod tests {
     fn strongest_cw_tone_requires_a_prominent_audio_peak() {
         let mut spectrum = vec![Complex::new(0.001, 0.0); 2_048];
         assert_eq!(strongest_cw_tone_hz(&spectrum, 12_000), None);
+        assert_eq!(strongest_cw_tone_hz(&spectrum[..3], 12_000), None);
+        assert_eq!(strongest_cw_tone_hz(&spectrum, 0), None);
         spectrum[256] = Complex::new(1.0, 0.0);
         let tone_hz = strongest_cw_tone_hz(&spectrum, 12_000).expect("CW peak");
         assert_eq!(tone_hz, 1_500);
+    }
+
+    #[test]
+    fn sstv_artifact_writers_validate_images_and_emit_debug_metadata() {
+        let directory = tempdir().expect("temporary SSTV artifact directory");
+        let invalid = qsonaut_sstv::DecodedImage {
+            width: 2,
+            height: 2,
+            rgb: vec![0, 1, 2],
+        };
+        assert!(save_received_sstv_image_in(directory.path(), &invalid, None, None).is_err());
+
+        let image = qsonaut_sstv::DecodedImage {
+            width: 2,
+            height: 1,
+            rgb: vec![255, 0, 0, 0, 255, 0],
+        };
+        let image_path = save_received_sstv_image_in(
+            directory.path(),
+            &image,
+            Some(qsonaut_sstv::SstvMode::MartinM1),
+            Some(14_074_000),
+        )
+        .expect("valid SSTV image should save");
+        assert!(image_path.exists());
+
+        let (wav_path, metadata_path) = save_sstv_debug_capture_in(
+            directory.path(),
+            &[-2.0, 0.25, 2.0],
+            12_000,
+            "coverage-sstv-artifact",
+            Some(qsonaut_sstv::SstvMode::MartinM1),
+            Some(14_074_000),
+            -125.5,
+            1_700_000_000_000,
+        )
+        .expect("debug capture should save");
+        let metadata = std::fs::read_to_string(&metadata_path).expect("debug metadata");
+        assert!(metadata.contains("sstv_debug_capture"));
+        assert!(metadata.contains("sample_count"));
+        assert!(metadata.contains("frequency_offset_hz"));
+        assert!(wav_path.exists());
+        std::fs::remove_file(image_path).expect("image cleanup");
+        std::fs::remove_file(wav_path).expect("wav cleanup");
+        std::fs::remove_file(metadata_path).expect("metadata cleanup");
+    }
+
+    #[test]
+    fn signal_recording_can_disable_each_output_and_finish_empty() {
+        let directory = tempdir().expect("temporary recording directory");
+        let recording = open_signal_recording_in(
+            directory.path(),
+            WorkspaceMode::Ft8,
+            12_000,
+            1_500,
+            None,
+            false,
+            false,
+        )
+        .expect("metadata-only recording should open");
+        let path = recording.path.clone();
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let mut optional = None;
+        finish_signal_recording(&mut optional, &state);
+        let mut active = Some(recording);
+        finish_signal_recording(&mut active, &state);
+        assert!(active.is_none());
+        let metadata =
+            std::fs::read_to_string(path.with_extension("jsonl")).expect("metadata should exist");
+        assert!(metadata.contains("\"full_width\":false"));
+        assert!(metadata.contains("\"stream\":false"));
+        assert!(!path.with_extension("full.wav").exists());
+        assert!(!path.with_extension("stream.wav").exists());
+        assert!(state
+            .lock()
+            .expect("state lock")
+            .cw_recording_status
+            .starts_with("Saved "));
+        std::fs::remove_file(path.with_extension("jsonl")).expect("metadata cleanup");
     }
 
     #[test]

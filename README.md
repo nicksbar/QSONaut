@@ -6,16 +6,16 @@
 
 [![CI](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml)
 [![Coverage gate](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml)
-[![Line coverage 40.04%](https://img.shields.io/badge/line%20coverage-40.04%25-green)](#coverage-area-snapshot)
-[![GUI core 27.79%](https://img.shields.io/badge/GUI%20core-27.79%25-yellow)](#coverage-area-snapshot)
-[![GUI workers 27.07%](https://img.shields.io/badge/GUI%20workers-27.07%25-yellow)](#coverage-area-snapshot)
-[![GUI modes 28.43%](https://img.shields.io/badge/GUI%20modes-28.43%25-yellow)](#coverage-area-snapshot)
-[![GUI panels 8.51%](https://img.shields.io/badge/GUI%20panels-8.51%25-red)](#coverage-area-snapshot)
+[![Line coverage 51.65%](https://img.shields.io/badge/line%20coverage-51.65%25-green)](#coverage-area-snapshot)
+[![GUI core 49.16%](https://img.shields.io/badge/GUI%20core-49.16%25-yellow)](#coverage-area-snapshot)
+[![GUI workers 35.60%](https://img.shields.io/badge/GUI%20workers-35.60%25-yellow)](#coverage-area-snapshot)
+[![GUI modes 36.75%](https://img.shields.io/badge/GUI%20modes-36.75%25-yellow)](#coverage-area-snapshot)
+[![GUI panels 16.42%](https://img.shields.io/badge/GUI%20panels-16.42%25-yellow)](#coverage-area-snapshot)
 [![Audio 36.28%](https://img.shields.io/badge/audio-36.28%25-yellow)](#coverage-area-snapshot)
-[![Core 85.98%](https://img.shields.io/badge/core-85.98%25-brightgreen)](#coverage-area-snapshot)
+[![Core 87.07%](https://img.shields.io/badge/core-87.07%25-brightgreen)](#coverage-area-snapshot)
 [![Server client 84.25%](https://img.shields.io/badge/server%20client-84.25%25-brightgreen)](#coverage-area-snapshot)
-[![PSK Reporter 81.85%](https://img.shields.io/badge/PSK%20Reporter-81.85%25-brightgreen)](#coverage-area-snapshot)
-[![Logging 81.05%](https://img.shields.io/badge/logging-81.05%25-brightgreen)](#coverage-area-snapshot)
+[![PSK Reporter 82.74%](https://img.shields.io/badge/PSK%20Reporter-82.74%25-brightgreen)](#coverage-area-snapshot)
+[![Logging 83.65%](https://img.shields.io/badge/logging-83.65%25-brightgreen)](#coverage-area-snapshot)
 [![Release builds](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml/badge.svg)](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml)
 [![Latest release](https://img.shields.io/github/v/release/nicksbar/QSONaut?display_name=tag&sort=semver)](https://github.com/nicksbar/QSONaut/releases)
 
@@ -115,13 +115,13 @@ tool once, then generate the terminal baseline with:
 rustup component add llvm-tools-preview
 cargo install cargo-llvm-cov --locked
 cargo llvm-cov --locked --all-features --workspace \
-  --ignore-filename-regex 'crates/qsonaut-gui/src/panels/profile_server\.rs|crates/qsonaut-gui/src/modes/(sstv|ft8|ft4|voice|cw|jt9|jt65|q65|wspr|fst4)\.rs' \
+  --ignore-filename-regex 'crates/qsonaut-gui/src/panels/(devices|profile_server|radio_ui)\.rs|crates/qsonaut-gui/src/modes/(sstv|ft8|ft4|voice|cw|jt9|jt65|q65|wspr|fst4)\.rs' \
   --summary-only
 ```
 
 To generate the browsable report, use `--html`; it is written beneath
 `target/llvm-cov/html`. Pull requests and pushes to `main` run the same
-coverage workflow, enforce a 35% executable-contract line-coverage gate,
+coverage workflow, enforce a 50% executable-contract line-coverage gate,
 enforce changed-file coverage on pull requests, and upload the HTML report as
 an artifact. The report intentionally excludes rendering-heavy UI and callback paths that
 are unsuitable for deterministic unit coverage (`panels/devices.rs`,
@@ -133,8 +133,11 @@ truth for included areas.
 
 ### Coverage area snapshot
 
-The current contract-coverage baseline was measured on 2026-08-31 with all
-workspace tests and 40.34% executable line coverage (9,505 / 23,565 lines).
+The current contract-coverage baseline was measured on 2026-09-01 with the
+workspace tests available in the validation environment and 51.65% executable
+line coverage (12,816 / 24,814 lines). The local sandbox used for this baseline
+cannot bind TCP listeners, so the two `rigctld` loopback tests were skipped
+locally; CI runs the complete suite without that environment limitation.
 The high-coverage `qsonaut-sstv` crate is
 now maintained behind the pinned `qsonaut-third-party` boundary and is covered
 by that repository's workflow rather than this workspace. These are grouped
@@ -144,22 +147,24 @@ remains the detailed, per-file source of truth.
 | Area | Covered / executable lines | Line coverage |
 | --- | ---: | ---: |
 | qsonaut-automation | 217 / 264 | 82.20% |
-| qsonaut-log | 740 / 913 | 81.05% |
+| qsonaut-log | 788 / 942 | 83.65% |
 | qsonaut-accelerate | 281 / 318 | 88.36% |
-| qsonaut-pskreporter | 275 / 336 | 81.85% |
+| qsonaut-pskreporter | 278 / 336 | 82.74% |
 | qsonaut-server-client | 733 / 870 | 84.25% |
 | qsonaut-audio | 316 / 871 | 36.28% |
-| qsonaut-core | 368 / 428 | 85.98% |
-| GUI core | 2,992 / 10,768 | 27.79% |
-| GUI workers | 617 / 2,279 | 27.07% |
-| GUI modes | 533 / 1,875 | 28.43% |
-| GUI panels | 118 / 1,387 | 8.51% |
-| Rigwright integration | 2,201 / 2,723 | 80.83% |
-| Application entry point | 53 / 495 | 10.71% |
+| qsonaut-core | 404 / 464 | 87.07% |
+| GUI core | 5,729 / 11,654 | 49.16% |
+| GUI workers | 860 / 2,416 | 35.60% |
+| GUI modes | 689 / 1,875 | 36.75% |
+| GUI panels | 237 / 1,443 | 16.42% |
+| Rigwright integration | 2,089 / 2,810 | 74.34% |
+| Application entry point | 195 / 551 | 35.39% |
 
-The Rigwright integration target is 80%+. The current worker boundary is
-80.29%; the combined worker and CAT/session contract is 80.83%. Changes to
-these areas should add deterministic seams or focused tests rather than
+The Rigwright integration target is 80%+ and is enforced by the CI coverage
+gate. The local snapshot above is lower when the environment cannot execute
+the two loopback tests; a CI runner with TCP listeners must execute those
+tests for the integration gate to pass. Changes to these areas should add
+deterministic seams or focused tests rather than
 weakening the contract gate.
 
 Changed-file coverage is enforced with `scripts/check-changed-coverage.sh`.

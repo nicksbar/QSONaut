@@ -23,6 +23,69 @@ fn fox_hound_role_label(role: FoxHoundRole) -> &'static str {
     }
 }
 
+fn has_logged_contact(contacts: &[QsoRecord], target_call: &str, mode: &str, band: &str) -> bool {
+    contacts.iter().any(|contact| {
+        callsign_eq(&contact.callsign, target_call)
+            && contact.mode.eq_ignore_ascii_case(mode)
+            && contact.band.eq_ignore_ascii_case(band)
+    })
+}
+
+fn contest_effective_tx_tone(
+    enabled: bool,
+    split_policy: SplitPolicy,
+    rx_tone_hz: u32,
+    fake_split_offset_hz: u32,
+    tx_tone_hz: u32,
+) -> u32 {
+    if enabled && split_policy == SplitPolicy::Fake {
+        rx_tone_hz
+            .saturating_add(fake_split_offset_hz)
+            .clamp(100, AUDIO_MAX_FREQ_HZ)
+    } else {
+        tx_tone_hz
+    }
+}
+
+fn contest_exchange_preview(
+    template: &str,
+    serial_current: u32,
+    target_call: &str,
+    my_call: &str,
+    my_grid: &str,
+) -> String {
+    let serial = serial_current.max(1);
+    let template = if template.trim().is_empty() {
+        "5NN ${serial}".to_string()
+    } else {
+        template.trim().to_string()
+    };
+    template
+        .replace("${serial}", &format!("{serial:03}"))
+        .replace("${call}", target_call)
+        .replace("${target}", target_call)
+        .replace("${my_call}", my_call)
+        .replace("${grid}", my_grid)
+}
+
+fn advance_contest_serial(current: u32, start: u32, step: u32) -> u32 {
+    current.max(start.max(1)).saturating_add(step.max(1))
+}
+
+fn contest_guidance_text(split_policy: SplitPolicy, role: FoxHoundRole) -> String {
+    let split_hint = match split_policy {
+        SplitPolicy::Off => "split off",
+        SplitPolicy::Fake => "fake split uses a software TX offset",
+        SplitPolicy::Rig => "rig split requested (no direct split command yet)",
+    };
+    let role_hint = match role {
+        FoxHoundRole::Disabled => "role disabled",
+        FoxHoundRole::Fox => "Fox: call CQ, keep the pileup flowing",
+        FoxHoundRole::Hound => "Hound: answer quickly and stay on the caller",
+    };
+    format!("{} · {}", split_hint, role_hint)
+}
+
 impl QsonautGuiApp {
     pub(super) fn has_logged_contact_with(
         &self,
@@ -30,11 +93,7 @@ impl QsonautGuiApp {
         mode: &str,
         band: &str,
     ) -> bool {
-        self.qso_log.contacts.iter().any(|contact| {
-            callsign_eq(&contact.callsign, target_call)
-                && contact.mode.eq_ignore_ascii_case(mode)
-                && contact.band.eq_ignore_ascii_case(band)
-        })
+        has_logged_contact(&self.qso_log.contacts, target_call, mode, band)
     }
 
     pub(super) fn block_duplicate_tx_if_needed(
@@ -96,52 +155,35 @@ impl QsonautGuiApp {
     }
 
     pub(super) fn contest_effective_tx_tone_hz(&self) -> u32 {
-        if self.contest_enabled && self.contest_split_policy == SplitPolicy::Fake {
-            self.rx_tone_hz
-                .saturating_add(self.contest_fake_split_offset_hz)
-                .clamp(100, AUDIO_MAX_FREQ_HZ)
-        } else {
-            self.tx_tone_hz
-        }
+        contest_effective_tx_tone(
+            self.contest_enabled,
+            self.contest_split_policy,
+            self.rx_tone_hz,
+            self.contest_fake_split_offset_hz,
+            self.tx_tone_hz,
+        )
     }
 
     pub(super) fn contest_exchange_preview(&self, target_call: &str) -> String {
-        let serial = self.contest_serial_current.max(1);
-        let my_call = self.station_callsign_or_default();
-        let my_grid = self.station_grid_or_default();
-        let template = if self.contest_exchange_template.trim().is_empty() {
-            "5NN ${serial}".to_string()
-        } else {
-            self.contest_exchange_template.trim().to_string()
-        };
-        template
-            .replace("${serial}", &format!("{serial:03}"))
-            .replace("${call}", target_call)
-            .replace("${target}", target_call)
-            .replace("${my_call}", my_call)
-            .replace("${grid}", my_grid)
+        contest_exchange_preview(
+            &self.contest_exchange_template,
+            self.contest_serial_current,
+            target_call,
+            self.station_callsign_or_default(),
+            self.station_grid_or_default(),
+        )
     }
 
     pub(super) fn advance_contest_serial(&mut self) {
-        let next = self
-            .contest_serial_current
-            .max(self.contest_serial_start.max(1))
-            .saturating_add(self.contest_serial_step.max(1));
-        self.contest_serial_current = next;
+        self.contest_serial_current = advance_contest_serial(
+            self.contest_serial_current,
+            self.contest_serial_start,
+            self.contest_serial_step,
+        );
     }
 
     pub(super) fn contest_guidance_text(&self) -> String {
-        let split_hint = match self.contest_split_policy {
-            SplitPolicy::Off => "split off",
-            SplitPolicy::Fake => "fake split uses a software TX offset",
-            SplitPolicy::Rig => "rig split requested (no direct split command yet)",
-        };
-        let role_hint = match self.contest_fox_hound_role {
-            FoxHoundRole::Disabled => "role disabled",
-            FoxHoundRole::Fox => "Fox: call CQ, keep the pileup flowing",
-            FoxHoundRole::Hound => "Hound: answer quickly and stay on the caller",
-        };
-        format!("{} · {}", split_hint, role_hint)
+        contest_guidance_text(self.contest_split_policy, self.contest_fox_hound_role)
     }
 
     pub(super) fn emit_contest_profile_hooks(&self) {
@@ -181,8 +223,12 @@ impl QsonautGuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{contest_operating_mode_label, fox_hound_role_label, split_policy_label};
-    use crate::{ContestOperatingMode, FoxHoundRole, SplitPolicy};
+    use super::{
+        advance_contest_serial, contest_effective_tx_tone, contest_exchange_preview,
+        contest_guidance_text, contest_operating_mode_label, fox_hound_role_label,
+        has_logged_contact, split_policy_label,
+    };
+    use crate::{ContestOperatingMode, FoxHoundRole, QsoRecord, SplitPolicy};
 
     #[test]
     fn labels_all_contest_operating_modes() {
@@ -208,5 +254,73 @@ mod tests {
         assert_eq!(fox_hound_role_label(FoxHoundRole::Disabled), "disabled");
         assert_eq!(fox_hound_role_label(FoxHoundRole::Fox), "fox");
         assert_eq!(fox_hound_role_label(FoxHoundRole::Hound), "hound");
+    }
+
+    #[test]
+    fn contest_helpers_cover_dupes_tones_exchange_serials_and_guidance() {
+        let mut contact = QsoRecord::new("K1ABC", "ft8", "20M", 14_074_000, 0, 1);
+        assert!(!has_logged_contact(&[], "K1ABC", "FT8", "20M"));
+        assert!(!has_logged_contact(
+            &[contact.clone()],
+            "K1ABC",
+            "CW",
+            "20M"
+        ));
+        assert!(has_logged_contact(
+            &[contact.clone()],
+            "k1abc",
+            "FT8",
+            "20m"
+        ));
+        contact.callsign = " ".to_string();
+        assert!(!has_logged_contact(&[contact], "K1ABC", "FT8", "20M"));
+
+        assert_eq!(
+            contest_effective_tx_tone(false, SplitPolicy::Fake, 1_000, 500, 700),
+            700
+        );
+        assert_eq!(
+            contest_effective_tx_tone(true, SplitPolicy::Off, 1_000, 500, 700),
+            700
+        );
+        assert_eq!(
+            contest_effective_tx_tone(true, SplitPolicy::Fake, 1_000, 500, 700),
+            1_500
+        );
+        assert_eq!(
+            contest_effective_tx_tone(true, SplitPolicy::Fake, 3_500, u32::MAX, 700),
+            4_000
+        );
+        assert_eq!(
+            contest_effective_tx_tone(true, SplitPolicy::Fake, 0, 0, 700),
+            100
+        );
+
+        assert_eq!(
+            contest_exchange_preview("", 0, "K1ABC", "N0CALL", "AA00"),
+            "5NN 001"
+        );
+        assert_eq!(
+            contest_exchange_preview(
+                "${call} ${target} ${my_call} ${grid} ${serial}",
+                7,
+                "K1ABC",
+                "N0CALL",
+                "AA00"
+            ),
+            "K1ABC K1ABC N0CALL AA00 007"
+        );
+        assert_eq!(advance_contest_serial(0, 5, 0), 6);
+        assert_eq!(advance_contest_serial(u32::MAX, 1, 1), u32::MAX);
+
+        assert_eq!(
+            contest_guidance_text(SplitPolicy::Off, FoxHoundRole::Disabled),
+            "split off · role disabled"
+        );
+        assert!(
+            contest_guidance_text(SplitPolicy::Fake, FoxHoundRole::Fox).contains("keep the pileup")
+        );
+        assert!(contest_guidance_text(SplitPolicy::Rig, FoxHoundRole::Hound)
+            .contains("stay on the caller"));
     }
 }

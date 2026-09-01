@@ -64,11 +64,27 @@ impl QsonautGuiApp {
         let controller_civ_address = self.config.radio.controller_civ_address;
         let radio_civ_address = self.config.radio.civ_address;
         self.cat_test_status = None;
+
+        // The CAT probe opens the serial port, which is exclusively owned by
+        // the running radio worker on Windows. Stop the worker first so the
+        // probe can open the port; the worker is restarted once the probe
+        // completes (see the cat_test_rx handling in update()).
+        let had_radio_worker = self.radio_worker_handle.is_some();
+        if had_radio_worker {
+            stop_radio_worker_for_reconnect(
+                &mut self.command_tx,
+                &mut self.radio_worker_stop,
+                &mut self.radio_worker_handle,
+            );
+        }
+        self.cat_test_restart_radio = had_radio_worker && self.config.radio.enabled;
+
         info!(
             backend = %backend,
             model = %model,
             port = %if port.is_empty() { "auto" } else { &port },
             baud = baud_rate,
+            paused_worker = had_radio_worker,
             "CAT connection test requested"
         );
         self.cat_test_rx = Some(spawn_cat_connection_test(

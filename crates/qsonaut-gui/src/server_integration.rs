@@ -271,4 +271,18 @@ mod tests {
         assert!(redacted.contains("[REDACTED SERVER TOKEN]"));
         assert!(redacted.contains("[REDACTED DEVICE]"));
     }
+
+    #[test]
+    fn diagnostic_redaction_handles_optional_devices_and_empty_secrets() {
+        let mut config = AppConfig::default();
+        config.server.device_token = "  ".to_string();
+        config.audio.output_device = Some("Private speakers".to_string());
+        config.audio.monitor_output_device = Some("Monitor output".to_string());
+        let mut raw = "empty= token= speakers=Private speakers monitor=Monitor output".to_string();
+        redact_log_value(&mut raw, "  ", "[REDACTED]");
+        let redacted = redacted_diagnostic_log(raw, &config);
+        assert!(!redacted.contains("Private speakers"));
+        assert!(!redacted.contains("Monitor output"));
+        assert!(redacted.contains("empty= token="));
+    }
 }

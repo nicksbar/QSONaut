@@ -921,6 +921,18 @@ mod tests {
     }
 
     #[test]
+    fn log_tail_handles_empty_limits_boundaries_and_unterminated_lines() {
+        let path =
+            std::env::temp_dir().join(format!("qsonaut-log-tail-edge-{}.log", std::process::id()));
+        fs::write(&path, "one\ntwo\npartial").unwrap();
+        assert_eq!(read_file_tail(&path, 0).unwrap(), "");
+        assert_eq!(read_file_tail(&path, 100).unwrap(), "one\ntwo\npartial");
+        assert_eq!(read_file_tail(&path, 3).unwrap(), "");
+        assert_eq!(read_file_tail(&path, 9).unwrap(), "partial");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn creates_utc_record_fields() {
         let record = QsoRecord::new("k1abc", "ft8", "20m", 14_074_000, 0, 65);
         assert_eq!(record.qso_date, "19700101");
@@ -980,6 +992,27 @@ mod tests {
         let adif = log.to_adif_filtered(&filter);
         assert!(adif.contains("<CALL:5>K1ABC"));
         assert!(!adif.contains("<CALL:4>W1AW"));
+    }
+
+    #[test]
+    fn adif_filters_honor_trimmed_date_bounds_and_case_insensitive_values() {
+        let mut early = QsoRecord::new("K1ABC", "FT8", "20m", 14_074_000, 0, 1);
+        early.qso_date = "20260812".to_string();
+        let mut late = QsoRecord::new("W1AW", "FT4", "40m", 7_074_000, 0, 1);
+        late.qso_date = "20260813".to_string();
+        let log = QsoLog {
+            version: 1,
+            contacts: vec![early, late],
+        };
+        let filter = AdifExportFilter {
+            date_from: Some(" 20260812 ".to_string()),
+            date_to: Some("20260812".to_string()),
+            mode: Some(" ft8 ".to_string()),
+            band: Some(" 20M ".to_string()),
+        };
+        let adif = log.to_adif_filtered(&filter);
+        assert!(adif.contains("<CALL:5>K1ABC"));
+        assert!(!adif.contains("W1AW"));
     }
 
     #[test]

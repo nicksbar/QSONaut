@@ -127,6 +127,59 @@ fn custom_rule_id(title: &str, existing: &[CustomAchievementRule]) -> String {
     id
 }
 
+fn achievement_progress(
+    achievement: AchievementKind,
+    qso_count: u32,
+    unique_heard: u32,
+    dupe_blocks: u32,
+    decode_bursts: u32,
+    contacts: &[QsoRecord],
+) -> (u32, u32) {
+    match achievement {
+        AchievementKind::FirstDecode => (decode_bursts.min(1), 1),
+        AchievementKind::DirectedCall => (0, 1),
+        AchievementKind::FirstQsoLogged => (qso_count.min(1), 1),
+        AchievementKind::TenQsosLogged => (qso_count.min(10), 10),
+        AchievementKind::FiftyQsosLogged => (qso_count.min(50), 50),
+        AchievementKind::DupeShield => (dupe_blocks.min(10), 10),
+        AchievementKind::CenturyHunter => (unique_heard.min(100), 100),
+        AchievementKind::BandCollector => {
+            let bands = contacts
+                .iter()
+                .map(|contact| contact.band.trim())
+                .filter(|band| !band.is_empty())
+                .collect::<HashSet<_>>()
+                .len() as u32;
+            (bands.min(5), 5)
+        }
+        AchievementKind::GridMapper => {
+            let grids = contacts
+                .iter()
+                .map(|contact| contact.grid.trim())
+                .filter(|grid| !grid.is_empty())
+                .collect::<HashSet<_>>()
+                .len() as u32;
+            (grids.min(25), 25)
+        }
+        AchievementKind::DXChaser => (0, 1),
+        AchievementKind::ModeExplorer => {
+            let modes = contacts
+                .iter()
+                .map(|contact| contact.mode.trim())
+                .filter(|mode| !mode.is_empty())
+                .collect::<HashSet<_>>()
+                .len() as u32;
+            (modes.min(3), 3)
+        }
+        AchievementKind::EarlyBird
+        | AchievementKind::NightOwl
+        | AchievementKind::ContestOperator
+        | AchievementKind::SignalSurvivor => (0, 1),
+        AchievementKind::AudioAlchemist => (decode_bursts.min(1_000), 1_000),
+        AchievementKind::QsoQuarter => (qso_count.min(25), 25),
+    }
+}
+
 impl QsonautGuiApp {
     pub(super) fn push_hunter_alert(
         &mut self,
@@ -390,57 +443,14 @@ impl QsonautGuiApp {
         let qso_count = self.qso_log.contacts.len() as u32;
         for achievement in AchievementKind::ALL {
             let (title, detail) = achievement.presentation();
-            let (progress, target) = match achievement {
-                AchievementKind::FirstDecode => (self.hunter_decode_bursts.min(1), 1),
-                AchievementKind::DirectedCall => (self.hunter_directed_hits.min(1), 1),
-                AchievementKind::FirstQsoLogged => (qso_count.min(1), 1),
-                AchievementKind::TenQsosLogged => (qso_count.min(10), 10),
-                AchievementKind::FiftyQsosLogged => (qso_count.min(50), 50),
-                AchievementKind::DupeShield => (self.hunter_dupe_blocks.min(10), 10),
-                AchievementKind::CenturyHunter => {
-                    ((self.hunter_unique_heard.len() as u32).min(100), 100)
-                }
-                AchievementKind::BandCollector => {
-                    let bands = self
-                        .qso_log
-                        .contacts
-                        .iter()
-                        .map(|contact| contact.band.trim())
-                        .filter(|band| !band.is_empty())
-                        .collect::<HashSet<_>>()
-                        .len() as u32;
-                    (bands.min(5), 5)
-                }
-                AchievementKind::GridMapper => {
-                    let grids = self
-                        .qso_log
-                        .contacts
-                        .iter()
-                        .map(|contact| contact.grid.trim())
-                        .filter(|grid| !grid.is_empty())
-                        .collect::<HashSet<_>>()
-                        .len() as u32;
-                    (grids.min(25), 25)
-                }
-                AchievementKind::DXChaser => (0, 1),
-                AchievementKind::ModeExplorer => {
-                    let modes = self
-                        .qso_log
-                        .contacts
-                        .iter()
-                        .map(|contact| contact.mode.trim())
-                        .filter(|mode| !mode.is_empty())
-                        .collect::<HashSet<_>>()
-                        .len() as u32;
-                    (modes.min(3), 3)
-                }
-                AchievementKind::EarlyBird
-                | AchievementKind::NightOwl
-                | AchievementKind::ContestOperator
-                | AchievementKind::SignalSurvivor => (0, 1),
-                AchievementKind::AudioAlchemist => (self.hunter_decode_bursts.min(1_000), 1_000),
-                AchievementKind::QsoQuarter => (qso_count.min(25), 25),
-            };
+            let (progress, target) = achievement_progress(
+                achievement,
+                qso_count,
+                self.hunter_unique_heard.len() as u32,
+                self.hunter_dupe_blocks,
+                self.hunter_decode_bursts,
+                &self.qso_log.contacts,
+            );
             let unlocked = self.hunter_unlocked.contains(&achievement);
             let acknowledged = self.hunter_acknowledged.contains(&achievement);
             if unlocked && acknowledged && !self.hunter_show_acknowledged {
@@ -952,7 +962,10 @@ impl QsonautGuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{custom_rule_id, AchievementKind, CustomAchievementRule, HunterMetric};
+    use super::{
+        achievement_progress, custom_rule_id, AchievementKind, CustomAchievementRule, HunterMetric,
+        QsoRecord,
+    };
 
     fn existing(id: &str) -> CustomAchievementRule {
         CustomAchievementRule {
@@ -983,6 +996,84 @@ mod tests {
             let (title, detail) = kind.presentation();
             assert!(!title.is_empty());
             assert!(!detail.is_empty());
+        }
+    }
+
+    #[test]
+    fn achievement_progress_normalizes_counts_and_distinct_contact_dimensions() {
+        let mut contacts = Vec::new();
+        for (band, grid, mode) in [
+            ("20m", "FN42", "FT8"),
+            ("40m", "EN50", "FT4"),
+            ("2m", "FN42", "CW"),
+            ("", "", ""),
+        ] {
+            let mut contact = QsoRecord::new("K1ABC", mode, band, 14_074_000, 0, 1);
+            contact.grid = grid.to_string();
+            contacts.push(contact);
+        }
+        assert_eq!(
+            achievement_progress(AchievementKind::FirstDecode, 80, 120, 20, 9, &contacts),
+            (1, 1)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::DirectedCall, 80, 120, 20, 9, &contacts),
+            (0, 1)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::TenQsosLogged, 80, 120, 20, 9, &contacts),
+            (10, 10)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::FiftyQsosLogged, 80, 120, 20, 9, &contacts),
+            (50, 50)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::DupeShield, 80, 120, 20, 9, &contacts),
+            (10, 10)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::CenturyHunter, 80, 120, 20, 9, &contacts),
+            (100, 100)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::BandCollector, 80, 120, 20, 9, &contacts),
+            (3, 5)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::GridMapper, 80, 120, 20, 9, &contacts),
+            (2, 25)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::ModeExplorer, 80, 120, 20, 9, &contacts),
+            (3, 3)
+        );
+        assert_eq!(
+            achievement_progress(
+                AchievementKind::AudioAlchemist,
+                80,
+                120,
+                20,
+                1_200,
+                &contacts
+            ),
+            (1_000, 1_000)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::QsoQuarter, 80, 120, 20, 9, &contacts),
+            (25, 25)
+        );
+        for kind in [
+            AchievementKind::DXChaser,
+            AchievementKind::EarlyBird,
+            AchievementKind::NightOwl,
+            AchievementKind::ContestOperator,
+            AchievementKind::SignalSurvivor,
+        ] {
+            assert_eq!(
+                achievement_progress(kind, 80, 120, 20, 9, &contacts),
+                (0, 1)
+            );
         }
     }
 }

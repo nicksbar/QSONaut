@@ -868,7 +868,7 @@ impl QsonautGuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::scope_attribution_layout;
+    use super::{draw_scope_attribution, scope_attribution_layout};
     use eframe::egui;
 
     #[test]
@@ -893,5 +893,18 @@ mod tests {
             scope_attribution_layout(wide, 1, 10).unwrap().width(),
             440.0
         );
+    }
+
+    #[test]
+    fn draws_scope_attribution_for_partial_history_without_panicking() {
+        let context = egui::Context::default();
+        let scope = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(640.0, 360.0));
+        let _ = context.run(Default::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                draw_scope_attribution(ui, scope, 0, 10, "Radio waterfall");
+                draw_scope_attribution(ui, scope, 5, 10, "Audio waterfall");
+                draw_scope_attribution(ui, scope, 10, 10, "Full");
+            });
+        });
     }
 }

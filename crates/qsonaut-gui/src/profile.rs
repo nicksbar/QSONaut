@@ -542,7 +542,7 @@ pub(super) fn save_operator_profile(profile: &OperatorProfile) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_profile_name;
+    use super::{validate_profile_name, OperatorProfile, RadioProfile};
 
     #[test]
     fn profile_names_allow_human_readable_safe_names() {
@@ -559,5 +559,67 @@ mod tests {
         assert!(validate_profile_name("").is_err());
         assert!(validate_profile_name("../other").is_err());
         assert!(validate_profile_name("club/profile").is_err());
+    }
+
+    #[test]
+    fn minimal_profile_deserialization_applies_safe_runtime_defaults() {
+        let profile: OperatorProfile = toml::from_str(
+            r#"
+callsign = "N0CALL"
+grid = "AA00"
+qth = "Portable"
+follow_log = true
+max_log_entries = 300
+deep_decode = false
+"#,
+        )
+        .expect("minimal profile should deserialize");
+        assert_eq!(profile.workspace_mode, "FT8");
+        assert_eq!(profile.radio_backend, "native");
+        assert_eq!(profile.radio_model, "IC-7300");
+        assert_eq!(profile.radio_baud_rate, 115_200);
+        assert_eq!(profile.radio_civ_address, 0x94);
+        assert_eq!(profile.radio_controller_civ_address, 0xE0);
+        assert_eq!(profile.audio_sample_rate_hz, 48_000);
+        assert_eq!(profile.audio_channels, 1);
+        assert!(profile.audio_enabled);
+        assert_eq!(profile.cw_wpm, 20);
+        assert_eq!(profile.cw_tone_hz, 600);
+        assert_eq!(profile.contest_serial_start, 1);
+        assert_eq!(profile.contest_serial_step, 1);
+        assert!(profile.contest_dupe_check);
+        assert_eq!(profile.contest_fake_split_offset_hz, 250);
+        assert_eq!(profile.psk_batch_interval_secs, 300);
+        assert_eq!(profile.psk_repeat_cache_secs, 300);
+        assert_eq!(profile.psk_max_pending, 80);
+        assert!(profile.pota_enabled);
+        assert!(profile.hunter_alerts_enabled);
+        assert_eq!(
+            profile.recording_modes.len(),
+            super::super::WORKSPACE_MODES.len()
+        );
+    }
+
+    #[test]
+    fn radio_profile_defaults_serialize_only_persistent_controls() {
+        let profile = RadioProfile {
+            name: "Portable FT8".to_string(),
+            mode: Some("USB".to_string()),
+            data_mode: Some(true),
+            filter: Some(2),
+            af_gain: Some(40),
+            rf_gain: Some(80),
+            rf_power: Some(50),
+            preamp: Some(true),
+            attenuator: Some(false),
+            noise_blank: Some(true),
+            noise_reduction: Some(false),
+            agc: Some(3),
+        };
+        let encoded = toml::to_string(&profile).expect("radio profile encoding");
+        let decoded: RadioProfile = toml::from_str(&encoded).expect("radio profile decoding");
+        assert_eq!(decoded.name, "Portable FT8");
+        assert_eq!(decoded.rf_power, Some(50));
+        assert_eq!(decoded.agc, Some(3));
     }
 }

@@ -284,11 +284,12 @@ pub(in super::super) fn run_native_digital_decode(
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::{q65_live_decode_config, WorkspaceMode};
+    use super::{q65_live_decode_config, run_native_digital_decode, WorkspaceMode};
     use crate::modes::fst4::Submode;
     use crate::tx_audio::build_native_digital_tx_pcm;
     use qsonaut_modems::AudioBlock;
     use qsonaut_third_party::wsjt::{decode as decode_wsjt, WsjtMode};
+    use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
     #[test]
@@ -341,6 +342,42 @@ mod tests {
         );
         assert!(result.is_ok(), "short Q65 capture should be a valid no-op");
         assert!(result.expect("checked above").events.is_empty());
+    }
+
+    #[test]
+    fn native_decode_worker_handles_empty_captures_for_each_supported_protocol() {
+        for mode in [
+            WorkspaceMode::Ft4,
+            WorkspaceMode::Fst4,
+            WorkspaceMode::Wspr,
+            WorkspaceMode::Jt9,
+            WorkspaceMode::Jt65,
+            WorkspaceMode::Q65,
+            WorkspaceMode::Msk144,
+        ] {
+            let state = Arc::new(Mutex::new(crate::GuiState::default()));
+            run_native_digital_decode(
+                mode,
+                Submode::default(),
+                vec![0.0; 12_000],
+                42,
+                "00:00:42".to_string(),
+                1_500,
+                false,
+                state.clone(),
+            );
+            let shared = state.lock().expect("state");
+            assert!(
+                shared.digital_decodes.is_empty(),
+                "{mode:?} decoded silence"
+            );
+            assert!(shared.digital_decode_status.contains(mode.label()));
+            if mode == WorkspaceMode::Ft4 {
+                assert_eq!(shared.ft4_last_decode_period, Some(42));
+            } else {
+                assert_eq!(shared.ft4_last_decode_period, None);
+            }
+        }
     }
 }
 

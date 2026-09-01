@@ -8,6 +8,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [0.3.15] - 2026-08-31
 
 ### Changed
+- Update the application and GUI to Rigwright `0.1.19`, which probes the
+  Yaesu CAT RTS / hardware-flow-control setting per model profile. The
+  FT-991A is now probed through its own flat `EX033;` menu selector, fixing
+  CAT timeouts when the radio's menu 033 CAT RTS is enabled (factory
+  default) while the host port was opened without RTS/CTS flow control.
+- Pause the GUI radio worker before running the CAT connection test so the
+  probe can open the exclusively-owned serial port, then restore the worker
+  once the test completes. This removes the spurious "failed to open Yaesu
+  CAT port" failures seen when testing a connection that was already live.
 - Update the application and GUI to Rigwright `0.1.18`, including the
   driver-owned radio profiles, normalized controls, meters, and session
   behavior.

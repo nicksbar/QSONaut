@@ -227,4 +227,28 @@ mod tests {
                 )
         );
     }
+
+    #[test]
+    fn graphics_preferences_expose_stable_labels_and_environment_values() {
+        assert_eq!(GraphicsPowerPreference::ALL.len(), 2);
+        assert_eq!(GraphicsPowerPreference::Low.label(), "Low power");
+        assert_eq!(GraphicsPowerPreference::High.label(), "High performance");
+        assert_eq!(GraphicsPowerPreference::Low.env_value(), "low");
+        assert_eq!(GraphicsPowerPreference::High.env_value(), "high");
+        assert_eq!(backend_score(wgpu::Backend::Vulkan), 3);
+        assert_eq!(backend_score(wgpu::Backend::Gl), 2);
+        assert_eq!(backend_score(wgpu::Backend::Noop), 1);
+        assert_eq!(
+            device_type_score(wgpu::DeviceType::VirtualGpu, GraphicsPowerPreference::Low),
+            3
+        );
+        assert_eq!(
+            device_type_score(wgpu::DeviceType::Other, GraphicsPowerPreference::High),
+            2
+        );
+        assert_eq!(
+            device_type_score(wgpu::DeviceType::Cpu, GraphicsPowerPreference::Low),
+            1
+        );
+    }
 }

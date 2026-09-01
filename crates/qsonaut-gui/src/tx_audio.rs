@@ -492,3 +492,105 @@ pub(super) enum DigitalTxEvent {
     Complete,
     Failed(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn morse_table_covers_alphanumeric_operator_text() {
+        for character in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".chars() {
+            assert!(morse_pattern(character).is_some(), "missing {character}");
+        }
+        assert_eq!(morse_pattern('?'), None);
+        assert_eq!(morse_pattern(' '), None);
+    }
+
+    #[test]
+    fn native_tx_validation_rejects_bad_shapes_and_unsupported_modes() {
+        assert!(build_native_digital_tx_pcm(
+            WorkspaceMode::Ft4,
+            "CQ K1ABC",
+            700,
+            crate::modes::fst4::Submode::default(),
+            20,
+            600
+        )
+        .is_err());
+        assert!(build_native_digital_tx_pcm(
+            WorkspaceMode::Wspr,
+            "K1ABC FN42 nope",
+            1_000,
+            crate::modes::fst4::Submode::default(),
+            20,
+            600
+        )
+        .is_err());
+        assert!(build_native_digital_tx_pcm(
+            WorkspaceMode::Cw,
+            "   ",
+            700,
+            crate::modes::fst4::Submode::default(),
+            20,
+            600
+        )
+        .is_err());
+        assert!(build_native_digital_tx_pcm(
+            WorkspaceMode::Voice,
+            "CQ K1ABC FN42",
+            700,
+            crate::modes::fst4::Submode::default(),
+            20,
+            600
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn wait_until_epoch_honors_abort_and_accepts_elapsed_deadlines() {
+        let abort = AtomicBool::new(true);
+        assert!(wait_until_epoch(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_secs_f64()
+                + 10.0,
+            &abort
+        )
+        .is_err());
+        let clear = AtomicBool::new(false);
+        assert!(wait_until_epoch(0.0, &clear).is_ok());
+    }
+
+    #[test]
+    fn request_ptt_distinguishes_acknowledgement_errors_timeouts_and_disconnects() {
+        let (tx, rx) = mpsc::channel();
+        let receiver = thread::spawn(move || {
+            let GuiCommand::SetPttWithAck(enabled, ack) = rx.recv().expect("PTT command") else {
+                panic!("unexpected command");
+            };
+            assert!(enabled);
+            ack.send(Ok(())).expect("ack receiver");
+        });
+        assert!(request_ptt(&tx, true, Duration::from_secs(1)).is_ok());
+        receiver.join().expect("ack thread");
+
+        let (tx, rx) = mpsc::channel();
+        let receiver = thread::spawn(move || {
+            let GuiCommand::SetPttWithAck(_, ack) = rx.recv().expect("PTT command") else {
+                panic!("unexpected command");
+            };
+            ack.send(Err("PTT rejected".to_string()))
+                .expect("ack receiver");
+        });
+        let error = request_ptt(&tx, false, Duration::from_secs(1)).expect_err("rejected PTT");
+        assert!(error.to_string().contains("PTT rejected"));
+        receiver.join().expect("ack thread");
+
+        let (tx, _rx) = mpsc::channel();
+        assert!(request_ptt(&tx, true, Duration::from_millis(1)).is_err());
+        let (tx, rx) = mpsc::channel();
+        drop(rx);
+        assert!(request_ptt(&tx, false, Duration::from_secs(1)).is_err());
+    }
+}

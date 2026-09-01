@@ -735,7 +735,7 @@ fn parse_control_value(id: ControlId, raw: &str) -> Result<ControlValue> {
 }
 
 fn parse_bool_like(raw: &str) -> Result<bool> {
-    match raw.to_ascii_lowercase().as_str() {
+    match raw.trim().to_ascii_lowercase().as_str() {
         "1" | "on" | "true" | "yes" => Ok(true),
         "0" | "off" | "false" | "no" => Ok(false),
         _ => anyhow::bail!("invalid boolean value: {raw} (expected on/off/true/false/1/0)"),
@@ -758,8 +758,11 @@ fn format_control_value(value: &ControlValue) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CliControl, CliMode, CliPtt};
-    use qsonaut_radio::{ControlId, Mode};
+    use super::{
+        format_control_value, format_core_mode, format_hex_bytes, parse_bool_like,
+        parse_civ_address, parse_control_value, parse_hex_bytes, CliControl, CliMode, CliPtt,
+    };
+    use qsonaut_radio::{ControlId, ControlValue, Mode};
 
     #[test]
     fn maps_every_cli_mode_to_the_radio_mode() {
@@ -794,5 +797,77 @@ mod tests {
         for (cli, expected) in controls {
             assert_eq!(ControlId::from(cli), expected);
         }
+    }
+
+    #[test]
+    fn cli_parsers_cover_hex_addresses_values_and_all_core_modes() {
+        assert_eq!(
+            parse_hex_bytes("FE fe 94 E0 03 FD").unwrap(),
+            vec![0xFE, 0xFE, 0x94, 0xE0, 3, 0xFD]
+        );
+        assert_eq!(format_hex_bytes(&[0, 0xAF, 0xFF]), "00 AF FF");
+        assert!(parse_hex_bytes("").is_err());
+        assert!(parse_hex_bytes("ABC").is_err());
+        assert_eq!(parse_civ_address("148").unwrap(), 148);
+        assert_eq!(parse_civ_address("0x94").unwrap(), 148);
+        assert_eq!(parse_civ_address("94h").unwrap(), 148);
+        assert_eq!(parse_civ_address("E0").unwrap(), 224);
+        assert!(parse_civ_address("").is_err());
+        assert!(parse_civ_address("not-an-address").is_err());
+        assert!(parse_bool_like(" YES ").unwrap());
+        assert!(!parse_bool_like("off").unwrap());
+        assert!(parse_bool_like("maybe").is_err());
+
+        for (mode, label) in [
+            (Mode::Usb, "USB"),
+            (Mode::Lsb, "LSB"),
+            (Mode::Cw, "CW"),
+            (Mode::Data, "DATA"),
+            (Mode::Am, "AM"),
+            (Mode::Fm, "FM"),
+            (Mode::Wfm, "WFM"),
+            (Mode::Rtty, "RTTY"),
+            (Mode::CwReverse, "CW-R"),
+            (Mode::RttyReverse, "RTTY-R"),
+        ] {
+            assert_eq!(format_core_mode(mode), label);
+        }
+    }
+
+    #[test]
+    fn cli_control_values_and_formatting_preserve_typed_hal_contracts() {
+        for (id, raw, expected) in [
+            (ControlId::Preamp, "on", ControlValue::Bool(true)),
+            (ControlId::Split, "0", ControlValue::Bool(false)),
+            (ControlId::AfGain, "42", ControlValue::U8(42)),
+            (ControlId::RfPower, "100", ControlValue::U8(100)),
+            (ControlId::Filter, "3", ControlValue::U8(3)),
+        ] {
+            assert_eq!(parse_control_value(id, raw).unwrap(), expected);
+        }
+        assert!(parse_control_value(ControlId::Tuner, "on").is_err());
+        assert!(parse_control_value(ControlId::AfGain, "bad").is_err());
+        assert_eq!(format_control_value(&ControlValue::Bool(true)), "ON");
+        assert_eq!(format_control_value(&ControlValue::Bool(false)), "OFF");
+        assert_eq!(format_control_value(&ControlValue::U8(7)), "7");
+        assert_eq!(format_control_value(&ControlValue::I32(-2)), "-2");
+        assert_eq!(format_control_value(&ControlValue::U64(9)), "9");
+        assert_eq!(
+            format_control_value(&ControlValue::Mode(Mode::Data)),
+            "DATA"
+        );
+        assert_eq!(
+            format_control_value(&ControlValue::Text("test".to_string())),
+            "test"
+        );
+        assert_eq!(
+            format_control_value(&ControlValue::Raw(vec![0xFE, 0xFD])),
+            "FE FD"
+        );
+        assert_eq!(format_control_value(&ControlValue::Vfo(1)), "VFO 1");
+        assert_eq!(
+            format_control_value(&ControlValue::Receiver(2)),
+            "receiver 2"
+        );
     }
 }

@@ -202,6 +202,7 @@ pub(crate) fn spawn_radio_worker(
                     power_on,
                     power_settling,
                     power_command_pending,
+                    radio_error,
                     scope_view,
                     frequency_hz,
                     span_code,
@@ -220,6 +221,7 @@ pub(crate) fn spawn_radio_worker(
                         s.radio_power_on,
                         s.radio_power_settling,
                         s.radio_power_command_pending,
+                        s.last_error.is_some(),
                         s.radio_scope_view,
                         s.frequency_hz,
                         s.radio_scope_span_code,
@@ -243,6 +245,8 @@ pub(crate) fn spawn_radio_worker(
                     s.radio_spectrum_enabled = false;
                     s.radio_waterfall_status = if power_on == Some(false) {
                         "OFF (radio off)".to_string()
+                    } else if radio_error {
+                        "CONFIG ERROR".to_string()
                     } else {
                         "WAITING FOR RADIO".to_string()
                     };
@@ -252,22 +256,13 @@ pub(crate) fn spawn_radio_worker(
                 }
 
                 if spectrum_desired {
-                    let scope_edges = match (scope_view, workspace_mode) {
-                        // Voice does not need a mode-aware passband. Keep the
-                        // radio scope in its normal centered-span mode so a
-                        // voice transition does not rewrite fixed edge memory.
-                        (RadioScopeView::Narrow, WorkspaceMode::Voice) => None,
-                        (RadioScopeView::Overview, _) => frequency_hz
-                            .and_then(|hz| band_edges_for_frequency(Some(hz)))
-                            .map(|(low, high, _)| (low, high)),
-                        (RadioScopeView::Narrow, _) => frequency_hz.and_then(|hz| {
-                            sideband_scope_edges(
-                                hz,
-                                scope_span_hz(span_code),
-                                scope_projection_for_mode(&mode),
-                            )
-                        }),
-                    };
+                    let scope_edges = scope_edges_for_view(
+                        scope_view,
+                        workspace_mode,
+                        frequency_hz,
+                        span_code,
+                        &mode,
+                    );
                     let sweep_code = {
                         let tuning = stream_display_tuning.lock().expect("tuning lock poisoned");
                         effective_visual_profile(&tuning, &mode, true).1
@@ -1666,6 +1661,10 @@ fn poll_radio_level_state(
                 ControlId::AfGain => s.af_gain = Some(value),
                 ControlId::RfGain => s.rf_gain = Some(value),
                 ControlId::Squelch => s.squelch = Some(value),
+                ControlId::RfPower if s.rf_power_write_pending == Some(value) => {
+                    s.rf_power = Some(value);
+                    s.rf_power_write_pending = None;
+                }
                 ControlId::RfPower if s.rf_power_write_pending.is_none() => {
                     s.rf_power = Some(value)
                 }
@@ -1778,6 +1777,31 @@ fn scope_vbw_wide_for_view(_view: RadioScopeView, user_vbw_wide: bool) -> bool {
     user_vbw_wide
 }
 
+fn scope_edges_for_view(
+    scope_view: RadioScopeView,
+    workspace_mode: WorkspaceMode,
+    frequency_hz: Option<u64>,
+    span_code: u8,
+    mode: &str,
+) -> Option<(u64, u64)> {
+    match (scope_view, workspace_mode) {
+        // Voice does not need a mode-aware passband. Keep the radio scope in
+        // its normal centered-span mode so a voice transition does not rewrite
+        // fixed edge memory.
+        (RadioScopeView::Narrow, WorkspaceMode::Voice) => None,
+        (RadioScopeView::Overview, _) => frequency_hz
+            .and_then(|hz| band_edges_for_frequency(Some(hz)))
+            .map(|(low, high, _)| (low, high)),
+        (RadioScopeView::Narrow, _) => frequency_hz.and_then(|hz| {
+            sideband_scope_edges(
+                hz,
+                scope_span_hz(span_code),
+                scope_projection_for_mode(mode),
+            )
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1871,6 +1895,40 @@ mod tests {
             assert!(!scope_vbw_wide_for_view(view, false));
             assert!(scope_vbw_wide_for_view(view, true));
         }
+    }
+
+    #[test]
+    fn scope_edges_project_voice_overview_and_mode_aware_narrow_views() {
+        assert_eq!(
+            scope_edges_for_view(
+                RadioScopeView::Narrow,
+                WorkspaceMode::Voice,
+                Some(14_074_000),
+                3,
+                "USB"
+            ),
+            None
+        );
+        assert!(scope_edges_for_view(
+            RadioScopeView::Overview,
+            WorkspaceMode::Ft8,
+            Some(14_074_000),
+            3,
+            "USB"
+        )
+        .is_some());
+        assert!(
+            scope_edges_for_view(RadioScopeView::Overview, WorkspaceMode::Ft8, None, 3, "USB")
+                .is_none()
+        );
+        assert!(scope_edges_for_view(
+            RadioScopeView::Narrow,
+            WorkspaceMode::Ft8,
+            Some(14_074_000),
+            3,
+            "USB"
+        )
+        .is_some());
     }
 
     #[test]
@@ -2455,6 +2513,40 @@ mod level_poll_tests {
     }
 
     #[test]
+    fn level_poll_preserves_pending_rf_power_until_matching_readback() {
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let radio = CoverageRadio {
+            controls: HashMap::from([(ControlId::RfPower, ControlValue::U8(44))]),
+            meters: HashMap::from([(MeterId::Voltage, 120)]),
+        };
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        {
+            let mut state = state.lock().expect("state lock");
+            state.rf_power = Some(12);
+            state.rf_power_write_pending = Some(44);
+        }
+
+        poll_radio_level_state(&rt, &radio, &state);
+        {
+            let state = state.lock().expect("state lock");
+            assert_eq!(state.rf_power, Some(44));
+            assert_eq!(state.rf_power_write_pending, None);
+            assert_eq!(state.voltage_meter, Some(120));
+            assert_eq!(state.voltage_history.back(), Some(&120));
+        }
+
+        {
+            let mut state = state.lock().expect("state lock");
+            state.rf_power = Some(44);
+            state.rf_power_write_pending = Some(55);
+        }
+        poll_radio_level_state(&rt, &radio, &state);
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.rf_power, Some(44));
+        assert_eq!(state.rf_power_write_pending, Some(55));
+    }
+
+    #[test]
     fn core_poll_marks_external_transport_failure_as_unavailable() {
         let rt = tokio::runtime::Runtime::new().expect("test runtime");
         let state = Arc::new(Mutex::new(GuiState::default()));
@@ -2877,7 +2969,17 @@ mod level_poll_tests {
 
     #[test]
     fn rigctld_loopback_exercises_worker_hal_commands_without_transmit() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        let listener = match TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                if std::env::var_os("CI").is_some() {
+                    panic!("CI runner denied loopback listener: {error}");
+                }
+                eprintln!("skipping loopback test: TCP listeners are unavailable");
+                return;
+            }
+            Err(error) => panic!("loopback listener: {error}"),
+        };
         listener
             .set_nonblocking(true)
             .expect("nonblocking listener");
@@ -2966,7 +3068,17 @@ mod level_poll_tests {
 
     #[test]
     fn rigctld_loopback_surfaces_failures_without_dropping_live_state() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        let listener = match TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                if std::env::var_os("CI").is_some() {
+                    panic!("CI runner denied loopback listener: {error}");
+                }
+                eprintln!("skipping loopback test: TCP listeners are unavailable");
+                return;
+            }
+            Err(error) => panic!("loopback listener: {error}"),
+        };
         listener
             .set_nonblocking(true)
             .expect("nonblocking listener");
