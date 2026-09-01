@@ -1186,16 +1186,8 @@ pub(crate) fn spawn_radio_worker(
             }
             {
                 let mut s = state.lock().expect("ui state lock poisoned");
-                if s.radio_power_command_pending
-                    && s.radio_power_wake_deadline
-                        .is_some_and(|deadline| now >= deadline)
-                {
+                if expire_power_on_wake(&mut s, now) {
                     warn!("Radio did not respond after power-on wake window");
-                    s.radio_power_on = Some(false);
-                    s.radio_power_command_pending = false;
-                    s.radio_power_settling = false;
-                    s.radio_power_wake_deadline = None;
-                    s.last_error = Some("radio did not respond after power-on command".to_string());
                 }
             }
             let power_off =
@@ -1553,6 +1545,23 @@ fn scope_change_updates(
         .filter(|previous| previous.reference_tenths_db != current.reference_tenths_db)
         .map(|_| current.reference_tenths_db);
     (geometry_changed, hold_update, reference_update)
+}
+
+fn expire_power_on_wake(state: &mut GuiState, now: Instant) -> bool {
+    if state.radio_power_command_pending
+        && state
+            .radio_power_wake_deadline
+            .is_some_and(|deadline| now >= deadline)
+    {
+        state.radio_power_on = Some(false);
+        state.radio_power_command_pending = false;
+        state.radio_power_settling = false;
+        state.radio_power_wake_deadline = None;
+        state.last_error = Some("radio did not respond after power-on command".to_string());
+        true
+    } else {
+        false
+    }
 }
 
 fn apply_icom_mode_details(
@@ -1915,6 +1924,37 @@ mod tests {
             (true, None, None)
         );
         assert_eq!(scope_change_updates(None, baseline), (true, None, None));
+    }
+
+    #[test]
+    fn power_on_wake_timeout_only_expires_an_outstanding_command() {
+        let now = Instant::now();
+        let mut expired = GuiState {
+            radio_power_command_pending: true,
+            radio_power_settling: true,
+            radio_power_on: None,
+            radio_power_wake_deadline: Some(now - Duration::from_secs(1)),
+            ..GuiState::default()
+        };
+
+        assert!(expire_power_on_wake(&mut expired, now));
+        assert_eq!(expired.radio_power_on, Some(false));
+        assert!(!expired.radio_power_command_pending);
+        assert!(!expired.radio_power_settling);
+        assert!(expired.radio_power_wake_deadline.is_none());
+        assert_eq!(
+            expired.last_error.as_deref(),
+            Some("radio did not respond after power-on command")
+        );
+
+        let mut waiting = GuiState {
+            radio_power_command_pending: true,
+            radio_power_wake_deadline: Some(now + Duration::from_secs(1)),
+            ..GuiState::default()
+        };
+        assert!(!expire_power_on_wake(&mut waiting, now));
+        assert!(waiting.radio_power_command_pending);
+        assert!(waiting.last_error.is_none());
     }
 
     #[test]
