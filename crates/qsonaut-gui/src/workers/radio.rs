@@ -2934,6 +2934,13 @@ mod level_poll_tests {
             .recv_timeout(Duration::from_secs(2))
             .expect("failing PTT ack")
             .is_err());
+        tx.send(GuiCommand::StartSwrSweep {
+            start_hz: 14_074_000,
+            stop_hz: 14_074_000,
+            step_hz: 1_000,
+            interval_ms: 100,
+        })
+        .expect("failing SWR setup");
         tx.send(GuiCommand::Quit).expect("quit error worker");
         handle.join().expect("error worker join");
         server.join().expect("error server join");
