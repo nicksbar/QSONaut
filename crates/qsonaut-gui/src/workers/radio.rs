@@ -2378,6 +2378,83 @@ mod level_poll_tests {
     }
 
     #[test]
+    fn rigctld_loopback_surfaces_failures_without_dropping_live_state() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let address = listener.local_addr().expect("loopback address");
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut index = 0;
+            while Instant::now() < deadline {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(Duration::from_millis(1));
+                    continue;
+                };
+                let mut command = String::new();
+                BufReader::new(stream.try_clone().expect("clone loopback stream"))
+                    .read_line(&mut command)
+                    .expect("loopback command");
+                let response = match index {
+                    0 => "14074000\n",
+                    1 => "USB 0\n",
+                    _ => "RPRT -1\n",
+                };
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("loopback error response");
+                index += 1;
+            }
+        });
+
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let sweep_abort = Arc::new(AtomicBool::new(false));
+        let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
+        let repaint = Arc::new(OnceLock::new());
+        let ptt_allowed = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker(
+            ConfiguredRadio::Rigctld(qsonaut_radio::rigctld::RigctldRadio::new(
+                address.to_string(),
+            )),
+            state.clone(),
+            stop,
+            sweep_abort,
+            display_tuning,
+            rx,
+            repaint,
+            ptt_allowed,
+        );
+
+        for _ in 0..100 {
+            if state.lock().expect("state lock").radio_power_on == Some(true) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        tx.send(GuiCommand::TuneTo(14_075_000))
+            .expect("failing tune command");
+        for _ in 0..100 {
+            if state.lock().expect("state lock").last_error.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        tx.send(GuiCommand::Quit).expect("quit error worker");
+        handle.join().expect("error worker join");
+        server.join().expect("error server join");
+
+        let state = state.lock().expect("state lock");
+        // A transient failed response after a known-good connection does not
+        // falsely report a power-off transition; the error remains visible.
+        assert_eq!(state.radio_power_on, Some(true));
+        assert!(state.last_error.is_some());
+        assert!(!state.ptt_on);
+    }
+
+    #[test]
     fn null_radio_worker_handles_safe_control_commands_without_transmit() {
         let state = Arc::new(Mutex::new(GuiState::default()));
         let stop = Arc::new(AtomicBool::new(false));
