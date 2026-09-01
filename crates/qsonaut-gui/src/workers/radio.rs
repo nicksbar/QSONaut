@@ -3044,6 +3044,35 @@ mod level_poll_tests {
     }
 
     #[test]
+    fn null_radio_worker_exits_when_session_command_channel_disconnects() {
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let sweep_abort = Arc::new(AtomicBool::new(false));
+        let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
+        let repaint = Arc::new(OnceLock::new());
+        let ptt_allowed = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker(
+            ConfiguredRadio::Null(qsonaut_radio::NullRadio::new()),
+            state.clone(),
+            stop,
+            sweep_abort,
+            display_tuning,
+            rx,
+            repaint,
+            ptt_allowed,
+        );
+        drop(tx);
+
+        handle
+            .join()
+            .expect("worker should stop when its session closes");
+        let state = state.lock().expect("state lock");
+        assert!(!state.ptt_on);
+        assert!(state.supported_controls.is_empty());
+    }
+
+    #[test]
     fn null_radio_swr_sweep_restores_state_without_hardware_transmit() {
         let state = Arc::new(Mutex::new(GuiState::default()));
         let stop = Arc::new(AtomicBool::new(false));
