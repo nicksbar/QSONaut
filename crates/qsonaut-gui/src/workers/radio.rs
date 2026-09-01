@@ -2192,4 +2192,66 @@ mod level_poll_tests {
         assert_eq!(state.mode, "DATA");
         assert!(!state.ptt_on);
     }
+
+    #[test]
+    fn worker_rejects_ptt_when_radio_is_unavailable_or_profile_is_inactive() {
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let sweep_abort = Arc::new(AtomicBool::new(false));
+        let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
+        let repaint = Arc::new(OnceLock::new());
+        let ptt_allowed = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker(
+            ConfiguredRadio::Null(qsonaut_radio::NullRadio::with_frequency_mode(
+                7_074_000,
+                Mode::Usb,
+            )),
+            state.clone(),
+            stop,
+            sweep_abort,
+            display_tuning,
+            rx,
+            repaint,
+            ptt_allowed.clone(),
+        );
+
+        for _ in 0..100 {
+            if state.lock().expect("state lock").radio_power_on == Some(true) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        state.lock().expect("state lock").radio_power_on = Some(false);
+        let (unavailable_tx, unavailable_rx) = mpsc::channel();
+        tx.send(GuiCommand::SetPttWithAck(true, unavailable_tx))
+            .expect("unavailable PTT command");
+        assert_eq!(
+            unavailable_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("unavailable PTT response")
+                .expect_err("unavailable radio must reject PTT"),
+            "radio is powered off"
+        );
+        assert_eq!(
+            state.lock().expect("state lock").last_error.as_deref(),
+            Some("radio command skipped: radio is unavailable")
+        );
+
+        state.lock().expect("state lock").radio_power_on = Some(true);
+        ptt_allowed.store(false, Ordering::Release);
+        let (inactive_tx, inactive_rx) = mpsc::channel();
+        tx.send(GuiCommand::SetPttWithAck(true, inactive_tx))
+            .expect("inactive profile PTT command");
+        assert_eq!(
+            inactive_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("inactive PTT response")
+                .expect_err("inactive profile must reject PTT"),
+            "PTT is disabled while this radio profile is inactive"
+        );
+        tx.send(GuiCommand::Quit).expect("quit worker");
+        handle.join().expect("worker join");
+        assert!(!state.lock().expect("state lock").ptt_on);
+    }
 }

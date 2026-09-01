@@ -7576,6 +7576,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn radio_initialization_routes_supported_and_unsupported_backends() {
+        let none = spawn_radio_init(
+            "none".to_string(),
+            "IC-7300".to_string(),
+            String::new(),
+            String::new(),
+            115_200,
+            0xE0,
+            0x94,
+        )
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("none backend result");
+        assert!(none.is_none());
+
+        let null = spawn_radio_init(
+            "mock".to_string(),
+            "IC-7300".to_string(),
+            String::new(),
+            String::new(),
+            115_200,
+            0xE0,
+            0x94,
+        )
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("mock backend result");
+        assert!(null.is_some());
+
+        let unsupported = spawn_radio_init(
+            "vendor-specific-backend".to_string(),
+            "IC-7300".to_string(),
+            String::new(),
+            String::new(),
+            115_200,
+            0xE0,
+            0x94,
+        )
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("unsupported backend result");
+        assert!(unsupported.is_none());
+    }
+
+    #[test]
     fn meter_display_orders_rx_and_tx_values_for_operator_context() {
         assert_eq!(mode_meter_order(false)[0], MeterId::Voltage);
         assert_eq!(mode_meter_order(false)[1], MeterId::Current);
