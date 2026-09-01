@@ -519,6 +519,10 @@ pub(super) fn save_operator_profile_named(name: &str, profile: &OperatorProfile)
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
+    if path.is_file() {
+        let backup = path.with_extension("toml.backup");
+        fs::copy(&path, backup)?;
+    }
     fs::write(&path, toml::to_string_pretty(profile)?)?;
     #[cfg(unix)]
     {

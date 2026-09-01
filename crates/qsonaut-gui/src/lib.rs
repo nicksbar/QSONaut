@@ -3038,6 +3038,17 @@ impl QsonautGuiApp {
     }
 
     fn apply_tab_preferences(&mut self, profile: &OperatorProfile) {
+        self.station_callsign = profile.callsign.clone();
+        self.station_grid = profile.grid.clone();
+        self.station_qth = profile.qth.clone();
+        self.station_rig = profile.station_rig.clone();
+        self.station_antenna = profile.station_antenna.clone();
+        self.station_notes = profile.station_notes.clone();
+        self.llm_prompt_context = profile.llm_prompt_context.clone();
+        self.sstv_image_requirements = profile.sstv_image_requirements.clone();
+        self.llm_model_notes = profile.llm_model_notes.clone();
+        self.config.station.callsign = Some(self.station_callsign_or_default().to_string());
+        self.config.station.grid = Some(self.station_grid_or_default().to_string());
         self.workspace_mode =
             parse_workspace_mode_token(&profile.workspace_mode).unwrap_or(WorkspaceMode::Ft8);
         self.ft8_follow_log = profile.follow_log;
@@ -3752,8 +3763,10 @@ impl QsonautGuiApp {
     }
 
     fn persist_profile(&mut self, status_prefix: &str) {
-        if let Err(error) = save_radio_profile_library(&self.radio_profiles) {
-            warn!(%error, "Radio profile library save failed");
+        if !self.radio_profiles.is_empty() {
+            if let Err(error) = save_radio_profile_library(&self.radio_profiles) {
+                warn!(%error, "Radio profile library save failed");
+            }
         }
         match save_operator_profile_named(
             &self.selected_profile_name,
