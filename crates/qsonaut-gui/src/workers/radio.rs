@@ -2939,6 +2939,25 @@ mod level_poll_tests {
             frequency_hz: 7_100_000,
         })
         .expect("apply workspace");
+        for mode in [
+            WorkspaceMode::Ft8,
+            WorkspaceMode::Ft4,
+            WorkspaceMode::Fst4,
+            WorkspaceMode::Wspr,
+            WorkspaceMode::Jt9,
+            WorkspaceMode::Jt65,
+            WorkspaceMode::Q65,
+            WorkspaceMode::Msk144,
+            WorkspaceMode::Cw,
+            WorkspaceMode::Sstv,
+            WorkspaceMode::Fldigi,
+        ] {
+            tx.send(GuiCommand::ApplyWorkspace {
+                mode,
+                frequency_hz: 7_101_000,
+            })
+            .expect("apply workspace mode");
+        }
         tx.send(GuiCommand::SetRadioMode(Mode::Data))
             .expect("set mode");
         tx.send(GuiCommand::SetFilter(3)).expect("set filter");
@@ -2962,7 +2981,7 @@ mod level_poll_tests {
         handle.join().expect("radio worker should stop cleanly");
 
         let state = state.lock().expect("state lock");
-        assert_eq!(state.frequency_hz, Some(7_100_000));
+        assert_eq!(state.frequency_hz, Some(7_101_000));
         assert_eq!(state.mode, "DATA");
         assert!(!state.ptt_on);
     }
