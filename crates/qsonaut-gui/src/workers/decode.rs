@@ -284,7 +284,10 @@ pub(in super::super) fn run_native_digital_decode(
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::{q65_live_decode_config, run_native_digital_decode, WorkspaceMode};
+    use super::{
+        q65_live_decode_config, run_ft8_decode_worker, run_native_digital_decode, PendingFt8Decode,
+        WorkspaceMode,
+    };
     use crate::modes::fst4::Submode;
     use crate::tx_audio::build_native_digital_tx_pcm;
     use qsonaut_modems::AudioBlock;
@@ -378,6 +381,29 @@ mod tests {
                 assert_eq!(shared.ft4_last_decode_period, None);
             }
         }
+    }
+
+    #[test]
+    fn ft8_decode_worker_publishes_telemetry_for_silence_without_results() {
+        let state = Arc::new(Mutex::new(crate::GuiState::default()));
+        let deferred = Arc::new(Mutex::new(None));
+        run_ft8_decode_worker(
+            PendingFt8Decode {
+                samples: vec![0.0; 12_000],
+                utc: "00:00:00.000".to_string(),
+                period: 7,
+                deep_decode: false,
+                alignment_s: 0.25,
+            },
+            state.clone(),
+            deferred,
+        );
+
+        let state = state.lock().expect("state");
+        assert!(state.ft8_compute_telemetry.is_some());
+        assert_eq!(state.ft8_last_decode_period, Some(7));
+        assert!(state.ft8_decode_status.starts_with("LIVE: no decodes"));
+        assert!(state.ft8_pending.is_empty());
     }
 }
 

@@ -962,10 +962,29 @@ impl QsonautGuiApp {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use super::{
         achievement_progress, custom_rule_id, AchievementKind, CustomAchievementRule, HunterMetric,
         QsoRecord,
     };
+    use std::sync::{Arc, Mutex};
+
+    fn headless_app() -> QsonautGuiApp {
+        let icon = eframe::icon_data::from_png_bytes(QSONAUT_ICON_PNG).expect("test icon");
+        QsonautGuiApp::new_with_context(
+            AppConfig::default(),
+            false,
+            false,
+            &egui::Context::default(),
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        )
+    }
 
     fn existing(id: &str) -> CustomAchievementRule {
         CustomAchievementRule {
@@ -1075,5 +1094,87 @@ mod tests {
                 (0, 1)
             );
         }
+    }
+
+    #[test]
+    fn hunter_rule_evaluation_unlocks_enabled_thresholds_and_ignores_disabled_rules() {
+        let mut app = headless_app();
+        app.hunter_unique_heard.insert("K1ABC".to_string());
+        app.hunter_custom_rules = vec![
+            CustomAchievementRule {
+                id: "heard".to_string(),
+                title: "Heard one".to_string(),
+                detail: "A station was heard".to_string(),
+                metric: HunterMetric::UniqueHeard,
+                threshold: 1,
+                enabled: true,
+                unlocked: false,
+            },
+            CustomAchievementRule {
+                id: "disabled".to_string(),
+                title: "Disabled".to_string(),
+                detail: "Must remain locked".to_string(),
+                metric: HunterMetric::DecodeBursts,
+                threshold: 1,
+                enabled: false,
+                unlocked: false,
+            },
+        ];
+        app.evaluate_custom_hunter_rules();
+        assert!(app.hunter_custom_rules[0].unlocked);
+        assert!(!app.hunter_custom_rules[1].unlocked);
+        assert_eq!(app.hunter_feed.len(), 1);
+    }
+
+    #[test]
+    fn automation_radio_commands_reject_unsafe_and_invalid_values() {
+        let mut app = headless_app();
+        app.config.radio.model = "unknown-model".to_string();
+        assert!(app
+            .execute_automation_radio_command("tune_delta_hz", "-25")
+            .contains("-25 Hz"));
+        assert!(app
+            .execute_automation_radio_command("tune_delta_hz", "bad")
+            .contains("invalid tune delta"));
+        assert!(app
+            .execute_automation_radio_command("tune_workspace_band_hz", "0")
+            .contains("must be > 0"));
+        assert!(app
+            .execute_automation_radio_command("tune_workspace_band_hz", "bad")
+            .contains("invalid frequency"));
+        assert!(app
+            .execute_automation_radio_command("set_filter", "bad")
+            .contains("no filter control"));
+        assert!(app
+            .execute_automation_radio_command("set_ptt", "1")
+            .contains("not allowed"));
+        assert!(app
+            .execute_automation_radio_command("unknown", "1")
+            .contains("unsupported command"));
+        assert!(app
+            .execute_automation_radio_command("cycle_mode", "")
+            .contains("mode cycle"));
+    }
+
+    #[test]
+    fn external_automation_send_validates_transport_and_bounds_outbox() {
+        let mut app = headless_app();
+        app.automation_external_transports.clear();
+        assert!(app
+            .execute_automation_external_send("", "target", "message")
+            .contains("required"));
+        assert!(app
+            .execute_automation_external_send("irc:station", "target", "message")
+            .contains("not configured"));
+        app.automation_external_transports.insert("irc".to_string());
+        for index in 0..40 {
+            let result = app.execute_automation_external_send(
+                "irc:station",
+                "target",
+                &format!("message-{index}"),
+            );
+            assert!(result.contains("Queued external send"));
+        }
+        assert_eq!(app.automation_external_outbox.len(), 32);
     }
 }

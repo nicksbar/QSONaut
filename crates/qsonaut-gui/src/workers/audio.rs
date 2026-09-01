@@ -1966,9 +1966,12 @@ mod tests {
         save_sstv_debug_capture_in, strongest_cw_tone_hz, GuiState, NullAudioGenerator,
         WorkspaceMode,
     };
+    use crate::is_probable_callsign;
     use qsonaut_third_party::sstv as qsonaut_sstv;
     use rustfft::num_complex::Complex;
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex, OnceLock};
+    use std::time::Duration;
     use tempfile::tempdir;
 
     #[test]
@@ -2067,6 +2070,160 @@ mod tests {
         assert_eq!(chunk.len(), 1);
         assert_eq!(generator.mode, Some(WorkspaceMode::Wspr));
         assert!(generator.next_deadline.is_some());
+    }
+
+    #[test]
+    fn audio_worker_disabled_path_reports_disabled_without_opening_devices() {
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let tx_active = Arc::new(AtomicBool::new(false));
+        let digital_tx_active = Arc::new(AtomicBool::new(false));
+        let monitor_volume = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
+        let repaint = Arc::new(OnceLock::new());
+        let tuning = Arc::new(Mutex::new(crate::DisplayTuning::default()));
+
+        let handle = super::spawn_audio_spectrum_worker(
+            state.clone(),
+            stop,
+            tx_active,
+            digital_tx_active,
+            false,
+            48_000,
+            1,
+            None,
+            false,
+            None,
+            monitor_volume,
+            repaint,
+            tuning,
+        );
+        handle.join().expect("disabled audio worker should exit");
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.audio_spectrum_status, "DISABLED");
+        assert!(state.audio_device_sample_rate_hz.is_none());
+        assert!(state.audio_device_channels.is_none());
+    }
+
+    #[test]
+    fn null_simulation_always_has_three_valid_fallback_stations() {
+        for mode in [
+            WorkspaceMode::Voice,
+            WorkspaceMode::Ft8,
+            WorkspaceMode::Sstv,
+        ] {
+            let stations = super::null_sim_stations(mode);
+            assert_eq!(stations.len(), 3);
+            assert!(stations.iter().all(|station| {
+                station
+                    .callsign
+                    .as_deref()
+                    .is_some_and(is_probable_callsign)
+            }));
+            assert!(stations.iter().all(|station| {
+                station.modes.is_empty()
+                    || station
+                        .modes
+                        .iter()
+                        .any(|supported| supported.eq_ignore_ascii_case(mode.label()))
+            }));
+        }
+    }
+
+    #[test]
+    fn null_audio_worker_runs_canonical_processing_pipeline_and_stops_cleanly() {
+        let state = Arc::new(Mutex::new(GuiState {
+            workspace_mode: WorkspaceMode::Voice,
+            ..GuiState::default()
+        }));
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_after_startup = stop.clone();
+        let tx_active = Arc::new(AtomicBool::new(false));
+        let digital_tx_active = Arc::new(AtomicBool::new(false));
+        let monitor_volume = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
+        let repaint = Arc::new(OnceLock::new());
+        let tuning = Arc::new(Mutex::new(crate::DisplayTuning::default()));
+
+        let stopper = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(2));
+            stop_after_startup.store(true, Ordering::Relaxed);
+        });
+        let handle = super::spawn_audio_spectrum_worker(
+            state.clone(),
+            stop,
+            tx_active,
+            digital_tx_active,
+            true,
+            44_100,
+            2,
+            Some(qsonaut_audio::NULL_INPUT_DEVICE.to_string()),
+            true,
+            Some(qsonaut_audio::NULL_OUTPUT_DEVICE.to_string()),
+            monitor_volume,
+            repaint,
+            tuning,
+        );
+        handle.join().expect("null audio worker should stop");
+        stopper.join().expect("worker stopper should stop");
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(
+            state.audio_device_sample_rate_hz,
+            Some(qsonaut_audio::CANONICAL_SAMPLE_RATE_HZ)
+        );
+        assert_eq!(
+            state.audio_device_channels,
+            Some(qsonaut_audio::CANONICAL_CHANNELS)
+        );
+        assert_eq!(
+            state.audio_device_sample_format.as_deref(),
+            Some("F32 (simulated)")
+        );
+        assert!(state.audio_waterfall_revision > 0);
+        assert!(!state.audio_waterfall_rows.is_empty());
+        assert!(state.audio_level_dbfs.is_some());
+        assert!(state.audio_spectrum_status.starts_with("SIMULATED RX"));
+    }
+
+    #[test]
+    fn null_audio_worker_resets_decoder_state_when_workspace_mode_changes() {
+        let state = Arc::new(Mutex::new(GuiState {
+            workspace_mode: WorkspaceMode::Cw,
+            ..GuiState::default()
+        }));
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_after_modes = stop.clone();
+        let state_for_modes = state.clone();
+        let mode_driver = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(700));
+            state_for_modes.lock().expect("state lock").workspace_mode = WorkspaceMode::Sstv;
+            std::thread::sleep(Duration::from_millis(900));
+            stop_after_modes.store(true, Ordering::Relaxed);
+        });
+        let handle = super::spawn_audio_spectrum_worker(
+            state.clone(),
+            stop,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            true,
+            qsonaut_audio::CANONICAL_SAMPLE_RATE_HZ,
+            qsonaut_audio::CANONICAL_CHANNELS as u8,
+            Some(qsonaut_audio::NULL_INPUT_DEVICE.to_string()),
+            false,
+            None,
+            Arc::new(AtomicU32::new(1.0_f32.to_bits())),
+            Arc::new(OnceLock::new()),
+            Arc::new(Mutex::new(crate::DisplayTuning::default())),
+        );
+        handle
+            .join()
+            .expect("mode-changing null worker should stop");
+        mode_driver.join().expect("mode driver should stop");
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.workspace_mode, WorkspaceMode::Sstv);
+        assert!(state.audio_waterfall_revision > 0);
+        assert!(!state.sstv_status.is_empty());
     }
 
     #[test]

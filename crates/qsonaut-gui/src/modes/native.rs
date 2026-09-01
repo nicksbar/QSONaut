@@ -386,7 +386,11 @@ impl QsonautGuiApp {
 #[cfg(test)]
 mod tests {
     use super::{native_mode_guidance, native_radio_mode_label, native_slot_label};
-    use crate::{band_plan::WorkspaceRadioPreset, modes::fst4::Submode, BaseMode, WorkspaceMode};
+    use crate::{
+        band_plan::WorkspaceRadioPreset, modes::fst4::Submode, AppConfig, BaseMode,
+        GraphicsPreferences, GuiState, QsonautGuiApp, WorkspaceMode, QSONAUT_ICON_PNG,
+    };
+    use std::sync::{Arc, Mutex};
 
     fn preset(base_mode: BaseMode, data_mode: bool) -> WorkspaceRadioPreset {
         WorkspaceRadioPreset {
@@ -444,5 +448,53 @@ mod tests {
         assert!(native_mode_guidance(WorkspaceMode::Jt65).contains("JT65"));
         assert!(native_mode_guidance(WorkspaceMode::Q65).contains("Q65-A30"));
         assert!(native_mode_guidance(WorkspaceMode::Fldigi).contains("one-shot"));
+    }
+
+    #[test]
+    fn draws_native_details_for_every_supported_mode_without_hardware() {
+        let icon = eframe::icon_data::from_png_bytes(QSONAUT_ICON_PNG).expect("test icon");
+        let context = eframe::egui::Context::default();
+        let mut app = QsonautGuiApp::new_with_context(
+            AppConfig::default(),
+            false,
+            false,
+            &context,
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+        let snapshot = GuiState {
+            frequency_hz: Some(14_074_000),
+            mode: "USB-D".to_string(),
+            ..GuiState::default()
+        };
+        for mode in [
+            WorkspaceMode::Ft4,
+            WorkspaceMode::Fst4,
+            WorkspaceMode::Jt9,
+            WorkspaceMode::Jt65,
+            WorkspaceMode::Q65,
+            WorkspaceMode::Wspr,
+            WorkspaceMode::Msk144,
+            WorkspaceMode::Cw,
+            WorkspaceMode::Fldigi,
+        ] {
+            let _ = context.run(Default::default(), |context| {
+                eframe::egui::CentralPanel::default().show(context, |ui| {
+                    app.draw_mfsk_mode_details(ui, &snapshot, mode);
+                });
+            });
+        }
+        for mode in [WorkspaceMode::Ft4, WorkspaceMode::Wspr, WorkspaceMode::Cw] {
+            let _ = context.run(Default::default(), |context| {
+                eframe::egui::CentralPanel::default().show(context, |ui| {
+                    app.draw_mfsk_mode_workspace(ui, &snapshot, mode);
+                });
+            });
+        }
     }
 }

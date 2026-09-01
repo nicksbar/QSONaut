@@ -7737,6 +7737,240 @@ mod tests {
     }
 
     #[test]
+    fn tx_safety_detects_and_clears_every_transmit_path() {
+        let icon = eframe::icon_data::from_png_bytes(QSONAUT_ICON_PNG).expect("test icon");
+        let mut config = AppConfig::default();
+        config.radio.enabled = false;
+        let context = egui::Context::default();
+        let mut app = QsonautGuiApp::new_with_context(
+            config,
+            false,
+            false,
+            &context,
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+
+        let mut snapshot = GuiState::default();
+        assert!(!app.any_tx_armed(&snapshot));
+        for arm in [
+            |app: &mut QsonautGuiApp| app.ft8_autoseq = true,
+            |app: &mut QsonautGuiApp| app.ft4_autoseq = true,
+            |app: &mut QsonautGuiApp| app.ft8_tx_queued_period = Some(1),
+            |app: &mut QsonautGuiApp| app.sstv_tx_armed = true,
+        ] {
+            arm(&mut app);
+            assert!(app.any_tx_armed(&snapshot));
+            app.ft8_autoseq = false;
+            app.ft4_autoseq = false;
+            app.ft8_tx_queued_period = None;
+            app.sstv_tx_armed = false;
+        }
+        snapshot.ptt_on = true;
+        assert!(app.any_tx_armed(&snapshot));
+        snapshot.ptt_on = false;
+        app.ft8_tx_active.store(true, Ordering::Release);
+        assert!(app.any_tx_armed(&snapshot));
+
+        app.ft8_autoseq = true;
+        app.ft4_autoseq = true;
+        app.sstv_tx_armed = true;
+        app.ft8_tx_queued_period = Some(9);
+        app.digital_seq_target = Some("W1AW".to_string());
+        app.digital_tx_started = Some((WorkspaceMode::Ft4, 9));
+        app.digital_last_tx_message = Some("CQ W1AW".to_string());
+        app.disarm_all_tx_with_persistence("safety test", false);
+
+        assert!(!app.ft8_autoseq);
+        assert!(!app.ft4_autoseq);
+        assert!(!app.sstv_tx_armed);
+        assert!(app.ft8_tx_queued_period.is_none());
+        assert!(app.digital_seq_target.is_none());
+        assert!(app.digital_tx_started.is_none());
+        assert!(app.digital_last_tx_message.is_none());
+        assert_eq!(app.ft8_seq_status, "safety test");
+        assert_eq!(app.digital_tx_status, "safety test");
+        app.ft8_tx_active.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn radio_profile_application_maps_persisted_controls_to_hal_commands() {
+        let icon = eframe::icon_data::from_png_bytes(QSONAUT_ICON_PNG).expect("test icon");
+        let mut config = AppConfig::default();
+        config.radio.enabled = false;
+        let context = egui::Context::default();
+        let mut app = QsonautGuiApp::new_with_context(
+            config,
+            false,
+            false,
+            &context,
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+        let snapshot = GuiState {
+            mode: "USB".to_string(),
+            data_mode: Some(true),
+            filter: Some(3),
+            af_gain: Some(12),
+            rf_gain: Some(34),
+            rf_power: Some(56),
+            ..GuiState::default()
+        };
+        let read_back = app.read_radio_profile("saved", &snapshot);
+        assert_eq!(read_back.name, "saved");
+        assert_eq!(read_back.mode.as_deref(), Some("USB"));
+        assert_eq!(read_back.data_mode, Some(true));
+        assert_eq!(read_back.filter, Some(3));
+        assert_eq!(read_back.rf_power, Some(56));
+        app.apply_radio_profile(RadioProfile {
+            name: "disconnected".to_string(),
+            mode: None,
+            data_mode: None,
+            filter: None,
+            af_gain: None,
+            rf_gain: None,
+            rf_power: None,
+            preamp: None,
+            attenuator: None,
+            noise_blank: None,
+            noise_reduction: None,
+            agc: None,
+        });
+        assert_eq!(
+            app.profile_io_status,
+            "Radio tuning unavailable: radio is not connected"
+        );
+        app.state.lock().expect("state lock").frequency_hz = Some(14_074_000);
+        let (tx, rx) = mpsc::channel();
+        app.command_tx = Some(tx);
+
+        app.apply_radio_profile(RadioProfile {
+            name: "FT4 contest".to_string(),
+            mode: Some("FT4".to_string()),
+            data_mode: Some(true),
+            filter: Some(2),
+            af_gain: Some(11),
+            rf_gain: Some(22),
+            rf_power: Some(33),
+            preamp: Some(true),
+            attenuator: Some(false),
+            noise_blank: Some(true),
+            noise_reduction: Some(false),
+            agc: Some(3),
+        });
+
+        let commands: Vec<_> = rx.try_iter().collect();
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            GuiCommand::ApplyWorkspace {
+                mode: WorkspaceMode::Ft4,
+                frequency_hz: 14_074_000
+            }
+        )));
+        assert!(commands
+            .iter()
+            .any(|command| matches!(command, GuiCommand::SetFilter(2))));
+        for expected in [
+            GuiCommand::SetControl(ControlId::AfGain, ControlValue::U8(11)),
+            GuiCommand::SetControl(ControlId::RfGain, ControlValue::U8(22)),
+            GuiCommand::SetControl(ControlId::RfPower, ControlValue::U8(33)),
+            GuiCommand::SetControl(ControlId::Preamp, ControlValue::Bool(true)),
+            GuiCommand::SetControl(ControlId::Attenuator, ControlValue::Bool(false)),
+            GuiCommand::SetControl(ControlId::NoiseBlanker, ControlValue::Bool(true)),
+            GuiCommand::SetControl(ControlId::NoiseReduction, ControlValue::Bool(false)),
+            GuiCommand::SetControl(ControlId::Agc, ControlValue::U8(3)),
+        ] {
+            assert!(
+                commands.iter().any(|command| match (&expected, command) {
+                    (
+                        GuiCommand::SetControl(expected_id, expected_value),
+                        GuiCommand::SetControl(actual_id, actual_value),
+                    ) => expected_id == actual_id && expected_value == actual_value,
+                    _ => false,
+                }),
+                "missing HAL command: {expected:?}"
+            );
+        }
+        assert_eq!(app.profile_io_status, "Applied radio profile FT4 contest");
+    }
+
+    #[test]
+    fn operator_profile_translation_preserves_versioned_audio_and_radio_settings() {
+        let icon = eframe::icon_data::from_png_bytes(QSONAUT_ICON_PNG).expect("test icon");
+        let config = AppConfig::default();
+        let context = egui::Context::default();
+        let app = QsonautGuiApp::new_with_context(
+            config.clone(),
+            false,
+            false,
+            &context,
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+        let mut profile = app.current_operator_profile();
+        profile.radio_enabled = true;
+        profile.radio_backend = "native".to_string();
+        profile.radio_model = "IC-7300".to_string();
+        profile.radio_endpoint = "127.0.0.1:4532".to_string();
+        profile.radio_serial_port = Some("/dev/ttyUSB0".to_string());
+        profile.radio_baud_rate = 230_400;
+        profile.radio_civ_address = 0x94;
+        profile.radio_controller_civ_address = 0xE0;
+        let radio = radio_config_from_operator_profile(&profile);
+        assert!(radio.enabled);
+        assert_eq!(radio.backend, "native");
+        assert_eq!(radio.model, "IC-7300");
+        assert_eq!(radio.baud_rate, 230_400);
+        assert_eq!(radio.civ_address, 0x94);
+
+        profile.profile_version = 2;
+        profile.audio_enabled = false;
+        profile.audio_input_device = Some("input".to_string());
+        profile.audio_output_device = Some("output".to_string());
+        profile.audio_monitor_enabled = true;
+        profile.audio_monitor_output_device = Some("monitor".to_string());
+        profile.audio_monitor_volume = 4.0;
+        profile.audio_sample_rate_hz = 44_100;
+        profile.audio_channels = 2;
+        let legacy_audio = audio_config_from_operator_profile(&profile, &config.audio);
+        assert_eq!(legacy_audio.enabled, config.audio.enabled);
+        assert_eq!(legacy_audio.input_device, config.audio.input_device);
+        assert_eq!(legacy_audio.output_device, config.audio.output_device);
+        assert_eq!(legacy_audio.monitor_enabled, config.audio.monitor_enabled);
+        assert_eq!(
+            legacy_audio.monitor_output_device,
+            config.audio.monitor_output_device
+        );
+        assert_eq!(legacy_audio.monitor_volume, config.audio.monitor_volume);
+
+        profile.profile_version = AUDIO_MONITOR_PROFILE_VERSION;
+        let current_audio = audio_config_from_operator_profile(&profile, &config.audio);
+        assert!(current_audio.monitor_enabled);
+        assert_eq!(
+            current_audio.monitor_output_device.as_deref(),
+            Some("monitor")
+        );
+        assert_eq!(current_audio.monitor_volume, 2.0);
+        assert_eq!(current_audio.sample_rate_hz, 44_100);
+        assert_eq!(current_audio.channels, 2);
+    }
+
+    #[test]
     fn radio_initialization_routes_supported_and_unsupported_backends() {
         let none = spawn_radio_init(
             "none".to_string(),
@@ -8446,6 +8680,236 @@ mod tests {
             state.radio_waterfall_rows.back().unwrap(),
             &[0, 0, 255, 0, 0]
         );
+    }
+
+    #[test]
+    fn radio_waterfall_draws_narrow_and_overview_scopes_headlessly() {
+        let icon = eframe::icon_data::from_png_bytes(QSONAUT_ICON_PNG).expect("test icon");
+        let mut app = QsonautGuiApp::new_with_context(
+            AppConfig::default(),
+            false,
+            false,
+            &egui::Context::default(),
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+        app.civ_spectrum_on = true;
+        let context = egui::Context::default();
+        let mut snapshot = GuiState {
+            frequency_hz: Some(14_074_000),
+            mode: "USB".to_string(),
+            radio_waterfall_revision: 1,
+            radio_waterfall_rows: std::collections::VecDeque::from([
+                vec![0, 32, 96, 160],
+                vec![160, 96, 32, 0],
+            ]),
+            ..GuiState::default()
+        };
+
+        for scope in [RadioScopeView::Narrow, RadioScopeView::Overview] {
+            app.radio_scope_view = scope;
+            let _ = context.run(Default::default(), |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    app.draw_radio_waterfall(ui, context, &snapshot);
+                });
+            });
+        }
+
+        snapshot.radio_waterfall_revision = 2;
+        let _ = context.run(Default::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                app.draw_radio_waterfall(ui, context, &snapshot);
+            });
+        });
+        assert!(app.radio_waterfall_texture.is_some());
+    }
+
+    #[test]
+    fn hunter_panel_renders_empty_and_populated_activity_headlessly() {
+        let icon = eframe::icon_data::from_png_bytes(QSONAUT_ICON_PNG).expect("test icon");
+        let mut app = QsonautGuiApp::new_with_context(
+            AppConfig::default(),
+            false,
+            false,
+            &egui::Context::default(),
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+        app.qso_log.contacts.clear();
+        app.qso_selected = None;
+        let context = egui::Context::default();
+        let snapshot = GuiState {
+            frequency_hz: Some(14_074_000),
+            ..GuiState::default()
+        };
+
+        let _ = context.run(Default::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                app.draw_hunter_panel(ui, &snapshot);
+            });
+        });
+
+        app.hunter_unique_heard.insert("K1ABC".to_string());
+        app.hunter_directed_hits = 1;
+        app.hunter_dupe_blocks = 2;
+        app.hunter_decode_bursts = 3;
+        app.hunter_unlocked.insert(AchievementKind::FirstDecode);
+        app.hunter_feed.push_back(HunterAlert {
+            utc: "12:34:56".to_string(),
+            title: "Signal Hunter".to_string(),
+            detail: "Captured a decode".to_string(),
+            accent: Color32::LIGHT_GREEN,
+        });
+        let _ = context.run(Default::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                app.draw_hunter_panel(ui, &snapshot);
+            });
+        });
+        app.hunter_show_acknowledged = true;
+        app.hunter_acknowledged.insert(AchievementKind::FirstDecode);
+        let _ = context.run(Default::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                app.draw_hunter_panel(ui, &snapshot);
+            });
+        });
+    }
+
+    #[test]
+    fn contact_log_renders_empty_and_selected_contact_editor_headlessly() {
+        let icon = eframe::icon_data::from_png_bytes(QSONAUT_ICON_PNG).expect("test icon");
+        let mut app = QsonautGuiApp::new_with_context(
+            AppConfig::default(),
+            false,
+            false,
+            &egui::Context::default(),
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+        app.qso_log.contacts.clear();
+        app.qso_selected = None;
+        let context = egui::Context::default();
+        let snapshot = GuiState {
+            frequency_hz: Some(14_074_000),
+            mode: "USB".to_string(),
+            ..GuiState::default()
+        };
+
+        let _ = context.run(Default::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                app.draw_contact_log(ui, &snapshot);
+            });
+        });
+
+        let contact = QsoRecord::new("K1ABC", "FT8", "20m", 14_074_000, 1, 1);
+        app.qso_selected = Some(contact.id);
+        app.qso_log.contacts.push(contact);
+        let _ = context.run(Default::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                app.draw_contact_log(ui, &snapshot);
+            });
+        });
+        assert_eq!(app.qso_selected, Some(app.qso_log.contacts[0].id));
+    }
+
+    #[test]
+    fn app_log_panel_filters_and_renders_levelled_lines_headlessly() {
+        let icon = eframe::icon_data::from_png_bytes(QSONAUT_ICON_PNG).expect("test icon");
+        let mut app = QsonautGuiApp::new_with_context(
+            AppConfig::default(),
+            false,
+            false,
+            &egui::Context::default(),
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+        app.app_log_status = "test log".to_string();
+        app.app_log_last_refresh = Instant::now();
+        app.app_log_text = [
+            "2026-09-01 INFO RX decode received",
+            "2026-09-01 WARN Audio fallback",
+            "2026-09-01 ERROR Radio failed",
+            "2026-09-01 DEBUG worker detail",
+            "2026-09-01 TRACE parser detail",
+        ]
+        .join("\n");
+        let context = egui::Context::default();
+        let _ = context.run(Default::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                app.draw_app_log_panel(ui);
+            });
+        });
+        app.app_log_filter = "missing".to_string();
+        app.app_log_level_filter = AppLogLevelFilter::Error;
+        let _ = context.run(Default::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                app.draw_app_log_panel(ui);
+            });
+        });
+    }
+
+    #[test]
+    fn audio_waterfall_renders_mode_specific_cursor_scopes_headlessly() {
+        let icon = eframe::icon_data::from_png_bytes(QSONAUT_ICON_PNG).expect("test icon");
+        let mut app = QsonautGuiApp::new_with_context(
+            AppConfig::default(),
+            false,
+            false,
+            &egui::Context::default(),
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+        let context = egui::Context::default();
+        let snapshot = GuiState {
+            audio_waterfall_revision: 1,
+            audio_waterfall_rows: std::collections::VecDeque::from([vec![0; 512], vec![160; 512]]),
+            filter: Some(2),
+            ..GuiState::default()
+        };
+        for mode in [
+            WorkspaceMode::Ft8,
+            WorkspaceMode::Ft4,
+            WorkspaceMode::Fst4,
+            WorkspaceMode::Wspr,
+            WorkspaceMode::Jt9,
+            WorkspaceMode::Jt65,
+            WorkspaceMode::Q65,
+            WorkspaceMode::Cw,
+            WorkspaceMode::Sstv,
+        ] {
+            app.workspace_mode = mode;
+            app.sstv_auto_target = mode == WorkspaceMode::Sstv;
+            let _ = context.run(Default::default(), |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    app.draw_audio_waterfall(ui, context, &snapshot);
+                });
+            });
+        }
+        assert!(app.audio_waterfall_texture.is_some());
     }
 
     #[test]
@@ -9281,6 +9745,34 @@ mod tests {
         ] {
             assert_eq!(parse_workspace_mode_token(token), Some(expected));
         }
+    }
+
+    #[test]
+    fn simulated_backends_override_audio_device_choices() {
+        assert_eq!(
+            effective_audio_input_device("null", Some("microphone".to_string())),
+            Some(NULL_INPUT_DEVICE.to_string())
+        );
+        assert_eq!(
+            effective_audio_input_device("MOCK", None),
+            Some(NULL_INPUT_DEVICE.to_string())
+        );
+        assert_eq!(
+            effective_audio_input_device("native", Some("microphone".to_string())),
+            Some("microphone".to_string())
+        );
+        assert_eq!(
+            effective_audio_output_device("null", Some("speakers".to_string())),
+            Some(NULL_OUTPUT_DEVICE.to_string())
+        );
+        assert_eq!(
+            effective_audio_output_device("MOCK", None),
+            Some(NULL_OUTPUT_DEVICE.to_string())
+        );
+        assert_eq!(
+            effective_audio_output_device("native", Some("speakers".to_string())),
+            Some("speakers".to_string())
+        );
     }
 
     #[test]

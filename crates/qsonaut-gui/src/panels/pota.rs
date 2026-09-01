@@ -179,6 +179,7 @@ fn draw_pota_history_graph(ui: &mut egui::Ui, history: &VecDeque<(Instant, usize
 mod tests {
     use super::{draw_pota_history_graph, format_frequency};
     use std::collections::VecDeque;
+    use std::time::Instant;
 
     #[test]
     fn formats_pota_frequencies_in_human_readable_units() {
@@ -194,6 +195,26 @@ mod tests {
         let _ = context.run(Default::default(), |context| {
             eframe::egui::CentralPanel::default().show(context, |ui| {
                 draw_pota_history_graph(ui, &history);
+            });
+        });
+    }
+
+    #[test]
+    fn draws_single_and_multi_point_history_graphs_with_scaled_values() {
+        let context = eframe::egui::Context::default();
+        let histories = [
+            VecDeque::from([(Instant::now(), 4)]),
+            VecDeque::from([
+                (Instant::now(), 0),
+                (Instant::now(), 8),
+                (Instant::now(), 3),
+            ]),
+        ];
+        let _ = context.run(Default::default(), |context| {
+            eframe::egui::CentralPanel::default().show(context, |ui| {
+                for history in &histories {
+                    draw_pota_history_graph(ui, history);
+                }
             });
         });
     }

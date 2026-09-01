@@ -157,4 +157,36 @@ mod tests {
         assert_eq!(geometry.position, None);
         assert_eq!(geometry.size, Some([8_192.0, 680.0]));
     }
+
+    #[test]
+    fn geometry_apply_preserves_saved_position_size_and_maximized_state() {
+        let geometry = WindowGeometry {
+            maximized: true,
+            position: Some([12.0, 34.0]),
+            size: Some([800.0, 600.0]),
+        };
+        let builder = geometry.apply(eframe::egui::ViewportBuilder::default());
+        assert_eq!(builder.inner_size, Some([800.0, 600.0].into()));
+        assert_eq!(builder.position, Some([12.0, 34.0].into()));
+        assert_eq!(builder.maximized, Some(true));
+    }
+
+    #[test]
+    fn geometry_read_handles_empty_viewport_and_empty_restore_fields() {
+        let context = eframe::egui::Context::default();
+        assert!(WindowGeometry::read(&context, None).is_none());
+        let geometry = WindowGeometry {
+            maximized: false,
+            position: None,
+            size: None,
+        }
+        .sanitized();
+        assert_eq!(geometry, WindowGeometry::default());
+        assert_eq!(
+            geometry
+                .apply(eframe::egui::ViewportBuilder::default())
+                .maximized,
+            None
+        );
+    }
 }
