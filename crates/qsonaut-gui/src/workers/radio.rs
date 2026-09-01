@@ -2353,6 +2353,33 @@ mod level_poll_tests {
     }
 
     #[test]
+    fn icom_core_poll_projects_frequency_mode_and_power_from_civ_status() {
+        let transport = ScriptedCiVTransport::with_frames([
+            vec![
+                0xFE, 0xFE, 0xE0, 0x94, 0x03, 0x00, 0x40, 0x07, 0x14, 0x00, 0xFD,
+            ],
+            vec![0xFE, 0xFE, 0xE0, 0x94, 0x04, 0x01, 0xFD],
+        ]);
+        let radio = ConfiguredRadio::Icom(IcomCiVRadio::with_transport(
+            Some(qsonaut_radio::IcomCivModel::Ic7300),
+            0xE0,
+            0x94,
+            transport,
+        ));
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+
+        poll_radio_core_state(&rt, &radio, &state, false);
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.frequency_hz, Some(14_074_000));
+        assert_eq!(state.mode, "USB");
+        assert_eq!(state.radio_power_on, Some(true));
+        assert!(state.last_update.is_some());
+        assert!(state.last_error.is_none());
+    }
+
+    #[test]
     fn icom_scope_worker_waits_when_radio_is_known_off() {
         let state = Arc::new(Mutex::new(GuiState::default()));
         {
