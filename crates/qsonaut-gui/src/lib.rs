@@ -1590,10 +1590,24 @@ fn spawn_radio_init(
 }
 
 fn request_radio_session_stop(session: &RadioSession) {
-    session.worker_stop.store(true, Ordering::Relaxed);
-    session.audio_worker_stop.store(true, Ordering::Relaxed);
-    session.swr_sweep_abort.store(true, Ordering::Relaxed);
-    if let Some(tx) = &session.command_tx {
+    request_radio_session_stop_handles(
+        session.command_tx.as_ref(),
+        &session.worker_stop,
+        &session.audio_worker_stop,
+        &session.swr_sweep_abort,
+    );
+}
+
+fn request_radio_session_stop_handles(
+    command_tx: Option<&mpsc::Sender<GuiCommand>>,
+    worker_stop: &Arc<AtomicBool>,
+    audio_worker_stop: &Arc<AtomicBool>,
+    swr_sweep_abort: &Arc<AtomicBool>,
+) {
+    worker_stop.store(true, Ordering::Relaxed);
+    audio_worker_stop.store(true, Ordering::Relaxed);
+    swr_sweep_abort.store(true, Ordering::Relaxed);
+    if let Some(tx) = command_tx {
         let _ = tx.send(GuiCommand::Quit);
     }
 }
@@ -7574,6 +7588,41 @@ fn append_ft8_log_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn radio_session_stop_contract_signals_every_owned_worker() {
+        let worker_stop = Arc::new(AtomicBool::new(false));
+        let audio_worker_stop = Arc::new(AtomicBool::new(false));
+        let swr_sweep_abort = Arc::new(AtomicBool::new(false));
+        let (command_tx, command_rx) = mpsc::channel();
+
+        request_radio_session_stop_handles(
+            Some(&command_tx),
+            &worker_stop,
+            &audio_worker_stop,
+            &swr_sweep_abort,
+        );
+
+        assert!(worker_stop.load(Ordering::Relaxed));
+        assert!(audio_worker_stop.load(Ordering::Relaxed));
+        assert!(swr_sweep_abort.load(Ordering::Relaxed));
+        assert!(matches!(command_rx.try_recv(), Ok(GuiCommand::Quit)));
+
+        // Parked sessions may already have relinquished their command sender;
+        // stopping them must still signal all cancellation flags.
+        worker_stop.store(false, Ordering::Relaxed);
+        audio_worker_stop.store(false, Ordering::Relaxed);
+        swr_sweep_abort.store(false, Ordering::Relaxed);
+        request_radio_session_stop_handles(
+            None,
+            &worker_stop,
+            &audio_worker_stop,
+            &swr_sweep_abort,
+        );
+        assert!(worker_stop.load(Ordering::Relaxed));
+        assert!(audio_worker_stop.load(Ordering::Relaxed));
+        assert!(swr_sweep_abort.load(Ordering::Relaxed));
+    }
 
     #[test]
     fn radio_initialization_routes_supported_and_unsupported_backends() {
