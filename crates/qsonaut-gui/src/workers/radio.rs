@@ -2134,6 +2134,55 @@ mod level_poll_tests {
     }
 
     #[test]
+    fn level_poll_gates_unsupported_controls_and_meters() {
+        let radio = CoverageRadio {
+            controls: HashMap::new(),
+            meters: HashMap::new(),
+        };
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        {
+            let mut state = state.lock().expect("state lock");
+            state.af_gain = Some(99);
+            state.signal_meter = Some(88);
+        }
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+
+        poll_radio_level_state(&rt, &radio, &state);
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.af_gain, Some(99));
+        assert_eq!(state.signal_meter, Some(88));
+        assert!(state.tuner_status.is_none());
+        assert!(state.voltage_history.is_empty());
+        assert_eq!(read_u8_control(&rt, &radio, ControlId::Filter), None);
+        assert_eq!(
+            read_bool_control(&rt, &radio, ControlId::NoiseBlanker),
+            None
+        );
+        assert_eq!(read_vfo_control(&rt, &radio), None);
+    }
+
+    #[test]
+    fn control_read_helpers_reject_wrong_value_types_and_invalid_vfos() {
+        let radio = CoverageRadio {
+            controls: HashMap::from([
+                (ControlId::Filter, ControlValue::Bool(true)),
+                (ControlId::NoiseBlanker, ControlValue::U8(1)),
+                (ControlId::Vfo, ControlValue::U8(2)),
+            ]),
+            meters: HashMap::new(),
+        };
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+
+        assert_eq!(read_u8_control(&rt, &radio, ControlId::Filter), None);
+        assert_eq!(
+            read_bool_control(&rt, &radio, ControlId::NoiseBlanker),
+            None
+        );
+        assert_eq!(read_vfo_control(&rt, &radio), None);
+    }
+
+    #[test]
     fn core_poll_maps_every_null_radio_mode_and_marks_connection_ready() {
         let modes = [
             (Mode::Usb, "USB"),
