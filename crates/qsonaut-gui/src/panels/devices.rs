@@ -21,73 +21,14 @@ impl QsonautGuiApp {
         );
 
         thread::spawn(move || {
-            let result = if !backend.eq_ignore_ascii_case("native") {
-                Err(format!(
-                    "CAT test requires the Native Rigwright backend; selected backend is '{}'.",
-                    backend
-                ))
-            } else if port.is_empty() {
-                Err("CAT test requires a specific serial port; select a radio USB/serial port first.".into())
-            } else {
-                match open_model_with_radio_address(
-                    &model,
-                    &port,
-                    baud_rate,
-                    controller_civ_address,
-                    Some(radio_civ_address),
-                ) {
-                    Ok(radio) => match radio {
-                        ConfiguredRadio::Yaesu(yaesu) => match yaesu.verify_model() {
-                            Ok(()) => Ok(format!(
-                                "CAT OK: {} answered and matched the selected profile at {} baud.",
-                                model, baud_rate
-                            )),
-                            Err(error) => Err(format!(
-                                "CAT probe failed for {} at {} baud: {error}",
-                                model, baud_rate
-                            )),
-                        },
-                        ConfiguredRadio::Kenwood(kenwood) => match kenwood.verify_model() {
-                            Ok(()) => Ok(format!(
-                                "CAT OK: {} answered and matched the selected profile at {} baud.",
-                                model, baud_rate
-                            )),
-                            Err(error) => Err(format!(
-                                "CAT probe failed for {} at {} baud: {error}",
-                                model, baud_rate
-                            )),
-                        },
-                        ConfiguredRadio::Icom(icom) => {
-                            match tokio::runtime::Builder::new_current_thread()
-                                .enable_all()
-                                .build()
-                            {
-                                Ok(runtime) => {
-                                    match runtime.block_on(Radio::get_frequency_hz(&icom)) {
-                                        Ok(frequency_hz) => Ok(format!(
-                                            "CAT OK: {} answered at {} baud (frequency {} Hz).",
-                                            model, baud_rate, frequency_hz
-                                        )),
-                                        Err(error) => Err(format!(
-                                            "CAT probe failed for {} at {} baud: {error}",
-                                            model, baud_rate
-                                        )),
-                                    }
-                                }
-                                Err(error) => Err(format!("CAT test runtime failed: {error}")),
-                            }
-                        }
-                        _ => Err(format!(
-                            "CAT testing is not implemented for the selected native profile '{}'.",
-                            model
-                        )),
-                    },
-                    Err(error) => Err(format!(
-                        "Could not open CAT port '{}' at {} baud for {}: {error}",
-                        port, baud_rate, model
-                    )),
-                }
-            };
+            let result = Self::cat_connection_result(
+                &backend,
+                &model,
+                &port,
+                baud_rate,
+                controller_civ_address,
+                radio_civ_address,
+            );
 
             match &result {
                 Ok(message) => info!(
@@ -107,6 +48,84 @@ impl QsonautGuiApp {
             }
             let _ = tx.send(result);
         });
+    }
+
+    fn cat_connection_result(
+        backend: &str,
+        model: &str,
+        port: &str,
+        baud_rate: u32,
+        controller_civ_address: u8,
+        radio_civ_address: u8,
+    ) -> Result<String, String> {
+        if !backend.eq_ignore_ascii_case("native") {
+            Err(format!(
+                "CAT test requires the Native Rigwright backend; selected backend is '{}'.",
+                backend
+            ))
+        } else if port.is_empty() {
+            Err(
+                "CAT test requires a specific serial port; select a radio USB/serial port first."
+                    .into(),
+            )
+        } else {
+            match open_model_with_radio_address(
+                model,
+                port,
+                baud_rate,
+                controller_civ_address,
+                Some(radio_civ_address),
+            ) {
+                Ok(radio) => match radio {
+                    ConfiguredRadio::Yaesu(yaesu) => match yaesu.verify_model() {
+                        Ok(()) => Ok(format!(
+                            "CAT OK: {} answered and matched the selected profile at {} baud.",
+                            model, baud_rate
+                        )),
+                        Err(error) => Err(format!(
+                            "CAT probe failed for {} at {} baud: {error}",
+                            model, baud_rate
+                        )),
+                    },
+                    ConfiguredRadio::Kenwood(kenwood) => match kenwood.verify_model() {
+                        Ok(()) => Ok(format!(
+                            "CAT OK: {} answered and matched the selected profile at {} baud.",
+                            model, baud_rate
+                        )),
+                        Err(error) => Err(format!(
+                            "CAT probe failed for {} at {} baud: {error}",
+                            model, baud_rate
+                        )),
+                    },
+                    ConfiguredRadio::Icom(icom) => {
+                        match tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                        {
+                            Ok(runtime) => match runtime.block_on(Radio::get_frequency_hz(&icom)) {
+                                Ok(frequency_hz) => Ok(format!(
+                                    "CAT OK: {} answered at {} baud (frequency {} Hz).",
+                                    model, baud_rate, frequency_hz
+                                )),
+                                Err(error) => Err(format!(
+                                    "CAT probe failed for {} at {} baud: {error}",
+                                    model, baud_rate
+                                )),
+                            },
+                            Err(error) => Err(format!("CAT test runtime failed: {error}")),
+                        }
+                    }
+                    _ => Err(format!(
+                        "CAT testing is not implemented for the selected native profile '{}'.",
+                        model
+                    )),
+                },
+                Err(error) => Err(format!(
+                    "Could not open CAT port '{}' at {} baud for {}: {error}",
+                    port, baud_rate, model
+                )),
+            }
+        }
     }
 
     fn profile_device_users(
@@ -911,5 +930,60 @@ mod tests {
         assert_eq!(radio_backend_label("native"), "Native Rigwright");
         assert_eq!(radio_backend_label("RIGCTLD"), "Hamlib rigctld");
         assert_eq!(radio_backend_label("custom"), "custom");
+    }
+
+    #[test]
+    fn cat_probe_rejects_non_native_and_missing_port_before_opening_hardware() {
+        let non_native = QsonautGuiApp::cat_connection_result(
+            "rigctld",
+            "IC-7300",
+            "/dev/ttyUSB0",
+            115_200,
+            0xE0,
+            0x94,
+        )
+        .expect_err("external backends are not probed here");
+        assert!(non_native.contains("Native Rigwright backend"));
+
+        let missing_port =
+            QsonautGuiApp::cat_connection_result("native", "IC-7300", "", 115_200, 0xE0, 0x94)
+                .expect_err("a CAT probe requires a selected port");
+        assert!(missing_port.contains("specific serial port"));
+    }
+
+    #[test]
+    fn cat_probe_reports_model_and_serial_open_failures() {
+        let unknown_model = QsonautGuiApp::cat_connection_result(
+            "native",
+            "not-a-real-model",
+            "/dev/null",
+            115_200,
+            0xE0,
+            0x94,
+        )
+        .expect_err("unknown model");
+        assert!(unknown_model.contains("Could not open CAT port"));
+        assert!(unknown_model.contains("not-a-real-model"));
+
+        let missing_device = QsonautGuiApp::cat_connection_result(
+            "native",
+            "IC-7300",
+            "/definitely-not-a-real-serial-device",
+            115_200,
+            0xE0,
+            0x94,
+        )
+        .expect_err("missing serial device");
+        assert!(missing_device.contains("CAT probe failed"));
+        assert!(missing_device.contains("IC-7300"));
+    }
+
+    #[test]
+    fn selected_radio_label_keeps_unknown_profiles_explicit() {
+        assert_eq!(
+            selected_radio_label("not-a-real-model"),
+            "Unknown profile: not-a-real-model"
+        );
+        assert_eq!(radio_backend_label(" NATIVE "), " NATIVE ");
     }
 }
