@@ -291,19 +291,8 @@ pub(crate) fn spawn_radio_worker(
                         // requests. Keep the latest values as the baseline.
                         last_scope_config = Some(config);
                     } else if scope_config_changed(last_scope_config, config) {
-                        let geometry_changed = last_scope_config.is_none_or(|previous| {
-                            previous.view != config.view
-                                || previous.span_code != config.span_code
-                                || previous.edges != config.edges
-                        });
-                        let hold_update = last_scope_config
-                            .filter(|previous| previous.hold != config.hold)
-                            .map(|_| config.hold);
-                        let reference_update = last_scope_config
-                            .filter(|previous| {
-                                previous.reference_tenths_db != config.reference_tenths_db
-                            })
-                            .map(|_| config.reference_tenths_db);
+                        let (geometry_changed, hold_update, reference_update) =
+                            scope_change_updates(last_scope_config, config);
                         match configure_radio_scope(
                             &rt,
                             &stream_radio,
@@ -1548,6 +1537,24 @@ fn scope_config_changed(
     previous.is_some_and(|previous| previous != current)
 }
 
+fn scope_change_updates(
+    previous: Option<RadioScopeStreamConfig>,
+    current: RadioScopeStreamConfig,
+) -> (bool, Option<bool>, Option<i16>) {
+    let geometry_changed = previous.is_none_or(|previous| {
+        previous.view != current.view
+            || previous.span_code != current.span_code
+            || previous.edges != current.edges
+    });
+    let hold_update = previous
+        .filter(|previous| previous.hold != current.hold)
+        .map(|_| current.hold);
+    let reference_update = previous
+        .filter(|previous| previous.reference_tenths_db != current.reference_tenths_db)
+        .map(|_| current.reference_tenths_db);
+    (geometry_changed, hold_update, reference_update)
+}
+
 fn apply_icom_mode_details(
     state: &mut GuiState,
     details: OperatingMode,
@@ -1872,6 +1879,42 @@ mod tests {
                 ..config
             }
         ));
+    }
+
+    #[test]
+    fn scope_change_updates_separate_geometry_hold_and_reference_changes() {
+        let baseline = RadioScopeStreamConfig {
+            view: RadioScopeView::Narrow,
+            span_code: 3,
+            vbw_wide: false,
+            edges: None,
+            sweep_code: 1,
+            hold: false,
+            reference_tenths_db: 0,
+        };
+
+        assert_eq!(
+            scope_change_updates(
+                Some(baseline),
+                RadioScopeStreamConfig {
+                    hold: true,
+                    reference_tenths_db: 10,
+                    ..baseline
+                }
+            ),
+            (false, Some(true), Some(10))
+        );
+        assert_eq!(
+            scope_change_updates(
+                Some(baseline),
+                RadioScopeStreamConfig {
+                    span_code: 4,
+                    ..baseline
+                }
+            ),
+            (true, None, None)
+        );
+        assert_eq!(scope_change_updates(None, baseline), (true, None, None));
     }
 
     #[test]
