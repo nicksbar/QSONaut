@@ -1,12 +1,16 @@
 use super::super::*;
+use qsonaut_hostbridge_client::normalize_endpoint;
 
 impl QsonautGuiApp {
     fn enumerate_hostbridge(&mut self) {
-        let endpoint = self.config.radio.endpoint.trim().to_string();
-        if endpoint.is_empty() {
-            self.hostbridge_scan_status = "Enter a HostBridge endpoint first".to_string();
-            return;
-        }
+        let endpoint = match normalize_endpoint(&self.config.radio.endpoint) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                self.hostbridge_scan_status = error.to_string();
+                return;
+            }
+        };
+        self.config.radio.endpoint = endpoint.clone();
         let config = HostBridgeConfig {
             endpoint,
             client_name: "QSONaut device setup".to_string(),
@@ -569,6 +573,13 @@ impl QsonautGuiApp {
             self.config.radio.model = "NullRadio".to_string();
             self.config.radio.serial_port = None;
             self.config.radio.endpoint.clear();
+        }
+
+        if old_backend != self.config.radio.backend
+            && is_hostbridge
+            && (old_endpoint.is_empty() || old_endpoint == "127.0.0.1:4532")
+        {
+            self.config.radio.endpoint = "ws://127.0.0.1:8765".to_string();
         }
 
         if self.config.radio.backend.eq_ignore_ascii_case("native") {

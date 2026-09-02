@@ -258,7 +258,7 @@ async fn connect(
     commands: &mut mpsc::UnboundedReceiver<Command>,
     events: &mpsc::UnboundedSender<HostBridgeEvent>,
 ) -> Result<ConnectionEnd> {
-    let endpoint = validate_endpoint(&config.endpoint)?;
+    let endpoint = normalize_endpoint(&config.endpoint)?;
     let (socket, _) =
         tokio::time::timeout(Duration::from_secs(10), connect_async(endpoint.as_str()))
             .await
@@ -330,8 +330,18 @@ where
         .map_err(Into::into)
 }
 
-fn validate_endpoint(value: &str) -> Result<String> {
-    let url = Url::parse(value.trim()).context("HostBridge endpoint is invalid")?;
+pub fn normalize_endpoint(value: &str) -> Result<String> {
+    let value = value.trim();
+    let value = if value.starts_with("ws://")
+        || value.starts_with("wss://")
+        || value.starts_with("http://")
+        || value.starts_with("https://")
+    {
+        value.to_string()
+    } else {
+        format!("ws://{value}")
+    };
+    let url = Url::parse(&value).context("HostBridge endpoint is invalid")?;
     if !matches!(url.scheme(), "ws" | "wss") {
         anyhow::bail!("HostBridge endpoint must use ws:// or wss://")
     }
@@ -382,8 +392,12 @@ mod tests {
 
     #[test]
     fn endpoint_requires_websocket_scheme() {
-        assert!(validate_endpoint("ws://127.0.0.1:8765").is_ok());
-        assert!(validate_endpoint("https://example.test").is_err());
+        assert_eq!(
+            normalize_endpoint("127.0.0.1:8765").unwrap(),
+            "ws://127.0.0.1:8765/"
+        );
+        assert!(normalize_endpoint("ws://127.0.0.1:8765").is_ok());
+        assert!(normalize_endpoint("https://example.test").is_err());
     }
 
     #[test]
