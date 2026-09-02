@@ -28,6 +28,7 @@ pub(crate) struct HostBridgeRadio {
     audio_source: Option<(String, qsonaut_hostbridge_protocol::AudioFormat)>,
     audio_output: Option<(String, qsonaut_hostbridge_protocol::AudioFormat)>,
     media_seen: AtomicBool,
+    meter_seen: AtomicBool,
 }
 
 static REMOTE_MEDIA_QUEUE: OnceLock<Arc<Mutex<VecDeque<Vec<f32>>>>> = OnceLock::new();
@@ -350,6 +351,7 @@ impl HostBridgeRadio {
             audio_source,
             audio_output,
             media_seen: AtomicBool::new(false),
+            meter_seen: AtomicBool::new(false),
         })
     }
 
@@ -373,7 +375,25 @@ impl HostBridgeRadio {
             match event {
                 HostBridgeEvent::Server(ServerMessage::State(next)) => {
                     if let Ok(mut state) = self.state.lock() {
-                        *state = next;
+                        // HostBridge state snapshots currently contain core
+                        // state. Meter/control replies arrive asynchronously;
+                        // replacing the snapshot here erased those values on
+                        // the next frequency poll before the UI could render
+                        // them.
+                        if next.frequency_hz.is_some() {
+                            state.frequency_hz = next.frequency_hz;
+                        }
+                        if next.mode.is_some() {
+                            state.mode = next.mode;
+                        }
+                        if next.ptt.is_some() {
+                            state.ptt = next.ptt;
+                        }
+                        state.controls.extend(next.controls);
+                        state.meters.extend(next.meters);
+                        if next.tuner.is_some() {
+                            state.tuner = next.tuner;
+                        }
                     }
                 }
                 HostBridgeEvent::Server(ServerMessage::RadioCapabilities(next)) => {
@@ -394,6 +414,9 @@ impl HostBridgeRadio {
                     meter_id, value, ..
                 }) => {
                     if let Some(value) = value {
+                        if !self.meter_seen.swap(true, Ordering::Relaxed) {
+                            tracing::info!(meter = ?meter_id, value, "First HostBridge meter response received");
+                        }
                         if let Ok(mut state) = self.state.lock() {
                             state.meters.insert(meter_id, value);
                         }
