@@ -13,6 +13,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 qsonaut-audio = { path = "../../crates/qsonaut-audio" }
+qsonaut-hostbridge-client = { path = "../../crates/qsonaut-hostbridge-client" }
 qsonaut-core = { path = "../../crates/qsonaut-core" }
 qsonaut-log = { path = "../../crates/qsonaut-log" }
 qsonaut-radio = { package = "rigwright", version = "0.1.19", path = "../../../rigwright" }

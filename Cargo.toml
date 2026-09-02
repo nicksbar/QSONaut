@@ -8,6 +8,7 @@ members = [
     "crates/qsonaut-automation",
     "crates/qsonaut-pskreporter",
     "crates/qsonaut-server-client",
+    "crates/qsonaut-hostbridge-client",
     "crates/qsonaut-gui",
 ]
 resolver = "2"
