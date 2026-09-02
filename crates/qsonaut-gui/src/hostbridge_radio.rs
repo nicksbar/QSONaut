@@ -6,6 +6,7 @@ use qsonaut_radio::{
     RadioCapabilities, TunerStatus,
 };
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -22,6 +23,7 @@ pub(crate) struct HostBridgeRadio {
     media_queue: Arc<Mutex<VecDeque<Vec<f32>>>>,
     audio_source: Option<(String, qsonaut_hostbridge_protocol::AudioFormat)>,
     audio_output: Option<(String, qsonaut_hostbridge_protocol::AudioFormat)>,
+    media_seen: AtomicBool,
 }
 
 static REMOTE_MEDIA_QUEUE: OnceLock<Arc<Mutex<VecDeque<Vec<f32>>>>> = OnceLock::new();
@@ -303,6 +305,7 @@ impl HostBridgeRadio {
             media_queue: remote_media_queue(),
             audio_source,
             audio_output,
+            media_seen: AtomicBool::new(false),
         })
     }
 
@@ -378,6 +381,14 @@ impl HostBridgeRadio {
                         continue;
                     }
                     let samples = pcm_s16le_to_mono(&payload, header.channels);
+                    if !self.media_seen.swap(true, Ordering::Relaxed) {
+                        tracing::info!(
+                            samples = samples.len(),
+                            payload_bytes = payload.len(),
+                            channels = header.channels,
+                            "First HostBridge RX media frame received"
+                        );
+                    }
                     if let Ok(mut queue) = self.media_queue.lock() {
                         if queue.len() >= 8 {
                             queue.pop_front();

@@ -823,7 +823,10 @@ pub(crate) fn spawn_radio_worker(
                                         Mode::Usb => "USB",
                                         Mode::Lsb => "LSB",
                                         Mode::Cw => "CW",
-                                        Mode::Data => "DATA",
+                                        // HostBridge represents digital USB as
+                                        // Mode::Data; present it consistently
+                                        // with native IC-7300 operation.
+                                        Mode::Data => "USB",
                                         Mode::Am => "AM",
                                         Mode::Fm => "FM",
                                         Mode::Wfm => "WFM",
@@ -1317,7 +1320,7 @@ fn poll_radio_core_state(
                         Mode::Usb => "USB",
                         Mode::Lsb => "LSB",
                         Mode::Cw => "CW",
-                        Mode::Data => "DATA",
+                        Mode::Data => "USB",
                         Mode::Am => "AM",
                         Mode::Fm => "FM",
                         Mode::Wfm => "WFM",
@@ -2577,7 +2580,7 @@ mod level_poll_tests {
             (Mode::Usb, "USB"),
             (Mode::Lsb, "LSB"),
             (Mode::Cw, "CW"),
-            (Mode::Data, "DATA"),
+            (Mode::Data, "USB"),
             (Mode::Am, "AM"),
             (Mode::Fm, "FM"),
             (Mode::Wfm, "WFM"),
@@ -3392,7 +3395,7 @@ mod level_poll_tests {
 
         let state = state.lock().expect("state lock");
         assert_eq!(state.frequency_hz, Some(7_101_000));
-        assert_eq!(state.mode, "DATA");
+        assert_eq!(state.mode, "USB");
         assert!(!state.ptt_on);
     }
 

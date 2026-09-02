@@ -724,6 +724,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut monitor_runtime_error: Option<String> = None;
         let mut last_audio_read_error: Option<String> = None;
         let mut last_monitor_clock_log = Instant::now() - Duration::from_secs(30);
+        let mut remote_media_seen = false;
 
         while !stop.load(Ordering::Relaxed) {
             let chunk_samples = {
@@ -755,6 +756,13 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 ))
             } {
                 Ok(Some(samples)) => {
+                    if remote_audio && !samples.is_empty() && !remote_media_seen {
+                        info!(
+                            samples = samples.len(),
+                            "Remote HostBridge audio reached audio worker"
+                        );
+                        remote_media_seen = true;
+                    }
                     if last_audio_read_error.take().is_some() {
                         info!("Audio input stream recovered");
                     }
