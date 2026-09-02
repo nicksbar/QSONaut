@@ -212,11 +212,7 @@ impl QsonautGuiApp {
         }
     }
 
-    pub(in super::super) fn draw_profile_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Profile");
-        ui.separator();
-        self.draw_station_profile_fields(ui);
-        ui.separator();
+    fn draw_profile_name_controls(&mut self, ui: &mut egui::Ui) {
         ui.label(
             RichText::new("Rename or delete this radio profile.")
                 .small()
@@ -268,6 +264,15 @@ impl QsonautGuiApp {
                 });
             });
         }
+    }
+
+    pub(in super::super) fn draw_profile_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Profile");
+        ui.separator();
+        self.draw_profile_name_controls(ui);
+        ui.separator();
+        self.draw_station_profile_fields(ui);
+        ui.separator();
 
         ui.add_space(8.0);
         ui.group(|ui| {
