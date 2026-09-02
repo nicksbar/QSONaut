@@ -742,7 +742,10 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 if chunk.is_none() {
                     thread::sleep(Duration::from_millis(10));
                 }
-                Ok(chunk)
+                // An empty remote queue is normal between network frames; it
+                // is not an end-of-stream signal. Keep the worker alive so a
+                // later HostBridge frame can feed the decoder and waterfall.
+                Ok(Some(chunk.unwrap_or_default()))
             } else {
                 Ok(Some(
                     null_generator
