@@ -7153,7 +7153,11 @@ impl Drop for QsonautGuiApp {
         let parked_profile_count = self.parked_radio_sessions.len();
         self.force_stop_tx();
         self.stop_native_digital_tx();
-        self.persist_profile("Saved on exit");
+        // A clean shutdown must not rewrite a valid profile with runtime
+        // defaults if startup did not finish loading its settings.
+        if self.profile_dirty {
+            self.persist_profile("Saved on exit");
+        }
         if self.qso_log_dirty {
             self.persist_qso_log("Saved on exit");
         }
