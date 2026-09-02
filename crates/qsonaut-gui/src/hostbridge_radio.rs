@@ -1,0 +1,566 @@
+use anyhow::{anyhow, Result};
+use qsonaut_hostbridge_client::{HostBridgeClient, HostBridgeConfig, HostBridgeEvent};
+use qsonaut_hostbridge_protocol::{HostHello, RadioState, ServerMessage, WireMode};
+use qsonaut_radio::{
+    drivers::ConfiguredRadio, ControlId, IcomCiVRadio, LinkHealth, MeterId, Mode, Radio,
+    RadioCapabilities, TunerStatus,
+};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+
+/// QSONaut-owned remote radio handle. Host device paths and leases remain
+/// entirely inside HostBridge; this handle only retains the negotiated
+/// catalog entry and the session transport.
+pub(crate) struct HostBridgeRadio {
+    client: Arc<HostBridgeClient>,
+    events: Mutex<tokio::sync::mpsc::UnboundedReceiver<HostBridgeEvent>>,
+    state: Mutex<RadioState>,
+    hello: HostHello,
+    device_id: String,
+    connected: Arc<Mutex<bool>>,
+    media_queue: Arc<Mutex<VecDeque<Vec<f32>>>>,
+    audio_source: Option<(String, qsonaut_hostbridge_protocol::AudioFormat)>,
+    audio_output: Option<(String, qsonaut_hostbridge_protocol::AudioFormat)>,
+}
+
+static REMOTE_MEDIA_QUEUE: OnceLock<Arc<Mutex<VecDeque<Vec<f32>>>>> = OnceLock::new();
+static REMOTE_CLIENT: OnceLock<Mutex<Option<Arc<HostBridgeClient>>>> = OnceLock::new();
+
+pub(crate) fn remote_media_queue() -> Arc<Mutex<VecDeque<Vec<f32>>>> {
+    REMOTE_MEDIA_QUEUE
+        .get_or_init(|| Arc::new(Mutex::new(VecDeque::with_capacity(8))))
+        .clone()
+}
+
+pub(crate) enum RadioHandle {
+    Local(ConfiguredRadio),
+    Remote(Box<HostBridgeRadio>),
+}
+
+impl From<ConfiguredRadio> for RadioHandle {
+    fn from(radio: ConfiguredRadio) -> Self {
+        Self::Local(radio)
+    }
+}
+
+impl RadioHandle {
+    pub(crate) fn as_icom(&self) -> Option<&IcomCiVRadio> {
+        match self {
+            Self::Local(radio) => radio.as_icom(),
+            Self::Remote(_) => None,
+        }
+    }
+
+    pub(crate) fn capabilities(&self) -> RadioCapabilities {
+        match self {
+            Self::Local(radio) => radio.capabilities(),
+            Self::Remote(radio) => radio.capabilities(),
+        }
+    }
+    pub(crate) fn supported_controls(&self) -> Vec<ControlId> {
+        match self {
+            Self::Local(radio) => radio.supported_controls(),
+            Self::Remote(radio) => radio.supported_controls(),
+        }
+    }
+    pub(crate) fn supported_meters(&self) -> Vec<MeterId> {
+        match self {
+            Self::Local(radio) => radio.supported_meters(),
+            Self::Remote(radio) => radio.supported_meters(),
+        }
+    }
+    pub(crate) fn supports_meter(&self, id: MeterId) -> bool {
+        match self {
+            Self::Local(radio) => radio.supports_meter(id),
+            Self::Remote(radio) => radio.supports_meter(id),
+        }
+    }
+    pub(crate) fn supports_control_write(&self, id: ControlId) -> bool {
+        match self {
+            Self::Local(radio) => radio.supports_control_write(id),
+            Self::Remote(radio) => radio.supports_control_write(id),
+        }
+    }
+    pub(crate) fn link_health(&self) -> LinkHealth {
+        match self {
+            Self::Local(radio) => radio.link_health(),
+            Self::Remote(radio) => radio.link_health(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Radio for RadioHandle {
+    async fn get_frequency_hz(&self) -> Result<u64> {
+        match self {
+            Self::Local(radio) => radio.get_frequency_hz().await,
+            Self::Remote(radio) => radio.get_frequency_hz().await,
+        }
+    }
+    async fn set_frequency_hz(&self, hz: u64) -> Result<()> {
+        match self {
+            Self::Local(radio) => radio.set_frequency_hz(hz).await,
+            Self::Remote(radio) => radio.set_frequency_hz(hz).await,
+        }
+    }
+    async fn get_mode(&self) -> Result<Mode> {
+        match self {
+            Self::Local(radio) => radio.get_mode().await,
+            Self::Remote(radio) => radio.get_mode().await,
+        }
+    }
+    async fn set_mode(&self, mode: Mode) -> Result<()> {
+        match self {
+            Self::Local(radio) => radio.set_mode(mode).await,
+            Self::Remote(radio) => radio.set_mode(mode).await,
+        }
+    }
+    async fn set_ptt(&self, enabled: bool) -> Result<()> {
+        match self {
+            Self::Local(radio) => radio.set_ptt(enabled).await,
+            Self::Remote(radio) => radio.set_ptt(enabled).await,
+        }
+    }
+    async fn get_ptt(&self) -> Result<bool> {
+        match self {
+            Self::Local(radio) => radio.get_ptt().await,
+            Self::Remote(radio) => radio.get_ptt().await,
+        }
+    }
+    async fn get_control(&self, id: ControlId) -> Result<Option<qsonaut_radio::ControlValue>> {
+        match self {
+            Self::Local(radio) => radio.get_control(id).await,
+            Self::Remote(radio) => radio.get_control(id).await,
+        }
+    }
+    async fn set_control(&self, id: ControlId, value: qsonaut_radio::ControlValue) -> Result<()> {
+        match self {
+            Self::Local(radio) => radio.set_control(id, value).await,
+            Self::Remote(radio) => radio.set_control(id, value).await,
+        }
+    }
+    async fn get_meter(&self, id: MeterId) -> Result<Option<u8>> {
+        match self {
+            Self::Local(radio) => radio.get_meter(id).await,
+            Self::Remote(radio) => radio.get_meter(id).await,
+        }
+    }
+    async fn start_tuner(&self) -> Result<()> {
+        match self {
+            Self::Local(radio) => radio.start_tuner().await,
+            Self::Remote(radio) => radio.start_tuner().await,
+        }
+    }
+    async fn get_tuner_status(&self) -> Result<Option<TunerStatus>> {
+        match self {
+            Self::Local(radio) => radio.get_tuner_status().await,
+            Self::Remote(radio) => radio.get_tuner_status().await,
+        }
+    }
+    fn capabilities(&self) -> RadioCapabilities {
+        self.capabilities()
+    }
+}
+
+impl HostBridgeRadio {
+    pub(crate) async fn connect(config: HostBridgeConfig) -> Result<Self> {
+        let requested_device_id = config.radio_device_id.clone();
+        let requested_audio_source_id = config.audio_source_id.clone();
+        let requested_audio_output_id = config.audio_output_id.clone();
+        let (client, mut events) = HostBridgeClient::spawn(config);
+        let client = Arc::new(client);
+        let hello = tokio::time::timeout(Duration::from_secs(12), async {
+            loop {
+                match events.recv().await {
+                    Some(HostBridgeEvent::Connected(hello)) => break Ok(hello),
+                    Some(HostBridgeEvent::SafetyDisarmed { reason }) => {
+                        break Err(anyhow!("HostBridge session disarmed: {reason}"));
+                    }
+                    Some(HostBridgeEvent::Disconnected { reason }) => {
+                        break Err(anyhow!("HostBridge disconnected during startup: {reason}"));
+                    }
+                    Some(_) => {}
+                    None => break Err(anyhow!("HostBridge event stream closed during startup")),
+                }
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("timed out waiting for HostBridge authentication"))??;
+
+        let device_id = requested_device_id
+            .filter(|id| {
+                hello
+                    .capabilities
+                    .radio_devices
+                    .iter()
+                    .any(|device| &device.id == id)
+            })
+            .or_else(|| {
+                hello
+                    .capabilities
+                    .radio_devices
+                    .iter()
+                    .find(|device| !device.in_use)
+                    .or_else(|| hello.capabilities.radio_devices.first())
+                    .map(|device| device.id.clone())
+            })
+            .ok_or_else(|| anyhow!("HostBridge advertised no selectable radio devices"))?;
+
+        client.select_radio(device_id.clone())?;
+        let audio_source = hello.capabilities.audio_sources.iter().find_map(|source| {
+            if requested_audio_source_id
+                .as_deref()
+                .is_some_and(|requested| requested != source.id)
+            {
+                return None;
+            }
+            source
+                .formats
+                .iter()
+                .any(|format| {
+                    format.codec == qsonaut_hostbridge_protocol::AudioCodec::PcmS16Le
+                        && format.sample_rate_hz == 48_000
+                })
+                .then(|| {
+                    (
+                        source.id.clone(),
+                        source
+                            .formats
+                            .iter()
+                            .find(|format| {
+                                format.codec == qsonaut_hostbridge_protocol::AudioCodec::PcmS16Le
+                                    && format.sample_rate_hz == 48_000
+                            })
+                            .expect("format selected by predicate")
+                            .clone(),
+                    )
+                })
+        });
+        if let Some((source_id, format)) = &audio_source {
+            client.select_audio(true, source_id.clone(), format.clone())?;
+        }
+        let audio_output = hello.capabilities.audio_outputs.iter().find_map(|output| {
+            if requested_audio_output_id
+                .as_deref()
+                .is_some_and(|requested| requested != output.id)
+            {
+                return None;
+            }
+            output
+                .formats
+                .iter()
+                .find(|format| {
+                    format.codec == qsonaut_hostbridge_protocol::AudioCodec::PcmS16Le
+                        && format.sample_rate_hz == 48_000
+                })
+                .map(|format| (output.id.clone(), format.clone()))
+        });
+        if let Some((output_id, format)) = &audio_output {
+            client.select_audio_output(true, output_id.clone(), format.clone())?;
+        }
+        client.get_state()?;
+        let _ = REMOTE_CLIENT
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .map(|mut current| *current = Some(client.clone()));
+        let initial_state = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match events.recv().await {
+                    Some(HostBridgeEvent::Server(ServerMessage::State(state))) => break state,
+                    Some(HostBridgeEvent::SafetyDisarmed { .. }) => break RadioState::default(),
+                    Some(_) => {}
+                    None => break RadioState::default(),
+                }
+            }
+        })
+        .await
+        .unwrap_or_default();
+        Ok(Self {
+            client,
+            events: Mutex::new(events),
+            state: Mutex::new(initial_state),
+            hello,
+            device_id,
+            connected: Arc::new(Mutex::new(true)),
+            media_queue: remote_media_queue(),
+            audio_source,
+            audio_output,
+        })
+    }
+
+    pub(crate) fn host_name(&self) -> &str {
+        &self.hello.host_name
+    }
+
+    pub(crate) fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
+    pub(crate) fn capabilities_advertised(&self) -> &qsonaut_hostbridge_protocol::Capabilities {
+        &self.hello.capabilities
+    }
+
+    pub(crate) fn pump_events(&self) {
+        let Ok(mut events) = self.events.lock() else {
+            return;
+        };
+        while let Ok(event) = events.try_recv() {
+            match event {
+                HostBridgeEvent::Server(ServerMessage::State(next)) => {
+                    if let Ok(mut state) = self.state.lock() {
+                        *state = next;
+                    }
+                }
+                HostBridgeEvent::SafetyDisarmed { .. }
+                | HostBridgeEvent::Disconnected { .. }
+                | HostBridgeEvent::Reconnecting => {
+                    if let Ok(mut connected) = self.connected.lock() {
+                        *connected = false;
+                    }
+                    if let Ok(mut state) = self.state.lock() {
+                        state.ptt = Some(false);
+                    }
+                }
+                HostBridgeEvent::Connected(_) => {
+                    // A reconnect creates a new host session and releases the
+                    // old lease. Reacquire only the selected host radio; TX
+                    // state is intentionally never replayed.
+                    let _ = self.client.select_radio(self.device_id.clone());
+                    if let Some((source_id, format)) = &self.audio_source {
+                        let _ = self
+                            .client
+                            .select_audio(true, source_id.clone(), format.clone());
+                    }
+                    if let Some((output_id, format)) = &self.audio_output {
+                        let _ = self.client.select_audio_output(
+                            true,
+                            output_id.clone(),
+                            format.clone(),
+                        );
+                    }
+                    // Audio source selection is repeated by the host session
+                    // policy on reconnect; this queue must never retain stale
+                    // frames from the previous session.
+                    if let Ok(mut queue) = self.media_queue.lock() {
+                        queue.clear();
+                    }
+                    let _ = self.client.get_state();
+                    if let Ok(mut connected) = self.connected.lock() {
+                        *connected = true;
+                    }
+                }
+                HostBridgeEvent::Media { header, payload } => {
+                    if header.sample_rate_hz != 48_000
+                        || header.codec != qsonaut_hostbridge_protocol::AudioCodec::PcmS16Le
+                        || header.channels == 0
+                    {
+                        continue;
+                    }
+                    let samples = pcm_s16le_to_mono(&payload, header.channels);
+                    if let Ok(mut queue) = self.media_queue.lock() {
+                        if queue.len() >= 8 {
+                            queue.pop_front();
+                        }
+                        queue.push_back(samples);
+                    }
+                }
+                HostBridgeEvent::Server(_) => {}
+            }
+        }
+    }
+
+    fn ensure_connected(&self) -> Result<()> {
+        self.pump_events();
+        if self.connected.lock().map(|value| *value).unwrap_or(false) {
+            Ok(())
+        } else {
+            Err(anyhow!("HostBridge radio session is disconnected"))
+        }
+    }
+
+    fn state(&self) -> RadioState {
+        self.pump_events();
+        self.state
+            .lock()
+            .map(|state| state.clone())
+            .unwrap_or_default()
+    }
+}
+
+fn pcm_s16le_to_mono(payload: &[u8], channels: u8) -> Vec<f32> {
+    let channels = usize::from(channels);
+    payload
+        .chunks_exact(2 * channels)
+        .map(|frame| {
+            let sum: i32 = frame
+                .chunks_exact(2)
+                .map(|sample| i16::from_le_bytes([sample[0], sample[1]]) as i32)
+                .sum();
+            sum as f32 / (channels as f32 * i16::MAX as f32)
+        })
+        .collect()
+}
+
+pub(crate) fn send_remote_pcm(pcm: &[i16], sample_rate_hz: u32) -> Result<()> {
+    let client = REMOTE_CLIENT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|_| anyhow!("HostBridge client registry is poisoned"))?
+        .clone()
+        .ok_or_else(|| anyhow!("no HostBridge audio session is active"))?;
+    send_remote_pcm_with_client(&client, pcm, sample_rate_hz)
+}
+
+fn send_remote_pcm_with_client(
+    client: &HostBridgeClient,
+    pcm: &[i16],
+    sample_rate_hz: u32,
+) -> Result<()> {
+    const MAX_SAMPLES_PER_FRAME: usize = 120_000;
+    for (sequence, chunk) in pcm.chunks(MAX_SAMPLES_PER_FRAME).enumerate() {
+        let payload = chunk
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect::<Vec<_>>();
+        client.send_media(
+            qsonaut_hostbridge_protocol::MediaFrameHeader {
+                version: qsonaut_hostbridge_protocol::MEDIA_HEADER_VERSION,
+                stream_id: 1,
+                direction: qsonaut_hostbridge_protocol::MediaDirection::ClientToHost,
+                codec: qsonaut_hostbridge_protocol::AudioCodec::PcmS16Le,
+                sequence: sequence as u64,
+                timestamp_samples: (sequence * MAX_SAMPLES_PER_FRAME) as u64,
+                sample_rate_hz,
+                channels: 1,
+                payload_bytes: payload.len() as u32,
+            },
+            &payload,
+        )?;
+    }
+    Ok(())
+}
+
+#[async_trait::async_trait]
+impl Radio for HostBridgeRadio {
+    async fn get_frequency_hz(&self) -> Result<u64> {
+        self.ensure_connected()?;
+        self.client.get_state()?;
+        self.state()
+            .frequency_hz
+            .ok_or_else(|| anyhow!("HostBridge has not supplied a radio frequency yet"))
+    }
+
+    async fn set_frequency_hz(&self, hz: u64) -> Result<()> {
+        self.ensure_connected()?;
+        self.client.set_frequency(hz)?;
+        if let Ok(mut state) = self.state.lock() {
+            state.frequency_hz = Some(hz);
+        }
+        Ok(())
+    }
+
+    async fn get_mode(&self) -> Result<Mode> {
+        self.ensure_connected()?;
+        self.state()
+            .mode
+            .map(mode_from_wire)
+            .ok_or_else(|| anyhow!("HostBridge has not supplied a radio mode yet"))
+    }
+
+    async fn set_mode(&self, mode: Mode) -> Result<()> {
+        self.ensure_connected()?;
+        self.client.set_mode(wire_mode(mode))?;
+        if let Ok(mut state) = self.state.lock() {
+            state.mode = Some(wire_mode(mode));
+        }
+        Ok(())
+    }
+
+    async fn set_ptt(&self, enabled: bool) -> Result<()> {
+        if enabled {
+            self.ensure_connected()?;
+        }
+        self.client.set_ptt(enabled)?;
+        if let Ok(mut state) = self.state.lock() {
+            state.ptt = Some(enabled);
+        }
+        Ok(())
+    }
+
+    async fn get_ptt(&self) -> Result<bool> {
+        self.ensure_connected()?;
+        self.state()
+            .ptt
+            .ok_or_else(|| anyhow!("HostBridge has not supplied PTT state yet"))
+    }
+
+    fn capabilities(&self) -> RadioCapabilities {
+        RadioCapabilities {
+            can_get_frequency: true,
+            can_set_frequency: true,
+            can_get_mode: true,
+            can_set_mode: true,
+            can_get_ptt: true,
+            can_set_ptt: true,
+            ..Default::default()
+        }
+    }
+
+    fn supports_meter(&self, _id: MeterId) -> bool {
+        false
+    }
+    fn supports_control(&self, _id: ControlId) -> bool {
+        false
+    }
+    fn link_health(&self) -> LinkHealth {
+        LinkHealth::default()
+    }
+    async fn get_tuner_status(&self) -> Result<Option<TunerStatus>> {
+        Ok(None)
+    }
+}
+
+fn mode_from_wire(mode: WireMode) -> Mode {
+    match mode {
+        WireMode::Usb => Mode::Usb,
+        WireMode::Lsb => Mode::Lsb,
+        WireMode::Cw => Mode::Cw,
+        WireMode::Data => Mode::Data,
+        WireMode::Am => Mode::Am,
+        WireMode::Fm => Mode::Fm,
+        WireMode::Wfm => Mode::Wfm,
+        WireMode::Rtty => Mode::Rtty,
+        WireMode::CwReverse => Mode::CwReverse,
+        WireMode::RttyReverse => Mode::RttyReverse,
+    }
+}
+
+fn wire_mode(mode: Mode) -> WireMode {
+    match mode {
+        Mode::Usb => WireMode::Usb,
+        Mode::Lsb => WireMode::Lsb,
+        Mode::Cw => WireMode::Cw,
+        Mode::Data => WireMode::Data,
+        Mode::Am => WireMode::Am,
+        Mode::Fm => WireMode::Fm,
+        Mode::Wfm => WireMode::Wfm,
+        Mode::Rtty => WireMode::Rtty,
+        Mode::CwReverse => WireMode::CwReverse,
+        Mode::RttyReverse => WireMode::RttyReverse,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pcm_s16le_to_mono;
+
+    #[test]
+    fn remote_pcm_is_downmixed_to_normalized_mono() {
+        let payload = [0xFF, 0x7F, 0x00, 0x80, 0x00, 0x40, 0x00, 0xC0];
+        let samples = pcm_s16le_to_mono(&payload, 2);
+        assert_eq!(samples.len(), 2);
+        assert!(samples[0].abs() < 0.001);
+        assert!(samples[1].abs() < 0.001);
+    }
+}

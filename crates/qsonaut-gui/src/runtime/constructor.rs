@@ -210,7 +210,7 @@ impl QsonautGuiApp {
         // Spawn radio initialization on a background thread to avoid blocking UI appearance
         let (radio_init_rx, radio_waterfall_status_init) = if config.radio.enabled {
             let port = config.radio.serial_port.clone().unwrap_or_default();
-            let rx = spawn_radio_init(
+            let rx = spawn_radio_init_with_hostbridge(
                 config.radio.backend.clone(),
                 config.radio.model.clone(),
                 port,
@@ -218,6 +218,11 @@ impl QsonautGuiApp {
                 config.radio.baud_rate,
                 config.radio.controller_civ_address,
                 config.radio.civ_address,
+                config.radio.hostbridge_access_key.clone(),
+                config.radio.hostbridge_password.clone(),
+                config.radio.hostbridge_radio_id.clone(),
+                config.radio.hostbridge_audio_source_id.clone(),
+                config.radio.hostbridge_audio_output_id.clone(),
             );
             (Some(rx), "CONNECTING…".to_string())
         } else {
@@ -619,6 +624,11 @@ impl QsonautGuiApp {
                     baud_rate: config.radio.baud_rate,
                     civ_address: config.radio.civ_address,
                     controller_civ_address: config.radio.controller_civ_address,
+                    hostbridge_access_key: config.radio.hostbridge_access_key.clone(),
+                    hostbridge_password: config.radio.hostbridge_password.clone(),
+                    hostbridge_radio_id: config.radio.hostbridge_radio_id.clone(),
+                    hostbridge_audio_source_id: config.radio.hostbridge_audio_source_id.clone(),
+                    hostbridge_audio_output_id: config.radio.hostbridge_audio_output_id.clone(),
                 },
                 gui_scale,
                 compute_preference,

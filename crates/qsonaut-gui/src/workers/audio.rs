@@ -552,9 +552,13 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
             );
         }
         let null_audio = preferred_device.as_deref() == Some(NULL_INPUT_DEVICE);
+        let remote_audio = preferred_device
+            .as_deref()
+            .is_some_and(|device| device.starts_with("hostbridge://"));
+        let remote_queue = remote_audio.then(remote_media_queue);
         let mut null_generator = null_audio.then(NullAudioGenerator::default);
         let audio_service = AudioService::new(preferred_device, true);
-        let mut stream = if null_audio {
+        let mut stream = if null_audio || remote_audio {
             None
         } else {
             match audio_service.open_stream(sample_rate_hz, CANONICAL_CHANNELS) {
@@ -590,6 +594,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
             device_sample_format = %device_sample_format,
             resampling_input,
             null_audio,
+            remote_audio,
             monitor_enabled,
             "Audio input worker started"
         );
@@ -732,6 +737,12 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
             };
             match if let Some(stream) = stream.as_mut() {
                 stream.read_frames_f32_until_stopped(chunk_samples, &stop)
+            } else if let Some(queue) = &remote_queue {
+                let chunk = queue.lock().ok().and_then(|mut queue| queue.pop_front());
+                if chunk.is_none() {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Ok(chunk)
             } else {
                 Ok(Some(
                     null_generator

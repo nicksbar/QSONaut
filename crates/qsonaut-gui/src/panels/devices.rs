@@ -113,6 +113,11 @@ impl QsonautGuiApp {
         let old_endpoint = self.config.radio.endpoint.clone();
         let old_model = self.config.radio.model.clone();
         let old_baud = self.config.radio.baud_rate;
+        let old_hostbridge_key = self.config.radio.hostbridge_access_key.clone();
+        let old_hostbridge_password = self.config.radio.hostbridge_password.clone();
+        let old_hostbridge_radio_id = self.config.radio.hostbridge_radio_id.clone();
+        let old_hostbridge_audio_source_id = self.config.radio.hostbridge_audio_source_id.clone();
+        let old_hostbridge_audio_output_id = self.config.radio.hostbridge_audio_output_id.clone();
         let old_monitor = self.config.audio.monitor_enabled;
         let old_monitor_device = self.config.audio.monitor_output_device.clone();
         let input_users = self.profile_device_users(
@@ -165,6 +170,53 @@ impl QsonautGuiApp {
                 ) {
                     ui.label("Backend endpoint");
                     ui.text_edit_singleline(&mut self.config.radio.endpoint);
+                    ui.end_row();
+                }
+
+                if self.config.radio.backend.eq_ignore_ascii_case("hostbridge") {
+                    ui.label("HostBridge endpoint");
+                    ui.text_edit_singleline(&mut self.config.radio.endpoint);
+                    ui.end_row();
+                    ui.label("Access key");
+                    ui.text_edit_singleline(&mut self.config.radio.hostbridge_access_key);
+                    ui.end_row();
+                    ui.label("Password");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.config.radio.hostbridge_password)
+                            .password(true),
+                    );
+                    ui.end_row();
+                    ui.label("Radio device ID");
+                    ui.text_edit_singleline(
+                        self.config
+                            .radio
+                            .hostbridge_radio_id
+                            .get_or_insert_with(String::new),
+                    );
+                    ui.end_row();
+                    ui.label("Audio source ID");
+                    ui.text_edit_singleline(
+                        self.config
+                            .radio
+                            .hostbridge_audio_source_id
+                            .get_or_insert_with(String::new),
+                    );
+                    ui.end_row();
+                    ui.label("Audio output ID");
+                    ui.text_edit_singleline(
+                        self.config
+                            .radio
+                            .hostbridge_audio_output_id
+                            .get_or_insert_with(String::new),
+                    );
+                    ui.end_row();
+                    ui.label(
+                        RichText::new(
+                            "Leave the ID blank to select the first available host radio.",
+                        )
+                        .small()
+                        .color(theme_muted(ui)),
+                    );
                     ui.end_row();
                 }
 
@@ -593,6 +645,12 @@ impl QsonautGuiApp {
             || old_endpoint != self.config.radio.endpoint
             || old_model != self.config.radio.model
             || old_baud != self.config.radio.baud_rate;
+        let radio_changed = radio_changed
+            || old_hostbridge_key != self.config.radio.hostbridge_access_key
+            || old_hostbridge_password != self.config.radio.hostbridge_password
+            || old_hostbridge_radio_id != self.config.radio.hostbridge_radio_id
+            || old_hostbridge_audio_source_id != self.config.radio.hostbridge_audio_source_id
+            || old_hostbridge_audio_output_id != self.config.radio.hostbridge_audio_output_id;
         if audio_changed || radio_changed {
             if old_model != self.config.radio.model {
                 if let Some(profile) = find_model(&self.config.radio.model) {
@@ -712,6 +770,7 @@ impl QsonautGuiApp {
 
 const RADIO_BACKENDS: &[(&str, &str)] = &[
     ("native", "Native Rigwright"),
+    ("hostbridge", "Remote HostBridge"),
     ("rigctld", "Hamlib rigctld"),
     ("dxlab", "DX Lab Commander"),
     ("null", "Offline test radio"),

@@ -121,7 +121,7 @@ fn workspace_audio_controls_clear_noise() -> (ControlId, ControlValue, ControlId
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_radio_worker(
-    radio: ConfiguredRadio,
+    radio: impl Into<RadioHandle>,
     state: Arc<Mutex<GuiState>>,
     stop: Arc<AtomicBool>,
     swr_sweep_abort: Arc<AtomicBool>,
@@ -130,12 +130,27 @@ pub(crate) fn spawn_radio_worker(
     repaint_ctx: Arc<OnceLock<egui::Context>>,
     ptt_allowed: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
+    let radio = radio.into();
     thread::spawn(move || {
         {
             let mut s = state.lock().expect("ui state lock poisoned");
+            if let RadioHandle::Remote(remote) = &radio {
+                s.radio_waterfall_status = format!(
+                    "CONNECTED · HostBridge {} · {}",
+                    remote.host_name(),
+                    remote.device_id()
+                );
+                info!(
+                    host = remote.host_name(),
+                    radio = remote.device_id(),
+                    audio_sources = remote.capabilities_advertised().audio_sources.len(),
+                    audio_outputs = remote.capabilities_advertised().audio_outputs.len(),
+                    "HostBridge radio selected from negotiated catalog"
+                );
+            }
             s.radio_power_supported = radio.capabilities().can_set_power;
             s.supported_controls = radio.supported_controls().into_iter().collect();
-            s.supported_meters = if matches!(radio, ConfiguredRadio::Null(_)) {
+            s.supported_meters = if matches!(radio, RadioHandle::Local(ConfiguredRadio::Null(_))) {
                 // NullRadio intentionally has no physical meter source. Keep
                 // the UI deterministic for offline decoding by exposing
                 // zero-valued synthetic meters rather than leaving stale or
@@ -144,7 +159,7 @@ pub(crate) fn spawn_radio_worker(
             } else {
                 radio.supported_meters().into_iter().collect()
             };
-            if matches!(radio, ConfiguredRadio::Null(_)) {
+            if matches!(radio, RadioHandle::Local(ConfiguredRadio::Null(_))) {
                 s.signal_meter = Some(0);
                 s.power_meter = Some(0);
                 s.swr = Some(0);
@@ -1233,7 +1248,7 @@ pub(crate) fn spawn_radio_worker(
 
 fn poll_radio_core_state(
     rt: &tokio::runtime::Runtime,
-    radio: &ConfiguredRadio,
+    radio: &RadioHandle,
     state: &Arc<Mutex<GuiState>>,
     poll_levels: bool,
 ) {
@@ -2555,7 +2570,7 @@ mod level_poll_tests {
                 7_074_000, mode,
             ));
             let state = Arc::new(Mutex::new(GuiState::default()));
-            poll_radio_core_state(&rt, &radio, &state, true);
+            poll_radio_core_state(&rt, &radio.into(), &state, true);
 
             let state = state.lock().expect("state lock");
             assert_eq!(state.frequency_hz, Some(7_074_000));
@@ -2579,7 +2594,7 @@ mod level_poll_tests {
         }
         // NullRadio is healthy and confirms that the ready state is populated
         // before the error contract is checked below.
-        poll_radio_core_state(&rt, &radio, &state, true);
+        poll_radio_core_state(&rt, &radio.into(), &state, true);
         assert_eq!(state.lock().expect("state lock").radio_power_on, Some(true));
 
         // The configured wrapper's non-Icom path is driven by the underlying
@@ -2633,7 +2648,7 @@ mod level_poll_tests {
         let radio =
             ConfiguredRadio::Rigctld(qsonaut_radio::rigctld::RigctldRadio::new("127.0.0.1:1"));
 
-        poll_radio_core_state(&rt, &radio, &state, false);
+        poll_radio_core_state(&rt, &radio.into(), &state, false);
 
         let state = state.lock().expect("state lock");
         assert_eq!(state.radio_power_on, Some(false));
@@ -2651,7 +2666,7 @@ mod level_poll_tests {
             0x94,
         ));
 
-        poll_radio_core_state(&rt, &radio, &state, false);
+        poll_radio_core_state(&rt, &radio.into(), &state, false);
 
         let state = state.lock().expect("state lock");
         assert_eq!(state.radio_power_on, Some(false));
@@ -2676,7 +2691,7 @@ mod level_poll_tests {
         let state = Arc::new(Mutex::new(GuiState::default()));
         let rt = tokio::runtime::Runtime::new().expect("test runtime");
 
-        poll_radio_core_state(&rt, &radio, &state, false);
+        poll_radio_core_state(&rt, &radio.into(), &state, false);
 
         let state = state.lock().expect("state lock");
         assert_eq!(state.frequency_hz, Some(14_074_000));

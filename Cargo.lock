@@ -3453,6 +3453,8 @@ dependencies = [
  "qsonaut-audio",
  "qsonaut-automation",
  "qsonaut-core",
+ "qsonaut-hostbridge-client",
+ "qsonaut-hostbridge-protocol",
  "qsonaut-log",
  "qsonaut-modems",
  "qsonaut-pskreporter",

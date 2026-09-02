@@ -38,7 +38,7 @@ impl QsonautGuiApp {
             &self.state,
             should_restart_audio,
             || {
-                spawn_radio_init(
+                spawn_radio_init_with_hostbridge(
                     backend,
                     model,
                     port,
@@ -46,6 +46,11 @@ impl QsonautGuiApp {
                     baud_rate,
                     controller_civ_address,
                     radio_civ_address,
+                    String::new(),
+                    String::new(),
+                    None,
+                    None,
+                    None,
                 )
             },
             || {},

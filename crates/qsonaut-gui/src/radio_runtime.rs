@@ -2,6 +2,7 @@ use super::*;
 
 /// Initialize a configured radio off the UI thread and verify native radios
 /// with a real CI-V transaction before reporting success.
+#[allow(dead_code)]
 pub(super) fn spawn_radio_init(
     backend: String,
     model: String,
@@ -10,7 +11,38 @@ pub(super) fn spawn_radio_init(
     baud_rate: u32,
     controller_civ_address: u8,
     radio_civ_address: u8,
-) -> mpsc::Receiver<Option<ConfiguredRadio>> {
+) -> mpsc::Receiver<Option<RadioHandle>> {
+    spawn_radio_init_with_hostbridge(
+        backend,
+        model,
+        port,
+        endpoint,
+        baud_rate,
+        controller_civ_address,
+        radio_civ_address,
+        String::new(),
+        String::new(),
+        None,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn spawn_radio_init_with_hostbridge(
+    backend: String,
+    model: String,
+    port: String,
+    endpoint: String,
+    baud_rate: u32,
+    controller_civ_address: u8,
+    radio_civ_address: u8,
+    hostbridge_access_key: String,
+    hostbridge_password: String,
+    hostbridge_radio_id: Option<String>,
+    hostbridge_audio_source_id: Option<String>,
+    hostbridge_audio_output_id: Option<String>,
+) -> mpsc::Receiver<Option<RadioHandle>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let start = std::time::Instant::now();
@@ -18,9 +50,34 @@ pub(super) fn spawn_radio_init(
 
         let radio = match backend.trim().to_ascii_lowercase().as_str() {
             "none" => None,
-            "null" | "mock" => Some(open_null()),
-            "rigctld" | "rigctl" => Some(open_rigctld(endpoint)),
-            "dxlab" | "dxlab-commander" | "commander" => Some(open_dxlab(endpoint)),
+            "null" | "mock" => Some(open_null().into()),
+            "rigctld" | "rigctl" => Some(open_rigctld(endpoint).into()),
+            "dxlab" | "dxlab-commander" | "commander" => Some(open_dxlab(endpoint).into()),
+            "hostbridge" => {
+                let config = HostBridgeConfig {
+                    endpoint,
+                    client_name: "QSONaut desktop".into(),
+                    access_key: hostbridge_access_key,
+                    password: hostbridge_password,
+                    radio_device_id: hostbridge_radio_id,
+                    audio_source_id: hostbridge_audio_source_id,
+                    audio_output_id: hostbridge_audio_output_id,
+                    ..Default::default()
+                };
+                match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime
+                        .block_on(HostBridgeRadio::connect(config))
+                        .map(|radio| RadioHandle::Remote(Box::new(radio)))
+                        .ok(),
+                    Err(error) => {
+                        error!(%error, "HostBridge startup runtime failed");
+                        None
+                    }
+                }
+            }
             "native" => match open_model_with_radio_address(
                 &model,
                 &port,
@@ -41,7 +98,7 @@ pub(super) fn spawn_radio_init(
                                 elapsed = ?start.elapsed(),
                                 "Radio CI-V startup probe succeeded"
                             );
-                            Some(radio)
+                            Some(radio.into())
                         }
                         Err(err) => {
                             error!(
@@ -153,6 +210,11 @@ pub(super) fn radio_config_from_operator_profile(profile: &OperatorProfile) -> R
         baud_rate: profile.radio.baud_rate,
         civ_address: profile.radio.civ_address,
         controller_civ_address: profile.radio.controller_civ_address,
+        hostbridge_access_key: profile.radio.hostbridge_access_key.clone(),
+        hostbridge_password: profile.radio.hostbridge_password.clone(),
+        hostbridge_radio_id: profile.radio.hostbridge_radio_id.clone(),
+        hostbridge_audio_source_id: profile.radio.hostbridge_audio_source_id.clone(),
+        hostbridge_audio_output_id: profile.radio.hostbridge_audio_output_id.clone(),
     }
 }
 
@@ -202,7 +264,7 @@ impl QsonautGuiApp {
             session.worker_stop = Arc::new(AtomicBool::new(false));
             session.audio_worker_stop = Arc::new(AtomicBool::new(false));
             let port = session.config.serial_port.clone().unwrap_or_default();
-            session.init_rx = Some(spawn_radio_init(
+            session.init_rx = Some(spawn_radio_init_with_hostbridge(
                 session.config.backend.clone(),
                 session.config.model.clone(),
                 port,
@@ -210,6 +272,11 @@ impl QsonautGuiApp {
                 session.config.baud_rate,
                 session.config.controller_civ_address,
                 session.config.civ_address,
+                session.config.hostbridge_access_key.clone(),
+                session.config.hostbridge_password.clone(),
+                session.config.hostbridge_radio_id.clone(),
+                session.config.hostbridge_audio_source_id.clone(),
+                session.config.hostbridge_audio_output_id.clone(),
             ));
             session.init_attempted = false;
             if session.audio_worker_handle.is_none() {
@@ -442,7 +509,7 @@ impl QsonautGuiApp {
             return;
         }
         let port = self.config.radio.serial_port.clone().unwrap_or_default();
-        self.radio_init_rx = Some(spawn_radio_init(
+        self.radio_init_rx = Some(spawn_radio_init_with_hostbridge(
             self.config.radio.backend.clone(),
             self.config.radio.model.clone(),
             port,
@@ -450,6 +517,11 @@ impl QsonautGuiApp {
             self.config.radio.baud_rate,
             self.config.radio.controller_civ_address,
             self.config.radio.civ_address,
+            self.config.radio.hostbridge_access_key.clone(),
+            self.config.radio.hostbridge_password.clone(),
+            self.config.radio.hostbridge_radio_id.clone(),
+            self.config.radio.hostbridge_audio_source_id.clone(),
+            self.config.radio.hostbridge_audio_output_id.clone(),
         ));
         self.radio_init_attempted = false;
         if let Ok(mut state) = self.state.lock() {

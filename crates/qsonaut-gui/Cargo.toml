@@ -8,6 +8,7 @@ authors.workspace = true
 [dependencies]
 ab_glyph = "0.2"
 anyhow.workspace = true
+async-trait = "0.1"
 eframe.workspace = true
 wgpu.workspace = true
 tokio.workspace = true
@@ -29,6 +30,8 @@ egui-file-dialog = { version = "=0.12.0", default-features = false }
 qsonaut-audio = { path = "../qsonaut-audio" }
 qsonaut-accelerate = { path = "../qsonaut-accelerate" }
 qsonaut-core = { path = "../qsonaut-core" }
+qsonaut-hostbridge-client = { path = "../qsonaut-hostbridge-client" }
+qsonaut-hostbridge-protocol = { git = "https://github.com/nicksbar/QSONaut-HostBridge.git", rev = "35aecc6" }
 qsonaut-automation = { path = "../qsonaut-automation" }
 qsonaut-log = { path = "../qsonaut-log" }
 qsonaut-radio = { package = "rigwright", version = "0.1.19", path = "../../../rigwright" }
@@ -36,6 +39,3 @@ qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }
 qsonaut-server-client = { path = "../qsonaut-server-client" }
 qsonaut-modems = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "6cc26b8" }
 qsonaut-third-party = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "5810c4f" }
-
-[dev-dependencies]
-async-trait = "0.1"

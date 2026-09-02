@@ -5,6 +5,7 @@ mod band_plan;
 mod contest;
 mod decode_model;
 mod graphics;
+mod hostbridge_radio;
 mod local_ai;
 mod modes;
 mod panels;
@@ -25,6 +26,7 @@ mod workers;
 
 use anyhow::{anyhow, Context, Result};
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
+use hostbridge_radio::{remote_media_queue, HostBridgeRadio, RadioHandle};
 use qsonaut_accelerate::{
     AccelerationReport, ActiveBackend, ComputePreference, DecodeTelemetry, DecodeTrace,
 };
@@ -37,6 +39,7 @@ use qsonaut_core::{
     AppConfig, AppEvent, AppEventBus, AudioConfig, ContestOperatingMode, ContestProfile,
     FoxHoundRole, RadioConfig, SplitPolicy,
 };
+use qsonaut_hostbridge_client::HostBridgeConfig;
 use qsonaut_log::{
     app_config_dir, clear_log, hamdb_cache_path, log_file_path, read_log_tail, AdifExportFilter,
     HamDbCache, HamDbCacheEntry, QsoLog, QsoRecord,
@@ -144,13 +147,19 @@ fn qsonaut_testers() -> String {
 }
 
 fn effective_audio_input_device(backend: &str, input: Option<String>) -> Option<String> {
-    let _ = backend;
-    input
+    if backend.eq_ignore_ascii_case("hostbridge") {
+        Some("hostbridge://capture".to_string())
+    } else {
+        input
+    }
 }
 
 fn effective_audio_output_device(backend: &str, output: Option<String>) -> Option<String> {
-    let _ = backend;
-    output
+    if backend.eq_ignore_ascii_case("hostbridge") {
+        Some("hostbridge://playback".to_string())
+    } else {
+        output
+    }
 }
 
 use activity::{draw_activity_icon, OperatingActivity};
@@ -198,9 +207,11 @@ use profile::{
     OPERATOR_PROFILE_VERSION,
 };
 use radio_faq::{help_for_model, render_document};
+#[cfg(test)]
+use radio_runtime::spawn_radio_init;
 use radio_runtime::{
     join_handle_for_shutdown, radio_config_from_operator_profile, request_radio_session_stop,
-    spawn_radio_init, stop_radio_session,
+    spawn_radio_init_with_hostbridge, stop_radio_session,
 };
 use rendering::{
     band_edges_for_frequency, draw_primary_meter, draw_voltage_graph, effective_visual_profile,
@@ -1072,7 +1083,7 @@ struct QsonautGuiApp {
     radio_worker_stop: Arc<AtomicBool>,
     swr_sweep_abort: Arc<AtomicBool>,
     audio_worker_stop: Arc<AtomicBool>,
-    radio_init_rx: Option<mpsc::Receiver<Option<ConfiguredRadio>>>,
+    radio_init_rx: Option<mpsc::Receiver<Option<RadioHandle>>>,
     cat_test_rx: Option<mpsc::Receiver<Result<String, String>>>,
     cat_test_status: Option<Result<String, String>>,
     /// Whether to restart the radio worker after a CAT connection test. The
@@ -1354,7 +1365,7 @@ struct RadioSession {
     ft8_tx_active: Arc<AtomicBool>,
     digital_tx_active: Arc<AtomicBool>,
     ptt_allowed: Arc<AtomicBool>,
-    init_rx: Option<mpsc::Receiver<Option<ConfiguredRadio>>>,
+    init_rx: Option<mpsc::Receiver<Option<RadioHandle>>>,
     init_attempted: bool,
     worker_handle: Option<std::thread::JoinHandle<()>>,
     audio_worker_handle: Option<std::thread::JoinHandle<()>>,

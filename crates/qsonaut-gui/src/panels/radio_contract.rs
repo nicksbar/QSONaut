@@ -120,7 +120,7 @@ pub(in super::super) fn stop_radio_worker_for_reconnect(
 
 pub(in super::super) fn mark_radio_reconnect_disabled(
     state: &Arc<Mutex<GuiState>>,
-    radio_init_rx: &mut Option<Receiver<Option<ConfiguredRadio>>>,
+    radio_init_rx: &mut Option<Receiver<Option<RadioHandle>>>,
     radio_init_attempted: &mut bool,
 ) {
     *radio_init_rx = None;
@@ -130,7 +130,7 @@ pub(in super::super) fn mark_radio_reconnect_disabled(
 }
 
 pub(in super::super) fn apply_radio_reconnect<Init, Restart>(
-    radio_init_rx: &mut Option<Receiver<Option<ConfiguredRadio>>>,
+    radio_init_rx: &mut Option<Receiver<Option<RadioHandle>>>,
     radio_init_attempted: &mut bool,
     device_restart_required: &mut bool,
     state: &Arc<Mutex<GuiState>>,
@@ -138,7 +138,7 @@ pub(in super::super) fn apply_radio_reconnect<Init, Restart>(
     init: Init,
     restart_audio: Restart,
 ) where
-    Init: FnOnce() -> Receiver<Option<ConfiguredRadio>>,
+    Init: FnOnce() -> Receiver<Option<RadioHandle>>,
     Restart: FnOnce(),
 {
     *radio_init_rx = Some(init());

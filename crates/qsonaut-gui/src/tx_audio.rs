@@ -185,6 +185,13 @@ fn morse_pattern(character: char) -> Option<&'static str> {
 }
 
 fn play_ft8_tx_pcm(pcm: &[i16], abort: Arc<AtomicBool>, output_device: Option<&str>) -> Result<()> {
+    if output_device.is_some_and(|device| device.starts_with("hostbridge://")) {
+        if abort.load(Ordering::Relaxed) {
+            anyhow::bail!("TX aborted by operator");
+        }
+        return super::hostbridge_radio::send_remote_pcm(pcm, FT8_TX_SAMPLE_RATE_HZ)
+            .context("HostBridge audio output failed");
+    }
     play_pcm_blocking(pcm, FT8_TX_SAMPLE_RATE_HZ, output_device, abort)
         .context("native audio output failed")
 }

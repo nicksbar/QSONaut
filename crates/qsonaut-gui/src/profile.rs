@@ -89,6 +89,16 @@ pub(super) struct RadioProfileSettings {
         default = "default_controller_civ_address"
     )]
     pub(super) controller_civ_address: u8,
+    #[serde(default)]
+    pub(super) hostbridge_access_key: String,
+    #[serde(default)]
+    pub(super) hostbridge_password: String,
+    #[serde(default)]
+    pub(super) hostbridge_radio_id: Option<String>,
+    #[serde(default)]
+    pub(super) hostbridge_audio_source_id: Option<String>,
+    #[serde(default)]
+    pub(super) hostbridge_audio_output_id: Option<String>,
 }
 
 impl Default for RadioProfileSettings {
@@ -102,6 +112,11 @@ impl Default for RadioProfileSettings {
             baud_rate: default_radio_baud_rate(),
             civ_address: default_radio_civ_address(),
             controller_civ_address: default_controller_civ_address(),
+            hostbridge_access_key: String::new(),
+            hostbridge_password: String::new(),
+            hostbridge_radio_id: None,
+            hostbridge_audio_source_id: None,
+            hostbridge_audio_output_id: None,
         }
     }
 }
