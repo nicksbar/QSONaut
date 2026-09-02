@@ -1,5 +1,8 @@
 use super::*;
 
+const HOSTBRIDGE_STARTUP_ATTEMPTS: u32 = 3;
+const HOSTBRIDGE_STARTUP_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Initialize a configured radio off the UI thread and verify native radios
 /// with a real CI-V transaction before reporting success.
 #[allow(dead_code)]
@@ -68,13 +71,42 @@ pub(super) fn spawn_radio_init_with_hostbridge(
                     .enable_all()
                     .build()
                 {
-                    Ok(runtime) => match runtime.block_on(HostBridgeRadio::connect(config)) {
-                        Ok(radio) => Some(RadioHandle::Remote(Box::new(radio))),
-                        Err(error) => {
-                            error!(%error, "HostBridge radio connection failed during initialization");
-                            None
+                    Ok(runtime) => {
+                        let mut last_error = None;
+                        let mut connected_radio = None;
+                        for attempt in 1..=HOSTBRIDGE_STARTUP_ATTEMPTS {
+                            match runtime.block_on(HostBridgeRadio::connect(config.clone())) {
+                                Ok(radio) => {
+                                    if attempt > 1 {
+                                        info!(
+                                            attempt,
+                                            "HostBridge radio connection recovered during initialization"
+                                        );
+                                    }
+                                    connected_radio = Some(RadioHandle::Remote(Box::new(radio)));
+                                    break;
+                                }
+                                Err(error) => {
+                                    warn!(
+                                        attempt,
+                                        max_attempts = HOSTBRIDGE_STARTUP_ATTEMPTS,
+                                        %error,
+                                        "HostBridge radio connection attempt failed"
+                                    );
+                                    last_error = Some(error);
+                                    if attempt < HOSTBRIDGE_STARTUP_ATTEMPTS {
+                                        thread::sleep(HOSTBRIDGE_STARTUP_RETRY_DELAY);
+                                    }
+                                }
+                            }
                         }
-                    },
+                        if connected_radio.is_none() {
+                            if let Some(error) = last_error {
+                                error!(%error, "HostBridge radio connection failed after retries");
+                            }
+                        }
+                        connected_radio
+                    }
                     Err(error) => {
                         error!(%error, "HostBridge startup runtime failed");
                         None
