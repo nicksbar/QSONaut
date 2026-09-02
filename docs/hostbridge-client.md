@@ -57,6 +57,7 @@ The client must not assume device paths or compile-time catalog entries.
   direction, and exact payload length required by HostBridge.
 - Media selection never implies PTT.
 
-The current API emits server acknowledgements/errors as `HostBridgeEvent::Server`;
-the next integration layer can attach request correlation when QSONaut’s UI
-needs it.
+The current API emits server acknowledgements/errors as `HostBridgeEvent::Server`.
+HostBridge release/0.1.1 supports optional request IDs echoed in successful
+acknowledgements, allowing the next integration layer to correlate concurrent
+control operations without relying on message ordering.

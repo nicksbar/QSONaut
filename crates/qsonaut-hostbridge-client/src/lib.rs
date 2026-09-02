@@ -86,6 +86,7 @@ impl HostBridgeClient {
 
     pub fn select_radio(&self, device_id: impl Into<String>) -> Result<()> {
         self.send(ClientMessage::SelectRadio {
+            request_id: None,
             device_id: device_id.into(),
         })
     }
@@ -97,6 +98,7 @@ impl HostBridgeClient {
         format: AudioFormat,
     ) -> Result<()> {
         self.send(ClientMessage::SelectAudio {
+            request_id: None,
             enabled,
             source_id: source_id.into(),
             format,
@@ -110,6 +112,7 @@ impl HostBridgeClient {
         format: AudioFormat,
     ) -> Result<()> {
         self.send(ClientMessage::SelectAudioOutput {
+            request_id: None,
             enabled,
             output_id: output_id.into(),
             format,
@@ -117,19 +120,28 @@ impl HostBridgeClient {
     }
 
     pub fn set_frequency(&self, frequency_hz: u64) -> Result<()> {
-        self.send(ClientMessage::SetFrequency { frequency_hz })
+        self.send(ClientMessage::SetFrequency {
+            request_id: None,
+            frequency_hz,
+        })
     }
 
     pub fn set_mode(&self, mode: qsonaut_hostbridge_protocol::WireMode) -> Result<()> {
-        self.send(ClientMessage::SetMode { mode })
+        self.send(ClientMessage::SetMode {
+            request_id: None,
+            mode,
+        })
     }
 
     pub fn set_ptt(&self, enabled: bool) -> Result<()> {
-        self.send(ClientMessage::SetPtt { enabled })
+        self.send(ClientMessage::SetPtt {
+            request_id: None,
+            enabled,
+        })
     }
 
     pub fn get_state(&self) -> Result<()> {
-        self.send(ClientMessage::GetState)
+        self.send(ClientMessage::GetState { request_id: None })
     }
 
     pub fn send_media(&self, header: MediaFrameHeader, payload: &[u8]) -> Result<()> {
@@ -243,7 +255,7 @@ async fn connect(
                 Some(Command::Message(message)) => send_json(&mut writer, &message).await?,
                 Some(Command::Media(bytes)) => writer.send(Message::Binary(bytes.into())).await?,
                 Some(Command::Shutdown) | None => {
-                    let _ = send_json(&mut writer, &ClientMessage::SetPtt { enabled: false }).await;
+                    let _ = send_json(&mut writer, &ClientMessage::SetPtt { request_id: None, enabled: false }).await;
                     let _ = writer.send(Message::Close(None)).await;
                     return Ok(ConnectionEnd::Shutdown);
                 }
