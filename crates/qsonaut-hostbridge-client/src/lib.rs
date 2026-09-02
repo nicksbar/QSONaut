@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::warn;
 use url::Url;
+use uuid::Uuid;
 
 const MAX_MEDIA_PAYLOAD_BYTES: usize = 1_048_576;
 
@@ -69,6 +70,13 @@ pub struct HostBridgeClient {
 }
 
 impl HostBridgeClient {
+    /// Create an identifier for a control request. The returned ID is echoed
+    /// by HostBridge in its acknowledgement/error event.
+    #[must_use]
+    pub fn new_request_id() -> String {
+        Uuid::new_v4().to_string()
+    }
+
     #[must_use]
     pub fn spawn(config: HostBridgeConfig) -> (Self, mpsc::UnboundedReceiver<HostBridgeEvent>) {
         install_tls_crypto_provider();
@@ -85,8 +93,16 @@ impl HostBridgeClient {
     }
 
     pub fn select_radio(&self, device_id: impl Into<String>) -> Result<()> {
+        self.select_radio_with_request_id(None, device_id)
+    }
+
+    pub fn select_radio_with_request_id(
+        &self,
+        request_id: Option<String>,
+        device_id: impl Into<String>,
+    ) -> Result<()> {
         self.send(ClientMessage::SelectRadio {
-            request_id: None,
+            request_id,
             device_id: device_id.into(),
         })
     }
@@ -120,22 +136,39 @@ impl HostBridgeClient {
     }
 
     pub fn set_frequency(&self, frequency_hz: u64) -> Result<()> {
+        self.set_frequency_with_request_id(None, frequency_hz)
+    }
+
+    pub fn set_frequency_with_request_id(
+        &self,
+        request_id: Option<String>,
+        frequency_hz: u64,
+    ) -> Result<()> {
         self.send(ClientMessage::SetFrequency {
-            request_id: None,
+            request_id,
             frequency_hz,
         })
     }
 
     pub fn set_mode(&self, mode: qsonaut_hostbridge_protocol::WireMode) -> Result<()> {
-        self.send(ClientMessage::SetMode {
-            request_id: None,
-            mode,
-        })
+        self.set_mode_with_request_id(None, mode)
+    }
+
+    pub fn set_mode_with_request_id(
+        &self,
+        request_id: Option<String>,
+        mode: qsonaut_hostbridge_protocol::WireMode,
+    ) -> Result<()> {
+        self.send(ClientMessage::SetMode { request_id, mode })
     }
 
     pub fn set_ptt(&self, enabled: bool) -> Result<()> {
+        self.set_ptt_with_request_id(None, enabled)
+    }
+
+    pub fn set_ptt_with_request_id(&self, request_id: Option<String>, enabled: bool) -> Result<()> {
         self.send(ClientMessage::SetPtt {
-            request_id: None,
+            request_id,
             enabled,
         })
     }

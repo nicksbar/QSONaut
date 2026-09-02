@@ -61,3 +61,5 @@ The current API emits server acknowledgements/errors as `HostBridgeEvent::Server
 HostBridge release/0.1.1 supports optional request IDs echoed in successful
 acknowledgements, allowing the next integration layer to correlate concurrent
 control operations without relying on message ordering.
+Use `HostBridgeClient::new_request_id()` with the `*_with_request_id` methods
+when the caller needs to correlate a specific control operation.
