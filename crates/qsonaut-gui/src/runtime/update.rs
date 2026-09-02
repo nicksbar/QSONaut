@@ -96,6 +96,25 @@ impl QsonautGuiApp {
             }
         }
 
+        if let Some(rx) = &self.hostbridge_scan {
+            match rx.try_recv() {
+                Ok(Ok(hello)) => {
+                    self.hostbridge_catalog = Some(hello);
+                    self.hostbridge_scan = None;
+                    self.hostbridge_scan_status = "Connected · options loaded".to_string();
+                }
+                Ok(Err(error)) => {
+                    self.hostbridge_scan = None;
+                    self.hostbridge_scan_status = error;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.hostbridge_scan = None;
+                    self.hostbridge_scan_status = "Enumeration stopped unexpectedly".to_string();
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+
         // Keep inactive tabs receiving/decoding; only their PTT path is gated.
         self.pump_parked_radio_sessions();
 

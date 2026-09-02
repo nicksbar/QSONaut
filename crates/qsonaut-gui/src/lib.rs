@@ -39,7 +39,8 @@ use qsonaut_core::{
     AppConfig, AppEvent, AppEventBus, AudioConfig, ContestOperatingMode, ContestProfile,
     FoxHoundRole, RadioConfig, SplitPolicy,
 };
-use qsonaut_hostbridge_client::HostBridgeConfig;
+use qsonaut_hostbridge_client::{HostBridgeClient, HostBridgeConfig, HostBridgeEvent};
+use qsonaut_hostbridge_protocol::HostHello;
 use qsonaut_log::{
     app_config_dir, clear_log, hamdb_cache_path, log_file_path, read_log_tail, AdifExportFilter,
     HamDbCache, HamDbCacheEntry, QsoLog, QsoRecord,
@@ -1293,6 +1294,9 @@ struct QsonautGuiApp {
     radio_serial_port_labels: HashMap<String, String>,
     radio_detected_models: Vec<String>,
     device_scan: Option<mpsc::Receiver<DeviceInventory>>,
+    hostbridge_catalog: Option<HostHello>,
+    hostbridge_scan: Option<mpsc::Receiver<Result<HostHello, String>>>,
+    hostbridge_scan_status: String,
     radio_scope_contrast: f32,
     radio_scope_span_code: u8,
     radio_scope_vbw_wide: bool,
