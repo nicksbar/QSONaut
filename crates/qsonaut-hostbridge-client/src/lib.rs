@@ -197,6 +197,40 @@ impl HostBridgeClient {
         self.send(ClientMessage::GetState { request_id: None })
     }
 
+    pub fn get_control(&self, control_id: impl Into<String>) -> Result<()> {
+        self.send(ClientMessage::GetControl {
+            request_id: None,
+            control_id: control_id.into(),
+        })
+    }
+
+    pub fn set_control(
+        &self,
+        control_id: impl Into<String>,
+        value: qsonaut_hostbridge_protocol::WireControlValue,
+    ) -> Result<()> {
+        self.send(ClientMessage::SetControl {
+            request_id: None,
+            control_id: control_id.into(),
+            value,
+        })
+    }
+
+    pub fn get_meter(&self, meter_id: qsonaut_hostbridge_protocol::WireMeterId) -> Result<()> {
+        self.send(ClientMessage::GetMeter {
+            request_id: None,
+            meter_id,
+        })
+    }
+
+    pub fn start_tuner(&self) -> Result<()> {
+        self.send(ClientMessage::StartTuner { request_id: None })
+    }
+
+    pub fn get_tuner_status(&self) -> Result<()> {
+        self.send(ClientMessage::GetTunerStatus { request_id: None })
+    }
+
     pub fn send_media(&self, header: MediaFrameHeader, payload: &[u8]) -> Result<()> {
         validate_outgoing_media(header, payload)?;
         let mut bytes = Vec::with_capacity(MediaFrameHeader::BYTES + payload.len());

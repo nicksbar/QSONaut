@@ -1,6 +1,9 @@
 use anyhow::{anyhow, Result};
 use qsonaut_hostbridge_client::{HostBridgeClient, HostBridgeConfig, HostBridgeEvent};
-use qsonaut_hostbridge_protocol::{HostHello, RadioState, ServerMessage, WireMode};
+use qsonaut_hostbridge_protocol::{
+    control_id_key, HostHello, RadioCapabilitiesInfo, RadioState, ServerMessage, WireControlValue,
+    WireMode,
+};
 use qsonaut_radio::{
     drivers::ConfiguredRadio, ControlId, IcomCiVRadio, LinkHealth, MeterId, Mode, Radio,
     RadioCapabilities, TunerStatus,
@@ -17,6 +20,7 @@ pub(crate) struct HostBridgeRadio {
     client: Arc<HostBridgeClient>,
     events: Mutex<tokio::sync::mpsc::UnboundedReceiver<HostBridgeEvent>>,
     state: Mutex<RadioState>,
+    capabilities: Mutex<RadioCapabilitiesInfo>,
     hello: HostHello,
     device_id: String,
     connected: Arc<Mutex<bool>>,
@@ -150,31 +154,57 @@ impl Radio for RadioHandle {
     async fn get_control(&self, id: ControlId) -> Result<Option<qsonaut_radio::ControlValue>> {
         match self {
             Self::Local(radio) => radio.get_control(id).await,
-            Self::Remote(radio) => radio.get_control(id).await,
+            Self::Remote(radio) => {
+                radio.ensure_connected()?;
+                let key = control_id_key(id);
+                radio.client.get_control(key.clone())?;
+                Ok(radio.state().controls.get(&key).cloned().map(Into::into))
+            }
         }
     }
     async fn set_control(&self, id: ControlId, value: qsonaut_radio::ControlValue) -> Result<()> {
         match self {
             Self::Local(radio) => radio.set_control(id, value).await,
-            Self::Remote(radio) => radio.set_control(id, value).await,
+            Self::Remote(radio) => {
+                radio.ensure_connected()?;
+                let key = control_id_key(id);
+                let wire_value: WireControlValue = value.clone().into();
+                radio.client.set_control(key.clone(), wire_value)?;
+                if let Ok(mut state) = radio.state.lock() {
+                    state.controls.insert(key, value.into());
+                }
+                Ok(())
+            }
         }
     }
     async fn get_meter(&self, id: MeterId) -> Result<Option<u8>> {
         match self {
             Self::Local(radio) => radio.get_meter(id).await,
-            Self::Remote(radio) => radio.get_meter(id).await,
+            Self::Remote(radio) => {
+                radio.ensure_connected()?;
+                radio.client.get_meter(id.into())?;
+                Ok(radio.state().meters.get(&id.into()).copied())
+            }
         }
     }
     async fn start_tuner(&self) -> Result<()> {
         match self {
             Self::Local(radio) => radio.start_tuner().await,
-            Self::Remote(radio) => radio.start_tuner().await,
+            Self::Remote(radio) => {
+                radio.ensure_connected()?;
+                radio.client.start_tuner()?;
+                Ok(())
+            }
         }
     }
     async fn get_tuner_status(&self) -> Result<Option<TunerStatus>> {
         match self {
             Self::Local(radio) => radio.get_tuner_status().await,
-            Self::Remote(radio) => radio.get_tuner_status().await,
+            Self::Remote(radio) => {
+                radio.ensure_connected()?;
+                radio.client.get_tuner_status()?;
+                Ok(radio.state().tuner.map(Into::into))
+            }
         }
     }
     fn capabilities(&self) -> RadioCapabilities {
@@ -283,10 +313,16 @@ impl HostBridgeRadio {
             .get_or_init(|| Mutex::new(None))
             .lock()
             .map(|mut current| *current = Some(client.clone()));
-        let initial_state = tokio::time::timeout(Duration::from_secs(5), async {
+        let (initial_state, capabilities) = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut capabilities = None;
             loop {
                 match events.recv().await {
-                    Some(HostBridgeEvent::Server(ServerMessage::State(state))) => break Ok(state),
+                    Some(HostBridgeEvent::Server(ServerMessage::RadioCapabilities(next))) => {
+                        capabilities = Some(next);
+                    }
+                    Some(HostBridgeEvent::Server(ServerMessage::State(state))) => {
+                        break Ok((state, capabilities.unwrap_or_default()))
+                    }
                     Some(HostBridgeEvent::SafetyDisarmed { reason }) => {
                         break Err(anyhow!(
                             "HostBridge session disarmed during startup: {reason}"
@@ -306,6 +342,7 @@ impl HostBridgeRadio {
             client,
             events: Mutex::new(events),
             state: Mutex::new(initial_state),
+            capabilities: Mutex::new(capabilities),
             hello,
             device_id,
             connected: Arc::new(Mutex::new(true)),
@@ -337,6 +374,34 @@ impl HostBridgeRadio {
                 HostBridgeEvent::Server(ServerMessage::State(next)) => {
                     if let Ok(mut state) = self.state.lock() {
                         *state = next;
+                    }
+                }
+                HostBridgeEvent::Server(ServerMessage::RadioCapabilities(next)) => {
+                    if let Ok(mut capabilities) = self.capabilities.lock() {
+                        *capabilities = next;
+                    }
+                }
+                HostBridgeEvent::Server(ServerMessage::ControlValue {
+                    control_id, value, ..
+                }) => {
+                    if let Some(value) = value {
+                        if let Ok(mut state) = self.state.lock() {
+                            state.controls.insert(control_id, value);
+                        }
+                    }
+                }
+                HostBridgeEvent::Server(ServerMessage::MeterValue {
+                    meter_id, value, ..
+                }) => {
+                    if let Some(value) = value {
+                        if let Ok(mut state) = self.state.lock() {
+                            state.meters.insert(meter_id, value);
+                        }
+                    }
+                }
+                HostBridgeEvent::Server(ServerMessage::TunerStatus { status, .. }) => {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.tuner = status;
                     }
                 }
                 HostBridgeEvent::SafetyDisarmed { .. }
@@ -426,6 +491,13 @@ impl HostBridgeRadio {
         self.state
             .lock()
             .map(|state| state.clone())
+            .unwrap_or_default()
+    }
+
+    fn capabilities_snapshot(&self) -> RadioCapabilitiesInfo {
+        self.capabilities
+            .lock()
+            .map(|value| value.clone())
             .unwrap_or_default()
     }
 }
@@ -538,22 +610,40 @@ impl Radio for HostBridgeRadio {
     }
 
     fn capabilities(&self) -> RadioCapabilities {
+        let capabilities = self.capabilities_snapshot();
         RadioCapabilities {
-            can_get_frequency: true,
-            can_set_frequency: true,
-            can_get_mode: true,
-            can_set_mode: true,
-            can_get_ptt: true,
-            can_set_ptt: true,
-            ..Default::default()
+            can_get_frequency: capabilities.can_get_frequency,
+            can_set_frequency: capabilities.can_set_frequency,
+            can_get_mode: capabilities.can_get_mode,
+            can_set_mode: capabilities.can_set_mode,
+            can_get_ptt: capabilities.can_get_ptt,
+            can_set_ptt: capabilities.can_set_ptt,
+            can_get_power: capabilities.can_get_power,
+            can_set_power: capabilities.can_set_power,
+            can_raw_protocol: capabilities.can_raw_protocol,
         }
     }
 
-    fn supports_meter(&self, _id: MeterId) -> bool {
-        false
+    fn supports_meter(&self, id: MeterId) -> bool {
+        self.capabilities_snapshot().meters.contains(&id.into())
     }
-    fn supports_control(&self, _id: ControlId) -> bool {
-        false
+    fn supports_control(&self, id: ControlId) -> bool {
+        self.capabilities_snapshot()
+            .controls
+            .iter()
+            .any(|capability| capability.id == control_id_key(id))
+    }
+    fn supports_control_read(&self, id: ControlId) -> bool {
+        self.capabilities_snapshot()
+            .controls
+            .iter()
+            .any(|capability| capability.id == control_id_key(id) && capability.readable)
+    }
+    fn supports_control_write(&self, id: ControlId) -> bool {
+        self.capabilities_snapshot()
+            .controls
+            .iter()
+            .any(|capability| capability.id == control_id_key(id) && capability.writable)
     }
     fn link_health(&self) -> LinkHealth {
         LinkHealth::default()

@@ -45,6 +45,21 @@ client.set_frequency(14_074_000)?;
 client.set_mode(qsonaut_hostbridge_protocol::WireMode::Usb)?;
 ```
 
+Once the radio is selected, the host sends `radio_capabilities`. This is the
+authoritative driver surface for that physical radio: core frequency/mode/PTT
+operations, readable and writable Rigwright controls, supported meters, and
+tuner support. QSONaut should build its remote controls from this message and
+must not expose local device paths or ask the operator to type a Rigwright
+control identifier.
+
+Control and meter operations are carried as typed protocol messages. Control
+identifiers are stable wire keys derived from Rigwright's public `ControlId`
+names (for example `RfPower` and `DataMode`); their read/write permissions are
+advertised independently. Meter values are normalized to the Rigwright `u8`
+range. Tuner operations are available only when `radio_capabilities.tuner` is
+true. The HostBridge remains authoritative for unsupported operations,
+hardware ownership, and all TX safety decisions.
+
 The client must not assume device paths or compile-time catalog entries.
 The GUI HostBridge backend stores the optional `radio_device_id`,
 `audio_source_id`, and `audio_output_id` selections in the radio profile. Blank
