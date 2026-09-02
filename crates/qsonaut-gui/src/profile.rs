@@ -22,6 +22,90 @@ const DEFAULT_PROFILE_NAME: &str = "Default";
 const OPERATOR_PROFILES_DIR: &str = "profiles";
 const ACTIVE_PROFILE_FILE: &str = "active-profile";
 
+/// Persisted audio settings owned by a radio profile.
+///
+/// This is flattened during serialization to preserve the existing TOML
+/// format, while keeping audio ownership separate in Rust.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct AudioProfileSettings {
+    #[serde(rename = "audio_input_device", default)]
+    pub(super) input_device: Option<String>,
+    #[serde(rename = "audio_enabled", default = "default_audio_enabled")]
+    pub(super) enabled: bool,
+    #[serde(rename = "audio_output_device", default)]
+    pub(super) output_device: Option<String>,
+    #[serde(rename = "audio_monitor_enabled", default)]
+    pub(super) monitor_enabled: bool,
+    #[serde(rename = "audio_monitor_output_device", default)]
+    pub(super) monitor_output_device: Option<String>,
+    #[serde(
+        rename = "audio_monitor_volume",
+        default = "default_audio_monitor_volume"
+    )]
+    pub(super) monitor_volume: f32,
+    #[serde(
+        rename = "audio_sample_rate_hz",
+        default = "default_audio_sample_rate_hz"
+    )]
+    pub(super) sample_rate_hz: u32,
+    #[serde(rename = "audio_channels", default = "default_audio_channels")]
+    pub(super) channels: u8,
+}
+
+impl Default for AudioProfileSettings {
+    fn default() -> Self {
+        Self {
+            input_device: None,
+            enabled: default_audio_enabled(),
+            output_device: None,
+            monitor_enabled: false,
+            monitor_output_device: None,
+            monitor_volume: default_audio_monitor_volume(),
+            sample_rate_hz: default_audio_sample_rate_hz(),
+            channels: default_audio_channels(),
+        }
+    }
+}
+
+/// Persisted radio connection settings owned by a radio profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct RadioProfileSettings {
+    #[serde(rename = "radio_enabled", default = "default_radio_enabled")]
+    pub(super) enabled: bool,
+    #[serde(rename = "radio_serial_port", default)]
+    pub(super) serial_port: Option<String>,
+    #[serde(rename = "radio_backend", default = "default_radio_backend")]
+    pub(super) backend: String,
+    #[serde(rename = "radio_endpoint", default = "default_radio_endpoint")]
+    pub(super) endpoint: String,
+    #[serde(rename = "radio_model", default = "default_radio_model")]
+    pub(super) model: String,
+    #[serde(rename = "radio_baud_rate", default = "default_radio_baud_rate")]
+    pub(super) baud_rate: u32,
+    #[serde(rename = "radio_civ_address", default = "default_radio_civ_address")]
+    pub(super) civ_address: u8,
+    #[serde(
+        rename = "radio_controller_civ_address",
+        default = "default_controller_civ_address"
+    )]
+    pub(super) controller_civ_address: u8,
+}
+
+impl Default for RadioProfileSettings {
+    fn default() -> Self {
+        Self {
+            enabled: default_radio_enabled(),
+            serial_port: None,
+            backend: default_radio_backend(),
+            endpoint: default_radio_endpoint(),
+            model: default_radio_model(),
+            baud_rate: default_radio_baud_rate(),
+            civ_address: default_radio_civ_address(),
+            controller_civ_address: default_controller_civ_address(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct OperatorProfile {
     #[serde(default)]
@@ -117,22 +201,8 @@ pub(super) struct OperatorProfile {
     pub(super) cw_wpm: u8,
     #[serde(default = "default_cw_tone_hz")]
     pub(super) cw_tone_hz: u16,
-    #[serde(default)]
-    pub(super) audio_input_device: Option<String>,
-    #[serde(default = "default_audio_enabled")]
-    pub(super) audio_enabled: bool,
-    #[serde(default)]
-    pub(super) audio_output_device: Option<String>,
-    #[serde(default)]
-    pub(super) audio_monitor_enabled: bool,
-    #[serde(default)]
-    pub(super) audio_monitor_output_device: Option<String>,
-    #[serde(default = "default_audio_monitor_volume")]
-    pub(super) audio_monitor_volume: f32,
-    #[serde(default = "default_audio_sample_rate_hz")]
-    pub(super) audio_sample_rate_hz: u32,
-    #[serde(default = "default_audio_channels")]
-    pub(super) audio_channels: u8,
+    #[serde(flatten, default)]
+    pub(super) audio: AudioProfileSettings,
     #[serde(default)]
     pub(super) recording_enabled: bool,
     #[serde(default = "default_recording_modes")]
@@ -141,22 +211,8 @@ pub(super) struct OperatorProfile {
     pub(super) recording_full_width: bool,
     #[serde(default = "default_recording_stream")]
     pub(super) recording_stream: bool,
-    #[serde(default = "default_radio_enabled")]
-    pub(super) radio_enabled: bool,
-    #[serde(default)]
-    pub(super) radio_serial_port: Option<String>,
-    #[serde(default = "default_radio_backend")]
-    pub(super) radio_backend: String,
-    #[serde(default = "default_radio_endpoint")]
-    pub(super) radio_endpoint: String,
-    #[serde(default = "default_radio_model")]
-    pub(super) radio_model: String,
-    #[serde(default = "default_radio_baud_rate")]
-    pub(super) radio_baud_rate: u32,
-    #[serde(default = "default_radio_civ_address")]
-    pub(super) radio_civ_address: u8,
-    #[serde(default = "default_controller_civ_address")]
-    pub(super) radio_controller_civ_address: u8,
+    #[serde(flatten, default)]
+    pub(super) radio: RadioProfileSettings,
     #[allow(dead_code)]
     #[serde(skip_serializing, default = "default_gui_scale")]
     pub(super) gui_scale: f32,
@@ -671,14 +727,14 @@ deep_decode = false
         let profile: OperatorProfile =
             toml::from_str(legacy).expect("minimal profile should deserialize");
         assert_eq!(profile.workspace_mode, "FT8");
-        assert_eq!(profile.radio_backend, "native");
-        assert_eq!(profile.radio_model, "IC-7300");
-        assert_eq!(profile.radio_baud_rate, 115_200);
-        assert_eq!(profile.radio_civ_address, 0x94);
-        assert_eq!(profile.radio_controller_civ_address, 0xE0);
-        assert_eq!(profile.audio_sample_rate_hz, 48_000);
-        assert_eq!(profile.audio_channels, 1);
-        assert!(profile.audio_enabled);
+        assert_eq!(profile.radio.backend, "native");
+        assert_eq!(profile.radio.model, "IC-7300");
+        assert_eq!(profile.radio.baud_rate, 115_200);
+        assert_eq!(profile.radio.civ_address, 0x94);
+        assert_eq!(profile.radio.controller_civ_address, 0xE0);
+        assert_eq!(profile.audio.sample_rate_hz, 48_000);
+        assert_eq!(profile.audio.channels, 1);
+        assert!(profile.audio.enabled);
         assert_eq!(profile.cw_wpm, 20);
         assert_eq!(profile.cw_tone_hz, 600);
         assert_eq!(profile.contest_serial_start, 1);

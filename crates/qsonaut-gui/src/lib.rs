@@ -1695,14 +1695,14 @@ fn stop_radio_session(session: RadioSession) {
 
 fn radio_config_from_operator_profile(profile: &OperatorProfile) -> RadioConfig {
     RadioConfig {
-        enabled: profile.radio_enabled,
-        backend: profile.radio_backend.clone(),
-        endpoint: profile.radio_endpoint.clone(),
-        model: profile.radio_model.clone(),
-        serial_port: profile.radio_serial_port.clone(),
-        baud_rate: profile.radio_baud_rate,
-        civ_address: profile.radio_civ_address,
-        controller_civ_address: profile.radio_controller_civ_address,
+        enabled: profile.radio.enabled,
+        backend: profile.radio.backend.clone(),
+        endpoint: profile.radio.endpoint.clone(),
+        model: profile.radio.model.clone(),
+        serial_port: profile.radio.serial_port.clone(),
+        baud_rate: profile.radio.baud_rate,
+        civ_address: profile.radio.civ_address,
+        controller_civ_address: profile.radio.controller_civ_address,
     }
 }
 
@@ -1714,26 +1714,26 @@ fn audio_config_from_operator_profile(
         return fallback.clone();
     }
     AudioConfig {
-        enabled: profile.audio_enabled,
-        input_device: profile.audio_input_device.clone(),
-        output_device: profile.audio_output_device.clone(),
+        enabled: profile.audio.enabled,
+        input_device: profile.audio.input_device.clone(),
+        output_device: profile.audio.output_device.clone(),
         monitor_enabled: if profile.profile_version >= AUDIO_MONITOR_PROFILE_VERSION {
-            profile.audio_monitor_enabled
+            profile.audio.monitor_enabled
         } else {
             fallback.monitor_enabled
         },
         monitor_output_device: if profile.profile_version >= AUDIO_MONITOR_PROFILE_VERSION {
-            profile.audio_monitor_output_device.clone()
+            profile.audio.monitor_output_device.clone()
         } else {
             fallback.monitor_output_device.clone()
         },
         monitor_volume: if profile.profile_version >= AUDIO_MONITOR_PROFILE_VERSION {
-            profile.audio_monitor_volume.clamp(0.0, 2.0)
+            profile.audio.monitor_volume.clamp(0.0, 2.0)
         } else {
             fallback.monitor_volume
         },
-        sample_rate_hz: profile.audio_sample_rate_hz,
-        channels: profile.audio_channels,
+        sample_rate_hz: profile.audio.sample_rate_hz,
+        channels: profile.audio.channels,
     }
 }
 
@@ -2153,29 +2153,30 @@ impl QsonautGuiApp {
         if apply_saved_profile {
             if let Some(profile) = load_operator_profile() {
                 if profile.profile_version >= 3 {
-                    config.audio.input_device = profile.audio_input_device;
-                    config.audio.enabled = profile.audio_enabled;
-                    config.audio.output_device = profile.audio_output_device;
-                    config.audio.sample_rate_hz = profile.audio_sample_rate_hz;
-                    config.audio.channels = profile.audio_channels;
+                    config.audio.input_device = profile.audio.input_device.clone();
+                    config.audio.enabled = profile.audio.enabled;
+                    config.audio.output_device = profile.audio.output_device.clone();
+                    config.audio.sample_rate_hz = profile.audio.sample_rate_hz;
+                    config.audio.channels = profile.audio.channels;
                     if profile.profile_version >= AUDIO_MONITOR_PROFILE_VERSION {
-                        config.audio.monitor_enabled = profile.audio_monitor_enabled;
-                        config.audio.monitor_output_device = profile.audio_monitor_output_device;
-                        config.audio.monitor_volume = profile.audio_monitor_volume.clamp(0.0, 2.0);
+                        config.audio.monitor_enabled = profile.audio.monitor_enabled;
+                        config.audio.monitor_output_device =
+                            profile.audio.monitor_output_device.clone();
+                        config.audio.monitor_volume = profile.audio.monitor_volume.clamp(0.0, 2.0);
                     }
-                    config.radio.enabled = profile.radio_enabled;
-                    config.radio.serial_port = profile.radio_serial_port;
-                    config.radio.backend = profile.radio_backend;
-                    config.radio.endpoint = profile.radio_endpoint;
+                    config.radio.enabled = profile.radio.enabled;
+                    config.radio.serial_port = profile.radio.serial_port.clone();
+                    config.radio.backend = profile.radio.backend.clone();
+                    config.radio.endpoint = profile.radio.endpoint.clone();
                     if config.radio.backend.trim().eq_ignore_ascii_case("none") {
                         config.radio.backend = "native".to_string();
                     }
                     if profile.profile_version >= 8 {
-                        config.radio.model = profile.radio_model;
-                        config.radio.baud_rate = profile.radio_baud_rate;
+                        config.radio.model = profile.radio.model.clone();
+                        config.radio.baud_rate = profile.radio.baud_rate;
                     }
-                    config.radio.civ_address = profile.radio_civ_address;
-                    config.radio.controller_civ_address = profile.radio_controller_civ_address;
+                    config.radio.civ_address = profile.radio.civ_address;
+                    config.radio.controller_civ_address = profile.radio.controller_civ_address;
                 }
             }
         }
@@ -2307,8 +2308,8 @@ impl QsonautGuiApp {
                 let session_audio_worker_handle = None;
                 info!(
                     profile = profile_name,
-                    radio_enabled = profile.radio_enabled,
-                    audio_enabled = profile.audio_enabled,
+                    radio_enabled = profile.radio.enabled,
+                    audio_enabled = profile.audio.enabled,
                     "Profile runtime initialization queued"
                 );
                 parked_radio_sessions.insert(
@@ -2616,22 +2617,26 @@ impl QsonautGuiApp {
                 recording_modes: recording_modes.clone(),
                 recording_full_width,
                 recording_stream,
-                audio_input_device: config.audio.input_device.clone(),
-                audio_enabled: config.audio.enabled,
-                audio_output_device: config.audio.output_device.clone(),
-                audio_monitor_enabled: config.audio.monitor_enabled,
-                audio_monitor_output_device: config.audio.monitor_output_device.clone(),
-                audio_monitor_volume: config.audio.monitor_volume.clamp(0.0, 2.0),
-                audio_sample_rate_hz: config.audio.sample_rate_hz,
-                audio_channels: config.audio.channels,
-                radio_enabled: config.radio.enabled,
-                radio_serial_port: config.radio.serial_port.clone(),
-                radio_backend: config.radio.backend.clone(),
-                radio_endpoint: config.radio.endpoint.clone(),
-                radio_model: config.radio.model.clone(),
-                radio_baud_rate: config.radio.baud_rate,
-                radio_civ_address: config.radio.civ_address,
-                radio_controller_civ_address: config.radio.controller_civ_address,
+                audio: profile::AudioProfileSettings {
+                    input_device: config.audio.input_device.clone(),
+                    enabled: config.audio.enabled,
+                    output_device: config.audio.output_device.clone(),
+                    monitor_enabled: config.audio.monitor_enabled,
+                    monitor_output_device: config.audio.monitor_output_device.clone(),
+                    monitor_volume: config.audio.monitor_volume.clamp(0.0, 2.0),
+                    sample_rate_hz: config.audio.sample_rate_hz,
+                    channels: config.audio.channels,
+                },
+                radio: profile::RadioProfileSettings {
+                    enabled: config.radio.enabled,
+                    serial_port: config.radio.serial_port.clone(),
+                    backend: config.radio.backend.clone(),
+                    endpoint: config.radio.endpoint.clone(),
+                    model: config.radio.model.clone(),
+                    baud_rate: config.radio.baud_rate,
+                    civ_address: config.radio.civ_address,
+                    controller_civ_address: config.radio.controller_civ_address,
+                },
                 gui_scale,
                 compute_preference,
                 psk_reporter_enabled,
@@ -3615,8 +3620,8 @@ impl QsonautGuiApp {
         };
         session.config.enabled = running;
         session.audio_config.enabled = running;
-        session.profile.radio_enabled = running;
-        session.profile.audio_enabled = running;
+        session.profile.radio.enabled = running;
+        session.profile.audio.enabled = running;
         if running {
             session.worker_stop = Arc::new(AtomicBool::new(false));
             session.audio_worker_stop = Arc::new(AtomicBool::new(false));
@@ -4437,22 +4442,26 @@ impl QsonautGuiApp {
             recording_modes: self.recording_modes.clone(),
             recording_full_width: self.recording_full_width,
             recording_stream: self.recording_stream,
-            audio_input_device: self.config.audio.input_device.clone(),
-            audio_enabled: self.config.audio.enabled,
-            audio_output_device: self.config.audio.output_device.clone(),
-            audio_monitor_enabled: self.config.audio.monitor_enabled,
-            audio_monitor_output_device: self.config.audio.monitor_output_device.clone(),
-            audio_monitor_volume: self.config.audio.monitor_volume.clamp(0.0, 2.0),
-            audio_sample_rate_hz: self.config.audio.sample_rate_hz,
-            audio_channels: self.config.audio.channels,
-            radio_enabled: self.config.radio.enabled,
-            radio_serial_port: self.config.radio.serial_port.clone(),
-            radio_backend: self.config.radio.backend.clone(),
-            radio_endpoint: self.config.radio.endpoint.clone(),
-            radio_model: self.config.radio.model.clone(),
-            radio_baud_rate: self.config.radio.baud_rate,
-            radio_civ_address: self.config.radio.civ_address,
-            radio_controller_civ_address: self.config.radio.controller_civ_address,
+            audio: profile::AudioProfileSettings {
+                input_device: self.config.audio.input_device.clone(),
+                enabled: self.config.audio.enabled,
+                output_device: self.config.audio.output_device.clone(),
+                monitor_enabled: self.config.audio.monitor_enabled,
+                monitor_output_device: self.config.audio.monitor_output_device.clone(),
+                monitor_volume: self.config.audio.monitor_volume.clamp(0.0, 2.0),
+                sample_rate_hz: self.config.audio.sample_rate_hz,
+                channels: self.config.audio.channels,
+            },
+            radio: profile::RadioProfileSettings {
+                enabled: self.config.radio.enabled,
+                serial_port: self.config.radio.serial_port.clone(),
+                backend: self.config.radio.backend.clone(),
+                endpoint: self.config.radio.endpoint.clone(),
+                model: self.config.radio.model.clone(),
+                baud_rate: self.config.radio.baud_rate,
+                civ_address: self.config.radio.civ_address,
+                controller_civ_address: self.config.radio.controller_civ_address,
+            },
             gui_scale: self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX),
             compute_preference: self.compute_preference,
             psk_reporter_enabled: self.psk_reporter_enabled,
@@ -8052,14 +8061,14 @@ mod tests {
             Arc::new(Mutex::new(None)),
         );
         let mut profile = app.current_operator_profile();
-        profile.radio_enabled = true;
-        profile.radio_backend = "native".to_string();
-        profile.radio_model = "IC-7300".to_string();
-        profile.radio_endpoint = "127.0.0.1:4532".to_string();
-        profile.radio_serial_port = Some("/dev/ttyUSB0".to_string());
-        profile.radio_baud_rate = 230_400;
-        profile.radio_civ_address = 0x94;
-        profile.radio_controller_civ_address = 0xE0;
+        profile.radio.enabled = true;
+        profile.radio.backend = "native".to_string();
+        profile.radio.model = "IC-7300".to_string();
+        profile.radio.endpoint = "127.0.0.1:4532".to_string();
+        profile.radio.serial_port = Some("/dev/ttyUSB0".to_string());
+        profile.radio.baud_rate = 230_400;
+        profile.radio.civ_address = 0x94;
+        profile.radio.controller_civ_address = 0xE0;
         let radio = radio_config_from_operator_profile(&profile);
         assert!(radio.enabled);
         assert_eq!(radio.backend, "native");
@@ -8068,14 +8077,14 @@ mod tests {
         assert_eq!(radio.civ_address, 0x94);
 
         profile.profile_version = 2;
-        profile.audio_enabled = false;
-        profile.audio_input_device = Some("input".to_string());
-        profile.audio_output_device = Some("output".to_string());
-        profile.audio_monitor_enabled = true;
-        profile.audio_monitor_output_device = Some("monitor".to_string());
-        profile.audio_monitor_volume = 4.0;
-        profile.audio_sample_rate_hz = 44_100;
-        profile.audio_channels = 2;
+        profile.audio.enabled = false;
+        profile.audio.input_device = Some("input".to_string());
+        profile.audio.output_device = Some("output".to_string());
+        profile.audio.monitor_enabled = true;
+        profile.audio.monitor_output_device = Some("monitor".to_string());
+        profile.audio.monitor_volume = 4.0;
+        profile.audio.sample_rate_hz = 44_100;
+        profile.audio.channels = 2;
         let legacy_audio = audio_config_from_operator_profile(&profile, &config.audio);
         assert_eq!(legacy_audio.enabled, config.audio.enabled);
         assert_eq!(legacy_audio.input_device, config.audio.input_device);

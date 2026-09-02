@@ -116,20 +116,20 @@ impl QsonautGuiApp {
         let old_monitor = self.config.audio.monitor_enabled;
         let old_monitor_device = self.config.audio.monitor_output_device.clone();
         let input_users = self.profile_device_users(
-            |profile| profile.audio_input_device.as_ref(),
-            |profile| profile.audio_enabled,
+            |profile| profile.audio.input_device.as_ref(),
+            |profile| profile.audio.enabled,
         );
         let output_users = self.profile_device_users(
-            |profile| profile.audio_output_device.as_ref(),
-            |profile| profile.audio_enabled,
+            |profile| profile.audio.output_device.as_ref(),
+            |profile| profile.audio.enabled,
         );
         let monitor_users = self.profile_device_users(
-            |profile| profile.audio_monitor_output_device.as_ref(),
-            |profile| profile.audio_enabled && profile.audio_monitor_enabled,
+            |profile| profile.audio.monitor_output_device.as_ref(),
+            |profile| profile.audio.enabled && profile.audio.monitor_enabled,
         );
         let serial_users = self.profile_device_users(
-            |profile| profile.radio_serial_port.as_ref(),
-            |profile| profile.radio_enabled,
+            |profile| profile.radio.serial_port.as_ref(),
+            |profile| profile.radio.enabled,
         );
 
         egui::Grid::new("device_settings_grid")
