@@ -153,6 +153,10 @@ impl QsonautGuiApp {
                     Ok(Some(radio)) => {
                         // Radio initialization succeeded; start the worker
                         self.radio_init_attempted = true;
+                        if let Some(catalog) = radio.hostbridge_catalog() {
+                            self.hostbridge_catalog = Some(catalog);
+                            self.hostbridge_scan_status = "Connected · options loaded".to_string();
+                        }
                         let (tx, rx) = mpsc::channel::<GuiCommand>();
                         let display_port = self
                             .config

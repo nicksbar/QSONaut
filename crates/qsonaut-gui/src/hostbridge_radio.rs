@@ -47,6 +47,13 @@ impl From<ConfiguredRadio> for RadioHandle {
 }
 
 impl RadioHandle {
+    pub(crate) fn hostbridge_catalog(&self) -> Option<HostHello> {
+        match self {
+            Self::Local(_) => None,
+            Self::Remote(radio) => Some(radio.hello.clone()),
+        }
+    }
+
     pub(crate) fn pump_events(&self) -> Option<bool> {
         match self {
             Self::Local(_) => None,
