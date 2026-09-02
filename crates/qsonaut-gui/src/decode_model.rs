@@ -248,3 +248,40 @@ fn activity_stats<'a>(
         median_snr,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{digital_activity_stats, DigitalDecodeEntry};
+    use crate::WorkspaceMode;
+    use std::collections::VecDeque;
+
+    fn entry(mode: WorkspaceMode, period: u64, snr_db: f32, message: &str) -> DigitalDecodeEntry {
+        DigitalDecodeEntry {
+            mode,
+            period,
+            utc: format!("00:00:{period:02}"),
+            snr_db,
+            dt_s: 0.0,
+            freq_hz: 1_500,
+            message: message.to_string(),
+        }
+    }
+
+    #[test]
+    fn ft4_activity_stats_only_use_ft4_entries() {
+        let log = VecDeque::from([
+            entry(WorkspaceMode::Ft4, 10, -12.0, "CQ W1AW AA00"),
+            entry(WorkspaceMode::Jt9, 10, 30.0, "CQ K1ABC FN31"),
+            entry(WorkspaceMode::Ft4, 11, -8.0, "CQ W1AW AA00"),
+        ]);
+
+        let stats = digital_activity_stats(&log, WorkspaceMode::Ft4);
+
+        assert_eq!(stats.latest_cycle, 1);
+        assert_eq!(stats.cq_this_cycle, 1);
+        assert_eq!(stats.unique_stations, 1);
+        assert_eq!(stats.most_heard, Some(("W1AW".to_string(), 2)));
+        assert_eq!(stats.median_snr, Some(-8));
+        assert!((stats.average_per_cycle - 1.0).abs() < f32::EPSILON);
+    }
+}

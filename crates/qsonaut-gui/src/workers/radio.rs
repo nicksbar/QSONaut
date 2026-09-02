@@ -3317,7 +3317,6 @@ mod level_poll_tests {
             WorkspaceMode::Msk144,
             WorkspaceMode::Cw,
             WorkspaceMode::Sstv,
-            WorkspaceMode::Fldigi,
         ] {
             tx.send(GuiCommand::ApplyWorkspace {
                 mode,

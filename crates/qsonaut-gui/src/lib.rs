@@ -165,8 +165,7 @@ use automation_integration::{configured_external_transports, parse_automation_ho
 pub(crate) use band_plan::workspace_frequency_for_current_band;
 use band_plan::{
     band_for_frequency, band_picker_plan, workspace_radio_preset,
-    workspace_radio_preset_for_frequency, WorkspaceMode, HF_WORKSPACE_MODES, OTHER_WORKSPACE_MODES,
-    WORKSPACE_MODES,
+    workspace_radio_preset_for_frequency, WorkspaceMode, WORKSPACE_MODES,
 };
 use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
@@ -388,7 +387,6 @@ fn parse_workspace_mode_token(mode: &str) -> Option<WorkspaceMode> {
         "CW" => Some(WorkspaceMode::Cw),
         "VOICE" | "SSB" | "PHONE" => Some(WorkspaceMode::Voice),
         "SSTV" => Some(WorkspaceMode::Sstv),
-        "FLDIGI" => Some(WorkspaceMode::Fldigi),
         _ => None,
     }
 }
@@ -3944,7 +3942,6 @@ mod tests {
             ("MSK144", WorkspaceMode::Msk144),
             ("CW", WorkspaceMode::Cw),
             ("PHONE", WorkspaceMode::Voice),
-            ("FLDIGI", WorkspaceMode::Fldigi),
         ] {
             assert_eq!(parse_workspace_mode_token(token), Some(expected));
         }
@@ -3990,7 +3987,6 @@ mod tests {
             WorkspaceMode::Wspr,
             WorkspaceMode::Msk144,
             WorkspaceMode::Voice,
-            WorkspaceMode::Fldigi,
         ] {
             assert!(!workspace_mode_supports_native_tx(mode));
         }

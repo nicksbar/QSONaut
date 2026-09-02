@@ -664,18 +664,22 @@ pub(super) fn load_operator_profile() -> Option<OperatorProfile> {
 pub(super) fn save_operator_profile_named(name: &str, profile: &OperatorProfile) -> Result<()> {
     let name = validate_profile_name(name)?;
     let path = named_operator_profile_path(name)?;
+    write_operator_profile_file(&path, profile)
+}
+
+fn write_operator_profile_file(path: &std::path::Path, profile: &OperatorProfile) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     if path.is_file() {
         let backup = path.with_extension("toml.backup");
-        fs::copy(&path, backup)?;
+        fs::copy(path, backup)?;
     }
-    fs::write(&path, toml::to_string_pretty(profile)?)?;
+    fs::write(path, toml::to_string_pretty(profile)?)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
 }
@@ -694,7 +698,12 @@ pub(super) fn save_operator_profile(profile: &OperatorProfile) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_profile_name, GlobalSettings, OperatorProfile, RadioProfile};
+    use std::fs;
+
+    use super::{
+        validate_profile_name, write_operator_profile_file, GlobalSettings, OperatorProfile,
+        RadioProfile,
+    };
 
     #[test]
     fn profile_names_allow_human_readable_safe_names() {
@@ -780,5 +789,56 @@ deep_decode = false
         assert_eq!(decoded.name, "Portable FT8");
         assert_eq!(decoded.rf_power, Some(50));
         assert_eq!(decoded.agc, Some(3));
+    }
+
+    #[test]
+    fn saving_profile_snapshots_keeps_each_radio_file_owned_by_its_name() {
+        let root = tempfile::tempdir().expect("temporary profile directory");
+        let mut null_radio: OperatorProfile = toml::from_str(
+            r#"
+callsign = "N0CALL"
+grid = "AA00"
+qth = "Portable"
+follow_log = true
+max_log_entries = 300
+deep_decode = false
+"#,
+        )
+        .expect("default profile should deserialize");
+        null_radio.radio.enabled = true;
+        null_radio.radio.backend = "null".to_string();
+        null_radio.radio.model = "NullRadio".to_string();
+
+        let mut ic7300 = null_radio.clone();
+        ic7300.radio.backend = "native".to_string();
+        ic7300.radio.model = "IC-7300".to_string();
+        ic7300.radio.civ_address = 0x94;
+
+        let mut mchf = null_radio.clone();
+        mchf.radio.backend = "native".to_string();
+        mchf.radio.model = "FT-817ND".to_string();
+        mchf.radio.enabled = false;
+
+        write_operator_profile_file(&root.path().join("NullRadio.toml"), &null_radio)
+            .expect("save null profile");
+        write_operator_profile_file(&root.path().join("7300.toml"), &ic7300)
+            .expect("save 7300 profile");
+        write_operator_profile_file(&root.path().join("mcHF.toml"), &mchf)
+            .expect("save mcHF profile");
+
+        for (name, backend, model, enabled) in [
+            ("NullRadio", "null", "NullRadio", true),
+            ("7300", "native", "IC-7300", true),
+            ("mcHF", "native", "FT-817ND", false),
+        ] {
+            let saved: OperatorProfile = toml::from_str(
+                &fs::read_to_string(root.path().join(format!("{name}.toml")))
+                    .expect("saved profile should be readable"),
+            )
+            .expect("saved profile should deserialize");
+            assert_eq!(saved.radio.backend, backend, "backend for {name}");
+            assert_eq!(saved.radio.model, model, "model for {name}");
+            assert_eq!(saved.radio.enabled, enabled, "enabled state for {name}");
+        }
     }
 }

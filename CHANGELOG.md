@@ -7,12 +7,35 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- Added FT4 rolling-buffer publication and realistic timing coverage, including
+  GUI filtering and rendering regression tests.
+- Added UTC-aligned WSPR 120-second slot timing and countdown presentation.
+- Added native MSK144 dispatch and expanded native decoder coverage for the
+  supported workspace modes.
+
 ### Changed
 - Decomposed the GUI coordinator into dedicated runtime, radio-session,
   profile, reporting, mode-type, and rendering packages while preserving the
   global station identity and per-profile radio/audio settings boundaries.
 - Moved the frame update loop and constructor into runtime modules, reducing
   `crates/qsonaut-gui/src/lib.rs` below the 5,000-line architecture target.
+- Reworked the header control deck into compact radio, meter, profile, and
+  operation-mode rows; functional mode controls retain icons while roadmap
+  placeholders remain visibly disabled.
+- Hardened native digital runtime sequencing, adaptive FT4 decoding, decode
+  publication, and worker-state handling across rolling audio buffers.
+
+### Removed
+- Removed the obsolete FLDIGI mode, placeholder backend references, and direct
+  modem ownership that is now provided through the shared third-party boundary.
+
+### Fixed
+- Fixed profile-tab persistence so each tab saves its own explicit profile
+  snapshot and cannot overwrite another radio's settings during tab switches
+  or autosave operations.
+- Added regression coverage ensuring NullRadio, IC-7300, and FT-817ND profile
+  files retain independent radio identities and enabled states.
 
 ## [0.3.15] - 2026-08-31
 

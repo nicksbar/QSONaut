@@ -1,5 +1,23 @@
 use super::super::*;
 
+// Visible roadmap entries only. These are deliberately not WorkspaceMode
+// variants until an implementation and a legally usable protocol boundary
+// exist.
+const FUTURE_TEXT_MODES: &[(&str, &str)] = &[(
+    "⌨ JS8Call",
+    "Future text modem placeholder; protocol support is not enabled",
+)];
+const FUTURE_VOICE_MODES: &[(&str, &str)] = &[
+    (
+        "🎙 VaraAC",
+        "Future voice modem placeholder; protocol support is not enabled",
+    ),
+    (
+        "🎙 RADE",
+        "Future voice modem placeholder; protocol support is not enabled",
+    ),
+];
+
 impl QsonautGuiApp {
     pub(crate) fn draw_header_branding(&mut self, ui: &mut egui::Ui) {
         let spin_angle = self.logo_spin_until.map_or(0.0, |until| {
@@ -81,14 +99,18 @@ impl QsonautGuiApp {
                     self.send_command(GuiCommand::AfGainDelta(5));
                 }
             });
-            ui.separator();
-            ui.label(RichText::new("Op mode").strong());
-            for mode in HF_WORKSPACE_MODES {
+        });
+    }
+
+    pub(crate) fn draw_banner_op_modes(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        ui.separator();
+        ui.horizontal_wrapped(|ui| {
+            let mut draw_mode = |ui: &mut egui::Ui, icon: &str, mode: WorkspaceMode| {
                 let response = ui
                     .add(
                         egui::Button::selectable(
                             self.workspace_mode == mode,
-                            RichText::new(mode.label()).size(12.0),
+                            RichText::new(format!("{icon} {}", mode.label())).size(12.0),
                         )
                         .small(),
                     )
@@ -103,36 +125,58 @@ impl QsonautGuiApp {
                         self.send_command(GuiCommand::ApplyWorkspace { mode, frequency_hz });
                     }
                 }
+            };
+            for mode in [
+                WorkspaceMode::Ft8,
+                WorkspaceMode::Ft4,
+                WorkspaceMode::Fst4,
+                WorkspaceMode::Jt9,
+                WorkspaceMode::Jt65,
+                WorkspaceMode::Q65,
+            ] {
+                draw_mode(ui, "⌨", mode);
             }
-            for mode in OTHER_WORKSPACE_MODES {
-                let enabled = !mode.is_uhf();
-                let response = ui
-                    .add_enabled(
-                        enabled,
-                        egui::Button::selectable(
-                            self.workspace_mode == mode,
-                            RichText::new(mode.label()).size(12.0),
-                        )
-                        .small(),
+            draw_mode(ui, "📡", WorkspaceMode::Wspr);
+            draw_mode(ui, "⌨", WorkspaceMode::Cw);
+            draw_mode(ui, "🎙", WorkspaceMode::Voice);
+            draw_mode(ui, "🖼", WorkspaceMode::Sstv);
+
+            let mode = WorkspaceMode::Msk144;
+            let enabled = !mode.is_uhf();
+            let response = ui
+                .add_enabled(
+                    enabled,
+                    egui::Button::selectable(
+                        self.workspace_mode == mode,
+                        RichText::new(format!("📶 {}", mode.label())).size(12.0),
                     )
-                    .on_hover_text(if enabled {
-                        format!("Switch workspace to {}", mode.label())
-                    } else {
-                        format!(
-                            "{} is disabled without a configured UHF radio",
-                            mode.label()
-                        )
-                    });
-                if response.clicked() && enabled {
-                    self.workspace_mode = mode;
-                    self.profile_dirty = true;
-                    self.persist_profile("Mode saved to");
-                    if let Some(frequency_hz) =
-                        workspace_frequency_for_current_band(mode, snapshot.frequency_hz)
-                    {
-                        self.send_command(GuiCommand::ApplyWorkspace { mode, frequency_hz });
-                    }
+                    .small(),
+                )
+                .on_hover_text(if enabled {
+                    format!("Switch workspace to {}", mode.label())
+                } else {
+                    format!(
+                        "{} is disabled without a configured UHF radio",
+                        mode.label()
+                    )
+                });
+            if response.clicked() && enabled {
+                self.workspace_mode = mode;
+                self.profile_dirty = true;
+                self.persist_profile("Mode saved to");
+                if let Some(frequency_hz) =
+                    workspace_frequency_for_current_band(mode, snapshot.frequency_hz)
+                {
+                    self.send_command(GuiCommand::ApplyWorkspace { mode, frequency_hz });
                 }
+            }
+
+            for (label, tooltip) in FUTURE_TEXT_MODES.iter().chain(FUTURE_VOICE_MODES.iter()) {
+                ui.add_enabled(
+                    false,
+                    egui::Button::selectable(false, RichText::new(*label).size(12.0)).small(),
+                )
+                .on_disabled_hover_text(*tooltip);
             }
         });
     }

@@ -37,13 +37,14 @@ Candidate Rust backends observed:
 - `qsantos/ripmors`
   - Fast Morse encoder/decoder crate, useful for text-domain CW handling.
 
-### FLDIGI ecosystem integration
+### Future modem review
 
-Candidate Rust bridge:
-
-- `elitegreg/ham-radio-digital-interfacing-rs`
-  - Focuses on interfacing with digital apps (WSJT-X/FLDIGI class integration patterns).
-  - Useful for control/interop bridge rather than full DSP modem implementation.
+The GUI keeps disabled roadmap tabs for VaraAC and DV RADE. They are not
+`WorkspaceMode` variants and have no runtime, audio, or decoder integration.
+Before implementation, verify that each project's protocol is documented,
+open source or otherwise legally usable, and suitable for a QSONaut-owned
+adapter. Do not add a dependency or reverse-engineer a closed protocol as a
+shortcut.
 
 ## Selection criteria before adoption
 
@@ -56,6 +57,6 @@ Candidate Rust bridge:
 ## Planned architecture
 
 - Keep QSONaut GUI/workspaces mode-oriented.
-- Route each mode to a backend adapter (e.g., `MfskBackend`, `CwBackend`, `FldigiBridge`).
+- Route each implemented mode to a backend adapter (e.g., `MfskBackend`, `CwBackend`).
 - Avoid mode-specific DSP logic in GUI crate.
 - Contribute bugfixes/perf improvements upstream where practical.

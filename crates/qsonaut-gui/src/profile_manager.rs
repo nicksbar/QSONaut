@@ -23,7 +23,7 @@ impl ProfileManager {
         Ok(())
     }
 
-    pub(super) fn save_operator_profile(
+    pub(super) fn save_operator_profile_snapshot(
         name: &str,
         profile: &OperatorProfile,
     ) -> Result<Vec<String>> {
@@ -235,25 +235,39 @@ impl QsonautGuiApp {
     }
 
     pub(crate) fn persist_profile(&mut self, status_prefix: &str) {
+        let profile_name = self.selected_profile_name.clone();
+        let profile = self.current_operator_profile();
+        self.persist_profile_snapshot(&profile_name, &profile, status_prefix);
+    }
+
+    pub(crate) fn persist_profile_snapshot(
+        &mut self,
+        profile_name: &str,
+        profile: &OperatorProfile,
+        status_prefix: &str,
+    ) {
         if let Err(error) = ProfileManager::save_global_and_radio_library(
             &self.current_global_settings(),
             &self.radio_profiles,
         ) {
             warn!(%error, "Global or radio profile library save failed");
         }
-        match ProfileManager::save_operator_profile(
-            &self.selected_profile_name,
-            &self.current_operator_profile(),
-        ) {
+        match ProfileManager::save_operator_profile_snapshot(profile_name, profile) {
             Ok(available_profiles) => {
-                info!(profile = %self.selected_profile_name, status = %status_prefix, "Operator profile saved");
-                self.profile_io_status =
-                    format!("{status_prefix} profile ‘{}’", self.selected_profile_name);
+                info!(
+                    profile = %profile_name,
+                    radio_backend = %profile.radio.backend,
+                    radio_model = %profile.radio.model,
+                    radio_enabled = profile.radio.enabled,
+                    status = %status_prefix,
+                    "Operator profile saved"
+                );
+                self.profile_io_status = format!("{status_prefix} profile ‘{profile_name}’");
                 self.available_profiles = available_profiles;
                 self.profile_dirty = false;
             }
             Err(err) => {
-                warn!(profile = %self.selected_profile_name, error = %err, "Operator profile save failed");
+                warn!(profile = %profile_name, error = %err, "Operator profile save failed");
                 self.profile_io_status = format!("Save failed: {err}");
             }
         }

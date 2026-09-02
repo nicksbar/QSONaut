@@ -16,20 +16,6 @@ pub(crate) const MSK144_BAND_PLAN: &[(&str, u64)] = &[
     ("2m", 144_138_000),
     ("70cm", 432_075_000),
 ];
-pub(crate) const FLDIGI_BAND_PLAN: &[(&str, u64)] = &[
-    ("160m", 1_840_000),
-    ("80m", 3_573_000),
-    ("60m", 5_357_000),
-    ("40m", 7_074_000),
-    ("30m", 10_136_000),
-    ("20m", 14_074_000),
-    ("17m", 18_100_000),
-    ("15m", 21_074_000),
-    ("12m", 24_924_000),
-    ("10m", 28_074_000),
-    ("6m", 50_313_000),
-];
-
 fn native_radio_mode_label(preset: crate::band_plan::WorkspaceRadioPreset) -> &'static str {
     match (preset.base_mode, preset.data_mode) {
         (BaseMode::Usb, true) => "USB-D",
@@ -155,8 +141,6 @@ impl QsonautGuiApp {
             ui.label(RichText::new("Backend:").strong());
             let backend = if mode.has_native_decoder() {
                 "shared WSJT adapter"
-            } else if mode == WorkspaceMode::Fldigi {
-                "external FLDIGI bridge"
             } else {
                 "CW backend pending"
             };
@@ -371,14 +355,6 @@ impl QsonautGuiApp {
                     theme_warning(ui)
                 }),
             );
-        } else {
-            ui.separator();
-            ui.label(
-                RichText::new(
-                    "FLDIGI is currently a radio preset and waterfall view. No XML-RPC modem connection is active yet.",
-                )
-                .color(theme_warning(ui)),
-            );
         }
     }
 }
@@ -447,7 +423,6 @@ mod tests {
         assert!(native_mode_guidance(WorkspaceMode::Fst4).contains("FST4-60"));
         assert!(native_mode_guidance(WorkspaceMode::Jt65).contains("JT65"));
         assert!(native_mode_guidance(WorkspaceMode::Q65).contains("Q65-A30"));
-        assert!(native_mode_guidance(WorkspaceMode::Fldigi).contains("one-shot"));
     }
 
     #[test]
@@ -481,7 +456,6 @@ mod tests {
             WorkspaceMode::Wspr,
             WorkspaceMode::Msk144,
             WorkspaceMode::Cw,
-            WorkspaceMode::Fldigi,
         ] {
             let _ = context.run(Default::default(), |context| {
                 eframe::egui::CentralPanel::default().show(context, |ui| {

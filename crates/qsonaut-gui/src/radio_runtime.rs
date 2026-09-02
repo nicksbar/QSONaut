@@ -271,11 +271,15 @@ impl QsonautGuiApp {
             return;
         };
 
-        self.disarm_all_tx_with_persistence("Radio tab switch: all TX disarmed", save_previous);
-        if save_previous {
-            self.persist_profile("Saved");
-        }
+        self.disarm_all_tx_with_persistence("Radio tab switch: all TX disarmed", false);
         self.park_active_radio_session();
+        if save_previous {
+            if let Some(session) = self.parked_radio_sessions.get(&self.selected_profile_name) {
+                let profile = session.profile.clone();
+                let previous_name = self.selected_profile_name.clone();
+                self.persist_profile_snapshot(&previous_name, &profile, "Saved");
+            }
+        }
         self.selected_profile_name = name.to_string();
         self.new_profile_name = name.to_string();
         self.config.radio = self.radio_config_for_profile(&profile);

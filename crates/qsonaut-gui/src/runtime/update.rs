@@ -261,6 +261,7 @@ impl QsonautGuiApp {
             WorkspaceMode::Jt9,
             WorkspaceMode::Jt65,
             WorkspaceMode::Q65,
+            WorkspaceMode::Msk144,
         ] {
             let native_decodes = {
                 let shared = self.state.lock().expect("ui state lock poisoned");
@@ -680,9 +681,7 @@ impl QsonautGuiApp {
                     );
                     filter_menu.response.on_hover_text("Select the radio IF filter");
                     self.draw_banner_radio_controls(ui, &snapshot);
-                    });
                     ui.horizontal(|ui| {
-                        self.draw_meter_display(ui, &snapshot);
                     let radio_ready = snapshot.radio_power_on == Some(true)
                         && !snapshot.radio_power_command_pending;
                     let supports_control = |id| snapshot.supported_controls.contains(&id);
@@ -1288,6 +1287,11 @@ impl QsonautGuiApp {
                             }
                         });
                     });
+                    });
+                    });
+                    ui.horizontal(|ui| {
+                        self.draw_meter_display(ui, &snapshot);
+                        self.draw_banner_op_modes(ui, &snapshot);
                     });
                     });
                     });

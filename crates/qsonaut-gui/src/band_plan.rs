@@ -15,7 +15,6 @@ pub(super) enum WorkspaceMode {
     Cw,
     Voice,
     Sstv,
-    Fldigi,
 }
 
 impl WorkspaceMode {
@@ -32,7 +31,6 @@ impl WorkspaceMode {
             Self::Cw => "CW",
             Self::Voice => "VOICE",
             Self::Sstv => "SSTV",
-            Self::Fldigi => "FLDIGI",
         }
     }
 
@@ -45,7 +43,7 @@ impl WorkspaceMode {
             Self::Jt9 | Self::Jt65 => Some(60.0),
             Self::Q65 => Some(30.0),
             Self::Msk144 => Some(15.0),
-            Self::Cw | Self::Voice | Self::Sstv | Self::Fldigi => None,
+            Self::Cw | Self::Voice | Self::Sstv => None,
         }
     }
 
@@ -58,7 +56,7 @@ impl WorkspaceMode {
     }
 
     pub(super) fn has_native_decoder(self) -> bool {
-        !matches!(self, Self::Cw | Self::Voice | Self::Sstv | Self::Fldigi)
+        !matches!(self, Self::Cw | Self::Voice | Self::Sstv)
     }
 
     pub(super) fn is_uhf(self) -> bool {
@@ -66,7 +64,7 @@ impl WorkspaceMode {
     }
 }
 
-pub(super) const WORKSPACE_MODES: [WorkspaceMode; 12] = [
+pub(super) const WORKSPACE_MODES: [WorkspaceMode; 11] = [
     WorkspaceMode::Ft8,
     WorkspaceMode::Ft4,
     WorkspaceMode::Fst4,
@@ -78,24 +76,7 @@ pub(super) const WORKSPACE_MODES: [WorkspaceMode; 12] = [
     WorkspaceMode::Cw,
     WorkspaceMode::Voice,
     WorkspaceMode::Sstv,
-    WorkspaceMode::Fldigi,
 ];
-
-pub(super) const HF_WORKSPACE_MODES: [WorkspaceMode; 10] = [
-    WorkspaceMode::Ft8,
-    WorkspaceMode::Ft4,
-    WorkspaceMode::Fst4,
-    WorkspaceMode::Wspr,
-    WorkspaceMode::Jt9,
-    WorkspaceMode::Jt65,
-    WorkspaceMode::Q65,
-    WorkspaceMode::Cw,
-    WorkspaceMode::Voice,
-    WorkspaceMode::Sstv,
-];
-
-pub(super) const OTHER_WORKSPACE_MODES: [WorkspaceMode; 2] =
-    [WorkspaceMode::Msk144, WorkspaceMode::Fldigi];
 
 // Shared band vocabulary for higher-level activity profiles. Mode-specific
 // center frequencies remain owned by each workspace band plan below.
@@ -161,7 +142,6 @@ pub(super) fn workspace_band_plan(mode: WorkspaceMode) -> &'static [(&'static st
         WorkspaceMode::Cw => cw::BAND_PLAN,
         WorkspaceMode::Voice => voice::BAND_PLAN,
         WorkspaceMode::Sstv => sstv::BAND_PLAN,
-        WorkspaceMode::Fldigi => native::FLDIGI_BAND_PLAN,
     }
 }
 

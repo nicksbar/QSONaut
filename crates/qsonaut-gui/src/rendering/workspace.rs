@@ -18,7 +18,7 @@ impl QsonautGuiApp {
             WorkspaceMode::Cw => self.draw_cw_workspace(ui, snapshot),
             WorkspaceMode::Voice => self.draw_voice_workspace(ui, snapshot),
             WorkspaceMode::Sstv => self.draw_sstv_workspace(ui, ctx, snapshot),
-            WorkspaceMode::Msk144 | WorkspaceMode::Fldigi => {
+            WorkspaceMode::Msk144 => {
                 self.draw_mfsk_mode_workspace(ui, snapshot, self.workspace_mode)
             }
         }

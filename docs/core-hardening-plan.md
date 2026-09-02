@@ -31,7 +31,7 @@ Date: 2026-08-12
 
 1. Mode UX is broader than mode completeness
    - `WorkspaceMode` includes many modes, but only FT8/FT4 have richer operating workflows.
-   - `CW` and `FLDIGI` currently show explicit placeholder messaging in GUI.
+  - `CW` remains the only non-native placeholder workflow in this milestone.
 2. Contest operations are not first-class
    - No explicit contest profile/model (Run/S&P, exchange templates, serial lifecycle).
    - Split control exists in radio HAL, but no guided contest UX around it.

@@ -98,12 +98,12 @@ impl OperatingActivity {
             Self::Satellite => ActivityProfile {
                 tx_cq: "CQ SAT",
                 bands: ActivityBandScope::Preferred(CORE_VHF_BAND_LABELS),
-                modes: ActivityModeScope::Preferred(&[WorkspaceMode::Cw, WorkspaceMode::Fldigi]),
+                modes: ActivityModeScope::Preferred(&[WorkspaceMode::Cw]),
             },
             Self::Emcomm => ActivityProfile {
                 tx_cq: "CQ EMCOMM",
                 bands: ActivityBandScope::Preferred(CORE_EMCOMM_BAND_LABELS),
-                modes: ActivityModeScope::Preferred(&[WorkspaceMode::Cw, WorkspaceMode::Fldigi]),
+                modes: ActivityModeScope::Preferred(&[WorkspaceMode::Cw]),
             },
         }
     }
