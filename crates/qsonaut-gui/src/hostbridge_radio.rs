@@ -45,6 +45,16 @@ impl From<ConfiguredRadio> for RadioHandle {
 }
 
 impl RadioHandle {
+    pub(crate) fn pump_events(&self) -> Option<bool> {
+        match self {
+            Self::Local(_) => None,
+            Self::Remote(radio) => {
+                radio.pump_events();
+                Some(radio.connected())
+            }
+        }
+    }
+
     pub(crate) fn as_icom(&self) -> Option<&IcomCiVRadio> {
         match self {
             Self::Local(radio) => radio.as_icom(),
@@ -321,6 +331,9 @@ impl HostBridgeRadio {
                     if let Ok(mut state) = self.state.lock() {
                         state.ptt = Some(false);
                     }
+                    if let Ok(mut queue) = self.media_queue.lock() {
+                        queue.clear();
+                    }
                 }
                 HostBridgeEvent::Connected(_) => {
                     // A reconnect creates a new host session and releases the
@@ -368,6 +381,10 @@ impl HostBridgeRadio {
                 HostBridgeEvent::Server(_) => {}
             }
         }
+    }
+
+    fn connected(&self) -> bool {
+        self.connected.lock().map(|value| *value).unwrap_or(false)
     }
 
     fn ensure_connected(&self) -> Result<()> {

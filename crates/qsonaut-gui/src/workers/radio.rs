@@ -531,8 +531,30 @@ pub(crate) fn spawn_radio_worker(
         let mut next_core_poll = Instant::now() + RADIO_CORE_POLL_INTERVAL;
         let mut next_level_poll = Instant::now() + RADIO_LEVEL_POLL_INTERVAL;
         let mut radio_power_settle_until = Instant::now();
+        let mut hostbridge_was_connected = true;
 
         while !stop.load(Ordering::Relaxed) {
+            if let Some(hostbridge_connected) = radio.pump_events() {
+                if !hostbridge_connected {
+                    ptt_allowed.store(false, Ordering::Release);
+                    if hostbridge_was_connected {
+                        let mut s = state.lock().expect("ui state lock poisoned");
+                        s.ptt_on = false;
+                        s.radio_waterfall_status =
+                            "DISCONNECTED · HostBridge (TX disarmed)".to_string();
+                        s.last_error = Some("HostBridge disconnected; TX disarmed".to_string());
+                        drop(s);
+                        request_gui_repaint(&repaint_ctx);
+                    }
+                } else if !hostbridge_was_connected {
+                    let mut s = state.lock().expect("ui state lock poisoned");
+                    s.radio_waterfall_status =
+                        "CONNECTED · HostBridge (TX remains disarmed)".to_string();
+                    drop(s);
+                    request_gui_repaint(&repaint_ctx);
+                }
+                hostbridge_was_connected = hostbridge_connected;
+            }
             let wait = next_core_poll
                 .saturating_duration_since(Instant::now())
                 .min(RADIO_COMMAND_WAKE_INTERVAL);
