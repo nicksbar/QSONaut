@@ -1571,7 +1571,40 @@ fn spawn_radio_init(
                 controller_civ_address,
                 Some(radio_civ_address),
             ) {
-                Ok(radio) => Some(radio),
+                Ok(radio) => match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => match runtime.block_on(radio.get_frequency_hz()) {
+                        Ok(frequency_hz) => {
+                            info!(
+                                model = %model,
+                                port = %if port.is_empty() { "auto" } else { &port },
+                                frequency_hz,
+                                elapsed = ?start.elapsed(),
+                                "Radio CI-V startup probe succeeded"
+                            );
+                            Some(radio)
+                        }
+                        Err(err) => {
+                            error!(
+                                backend = %backend,
+                                model = %model,
+                                endpoint = %endpoint,
+                                port = %if port.is_empty() { "auto" } else { &port },
+                                baud = baud_rate,
+                                error = %err,
+                                elapsed = ?start.elapsed(),
+                                "Radio startup probe failed"
+                            );
+                            None
+                        }
+                    },
+                    Err(err) => {
+                        error!(error = %err, "Radio startup probe runtime failed");
+                        None
+                    }
+                },
                 Err(err) => {
                     error!(
                         backend = %backend,
