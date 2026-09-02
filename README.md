@@ -101,7 +101,12 @@ cargo run --release -p qsonaut -- --gui
 Cargo resolves the pinned revisions and records those sources in `Cargo.lock`
 for reproducible builds.
 
-Use a release build for live decoding. Debug builds are substantially slower.
+Use a release build for maximum live-decoding performance. The workspace
+optimizes the lower-level modem DSP crates in dev builds by default, so the
+GUI remains debuggable without making FST4/Q65 appear frozen. Use
+`RUST_LOG=debug` (or a narrower module filter) for runtime diagnostics. When
+stepping through unoptimized modem code, use Cargo's `modem-debug` profile
+instead of the normal dev profile.
 
 ## Tests and coverage
 

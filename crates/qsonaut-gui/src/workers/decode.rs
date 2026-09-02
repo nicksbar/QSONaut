@@ -375,9 +375,11 @@ mod tests {
 
     #[test]
     #[ignore = "slow FST4/Q65 end-to-end DSP validation; run in release mode"]
-    fn native_fst4_and_q65_generated_signals_decode_through_the_adapter() {
+    fn native_generated_signals_decode_through_the_adapter() {
         for (mode, submode, message) in [
             (WorkspaceMode::Fst4, Submode::S15, "CQ W1AW AA00"),
+            (WorkspaceMode::Jt9, Submode::default(), "CQ W1AW AA00"),
+            (WorkspaceMode::Jt65, Submode::default(), "CQ W1AW AA00"),
             (WorkspaceMode::Q65, Submode::default(), "CQ W1AW AA00"),
         ] {
             let pcm = build_native_digital_tx_pcm(mode, message, 1_500, submode, 20, 600)

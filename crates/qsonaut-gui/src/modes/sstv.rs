@@ -1482,11 +1482,32 @@ impl QsonautGuiApp {
 #[cfg(test)]
 mod tests {
     use super::fitted_sstv_body_height;
+    use qsonaut_third_party::sstv::{self, SstvMode};
 
     #[test]
     fn sstv_body_tracks_the_available_viewport() {
         assert_eq!(fitted_sstv_body_height(500.0), 422.0);
         assert_eq!(fitted_sstv_body_height(200.0), 122.0);
         assert_eq!(fitted_sstv_body_height(60.0), 0.0);
+    }
+
+    #[test]
+    fn sstv_tx_path_encodes_a_complete_12khz_martin_m1_frame() {
+        let rgb = vec![112_u8; sstv::WIDTH * sstv::HEIGHT * 3];
+        let pcm = sstv::encode_rgb_mode_12k(
+            SstvMode::MartinM1,
+            sstv::WIDTH as u32,
+            sstv::HEIGHT as u32,
+            &rgb,
+        )
+        .expect("Martin M1 TX encoding");
+        let expected_samples = (sstv::mode_duration_seconds(SstvMode::MartinM1)
+            * sstv::SAMPLE_RATE_HZ as f32) as usize;
+        assert!(
+            pcm.len() >= expected_samples.saturating_sub(sstv::SAMPLE_RATE_HZ as usize),
+            "SSTV TX frame is unexpectedly short: {} samples, expected about {expected_samples}",
+            pcm.len()
+        );
+        assert!(pcm.iter().any(|sample| *sample != 0));
     }
 }

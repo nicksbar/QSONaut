@@ -496,6 +496,8 @@ pub(super) enum DigitalTxEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qsonaut_modems::AudioBlock;
+    use qsonaut_third_party::wsjt::{decode as decode_wsjt, WsjtDecodeConfig, WsjtMode};
 
     #[test]
     fn morse_table_covers_alphanumeric_operator_text() {
@@ -544,6 +546,93 @@ mod tests {
             600
         )
         .is_err());
+    }
+
+    #[test]
+    fn native_digital_modes_produce_nonempty_fixtures() {
+        for mode in [
+            WorkspaceMode::Fst4,
+            WorkspaceMode::Jt9,
+            WorkspaceMode::Jt65,
+            WorkspaceMode::Q65,
+        ] {
+            let (pcm, audio_start_s) = build_native_digital_tx_pcm(
+                mode,
+                "CQ W1AW AA00",
+                1_500,
+                crate::modes::fst4::Submode::S15,
+                20,
+                600,
+            )
+            .unwrap_or_else(|error| panic!("{} synthesis failed: {error}", mode.label()));
+            assert!(!pcm.is_empty(), "{} produced no PCM", mode.label());
+            assert!(audio_start_s >= 0.0, "{} has invalid start", mode.label());
+        }
+    }
+
+    #[test]
+    #[ignore = "slow native TX/RX round-trip; run in release mode"]
+    fn native_tx_waveforms_decode_back_through_the_adapter() {
+        for mode in [
+            WorkspaceMode::Fst4,
+            WorkspaceMode::Jt9,
+            WorkspaceMode::Jt65,
+            WorkspaceMode::Q65,
+        ] {
+            let (pcm, _) = build_native_digital_tx_pcm(
+                mode,
+                "CQ W1AW AA00",
+                1_500,
+                crate::modes::fst4::Submode::S15,
+                20,
+                600,
+            )
+            .unwrap_or_else(|error| panic!("{} synthesis failed: {error}", mode.label()));
+            let samples = pcm
+                .into_iter()
+                .map(|sample| sample as f32 / i16::MAX as f32 * 0.06)
+                .collect::<Vec<_>>();
+            let (wsjt_mode, config) = match mode {
+                WorkspaceMode::Fst4 => (
+                    WsjtMode::Fst4(Fst4Submode::S15),
+                    WsjtDecodeConfig {
+                        frequency_min_hz: 100.0,
+                        frequency_max_hz: 3_000.0,
+                        sync_min: 0.8,
+                        max_candidates: 50,
+                        frequency_hint_hz: Some(1_500.0),
+                        ..WsjtDecodeConfig::default()
+                    },
+                ),
+                WorkspaceMode::Jt9 => (WsjtMode::Jt9, WsjtDecodeConfig::default()),
+                WorkspaceMode::Jt65 => (WsjtMode::Jt65, WsjtDecodeConfig::default()),
+                WorkspaceMode::Q65 => (
+                    WsjtMode::Q65,
+                    WsjtDecodeConfig {
+                        score_threshold: 0.05,
+                        max_candidates: 8,
+                        time_tolerance_sec: 1.0,
+                        ..WsjtDecodeConfig::default()
+                    },
+                ),
+                _ => unreachable!(),
+            };
+            let batch = decode_wsjt(
+                &AudioBlock::new(12_000, samples).expect("native TX audio block"),
+                wsjt_mode,
+                &config,
+            )
+            .unwrap_or_else(|error| panic!("{} decode failed: {error}", mode.label()));
+            assert!(
+                batch
+                    .events
+                    .iter()
+                    .any(|event| event.message.contains("W1AW")),
+                "{} TX waveform did not decode: {:?}",
+                mode.label(),
+                batch.events
+            );
+        }
     }
 
     #[test]

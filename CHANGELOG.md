@@ -13,6 +13,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added UTC-aligned WSPR 120-second slot timing and countdown presentation.
 - Added native MSK144 dispatch and expanded native decoder coverage for the
   supported workspace modes.
+- Added generated native decode fixtures for FST4, JT9, JT65, and Q65, plus
+  synthesis coverage that verifies each mode produces a usable waveform.
 
 ### Changed
 - Decomposed the GUI coordinator into dedicated runtime, radio-session,
@@ -37,6 +39,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Reset native decoder buffers and slot gates when changing FST4 submodes, and
   clarified that background profile workers may produce valid null-radio test
   decodes for their own selected modes.
+- Keep profile-owned audio assignments strict: an unavailable device fails only
+  that profile's worker rather than silently switching to another device.
 - Added regression coverage ensuring NullRadio, IC-7300, and FT-817ND profile
   files retain independent radio identities and enabled states.
 
