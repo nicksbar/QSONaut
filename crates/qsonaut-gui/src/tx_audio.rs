@@ -2,7 +2,7 @@ use super::*;
 use qsonaut_third_party::wsjt::{
     synthesize_fst4_standard, synthesize_ft4_standard, synthesize_ft8_standard,
     synthesize_jt65_standard, synthesize_jt9_standard, synthesize_q65_standard,
-    synthesize_wspr_type1, Fst4Submode,
+    synthesize_wspr_type1, Fst4Submode, Q65Submode,
 };
 
 const FT8_TX_AMPLITUDE_I16: i16 = 18_000;
@@ -64,9 +64,11 @@ pub(super) fn build_native_digital_tx_pcm(
         WorkspaceMode::Jt65 => synthesize_jt65_standard(compose, tone, FT8_TX_AMPLITUDE_I16)
             .map(|audio| (audio, 0.0))
             .ok_or_else(|| anyhow!("unable to pack JT65 message")),
-        WorkspaceMode::Q65 => synthesize_q65_standard(compose, tone, FT8_TX_AMPLITUDE_I16)
-            .map(|audio| (audio, 1.0))
-            .ok_or_else(|| anyhow!("unable to pack Q65 message")),
+        WorkspaceMode::Q65 => {
+            synthesize_q65_standard(compose, Q65Submode::A30, tone, FT8_TX_AMPLITUDE_I16)
+                .map(|audio| (audio, 1.0))
+                .ok_or_else(|| anyhow!("unable to pack Q65 message"))
+        }
         WorkspaceMode::Wspr => {
             tokens
                 .get(2)
@@ -614,7 +616,7 @@ mod tests {
                 WorkspaceMode::Jt9 => (WsjtMode::Jt9, WsjtDecodeConfig::default()),
                 WorkspaceMode::Jt65 => (WsjtMode::Jt65, WsjtDecodeConfig::default()),
                 WorkspaceMode::Q65 => (
-                    WsjtMode::Q65,
+                    WsjtMode::Q65(Q65Submode::A30),
                     WsjtDecodeConfig {
                         score_threshold: 0.05,
                         max_candidates: 8,

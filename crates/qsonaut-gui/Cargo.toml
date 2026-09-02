@@ -38,4 +38,4 @@ qsonaut-radio = { package = "rigwright", version = "0.1.19", path = "../../../ri
 qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }
 qsonaut-server-client = { path = "../qsonaut-server-client" }
 qsonaut-modems = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "6cc26b8" }
-qsonaut-third-party = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "5810c4f" }
+qsonaut-third-party = { path = "../../../qsonaut-third-party/crates/qsonaut-third-party" }

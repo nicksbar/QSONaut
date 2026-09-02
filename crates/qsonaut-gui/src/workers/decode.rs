@@ -1,6 +1,8 @@
 use super::super::*;
 use qsonaut_modems::{extract_aligned_window, AudioBlock};
-use qsonaut_third_party::wsjt::{decode as decode_wsjt, Fst4Submode, WsjtDecodeConfig, WsjtMode};
+use qsonaut_third_party::wsjt::{
+    decode as decode_wsjt, Fst4Submode, Q65Submode, WsjtDecodeConfig, WsjtMode,
+};
 
 const FT8_SLOT_MS: u128 = 15_000;
 const FT8_DEEP_RUNTIME_BUDGET_MS: u128 = 12_000;
@@ -175,7 +177,7 @@ pub(in super::super) fn run_native_digital_decode(
         WorkspaceMode::Q65 => {
             if let Ok(batch) = decode_wsjt(
                 &AudioBlock::new(12_000, samples.clone()).expect("normalized audio is valid"),
-                WsjtMode::Q65,
+                WsjtMode::Q65(Q65Submode::A30),
                 &q65_live_decode_config(),
             ) {
                 for event in batch.events {

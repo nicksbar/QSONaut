@@ -3393,7 +3393,7 @@ dependencies = [
  "qsonaut-gui",
  "qsonaut-hostbridge-client",
  "qsonaut-log",
- "rigwright 0.1.20",
+ "rigwright",
  "tokio",
  "tracing",
  "windows-sys 0.59.0",
@@ -3461,7 +3461,7 @@ dependencies = [
  "qsonaut-server-client",
  "qsonaut-third-party",
  "reqwest",
- "rigwright 0.1.20",
+ "rigwright",
  "rusqlite",
  "rustfft",
  "serde",
@@ -3493,9 +3493,9 @@ dependencies = [
 [[package]]
 name = "qsonaut-hostbridge-protocol"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?rev=35aecc6#35aecc6a3a44e1aba83c4f1286b624b55f5d317b"
+source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?rev=1fe8dc4#1fe8dc489592fa91cfd99f720f34492b2dc89bc2"
 dependencies = [
- "rigwright 0.1.20 (git+https://github.com/nicksbar/rigwright.git?rev=fbf0a256e777485f96535069f333833795057f54)",
+ "rigwright",
  "serde",
  "serde_json",
  "uuid",
@@ -3548,7 +3548,6 @@ dependencies = [
 [[package]]
 name = "qsonaut-third-party"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=5810c4f#5810c4fb100a45e920c46a185de1ae6741a11d7b"
 dependencies = [
  "cwdit-dsp",
  "cwdit-morse",
@@ -3975,17 +3974,6 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 [[package]]
 name = "rigwright"
 version = "0.1.20"
-dependencies = [
- "anyhow",
- "async-trait",
- "futures",
- "serialport",
-]
-
-[[package]]
-name = "rigwright"
-version = "0.1.20"
-source = "git+https://github.com/nicksbar/rigwright.git?rev=fbf0a256e777485f96535069f333833795057f54#fbf0a256e777485f96535069f333833795057f54"
 dependencies = [
  "anyhow",
  "async-trait",
