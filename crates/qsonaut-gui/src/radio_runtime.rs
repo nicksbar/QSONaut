@@ -644,6 +644,17 @@ impl QsonautGuiApp {
                         session.ptt_allowed.clone(),
                     ));
                     session.command_tx = Some(tx);
+                    let mut profile = session.profile.clone();
+                    update_profile_connection_settings(
+                        &mut profile,
+                        &session.config,
+                        &session.audio_config,
+                    );
+                    if let Err(error) = save_operator_profile_named(name, &profile) {
+                        warn!(profile = name, %error, "Failed to persist profile after parked radio worker started");
+                    } else {
+                        session.profile = profile;
+                    }
                     info!(
                         profile = name,
                         "Started inactive radio worker with PTT disabled"

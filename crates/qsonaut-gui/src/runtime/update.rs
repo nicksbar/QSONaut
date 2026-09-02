@@ -184,6 +184,12 @@ impl QsonautGuiApp {
                         );
                         self.command_tx = Some(tx);
                         self.radio_worker_handle = Some(handle);
+                        // Settings changed while the hardware was unavailable
+                        // remain dirty in memory. Persist them only now that
+                        // the configured radio worker has actually started.
+                        if self.profile_dirty {
+                            self.persist_profile("Saved after radio worker started");
+                        }
                     }
                     Ok(None) => {
                         // Radio initialization failed

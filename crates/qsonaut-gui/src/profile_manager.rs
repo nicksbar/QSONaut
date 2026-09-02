@@ -251,6 +251,15 @@ impl QsonautGuiApp {
         profile: &OperatorProfile,
         status_prefix: &str,
     ) {
+        if !self.profile_runtime_ready(profile_name) {
+            warn!(
+                profile = %profile_name,
+                status = %status_prefix,
+                "Profile save deferred until configured workers start successfully"
+            );
+            self.profile_dirty = true;
+            return;
+        }
         if let Err(error) = ProfileManager::save_global_and_radio_library(
             &self.current_global_settings(),
             &self.radio_profiles,
@@ -276,6 +285,37 @@ impl QsonautGuiApp {
                 self.profile_io_status = format!("Save failed: {err}");
             }
         }
+    }
+
+    fn profile_runtime_ready(&self, profile_name: &str) -> bool {
+        let Some((radio, audio, radio_started, audio_started)) =
+            self.profile_runtime_state(profile_name)
+        else {
+            return false;
+        };
+        (!radio.enabled || radio_started) && (!audio.enabled || audio_started)
+    }
+
+    fn profile_runtime_state(
+        &self,
+        profile_name: &str,
+    ) -> Option<(&RadioConfig, &AudioConfig, bool, bool)> {
+        if profile_name == self.selected_profile_name {
+            return Some((
+                &self.config.radio,
+                &self.config.audio,
+                self.radio_worker_handle.is_some(),
+                self.audio_worker_handle.is_some(),
+            ));
+        }
+        self.parked_radio_sessions.get(profile_name).map(|session| {
+            (
+                &session.config,
+                &session.audio_config,
+                session.worker_handle.is_some(),
+                session.audio_worker_handle.is_some(),
+            )
+        })
     }
 
     pub(crate) fn current_global_settings(&self) -> GlobalSettings {
