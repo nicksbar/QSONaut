@@ -24,6 +24,9 @@ pub struct HostBridgeConfig {
     pub client_name: String,
     pub access_key: String,
     pub password: String,
+    pub radio_device_id: Option<String>,
+    pub audio_source_id: Option<String>,
+    pub audio_output_id: Option<String>,
     pub reconnect_delay: Duration,
 }
 
@@ -34,6 +37,9 @@ impl Default for HostBridgeConfig {
             client_name: "QSONaut".into(),
             access_key: String::new(),
             password: String::new(),
+            radio_device_id: None,
+            audio_source_id: None,
+            audio_output_id: None,
             reconnect_delay: Duration::from_secs(2),
         }
     }

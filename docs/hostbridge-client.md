@@ -46,6 +46,11 @@ client.set_mode(qsonaut_hostbridge_protocol::WireMode::Usb)?;
 ```
 
 The client must not assume device paths or compile-time catalog entries.
+The GUI HostBridge backend stores the optional `radio_device_id`,
+`audio_source_id`, and `audio_output_id` selections in the radio profile. Blank
+IDs use the first compatible negotiated host entry. Host capture is converted
+to QSONaut's canonical mono 48 kHz processing stream; digital TX emits bounded
+PCM frames to the selected host output.
 
 ## Safety and reconnect rules
 
