@@ -308,7 +308,14 @@ impl QsonautGuiApp {
             self.profile_io_status = format!("Profile ‘{name}’ already exists");
             return;
         }
-        match ProfileManager::create_profile(&name, &self.current_operator_profile()) {
+        // A new tab may inherit operator/workspace preferences, but it must
+        // never inherit another tab's hardware connection or audio endpoint.
+        // Otherwise creating a remote tab from a local 7300 tab silently
+        // copies the serial port, model, and local audio choices into it.
+        let mut new_profile = self.current_operator_profile();
+        new_profile.radio = profile::RadioProfileSettings::default();
+        new_profile.audio = profile::AudioProfileSettings::default();
+        match ProfileManager::create_profile(&name, &new_profile) {
             Ok(available_profiles) => {
                 self.available_profiles = available_profiles;
                 self.new_profile_name.clear();

@@ -741,6 +741,14 @@ impl QsonautGuiApp {
             || old_hostbridge_radio_id != self.config.radio.hostbridge_radio_id
             || old_hostbridge_audio_source_id != self.config.radio.hostbridge_audio_source_id
             || old_hostbridge_audio_output_id != self.config.radio.hostbridge_audio_output_id;
+        if old_backend != self.config.radio.backend
+            && self.config.radio.backend.eq_ignore_ascii_case("hostbridge")
+            && (self.config.radio.endpoint.trim().is_empty()
+                || self.config.radio.endpoint.trim() == "127.0.0.1:4532"
+                || self.config.radio.endpoint.trim() == "ws://127.0.0.1:4532")
+        {
+            self.config.radio.endpoint = "127.0.0.1:8765".to_string();
+        }
         if audio_changed || radio_changed {
             if old_model != self.config.radio.model {
                 if let Some(profile) = find_model(&self.config.radio.model) {
