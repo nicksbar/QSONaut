@@ -157,6 +157,16 @@ pub(super) fn native_radio_profile(
         .flatten()
 }
 
+pub(super) fn radio_control_max(
+    model: &str,
+    control: qsonaut_radio::ControlId,
+    fallback: u8,
+) -> u8 {
+    native_radio_profile("native", model)
+        .and_then(|profile| profile.control_max(control))
+        .unwrap_or(fallback)
+}
+
 pub(super) fn radio_baud_rates(model: &str) -> &'static [u32] {
     let Some(profile) = find_model(model) else {
         return &[];

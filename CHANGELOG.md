@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Decomposed the GUI coordinator into dedicated runtime, radio-session,
+  profile, reporting, mode-type, and rendering packages while preserving the
+  global station identity and per-profile radio/audio settings boundaries.
+- Moved the frame update loop and constructor into runtime modules, reducing
+  `crates/qsonaut-gui/src/lib.rs` below the 5,000-line architecture target.
+
 ## [0.3.15] - 2026-08-31
 
 ### Changed

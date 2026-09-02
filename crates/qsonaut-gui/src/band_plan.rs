@@ -165,6 +165,19 @@ pub(super) fn workspace_band_plan(mode: WorkspaceMode) -> &'static [(&'static st
     }
 }
 
+pub(super) fn workspace_frequency_for_current_band(
+    mode: WorkspaceMode,
+    current_frequency_hz: Option<u64>,
+) -> Option<u64> {
+    let band = current_frequency_hz
+        .map(band_for_frequency)
+        .filter(|band| !band.is_empty())?;
+    workspace_band_plan(mode)
+        .iter()
+        .find(|(label, _)| *label == band)
+        .map(|(_, frequency_hz)| *frequency_hz)
+}
+
 pub(super) fn band_picker_plan(mode: WorkspaceMode) -> Vec<(&'static str, u64)> {
     CORE_BAND_LABELS
         .iter()
