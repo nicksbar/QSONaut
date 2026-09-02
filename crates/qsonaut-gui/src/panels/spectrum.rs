@@ -553,10 +553,13 @@ impl QsonautGuiApp {
             match self.workspace_mode {
                 WorkspaceMode::Ft8 => 50,
                 WorkspaceMode::Ft4 => 90,
-                WorkspaceMode::Fst4 => 70,
+                WorkspaceMode::Fst4 => {
+                    native_channel_width_hz(self.workspace_mode, self.fst4_submode)
+                }
                 WorkspaceMode::Wspr => 6,
-                WorkspaceMode::Jt9 => 16,
-                WorkspaceMode::Jt65 | WorkspaceMode::Q65 => 180,
+                WorkspaceMode::Jt9 | WorkspaceMode::Jt65 | WorkspaceMode::Q65 => {
+                    native_channel_width_hz(self.workspace_mode, self.fst4_submode)
+                }
                 WorkspaceMode::Sstv if sstv_scanning => {
                     (2_300 + qsonaut_sstv::AUTO_TARGET_MAX_OFFSET_HZ
                         - (1_100 + qsonaut_sstv::AUTO_TARGET_MIN_OFFSET_HZ))

@@ -34,6 +34,29 @@ pub(crate) fn filter_bandwidth_hz(mode: &str, filter: Option<u8>) -> u32 {
     }
 }
 
+/// Approximate occupied signal width used by the audio reticle. These values
+/// cover the protocol tone span rather than the 3 kHz receiver filter width.
+pub(crate) fn native_channel_width_hz(
+    mode: WorkspaceMode,
+    fst4_submode: crate::modes::fst4::Submode,
+) -> u32 {
+    match mode {
+        WorkspaceMode::Fst4 => match fst4_submode {
+            crate::modes::fst4::Submode::S15 => 70,
+            crate::modes::fst4::Submode::S30 => 30,
+            crate::modes::fst4::Submode::S60 => 15,
+            crate::modes::fst4::Submode::S120 => 8,
+            crate::modes::fst4::Submode::S300 => 3,
+        },
+        WorkspaceMode::Jt9 => 16,
+        // JT65A spans the 65-tone constellation at approximately 2.69 Hz.
+        WorkspaceMode::Jt65 => 180,
+        // QSONaut currently wires Q65-A30: 65 tones at approximately 3.33 Hz.
+        WorkspaceMode::Q65 => 220,
+        _ => 50,
+    }
+}
+
 pub(crate) fn effective_visual_profile(
     tuning: &DisplayTuning,
     mode: &str,
@@ -165,5 +188,48 @@ pub(crate) fn band_edges_for_frequency(
         144_000_000..=148_000_000 => Some((144_000_000, 148_000_000, "2m")),
         420_000_000..=450_000_000 => Some((420_000_000, 450_000_000, "70cm")),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::native_channel_width_hz;
+    use crate::modes::fst4::Submode;
+    use crate::WorkspaceMode;
+
+    #[test]
+    fn native_reticle_widths_match_protocol_tone_spans() {
+        assert_eq!(
+            native_channel_width_hz(WorkspaceMode::Fst4, Submode::S15),
+            70
+        );
+        assert_eq!(
+            native_channel_width_hz(WorkspaceMode::Fst4, Submode::S30),
+            30
+        );
+        assert_eq!(
+            native_channel_width_hz(WorkspaceMode::Fst4, Submode::S60),
+            15
+        );
+        assert_eq!(
+            native_channel_width_hz(WorkspaceMode::Fst4, Submode::S120),
+            8
+        );
+        assert_eq!(
+            native_channel_width_hz(WorkspaceMode::Fst4, Submode::S300),
+            3
+        );
+        assert_eq!(
+            native_channel_width_hz(WorkspaceMode::Jt9, Submode::S15),
+            16
+        );
+        assert_eq!(
+            native_channel_width_hz(WorkspaceMode::Jt65, Submode::S15),
+            180
+        );
+        assert_eq!(
+            native_channel_width_hz(WorkspaceMode::Q65, Submode::S15),
+            220
+        );
     }
 }

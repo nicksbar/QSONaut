@@ -206,9 +206,10 @@ use rendering::{
     band_edges_for_frequency, draw_primary_meter, draw_voltage_graph, effective_visual_profile,
     filter_bandwidth_hz, meter_color, meter_color_for_context, meter_label, meter_percent,
     meter_reading, meter_reading_for_model, meter_tooltip, meter_value, mode_meter_order,
-    record_voltage_sample, scope_projection_for_mode, scope_span_for_filter, scope_span_hz,
-    scope_span_label, sideband_scope_edges, status_color, theme_accent, theme_muted, theme_success,
-    theme_warning, METER_LABEL_WIDTH, VOLTAGE_HISTORY_CAPACITY,
+    native_channel_width_hz, record_voltage_sample, scope_projection_for_mode,
+    scope_span_for_filter, scope_span_hz, scope_span_label, sideband_scope_edges, status_color,
+    theme_accent, theme_muted, theme_success, theme_warning, METER_LABEL_WIDTH,
+    VOLTAGE_HISTORY_CAPACITY,
 };
 use reporting::{
     enrich_qso_from_hamdb, qso_adif_path, qso_log_path, qso_timestamp, spawn_hamdb_lookup,
