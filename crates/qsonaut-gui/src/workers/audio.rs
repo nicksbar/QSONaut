@@ -710,6 +710,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut digital_slot_gate = DigitalSlotGate::default();
         let mut ft4_slot_gate = Ft8SlotGate::default();
         let mut decode_workspace_last: Option<WorkspaceMode> = None;
+        let mut decode_fst4_submode_last: Option<crate::modes::fst4::Submode> = None;
         // Waterfall rows arrive far faster than a human can see. Redrawing the
         // whole UI on every chunk is what pins the GPU, so cap the repaint rate
         // and let egui coalesce the rest.
@@ -877,13 +878,21 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                     if let Some(ref mut dec) = decimator {
                         let active_workspace_mode =
                             state.lock().expect("ui state lock poisoned").workspace_mode;
-                        if decode_workspace_last != Some(active_workspace_mode) {
+                        let active_fst4_submode = if active_workspace_mode == WorkspaceMode::Fst4 {
+                            state.lock().expect("ui state lock poisoned").fst4_submode
+                        } else {
+                            crate::modes::fst4::Submode::default()
+                        };
+                        if decode_workspace_last != Some(active_workspace_mode)
+                            || decode_fst4_submode_last != Some(active_fst4_submode)
+                        {
                             info!(workspace = %active_workspace_mode.label(), "Audio decoder workspace changed");
                             if recording_active {
                                 let _ = recording_tx.try_send(RecordingMessage::Stop);
                                 recording_active = false;
                             }
                             decode_workspace_last = Some(active_workspace_mode);
+                            decode_fst4_submode_last = Some(active_fst4_submode);
                             ft8_buf.clear();
                             digital_buf.clear();
                             cw_stream_decoder = None;
@@ -1855,9 +1864,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                             .to_string();
                                 }
                             }
-                        } else if let Some(slot_seconds) = active_workspace_mode.slot_seconds(
-                            state.lock().expect("ui state lock poisoned").fst4_submode,
-                        ) {
+                        } else if let Some(slot_seconds) =
+                            active_workspace_mode.slot_seconds(active_fst4_submode)
+                        {
                             digital_buf.extend_from_slice(&ds);
                             let slot_samples = (slot_seconds * 12_000.0).round() as usize;
                             if digital_buf.len() > slot_samples {
@@ -1916,8 +1925,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         utc,
                                         "digital decode triggered"
                                     );
-                                    let fst4_submode =
-                                        state.lock().expect("ui state lock poisoned").fst4_submode;
+                                    let fst4_submode = active_fst4_submode;
                                     thread::spawn(move || {
                                         run_native_digital_decode(
                                             active_workspace_mode,

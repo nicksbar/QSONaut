@@ -34,6 +34,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Fixed profile-tab persistence so each tab saves its own explicit profile
   snapshot and cannot overwrite another radio's settings during tab switches
   or autosave operations.
+- Reset native decoder buffers and slot gates when changing FST4 submodes, and
+  clarified that background profile workers may produce valid null-radio test
+  decodes for their own selected modes.
 - Added regression coverage ensuring NullRadio, IC-7300, and FT-817ND profile
   files retain independent radio identities and enabled states.
 

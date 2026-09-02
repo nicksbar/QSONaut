@@ -374,6 +374,45 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "slow FST4/Q65 end-to-end DSP validation; run in release mode"]
+    fn native_fst4_and_q65_generated_signals_decode_through_the_adapter() {
+        for (mode, submode, message) in [
+            (WorkspaceMode::Fst4, Submode::S15, "CQ W1AW AA00"),
+            (WorkspaceMode::Q65, Submode::default(), "CQ W1AW AA00"),
+        ] {
+            let pcm = build_native_digital_tx_pcm(mode, message, 1_500, submode, 20, 600)
+                .expect("native fixture synthesis")
+                .0;
+            let samples = pcm
+                .into_iter()
+                .map(|sample| sample as f32 / i16::MAX as f32 * 0.06)
+                .collect::<Vec<_>>();
+            let state = Arc::new(Mutex::new(crate::GuiState::default()));
+
+            run_native_digital_decode(
+                mode,
+                submode,
+                samples,
+                42,
+                "00:05:15.000".to_string(),
+                1_500,
+                false,
+                state.clone(),
+            );
+
+            let shared = state.lock().expect("state");
+            assert!(
+                shared
+                    .digital_decodes
+                    .iter()
+                    .any(|entry| entry.mode == mode && entry.message.contains("W1AW")),
+                "{mode:?} fixture did not decode: {:?}",
+                shared.digital_decodes
+            );
+        }
+    }
+
+    #[test]
     fn native_decode_worker_handles_empty_captures_for_each_supported_protocol() {
         for mode in [
             WorkspaceMode::Ft4,
