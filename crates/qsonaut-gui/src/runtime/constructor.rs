@@ -133,8 +133,20 @@ impl QsonautGuiApp {
         );
         let brand_icon =
             ctx.load_texture("qsonaut-brand-icon", brand_image, TextureOptions::LINEAR);
+        let available_profiles = list_operator_profiles();
+        let active_profile_name = active_operator_profile_name();
+        let selected_profile_name = available_profiles
+            .iter()
+            .find(|name| name.eq_ignore_ascii_case(&active_profile_name))
+            .cloned()
+            .unwrap_or_else(|| "Default".to_string());
+
+        // Resolve the selected profile once, then apply that exact file. The
+        // old path loaded the active profile before resolving the active name,
+        // which made startup vulnerable to a stale/fallback profile source and
+        // could boot a remote tab with another tab's native radio config.
         if apply_saved_profile {
-            if let Some(profile) = load_operator_profile() {
+            if let Some(profile) = load_operator_profile_named(&selected_profile_name) {
                 if profile.profile_version >= 3 {
                     config.audio.input_device = profile.audio.input_device.clone();
                     config.audio.enabled = profile.audio.enabled;
@@ -171,14 +183,6 @@ impl QsonautGuiApp {
                 }
             }
         }
-
-        let available_profiles = list_operator_profiles();
-        let active_profile_name = active_operator_profile_name();
-        let selected_profile_name = available_profiles
-            .iter()
-            .find(|name| name.eq_ignore_ascii_case(&active_profile_name))
-            .cloned()
-            .unwrap_or_else(|| "Default".to_string());
 
         info!(
             profile = %selected_profile_name,

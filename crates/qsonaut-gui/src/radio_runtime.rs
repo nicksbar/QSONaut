@@ -253,6 +253,34 @@ pub(super) fn radio_config_from_operator_profile(profile: &OperatorProfile) -> R
     }
 }
 
+fn update_profile_connection_settings(
+    profile: &mut OperatorProfile,
+    radio: &RadioConfig,
+    audio: &AudioConfig,
+) {
+    profile.radio.enabled = radio.enabled;
+    profile.radio.serial_port = radio.serial_port.clone();
+    profile.radio.backend = radio.backend.clone();
+    profile.radio.endpoint = radio.endpoint.clone();
+    profile.radio.model = radio.model.clone();
+    profile.radio.baud_rate = radio.baud_rate;
+    profile.radio.civ_address = radio.civ_address;
+    profile.radio.controller_civ_address = radio.controller_civ_address;
+    profile.radio.hostbridge_access_key = radio.hostbridge_access_key.clone();
+    profile.radio.hostbridge_password = radio.hostbridge_password.clone();
+    profile.radio.hostbridge_radio_id = radio.hostbridge_radio_id.clone();
+    profile.radio.hostbridge_audio_source_id = radio.hostbridge_audio_source_id.clone();
+    profile.radio.hostbridge_audio_output_id = radio.hostbridge_audio_output_id.clone();
+    profile.audio.input_device = audio.input_device.clone();
+    profile.audio.enabled = audio.enabled;
+    profile.audio.output_device = audio.output_device.clone();
+    profile.audio.monitor_enabled = audio.monitor_enabled;
+    profile.audio.monitor_output_device = audio.monitor_output_device.clone();
+    profile.audio.monitor_volume = audio.monitor_volume;
+    profile.audio.sample_rate_hz = audio.sample_rate_hz;
+    profile.audio.channels = audio.channels;
+}
+
 impl QsonautGuiApp {
     pub(super) fn set_tab_workers_running(&mut self, name: &str, running: bool) {
         if name == self.selected_profile_name {
@@ -357,7 +385,9 @@ impl QsonautGuiApp {
             session.command_tx = None;
             session.init_rx = None;
         }
-        let _ = save_operator_profile_named(name, &session.profile);
+        let mut profile = session.profile.clone();
+        update_profile_connection_settings(&mut profile, &session.config, &session.audio_config);
+        let _ = save_operator_profile_named(name, &profile);
     }
 
     pub(super) fn switch_radio_tab(&mut self, name: &str) {
