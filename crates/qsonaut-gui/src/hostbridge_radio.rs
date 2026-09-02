@@ -277,15 +277,22 @@ impl HostBridgeRadio {
         let initial_state = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 match events.recv().await {
-                    Some(HostBridgeEvent::Server(ServerMessage::State(state))) => break state,
-                    Some(HostBridgeEvent::SafetyDisarmed { .. }) => break RadioState::default(),
+                    Some(HostBridgeEvent::Server(ServerMessage::State(state))) => break Ok(state),
+                    Some(HostBridgeEvent::SafetyDisarmed { reason }) => {
+                        break Err(anyhow!(
+                            "HostBridge session disarmed during startup: {reason}"
+                        ));
+                    }
+                    Some(HostBridgeEvent::Disconnected { reason }) => {
+                        break Err(anyhow!("HostBridge disconnected during startup: {reason}"));
+                    }
                     Some(_) => {}
-                    None => break RadioState::default(),
+                    None => break Err(anyhow!("HostBridge event stream closed during startup")),
                 }
             }
         })
         .await
-        .unwrap_or_default();
+        .map_err(|_| anyhow!("timed out waiting for initial HostBridge radio state"))??;
         Ok(Self {
             client,
             events: Mutex::new(events),

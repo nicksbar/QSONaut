@@ -72,7 +72,7 @@ enum Command {
 
 pub struct HostBridgeClient {
     commands: mpsc::UnboundedSender<Command>,
-    worker: Option<tokio::task::JoinHandle<()>>,
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl HostBridgeClient {
@@ -88,7 +88,21 @@ impl HostBridgeClient {
         install_tls_crypto_provider();
         let (commands, command_rx) = mpsc::unbounded_channel();
         let (events, event_rx) = mpsc::unbounded_channel();
-        let worker = tokio::spawn(run(config, command_rx, events));
+        // The client must outlive the short-lived runtime used by callers to
+        // complete initial authentication. Run the transport on its own
+        // runtime so the WebSocket remains alive after spawn() returns.
+        let worker = std::thread::spawn(move || {
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                let _ = events.send(HostBridgeEvent::Disconnected {
+                    reason: "could not start HostBridge transport runtime".to_string(),
+                });
+                return;
+            };
+            runtime.block_on(run(config, command_rx, events));
+        });
         (
             Self {
                 commands,
@@ -209,9 +223,9 @@ impl HostBridgeClient {
 impl Drop for HostBridgeClient {
     fn drop(&mut self) {
         let _ = self.commands.send(Command::Shutdown);
-        if let Some(worker) = self.worker.take() {
-            worker.abort();
-        }
+        // Dropping the handle detaches the transport thread; the shutdown
+        // command lets its runtime close the socket and exit normally.
+        let _ = self.worker.take();
     }
 }
 
