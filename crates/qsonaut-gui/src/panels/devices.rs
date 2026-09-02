@@ -112,13 +112,19 @@ impl QsonautGuiApp {
             true,
             self.config.audio.sample_rate_hz,
             self.config.audio.channels,
-            self.config.audio.input_device.clone(),
+            effective_audio_input_device(
+                &self.config.radio.backend,
+                self.config.audio.input_device.clone(),
+            ),
             self.config.audio.monitor_enabled,
-            self.config
-                .audio
-                .monitor_output_device
-                .clone()
-                .or_else(|| self.config.audio.output_device.clone()),
+            effective_audio_output_device(
+                &self.config.radio.backend,
+                self.config
+                    .audio
+                    .monitor_output_device
+                    .clone()
+                    .or_else(|| self.config.audio.output_device.clone()),
+            ),
             self.monitor_volume.clone(),
             self.repaint_ctx.clone(),
             self.display_tuning.clone(),

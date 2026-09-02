@@ -151,6 +151,14 @@ impl QsonautGuiApp {
                     config.radio.serial_port = profile.radio.serial_port.clone();
                     config.radio.backend = profile.radio.backend.clone();
                     config.radio.endpoint = profile.radio.endpoint.clone();
+                    config.radio.hostbridge_access_key =
+                        profile.radio.hostbridge_access_key.clone();
+                    config.radio.hostbridge_password = profile.radio.hostbridge_password.clone();
+                    config.radio.hostbridge_radio_id = profile.radio.hostbridge_radio_id.clone();
+                    config.radio.hostbridge_audio_source_id =
+                        profile.radio.hostbridge_audio_source_id.clone();
+                    config.radio.hostbridge_audio_output_id =
+                        profile.radio.hostbridge_audio_output_id.clone();
                     if config.radio.backend.trim().eq_ignore_ascii_case("none") {
                         config.radio.backend = "native".to_string();
                     }

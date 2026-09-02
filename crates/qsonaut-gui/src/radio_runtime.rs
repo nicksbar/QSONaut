@@ -68,10 +68,13 @@ pub(super) fn spawn_radio_init_with_hostbridge(
                     .enable_all()
                     .build()
                 {
-                    Ok(runtime) => runtime
-                        .block_on(HostBridgeRadio::connect(config))
-                        .map(|radio| RadioHandle::Remote(Box::new(radio)))
-                        .ok(),
+                    Ok(runtime) => match runtime.block_on(HostBridgeRadio::connect(config)) {
+                        Ok(radio) => Some(RadioHandle::Remote(Box::new(radio))),
+                        Err(error) => {
+                            error!(%error, "HostBridge radio connection failed during initialization");
+                            None
+                        }
+                    },
                     Err(error) => {
                         error!(%error, "HostBridge startup runtime failed");
                         None
