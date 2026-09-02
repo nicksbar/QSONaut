@@ -95,12 +95,24 @@ pub(in super::super) fn stop_radio_worker_for_reconnect(
     worker_stop: &mut Arc<AtomicBool>,
     worker_handle: &mut Option<JoinHandle<()>>,
 ) {
+    let started = Instant::now();
     if let Some(tx) = command_tx {
         let _ = tx.send(GuiCommand::Quit);
     }
     worker_stop.store(true, Ordering::Relaxed);
     if let Some(handle) = worker_handle.take() {
-        let _ = handle.join();
+        // A synchronous CI-V read can outlive the UI frame. Do not make the
+        // UI wait indefinitely for a worker that is already being stopped.
+        let (done_tx, done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = handle.join();
+            let _ = done_tx.send(());
+        });
+        if done_rx.recv_timeout(Duration::from_secs(3)).is_err() {
+            warn!(elapsed = ?started.elapsed(), "Radio worker did not stop within reconnect timeout; abandoning join");
+        } else {
+            info!(elapsed = ?started.elapsed(), "Radio worker stopped for reconnect");
+        }
     }
     *command_tx = None;
     *worker_stop = Arc::new(AtomicBool::new(false));

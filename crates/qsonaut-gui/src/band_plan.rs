@@ -201,7 +201,7 @@ pub(super) fn workspace_radio_preset_for_frequency(
     if mode == WorkspaceMode::Sstv {
         return WorkspaceRadioPreset {
             base_mode: BaseMode::Usb,
-            data_mode: false,
+            data_mode: true,
             filter: 1,
         };
     }
@@ -273,14 +273,14 @@ mod tests {
     }
 
     #[test]
-    fn sstv_uses_arrl_calling_centers_and_voice_usb() {
+    fn sstv_uses_arrl_calling_centers_and_data_usb() {
         let sstv = workspace_band_plan(WorkspaceMode::Sstv);
         assert!(sstv.contains(&("80m", 3_845_000)));
         assert!(sstv.contains(&("20m", 14_230_000)));
         assert!(sstv.contains(&("10m", 28_680_000)));
         let preset = workspace_radio_preset(WorkspaceMode::Sstv);
         assert_eq!(preset.base_mode, BaseMode::Usb);
-        assert!(!preset.data_mode);
+        assert!(preset.data_mode);
         assert_eq!(preset.filter, 1);
     }
 

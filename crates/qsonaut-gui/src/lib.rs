@@ -138,19 +138,13 @@ fn qsonaut_testers() -> String {
 }
 
 fn effective_audio_input_device(backend: &str, input: Option<String>) -> Option<String> {
-    if matches!(backend.to_ascii_lowercase().as_str(), "null" | "mock") {
-        Some(NULL_INPUT_DEVICE.to_string())
-    } else {
-        input
-    }
+    let _ = backend;
+    input
 }
 
 fn effective_audio_output_device(backend: &str, output: Option<String>) -> Option<String> {
-    if matches!(backend.to_ascii_lowercase().as_str(), "null" | "mock") {
-        Some(NULL_OUTPUT_DEVICE.to_string())
-    } else {
-        output
-    }
+    let _ = backend;
+    output
 }
 
 fn radio_control_max(model: &str, control: ControlId, fallback: u8) -> u8 {
@@ -188,14 +182,14 @@ use modes::exchange::{
 use modes::voice::VoiceContestField;
 use profile::{
     active_operator_profile_name, default_contest_fake_split_offset_hz, default_cw_tone_hz,
-    default_cw_wpm, default_gui_scale, default_max_attempts as default_ft8_max_attempts,
+    default_cw_wpm, default_max_attempts as default_ft8_max_attempts,
     default_psk_batch_interval_secs, default_psk_max_pending, default_psk_repeat_cache_secs,
     default_ptt_lead_ms, default_ptt_tail_ms, default_rx_tone_hz, default_tx_tone_hz,
-    default_waterfall_deck_height, list_operator_profiles, load_operator_profile,
-    load_operator_profile_named, load_radio_profile_library, remove_operator_profile_named,
-    save_operator_profile, save_operator_profile_named, save_radio_profile_library,
-    select_operator_profile, OperatorProfile, RadioProfile, OPERATOR_PROFILE_FILE,
-    OPERATOR_PROFILE_VERSION,
+    default_waterfall_deck_height, list_operator_profiles, load_global_settings,
+    load_operator_profile, load_operator_profile_named, load_radio_profile_library,
+    remove_operator_profile_named, save_global_settings, save_operator_profile,
+    save_operator_profile_named, save_radio_profile_library, select_operator_profile,
+    GlobalSettings, OperatorProfile, RadioProfile, OPERATOR_PROFILE_FILE, OPERATOR_PROFILE_VERSION,
 };
 use radio_faq::{help_for_model, render_document};
 #[cfg(test)]
@@ -232,7 +226,6 @@ const AUDIO_WF_HEIGHT: usize = 120;
 const AUDIO_MAX_FREQ_HZ: u32 = 4_000;
 // 8192 samples @ 48 kHz = 170 ms window, ~5.9 Hz/bin, ~683 useful bins for 0-4 kHz.
 const FFT_SIZE: usize = 8192;
-const GUI_SCALE_PROFILE_VERSION: u32 = 8;
 const AUDIO_MONITOR_PROFILE_VERSION: u32 = 12;
 const GUI_SCALE_BASE: f32 = 1.2;
 const GUI_SCALE_MAX: f32 = 2.0;
@@ -480,6 +473,13 @@ fn parse_workspace_mode_token(mode: &str) -> Option<WorkspaceMode> {
 }
 
 fn radio_mode_label(mode: &str, data_mode: Option<bool>) -> String {
+    // The radio's mode response is authoritative when it already includes
+    // the data suffix. A separate DataMode query can briefly lag or report a
+    // stale value while the IC-7300 is settling; allowing that value to erase
+    // an explicit suffix makes the mode button flicker between USB and USB-D.
+    if mode.ends_with("-D") {
+        return mode.to_string();
+    }
     let base_mode = mode.strip_suffix("-D").unwrap_or(mode);
     match data_mode {
         Some(false) => base_mode.to_string(),
@@ -621,6 +621,7 @@ fn bootstrap_automation_host() -> (AutomationHost, String, HashSet<String>) {
 
 fn start_psk_reporter(
     enabled: bool,
+    backend: &str,
     callsign: &str,
     grid: &str,
     tuning: ReporterTuning,
@@ -630,8 +631,16 @@ fn start_psk_reporter(
         .lock()
         .expect("ui state lock poisoned")
         .psk_report_sender = None;
-    if !enabled || callsign.trim().is_empty() || callsign == "N0CALL" || grid == "AA00" {
-        info!(enabled, callsign = %callsign, grid = %grid, "PSK Reporter not started: station identity is incomplete or reporting is disabled");
+    if !enabled
+        || matches!(
+            backend.trim().to_ascii_lowercase().as_str(),
+            "null" | "mock" | "none"
+        )
+        || callsign.trim().is_empty()
+        || callsign == "N0CALL"
+        || grid == "AA00"
+    {
+        info!(enabled, backend, callsign = %callsign, grid = %grid, "PSK Reporter not started: reporting is disabled, simulated, or station identity is incomplete");
         return None;
     }
     let mut config = ReporterConfig::production(callsign, grid);
@@ -1620,10 +1629,29 @@ fn request_radio_session_stop_handles(
 
 fn join_radio_session(mut session: RadioSession) {
     if let Some(handle) = session.worker_handle.take() {
-        let _ = handle.join();
+        join_handle_for_shutdown(handle, "radio session");
     }
     if let Some(handle) = session.audio_worker_handle.take() {
+        join_handle_for_shutdown(handle, "audio session");
+    }
+}
+
+fn join_handle_for_shutdown(handle: std::thread::JoinHandle<()>, worker: &str) {
+    const SHUTDOWN_JOIN_BUDGET: Duration = Duration::from_millis(250);
+    let deadline = Instant::now() + SHUTDOWN_JOIN_BUDGET;
+    while !handle.is_finished() && Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    if handle.is_finished() {
         let _ = handle.join();
+    } else {
+        warn!(
+            worker,
+            "Worker did not stop within shutdown budget; detaching"
+        );
+        // Dropping a JoinHandle detaches the thread. This is preferable to
+        // preventing the GUI process from exiting when a driver call is
+        // blocked in a device or OS API that cannot be interrupted.
     }
 }
 
@@ -2127,6 +2155,16 @@ impl QsonautGuiApp {
             .cloned()
             .unwrap_or_else(|| "Default".to_string());
 
+        info!(
+            profile = %selected_profile_name,
+            backend = %config.radio.backend,
+            model = %config.radio.model,
+            serial_port = ?config.radio.serial_port,
+            audio_input = ?config.audio.input_device,
+            audio_output = ?config.audio.output_device,
+            "Loaded active operator profile for startup"
+        );
+
         let state = Arc::new(Mutex::new(GuiState::default()));
         if let Some(profile) = load_operator_profile_named(&selected_profile_name) {
             if let Ok(mut state) = state.lock() {
@@ -2197,23 +2235,12 @@ impl QsonautGuiApp {
                 let session_audio_config =
                     audio_config_from_operator_profile(&profile, &config.audio);
                 let session_state = Arc::new(Mutex::new(GuiState::default()));
-                let (init_rx, status) = if session_config.enabled {
-                    let port = session_config.serial_port.clone().unwrap_or_default();
-                    (
-                        Some(spawn_radio_init(
-                            session_config.backend.clone(),
-                            session_config.model.clone(),
-                            port,
-                            session_config.endpoint.clone(),
-                            session_config.baud_rate,
-                            session_config.controller_civ_address,
-                            session_config.civ_address,
-                        )),
-                        "CONNECTING…",
-                    )
-                } else {
-                    (None, "UNAVAILABLE (radio disabled)")
-                };
+                // Parked tabs are deliberately inert at startup. Opening
+                // their CI-V device and audio stream here creates hidden
+                // hardware I/O, FFT work, and decoder load before the user
+                // has selected those tabs.
+                let init_rx = None;
+                let status = "PARKED (select tab to start)";
                 if let Ok(mut state) = session_state.lock() {
                     state.radio_waterfall_status = status.to_string();
                     state.workspace_mode = parse_workspace_mode_token(&profile.workspace_mode)
@@ -2244,30 +2271,7 @@ impl QsonautGuiApp {
                 let session_ft8_tx_active = Arc::new(AtomicBool::new(false));
                 let session_digital_tx_active = Arc::new(AtomicBool::new(false));
                 let session_ptt_allowed = Arc::new(AtomicBool::new(false));
-                let session_audio_worker_handle = Some(spawn_audio_spectrum_worker(
-                    session_state.clone(),
-                    session_audio_worker_stop.clone(),
-                    session_ft8_tx_active.clone(),
-                    session_digital_tx_active.clone(),
-                    session_audio_config.enabled,
-                    session_audio_config.sample_rate_hz,
-                    session_audio_config.channels,
-                    effective_audio_input_device(
-                        &session_config.backend,
-                        session_audio_config.input_device.clone(),
-                    ),
-                    session_audio_config.monitor_enabled,
-                    effective_audio_output_device(
-                        &session_config.backend,
-                        session_audio_config
-                            .monitor_output_device
-                            .clone()
-                            .or_else(|| session_audio_config.output_device.clone()),
-                    ),
-                    session_monitor_volume.clone(),
-                    repaint_ctx.clone(),
-                    session_display_tuning.clone(),
-                ));
+                let session_audio_worker_handle = None;
                 info!(
                     profile = profile_name,
                     radio_enabled = profile.radio_enabled,
@@ -2311,6 +2315,7 @@ impl QsonautGuiApp {
                 ft8_tx_active.clone(),
                 digital_tx_active.clone(),
                 config.audio.enabled,
+                true,
                 config.audio.sample_rate_hz,
                 config.audio.channels,
                 effective_audio_input_device(
@@ -2332,24 +2337,17 @@ impl QsonautGuiApp {
             )
         });
 
-        let mut station_callsign = config
-            .station
-            .callsign
-            .clone()
-            .unwrap_or_else(|| "N0CALL".to_string());
-        let mut station_grid = config
-            .station
-            .grid
-            .clone()
-            .unwrap_or_else(|| "AA00".to_string());
+        let global_settings = load_global_settings();
+        let station_callsign = global_settings.callsign.clone();
+        let station_grid = global_settings.grid.clone();
 
-        let mut station_qth = String::new();
-        let mut station_rig = String::new();
-        let mut station_antenna = String::new();
-        let mut station_notes = String::new();
-        let mut llm_prompt_context = String::new();
-        let mut sstv_image_requirements = String::new();
-        let mut llm_model_notes = String::new();
+        let station_qth = global_settings.qth.clone();
+        let mut station_rig = global_settings.station_rig.clone();
+        let mut station_antenna = global_settings.station_antenna.clone();
+        let station_notes = global_settings.station_notes.clone();
+        let llm_prompt_context = global_settings.llm_prompt_context.clone();
+        let sstv_image_requirements = global_settings.sstv_image_requirements.clone();
+        let llm_model_notes = global_settings.llm_model_notes.clone();
         let mut ft8_follow_log = true;
         let mut ft8_max_log_entries = 300usize;
         let mut ft8_deep_decode = false;
@@ -2384,8 +2382,8 @@ impl QsonautGuiApp {
         let mut recording_modes = std::collections::BTreeMap::new();
         let mut recording_full_width = true;
         let mut recording_stream = true;
-        let mut gui_scale = default_gui_scale();
-        let mut compute_preference = ComputePreference::Auto;
+        let gui_scale = global_settings.gui_scale;
+        let compute_preference = global_settings.compute_preference;
         let mut psk_reporter_enabled = false;
         let mut pota_enabled = true;
         let mut psk_batch_interval_secs = default_psk_batch_interval_secs();
@@ -2413,15 +2411,19 @@ impl QsonautGuiApp {
         let profile_io_status: String;
 
         if let Some(p) = load_operator_profile() {
-            station_callsign = p.callsign;
-            station_grid = p.grid;
-            station_qth = p.qth;
-            station_rig = p.station_rig;
-            station_antenna = p.station_antenna;
-            station_notes = p.station_notes;
-            llm_prompt_context = p.llm_prompt_context;
-            sstv_image_requirements = p.sstv_image_requirements;
-            llm_model_notes = p.llm_model_notes;
+            // Older profiles kept station data in global settings. Prefer the
+            // profile values once present, while allowing a one-time migration
+            // for existing installations.
+            if p.station_rig.is_empty() && !global_settings.station_rig.is_empty() {
+                station_rig = global_settings.station_rig.clone();
+            } else {
+                station_rig = p.station_rig.clone();
+            }
+            if p.station_antenna.is_empty() && !global_settings.station_antenna.is_empty() {
+                station_antenna = global_settings.station_antenna.clone();
+            } else {
+                station_antenna = p.station_antenna.clone();
+            }
             ft8_follow_log = p.follow_log;
             ft8_max_log_entries = p.max_log_entries.clamp(80, 1000);
             ft8_deep_decode = p.deep_decode;
@@ -2465,13 +2467,6 @@ impl QsonautGuiApp {
             recording_modes = p.recording_modes;
             recording_full_width = p.recording_full_width;
             recording_stream = p.recording_stream;
-            gui_scale = if p.profile_version >= GUI_SCALE_PROFILE_VERSION {
-                p.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX)
-            } else {
-                // v3 called this physical size 160%; it is the v4 100% baseline.
-                default_gui_scale()
-            };
-            compute_preference = p.compute_preference;
             psk_reporter_enabled = p.psk_reporter_enabled;
             pota_enabled = p.pota_enabled;
             psk_batch_interval_secs = p.psk_batch_interval_secs.clamp(60, 3_600);
@@ -2689,6 +2684,7 @@ impl QsonautGuiApp {
         ctx.set_zoom_factor(gui_scale * os_dpi_adjustment);
         let psk_reporter = start_psk_reporter(
             psk_reporter_enabled,
+            &config.radio.backend,
             &station_callsign,
             &station_grid,
             ReporterTuning {
@@ -2701,7 +2697,12 @@ impl QsonautGuiApp {
         let psk_sender = psk_reporter.as_ref().map(Reporter::sender);
         for session in parked_radio_sessions.values() {
             if let Ok(mut session_state) = session.state.lock() {
-                session_state.psk_report_sender = psk_sender.clone();
+                session_state.psk_report_sender = (!matches!(
+                    session.config.backend.trim().to_ascii_lowercase().as_str(),
+                    "null" | "mock" | "none"
+                ))
+                .then(|| psk_sender.clone())
+                .flatten();
             }
         }
 
@@ -3038,17 +3039,6 @@ impl QsonautGuiApp {
     }
 
     fn apply_tab_preferences(&mut self, profile: &OperatorProfile) {
-        self.station_callsign = profile.callsign.clone();
-        self.station_grid = profile.grid.clone();
-        self.station_qth = profile.qth.clone();
-        self.station_rig = profile.station_rig.clone();
-        self.station_antenna = profile.station_antenna.clone();
-        self.station_notes = profile.station_notes.clone();
-        self.llm_prompt_context = profile.llm_prompt_context.clone();
-        self.sstv_image_requirements = profile.sstv_image_requirements.clone();
-        self.llm_model_notes = profile.llm_model_notes.clone();
-        self.config.station.callsign = Some(self.station_callsign_or_default().to_string());
-        self.config.station.grid = Some(self.station_grid_or_default().to_string());
         self.workspace_mode =
             parse_workspace_mode_token(&profile.workspace_mode).unwrap_or(WorkspaceMode::Ft8);
         self.ft8_follow_log = profile.follow_log;
@@ -3517,10 +3507,7 @@ impl QsonautGuiApp {
                 WorkspaceMode::Ft8,
             )
         };
-        let radio_failed = radio_enabled
-            && ((radio_status.starts_with("UNAVAILABLE")
-                && !radio_status.contains("no scope stream"))
-                || radio_status.starts_with("SESSION STOPPED"));
+        let radio_failed = radio_status_is_failed(radio_enabled, &radio_status);
         let audio_failed = audio_enabled
             && (audio_status.starts_with("NO INPUT")
                 || audio_status.starts_with("ERROR")
@@ -3577,10 +3564,10 @@ impl QsonautGuiApp {
                     let _ = tx.send(GuiCommand::Quit);
                 }
                 if let Some(handle) = self.radio_worker_handle.take() {
-                    let _ = handle.join();
+                    join_handle_for_shutdown(handle, "active radio");
                 }
                 if let Some(handle) = self.audio_worker_handle.take() {
-                    let _ = handle.join();
+                    join_handle_for_shutdown(handle, "active audio");
                 }
                 self.command_tx = None;
                 if let Ok(mut state) = self.state.lock() {
@@ -3618,6 +3605,7 @@ impl QsonautGuiApp {
                     session.ft8_tx_active.clone(),
                     session.digital_tx_active.clone(),
                     true,
+                    false,
                     session.audio_config.sample_rate_hz,
                     session.audio_config.channels,
                     effective_audio_input_device(
@@ -3645,10 +3633,10 @@ impl QsonautGuiApp {
                 let _ = tx.send(GuiCommand::Quit);
             }
             if let Some(handle) = session.worker_handle.take() {
-                let _ = handle.join();
+                join_handle_for_shutdown(handle, "parked radio");
             }
             if let Some(handle) = session.audio_worker_handle.take() {
-                let _ = handle.join();
+                join_handle_for_shutdown(handle, "parked audio");
             }
             session.command_tx = None;
             session.init_rx = None;
@@ -3700,6 +3688,37 @@ impl QsonautGuiApp {
             self.ptt_allowed.store(true, Ordering::Release);
             self.apply_tab_preferences(&session_profile);
             self.restore_tab_view_state(session_view);
+            if self.radio_worker_handle.is_none() && self.radio_init_rx.is_none() {
+                self.start_active_radio_session();
+            }
+            if self.audio_worker_handle.is_none() {
+                self.audio_worker_handle = Some(spawn_audio_spectrum_worker(
+                    self.state.clone(),
+                    self.audio_worker_stop.clone(),
+                    self.ft8_tx_active.clone(),
+                    self.digital_tx_active.clone(),
+                    self.config.audio.enabled,
+                    true,
+                    self.config.audio.sample_rate_hz,
+                    self.config.audio.channels,
+                    effective_audio_input_device(
+                        &self.config.radio.backend,
+                        self.config.audio.input_device.clone(),
+                    ),
+                    self.config.audio.monitor_enabled,
+                    effective_audio_output_device(
+                        &self.config.radio.backend,
+                        self.config
+                            .audio
+                            .monitor_output_device
+                            .clone()
+                            .or_else(|| self.config.audio.output_device.clone()),
+                    ),
+                    self.monitor_volume.clone(),
+                    self.repaint_ctx.clone(),
+                    self.display_tuning.clone(),
+                ));
+            }
             info!(
                 profile = name,
                 radio_running = self.command_tx.is_some(),
@@ -3727,6 +3746,7 @@ impl QsonautGuiApp {
                 self.ft8_tx_active.clone(),
                 self.digital_tx_active.clone(),
                 self.config.audio.enabled,
+                true,
                 self.config.audio.sample_rate_hz,
                 self.config.audio.channels,
                 effective_audio_input_device(
@@ -3763,6 +3783,9 @@ impl QsonautGuiApp {
     }
 
     fn persist_profile(&mut self, status_prefix: &str) {
+        if let Err(error) = save_global_settings(&self.current_global_settings()) {
+            warn!(%error, "Global settings save failed");
+        }
         if !self.radio_profiles.is_empty() {
             if let Err(error) = save_radio_profile_library(&self.radio_profiles) {
                 warn!(%error, "Radio profile library save failed");
@@ -3783,6 +3806,22 @@ impl QsonautGuiApp {
                 warn!(profile = %self.selected_profile_name, error = %err, "Operator profile save failed");
                 self.profile_io_status = format!("Save failed: {err}");
             }
+        }
+    }
+
+    fn current_global_settings(&self) -> GlobalSettings {
+        GlobalSettings {
+            callsign: self.station_callsign_or_default().to_string(),
+            grid: self.station_grid_or_default().to_string(),
+            qth: self.station_qth.trim().to_string(),
+            station_rig: String::new(),
+            station_antenna: String::new(),
+            station_notes: self.station_notes.trim().to_string(),
+            llm_prompt_context: self.llm_prompt_context.trim().to_string(),
+            sstv_image_requirements: self.sstv_image_requirements.trim().to_string(),
+            llm_model_notes: self.llm_model_notes.trim().to_string(),
+            gui_scale: self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX),
+            compute_preference: self.compute_preference,
         }
     }
 
@@ -4533,6 +4572,7 @@ impl QsonautGuiApp {
         self.psk_reporter = None;
         self.psk_reporter = start_psk_reporter(
             self.psk_reporter_enabled,
+            &self.config.radio.backend,
             self.station_callsign.trim(),
             self.station_grid.trim(),
             ReporterTuning {
@@ -4545,7 +4585,12 @@ impl QsonautGuiApp {
         let sender = self.psk_reporter.as_ref().map(Reporter::sender);
         for session in self.parked_radio_sessions.values() {
             if let Ok(mut state) = session.state.lock() {
-                state.psk_report_sender = sender.clone();
+                state.psk_report_sender = (!matches!(
+                    session.config.backend.trim().to_ascii_lowercase().as_str(),
+                    "null" | "mock" | "none"
+                ))
+                .then(|| sender.clone())
+                .flatten();
             }
         }
     }
@@ -6039,7 +6084,10 @@ impl eframe::App for QsonautGuiApp {
                     ui.separator();
                     let current_radio_mode = radio_mode_label(&snapshot.mode, snapshot.data_mode);
                     let mode_menu = ui.menu_button(
-                        RichText::new(current_radio_mode.clone())
+                        // Keep the control width stable when the radio reports
+                        // USB versus USB-D so neighboring controls do not
+                        // jump during a mode-status refresh.
+                        RichText::new(format!("{current_radio_mode: <5}"))
                             .monospace()
                             .strong()
                             .color(Color32::WHITE),
@@ -7118,13 +7166,18 @@ impl Drop for QsonautGuiApp {
             request_radio_session_stop(session);
         }
         if let Some(handle) = self.radio_worker_handle.take() {
-            let _ = handle.join();
+            join_handle_for_shutdown(handle, "active radio");
         }
-        for (_, session) in std::mem::take(&mut self.parked_radio_sessions) {
-            join_radio_session(session);
+        for (_, mut session) in std::mem::take(&mut self.parked_radio_sessions) {
+            if let Some(handle) = session.worker_handle.take() {
+                join_handle_for_shutdown(handle, "parked radio");
+            }
+            if let Some(handle) = session.audio_worker_handle.take() {
+                join_handle_for_shutdown(handle, "parked audio");
+            }
         }
         if let Some(handle) = self.audio_worker_handle.take() {
-            let _ = handle.join();
+            join_handle_for_shutdown(handle, "active audio");
         }
         info!(
             elapsed_ms = shutdown_started.elapsed().as_millis(),
@@ -7566,6 +7619,12 @@ fn format_meter_value(value: Option<u8>) -> String {
         .unwrap_or_else(|| "—".to_string())
 }
 
+fn radio_status_is_failed(enabled: bool, status: &str) -> bool {
+    enabled
+        && ((status.starts_with("UNAVAILABLE") && !status.contains("no scope stream"))
+            || status.starts_with("SESSION STOPPED"))
+}
+
 fn meter_label(id: MeterId) -> &'static str {
     match id {
         MeterId::Signal => "S-METER",
@@ -7658,6 +7717,20 @@ fn append_ft8_log_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scope_retry_status_does_not_mark_healthy_radio_offline() {
+        assert!(!radio_status_is_failed(true, "ENABLE RETRY"));
+        assert!(!radio_status_is_failed(true, "CONFIG ERROR"));
+        assert!(radio_status_is_failed(
+            true,
+            "UNAVAILABLE (connection failed)"
+        ));
+        assert!(radio_status_is_failed(
+            true,
+            "SESSION STOPPED (radio worker failed)"
+        ));
+    }
 
     #[test]
     fn radio_session_stop_contract_signals_every_owned_worker() {
@@ -7987,6 +8060,11 @@ mod tests {
         assert_eq!(current_audio.monitor_volume, 2.0);
         assert_eq!(current_audio.sample_rate_hz, 44_100);
         assert_eq!(current_audio.channels, 2);
+
+        let serialized = toml::to_string(&profile).expect("serialize profile");
+        assert!(serialized.contains("audio_input_device = \"input\""));
+        assert!(serialized.contains("audio_output_device = \"output\""));
+        assert!(serialized.contains("audio_monitor_output_device = \"monitor\""));
     }
 
     #[test]
@@ -8133,14 +8211,14 @@ mod tests {
     }
 
     #[test]
-    fn null_profiles_always_use_virtual_audio_devices() {
+    fn null_profiles_preserve_configured_audio_devices() {
         assert_eq!(
             effective_audio_input_device("null", Some("Physical microphone".to_string())),
-            Some(NULL_INPUT_DEVICE.to_string())
+            Some("Physical microphone".to_string())
         );
         assert_eq!(
             effective_audio_output_device("mock", Some("Physical speakers".to_string())),
-            Some(NULL_OUTPUT_DEVICE.to_string())
+            Some("Physical speakers".to_string())
         );
         assert_eq!(
             effective_audio_input_device("native", Some("Physical microphone".to_string())),
@@ -9701,7 +9779,7 @@ mod tests {
 
     #[test]
     fn radio_mode_label_honors_reported_data_mode() {
-        assert_eq!(radio_mode_label("LSB-D", Some(false)), "LSB");
+        assert_eq!(radio_mode_label("LSB-D", Some(false)), "LSB-D");
         assert_eq!(radio_mode_label("USB", Some(true)), "USB-D");
         assert_eq!(radio_mode_label("USB-D", Some(true)), "USB-D");
     }
@@ -9781,27 +9859,21 @@ mod tests {
     }
 
     #[test]
-    fn simulated_backends_override_audio_device_choices() {
+    fn simulated_backends_preserve_audio_device_choices() {
         assert_eq!(
             effective_audio_input_device("null", Some("microphone".to_string())),
-            Some(NULL_INPUT_DEVICE.to_string())
+            Some("microphone".to_string())
         );
-        assert_eq!(
-            effective_audio_input_device("MOCK", None),
-            Some(NULL_INPUT_DEVICE.to_string())
-        );
+        assert_eq!(effective_audio_input_device("MOCK", None), None);
         assert_eq!(
             effective_audio_input_device("native", Some("microphone".to_string())),
             Some("microphone".to_string())
         );
         assert_eq!(
             effective_audio_output_device("null", Some("speakers".to_string())),
-            Some(NULL_OUTPUT_DEVICE.to_string())
+            Some("speakers".to_string())
         );
-        assert_eq!(
-            effective_audio_output_device("MOCK", None),
-            Some(NULL_OUTPUT_DEVICE.to_string())
-        );
+        assert_eq!(effective_audio_output_device("MOCK", None), None);
         assert_eq!(
             effective_audio_output_device("native", Some("speakers".to_string())),
             Some("speakers".to_string())

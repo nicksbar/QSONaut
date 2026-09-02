@@ -511,6 +511,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
     tx_active: Arc<AtomicBool>,
     digital_tx_active: Arc<AtomicBool>,
     enabled: bool,
+    render_waterfall: bool,
     sample_rate_hz: u32,
     channels: u8,
     preferred_device: Option<String>,
@@ -641,7 +642,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         }
 
         let mut fft_planner = FftPlanner::<f32>::new();
-        let audio_fft = fft_planner.plan_fft_forward(FFT_SIZE);
+        let audio_fft = render_waterfall.then(|| fft_planner.plan_fft_forward(FFT_SIZE));
         let mut fft_buf = vec![Complex::<f32>::new(0.0, 0.0); FFT_SIZE];
         let mut ring: VecDeque<f32> = VecDeque::with_capacity(FFT_SIZE);
         let decode_in_progress = Arc::new(AtomicBool::new(false));
@@ -813,25 +814,28 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             / samples_f32.len() as f32
                     };
                     // ── Display ring buffer + FFT ──────────────────────────
-                    for &x in &samples_f32 {
-                        ring.push_back(x);
-                    }
-                    while ring.len() > FFT_SIZE {
-                        ring.pop_front();
-                    }
-                    let nfill = ring.len();
-                    for (i, b) in fft_buf.iter_mut().enumerate() {
-                        *b = if i < nfill {
-                            let w =
-                                0.5 - 0.5 * (2.0 * PI * i as f32 / (nfill.max(2) - 1) as f32).cos();
-                            Complex::new(ring[i] * w, 0.0)
-                        } else {
-                            Complex::new(0.0, 0.0)
-                        };
-                    }
-                    audio_fft.process(&mut fft_buf);
-                    let bins = fft_buffer_to_display_bins(&fft_buf, AUDIO_BINS, sample_rate_hz);
-                    {
+                    // Parked tabs still capture audio for decoding, but their
+                    // waterfall is not visible. Avoid the FFT and row churn
+                    // unless this worker belongs to the active tab.
+                    if let Some(audio_fft) = audio_fft.as_ref() {
+                        for &x in &samples_f32 {
+                            ring.push_back(x);
+                        }
+                        while ring.len() > FFT_SIZE {
+                            ring.pop_front();
+                        }
+                        let nfill = ring.len();
+                        for (i, b) in fft_buf.iter_mut().enumerate() {
+                            *b = if i < nfill {
+                                let w = 0.5
+                                    - 0.5 * (2.0 * PI * i as f32 / (nfill.max(2) - 1) as f32).cos();
+                                Complex::new(ring[i] * w, 0.0)
+                            } else {
+                                Complex::new(0.0, 0.0)
+                            };
+                        }
+                        audio_fft.process(&mut fft_buf);
+                        let bins = fft_buffer_to_display_bins(&fft_buf, AUDIO_BINS, sample_rate_hz);
                         let mut s = state.lock().expect("ui state lock poisoned");
                         if !s.ptt_on {
                             if s.audio_waterfall_rows.len() >= AUDIO_WF_HEIGHT {
@@ -839,6 +843,11 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             }
                             s.audio_waterfall_rows.push_back(bins);
                             s.audio_waterfall_revision = s.audio_waterfall_revision.wrapping_add(1);
+                        }
+                    }
+                    {
+                        let mut s = state.lock().expect("ui state lock poisoned");
+                        if !s.ptt_on {
                             s.audio_spectrum_status = monitor_runtime_error
                                 .as_deref()
                                 .map(|error| format!("LIVE RX · MONITOR ERROR ({error})"))
@@ -2088,6 +2097,7 @@ mod tests {
             tx_active,
             digital_tx_active,
             false,
+            false,
             48_000,
             1,
             None,
@@ -2154,6 +2164,7 @@ mod tests {
             tx_active,
             digital_tx_active,
             true,
+            true,
             44_100,
             2,
             Some(qsonaut_audio::NULL_INPUT_DEVICE.to_string()),
@@ -2205,6 +2216,7 @@ mod tests {
             stop,
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
+            true,
             true,
             qsonaut_audio::CANONICAL_SAMPLE_RATE_HZ,
             qsonaut_audio::CANONICAL_CHANNELS as u8,

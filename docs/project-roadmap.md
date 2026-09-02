@@ -88,6 +88,24 @@ are true:
 | Coordination service and hosted governance | `QSONaut-Server` | Own accounts, enrollment, server policy, persistence, and deployment. |
 | Android station application | `QSONoid` | Own Android UI/USB/audio lifecycle while reusing Rigwright/domain contracts. |
 
+### Current coordinated issue set
+
+The QSONaut roadmap retains consumer acceptance and release-parent issues;
+implementation-specific follow-up now lives with the owning repository:
+
+| Repository | Issue | Coordinates with |
+|---|---|---|
+| `rigwright` | [#24](https://github.com/nicksbar/rigwright/issues/24) capability and validation contract | QSONaut #41, #69 |
+| `qsonaut-modems` | [#2](https://github.com/nicksbar/qsonaut-modems/issues/2) deterministic modem fixture contract | QSONaut #83 |
+| `qsonaut-third-party` | [#5](https://github.com/nicksbar/qsonaut-third-party/issues/5) adapter fixtures and failure contracts | QSONaut #64, #83 |
+| `QSONaut-HostBridge` | [#4](https://github.com/nicksbar/QSONaut-HostBridge/issues/4) physical radio provider contract | QSONaut #81 |
+| `QSONaut-Server` | [#5](https://github.com/nicksbar/QSONaut-Server/issues/5) hosted collaboration boundary | QSONaut #36 |
+| `QSONoid` | [#3](https://github.com/nicksbar/QSONoid/issues/3) Android Rigwright integration validation | QSONaut #69, #81 |
+
+These are child coordination issues, not copies of the QSONaut acceptance
+issues. Defects discovered during validation should be filed in the owning
+repository and linked back to the relevant QSONaut parent.
+
 ## GitHub project reconciliation
 
 The live GitHub project is now `QSONaut Release & Ecosystem Roadmap`.
@@ -170,7 +188,8 @@ Issue handling rules:
 ## Immediate next queue
 
 1. Raise and stabilize the Rigwright integration gate before cutting v0.4.
-2. Finish v0.4 fixture and reference-station acceptance evidence.
+2. Finish v0.4 fixture and reference-station acceptance evidence, using the
+   shared-repository child issues above for implementation gaps.
 3. Audit QSONaut, Rigwright, and shared-crate release/version metadata as one
    dependency graph.
 4. Begin v0.4 implementation work only after the release blockers are visible

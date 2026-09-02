@@ -57,6 +57,7 @@ impl QsonautGuiApp {
             self.ft8_tx_active.clone(),
             self.digital_tx_active.clone(),
             self.config.audio.enabled,
+            true,
             self.config.audio.sample_rate_hz,
             self.config.audio.channels,
             self.config.audio.input_device.clone(),
@@ -114,10 +115,6 @@ impl QsonautGuiApp {
         let old_baud = self.config.radio.baud_rate;
         let old_monitor = self.config.audio.monitor_enabled;
         let old_monitor_device = self.config.audio.monitor_output_device.clone();
-        let null_radio = matches!(
-            self.config.radio.backend.to_ascii_lowercase().as_str(),
-            "null" | "mock"
-        );
         let input_users = self.profile_device_users(
             |profile| profile.audio_input_device.as_ref(),
             |profile| profile.audio_enabled,
@@ -241,74 +238,107 @@ impl QsonautGuiApp {
             .num_columns(2)
             .spacing([10.0, 6.0])
             .show(ui, |ui| {
-                if null_radio {
-                    ui.label("Audio devices");
-                    ui.label(
-                        RichText::new("QSONaut Null Sound Card · virtual input/output")
-                            .small()
-                            .color(theme_success(ui)),
-                    );
-                    ui.end_row();
-                } else {
-                    ui.label("Audio input");
-                    ui.horizontal(|ui| {
-                        egui::ComboBox::from_id_salt("audio_input_device")
-                            .selected_text(
-                                self.config
-                                    .audio
-                                    .input_device
-                                    .as_deref()
-                                    .unwrap_or("System default"),
-                            )
-                            .width((ui.available_width() - 34.0).max(180.0))
-                            .show_ui(ui, |ui| {
+                ui.label("Audio input");
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("audio_input_device")
+                        .selected_text(
+                            self.config
+                                .audio
+                                .input_device
+                                .as_deref()
+                                .unwrap_or("System default"),
+                        )
+                        .width((ui.available_width() - 34.0).max(180.0))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.config.audio.input_device,
+                                None,
+                                "System default",
+                            );
+                            for name in &input_devices {
+                                let label =
+                                    Self::device_choice_label(name, &input_users, "available");
                                 ui.selectable_value(
                                     &mut self.config.audio.input_device,
-                                    None,
-                                    "System default",
+                                    Some(name.clone()),
+                                    label,
                                 );
-                                for name in &input_devices {
-                                    let label =
-                                        Self::device_choice_label(name, &input_users, "available");
-                                    ui.selectable_value(
-                                        &mut self.config.audio.input_device,
-                                        Some(name.clone()),
-                                        label,
-                                    );
-                                }
-                            });
-                        if ui
-                            .small_button("↻")
-                            .on_hover_text("Re-scan audio input devices")
-                            .clicked()
-                        {
-                            self.refresh_device_lists();
-                        }
-                    });
-                    ui.end_row();
+                            }
+                        });
+                    if ui
+                        .small_button("↻")
+                        .on_hover_text("Re-scan audio input devices")
+                        .clicked()
+                    {
+                        self.refresh_device_lists();
+                    }
+                });
+                ui.end_row();
 
-                    ui.label("Audio output");
+                ui.label("Audio output");
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("audio_output_device")
+                        .selected_text(
+                            self.config
+                                .audio
+                                .output_device
+                                .as_deref()
+                                .unwrap_or("System default"),
+                        )
+                        .width((ui.available_width() - 34.0).max(180.0))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.config.audio.output_device,
+                                None,
+                                "System default",
+                            );
+                            for name in &output_devices {
+                                let label =
+                                    Self::device_choice_label(name, &output_users, "available");
+                                ui.selectable_value(
+                                    &mut self.config.audio.output_device,
+                                    Some(name.clone()),
+                                    label,
+                                );
+                            }
+                        });
+                    if ui
+                        .small_button("↻")
+                        .on_hover_text("Re-scan audio output devices")
+                        .clicked()
+                    {
+                        self.refresh_device_lists();
+                    }
+                });
+                ui.end_row();
+
+                if include_monitor {
+                    ui.label("RX monitor output");
                     ui.horizontal(|ui| {
-                        egui::ComboBox::from_id_salt("audio_output_device")
+                        egui::ComboBox::from_id_salt("settings_monitor_output_device")
                             .selected_text(
                                 self.config
                                     .audio
-                                    .output_device
+                                    .monitor_output_device
                                     .as_deref()
-                                    .unwrap_or("System default"),
+                                    .or(self.config.audio.output_device.as_deref())
+                                    .unwrap_or("Audio output device"),
                             )
                             .width((ui.available_width() - 34.0).max(180.0))
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
-                                    &mut self.config.audio.output_device,
+                                    &mut self.config.audio.monitor_output_device,
                                     None,
-                                    "System default",
+                                    "Use audio output device",
                                 );
                                 for name in &output_devices {
-                                    let label =
-                                        Self::device_choice_label(name, &output_users, "available");
+                                    let label = Self::device_choice_label(
+                                        name,
+                                        &monitor_users,
+                                        "available",
+                                    );
                                     ui.selectable_value(
-                                        &mut self.config.audio.output_device,
+                                        &mut self.config.audio.monitor_output_device,
                                         Some(name.clone()),
                                         label,
                                     );
@@ -323,49 +353,6 @@ impl QsonautGuiApp {
                         }
                     });
                     ui.end_row();
-
-                    if include_monitor {
-                        ui.label("RX monitor output");
-                        ui.horizontal(|ui| {
-                            egui::ComboBox::from_id_salt("settings_monitor_output_device")
-                                .selected_text(
-                                    self.config
-                                        .audio
-                                        .monitor_output_device
-                                        .as_deref()
-                                        .or(self.config.audio.output_device.as_deref())
-                                        .unwrap_or("Audio output device"),
-                                )
-                                .width((ui.available_width() - 34.0).max(180.0))
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(
-                                        &mut self.config.audio.monitor_output_device,
-                                        None,
-                                        "Use audio output device",
-                                    );
-                                    for name in &output_devices {
-                                        let label = Self::device_choice_label(
-                                            name,
-                                            &monitor_users,
-                                            "available",
-                                        );
-                                        ui.selectable_value(
-                                            &mut self.config.audio.monitor_output_device,
-                                            Some(name.clone()),
-                                            label,
-                                        );
-                                    }
-                                });
-                            if ui
-                                .small_button("↻")
-                                .on_hover_text("Re-scan audio output devices")
-                                .clicked()
-                            {
-                                self.refresh_device_lists();
-                            }
-                        });
-                        ui.end_row();
-                    }
                 }
 
                 ui.label("Radio / USB serial");
@@ -415,28 +402,53 @@ impl QsonautGuiApp {
                 });
                 ui.end_row();
 
-                ui.label("CAT baud rate");
-                let baud_rates = radio_baud_rates(&self.config.radio.model);
-                if !baud_rates.contains(&self.config.radio.baud_rate) {
-                    self.config.radio.baud_rate = find_model(&self.config.radio.model)
-                        .map(|profile| profile.preferred_baud_rate())
-                        .filter(|baud| baud_rates.contains(baud))
-                        .unwrap_or(baud_rates[0]);
-                }
-                egui::ComboBox::from_id_salt("radio_baud_rate")
-                    .selected_text(self.config.radio.baud_rate.to_string())
-                    .width(ui.available_width().max(180.0))
-                    .show_ui(ui, |ui| {
-                        for baud_rate in baud_rates {
-                            ui.selectable_value(
-                                &mut self.config.radio.baud_rate,
-                                *baud_rate,
-                                baud_rate.to_string(),
-                            );
+                if self.config.radio.backend.eq_ignore_ascii_case("native") {
+                    let baud_rates = radio_baud_rates(&self.config.radio.model);
+                    if baud_rates.is_empty() {
+                        ui.label("CAT baud rate");
+                        ui.label(
+                            RichText::new("No baud rates available for this radio model")
+                                .small()
+                                .color(theme_warning(ui)),
+                        );
+                        ui.end_row();
+                    } else {
+                        ui.label("CAT baud rate");
+                        if !baud_rates.contains(&self.config.radio.baud_rate) {
+                            self.config.radio.baud_rate = find_model(&self.config.radio.model)
+                                .map(|profile| profile.preferred_baud_rate())
+                                .filter(|baud| baud_rates.contains(baud))
+                                .unwrap_or(baud_rates[0]);
                         }
-                    });
-                ui.end_row();
+                        egui::ComboBox::from_id_salt("radio_baud_rate")
+                            .selected_text(self.config.radio.baud_rate.to_string())
+                            .width(ui.available_width().max(180.0))
+                            .show_ui(ui, |ui| {
+                                for baud_rate in baud_rates {
+                                    ui.selectable_value(
+                                        &mut self.config.radio.baud_rate,
+                                        *baud_rate,
+                                        baud_rate.to_string(),
+                                    );
+                                }
+                            });
+                        ui.end_row();
+                    }
+                }
             });
+
+        if matches!(
+            self.config.radio.backend.to_ascii_lowercase().as_str(),
+            "null" | "mock"
+        ) {
+            // NullRadio is a complete virtual radio, not a native model with
+            // a missing serial device. Normalize the radio-side hardware
+            // fields, but deliberately leave the audio fields untouched so
+            // this tab can use real input/output devices for decoding.
+            self.config.radio.model = "NullRadio".to_string();
+            self.config.radio.serial_port = None;
+            self.config.radio.endpoint.clear();
+        }
 
         if self.config.radio.backend.eq_ignore_ascii_case("native") {
             ui.add_space(6.0);
@@ -765,6 +777,12 @@ mod tests {
         assert_eq!(radio_backend_label("native"), "Native Rigwright");
         assert_eq!(radio_backend_label("RIGCTLD"), "Hamlib rigctld");
         assert_eq!(radio_backend_label("custom"), "custom");
+    }
+
+    #[test]
+    fn unknown_or_virtual_models_have_no_unsafe_baud_rate_fallback() {
+        assert!(radio_baud_rates("NullRadio").is_empty());
+        assert!(radio_baud_rates("not-a-model").is_empty());
     }
 
     #[test]

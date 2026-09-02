@@ -15,6 +15,7 @@ use super::{
 
 pub(super) const OPERATOR_PROFILE_FILE: &str = "profile.toml";
 pub(super) const OPERATOR_PROFILE_VERSION: u32 = 17;
+const GLOBAL_SETTINGS_FILE: &str = "settings.toml";
 const RADIO_PROFILE_LIBRARY_FILE: &str = "radio-profiles.toml";
 const LEGACY_OPERATOR_PROFILE_FILE: &str = ".rigforge_profile.toml";
 const DEFAULT_PROFILE_NAME: &str = "Default";
@@ -25,20 +26,32 @@ const ACTIVE_PROFILE_FILE: &str = "active-profile";
 pub(super) struct OperatorProfile {
     #[serde(default)]
     pub(super) profile_version: u32,
+    // Station identity/context remain global. These legacy fields stay
+    // readable for compatibility but are not duplicated in profiles.
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) callsign: String,
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) grid: String,
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) qth: String,
     #[serde(default)]
     pub(super) station_rig: String,
     #[serde(default)]
     pub(super) station_antenna: String,
-    #[serde(default)]
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) station_notes: String,
-    #[serde(default)]
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) llm_prompt_context: String,
-    #[serde(default)]
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) sstv_image_requirements: String,
-    #[serde(default)]
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) llm_model_notes: String,
     pub(super) follow_log: bool,
     pub(super) max_log_entries: usize,
@@ -144,9 +157,11 @@ pub(super) struct OperatorProfile {
     pub(super) radio_civ_address: u8,
     #[serde(default = "default_controller_civ_address")]
     pub(super) radio_controller_civ_address: u8,
-    #[serde(default = "default_gui_scale")]
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default = "default_gui_scale")]
     pub(super) gui_scale: f32,
-    #[serde(default)]
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) compute_preference: ComputePreference,
     #[serde(default)]
     pub(super) psk_reporter_enabled: bool,
@@ -199,6 +214,83 @@ pub(super) struct OperatorProfile {
     pub(super) mode_radio_profile: std::collections::BTreeMap<String, String>,
     #[serde(default = "default_workspace_mode")]
     pub(super) workspace_mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct GlobalSettings {
+    // Station identity/context are application-wide. Keep these fields in the
+    // global settings file so changing radio tabs cannot replace them.
+    #[serde(default)]
+    pub(super) callsign: String,
+    #[serde(default)]
+    pub(super) grid: String,
+    #[serde(default)]
+    pub(super) qth: String,
+    // Legacy global copies; new saves keep these values in the radio profile.
+    #[serde(default, skip_serializing)]
+    pub(super) station_rig: String,
+    #[serde(default, skip_serializing)]
+    pub(super) station_antenna: String,
+    #[serde(default)]
+    pub(super) station_notes: String,
+    #[serde(default)]
+    pub(super) llm_prompt_context: String,
+    #[serde(default)]
+    pub(super) sstv_image_requirements: String,
+    #[serde(default)]
+    pub(super) llm_model_notes: String,
+    #[serde(default = "default_gui_scale")]
+    pub(super) gui_scale: f32,
+    #[serde(default)]
+    pub(super) compute_preference: ComputePreference,
+}
+
+fn global_settings_path() -> PathBuf {
+    app_config_dir().join(GLOBAL_SETTINGS_FILE)
+}
+
+pub(super) fn load_global_settings() -> GlobalSettings {
+    let path = global_settings_path();
+    if let Ok(source) = fs::read_to_string(&path) {
+        if let Ok(settings) = toml::from_str(&source) {
+            return settings;
+        }
+    }
+
+    let migrated = active_operator_profile_name();
+    let settings = named_operator_profile_path(&migrated)
+        .ok()
+        .and_then(|profile_path| fs::read_to_string(profile_path).ok())
+        .and_then(|source| toml::from_str::<GlobalSettings>(&source).ok())
+        .unwrap_or_else(|| GlobalSettings {
+            callsign: String::new(),
+            grid: String::new(),
+            qth: String::new(),
+            station_rig: String::new(),
+            station_antenna: String::new(),
+            station_notes: String::new(),
+            llm_prompt_context: String::new(),
+            sstv_image_requirements: String::new(),
+            llm_model_notes: String::new(),
+            gui_scale: default_gui_scale(),
+            compute_preference: ComputePreference::default(),
+        });
+    let _ = save_global_settings(&settings);
+    settings
+}
+
+pub(super) fn save_global_settings(settings: &GlobalSettings) -> Result<()> {
+    let path = global_settings_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, toml::to_string_pretty(settings)?)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 fn default_recording_modes() -> std::collections::BTreeMap<String, bool> {
@@ -546,7 +638,7 @@ pub(super) fn save_operator_profile(profile: &OperatorProfile) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_profile_name, OperatorProfile, RadioProfile};
+    use super::{validate_profile_name, GlobalSettings, OperatorProfile, RadioProfile};
 
     #[test]
     fn profile_names_allow_human_readable_safe_names() {
@@ -567,17 +659,17 @@ mod tests {
 
     #[test]
     fn minimal_profile_deserialization_applies_safe_runtime_defaults() {
-        let profile: OperatorProfile = toml::from_str(
-            r#"
+        let legacy = r#"
 callsign = "N0CALL"
 grid = "AA00"
 qth = "Portable"
+    station_rig = "Test rig"
 follow_log = true
 max_log_entries = 300
 deep_decode = false
-"#,
-        )
-        .expect("minimal profile should deserialize");
+    "#;
+        let profile: OperatorProfile =
+            toml::from_str(legacy).expect("minimal profile should deserialize");
         assert_eq!(profile.workspace_mode, "FT8");
         assert_eq!(profile.radio_backend, "native");
         assert_eq!(profile.radio_model, "IC-7300");
@@ -602,6 +694,13 @@ deep_decode = false
             profile.recording_modes.len(),
             super::super::WORKSPACE_MODES.len()
         );
+        let global: GlobalSettings =
+            toml::from_str(legacy).expect("legacy settings should migrate");
+        assert_eq!(global.callsign, "N0CALL");
+        assert_eq!(global.station_rig, "Test rig");
+        let saved = toml::to_string(&profile).expect("profile encoding");
+        assert!(!saved.contains("callsign"));
+        assert!(saved.contains("station_rig = \"Test rig\""));
     }
 
     #[test]

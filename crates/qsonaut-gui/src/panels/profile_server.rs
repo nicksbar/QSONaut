@@ -69,7 +69,7 @@ impl QsonautGuiApp {
         ui.heading("Station");
         ui.separator();
         ui.label(
-            RichText::new("Operator identity and station details")
+            RichText::new("Global operator identity and station details")
                 .small()
                 .color(Color32::GRAY),
         );
@@ -85,12 +85,8 @@ impl QsonautGuiApp {
                 .changed();
             if changed {
                 self.station_callsign = self.station_callsign.trim().to_ascii_uppercase();
-                let val = self.station_callsign.trim();
-                self.config.station.callsign = if val.is_empty() {
-                    None
-                } else {
-                    Some(val.to_string())
-                };
+                self.config.station.callsign = (!self.station_callsign.trim().is_empty())
+                    .then(|| self.station_callsign.clone());
                 self.restart_psk_reporter();
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
@@ -99,7 +95,6 @@ impl QsonautGuiApp {
                     self.station_callsign_or_default()
                 ));
             }
-
             ui.label(RichText::new("Grid").strong());
             let changed = ui
                 .add(
@@ -111,12 +106,8 @@ impl QsonautGuiApp {
                 .changed();
             if changed {
                 self.station_grid = self.station_grid.trim().to_ascii_uppercase();
-                let val = self.station_grid.trim();
-                self.config.station.grid = if val.is_empty() {
-                    None
-                } else {
-                    Some(val.to_string())
-                };
+                self.config.station.grid =
+                    (!self.station_grid.trim().is_empty()).then(|| self.station_grid.clone());
                 self.restart_psk_reporter();
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
@@ -126,41 +117,81 @@ impl QsonautGuiApp {
                 ));
             }
         });
-
-        if ui
-            .button("Load license profile from HamDB")
-            .on_hover_text(
-                "Look up this callsign and fill the station profile from its license record",
-            )
-            .clicked()
-        {
+        if ui.button("Load license profile from HamDB").clicked() {
             self.load_profile_from_hamdb();
         }
-
         ui.horizontal(|ui| {
             ui.label(RichText::new("QTH").strong());
-            let qth_changed = ui
+            if ui
                 .add(
                     egui::TextEdit::singleline(&mut self.station_qth)
                         .desired_width(ui.available_width())
                         .hint_text("City / locator notes")
                         .font(egui::TextStyle::Monospace),
                 )
-                .changed();
-            if qth_changed {
+                .changed()
+            {
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
                 self.emit_operator_profile_hook("qth_changed");
             }
         });
-
         ui.add_space(8.0);
         ui.label(RichText::new("Station and image-generation notes").strong());
         ui.label("These details describe the station and are used to improve SSTV image prompts.");
+        let mut changed = false;
+        for (label, value, rows, hint) in [
+            (
+                "Station notes",
+                &mut self.station_notes,
+                2,
+                "Location, propagation, operating preferences, or constraints",
+            ),
+            (
+                "General LLM prompt context",
+                &mut self.llm_prompt_context,
+                2,
+                "Style, audience, branding, or recurring subjects",
+            ),
+            (
+                "SSTV image requirements",
+                &mut self.sstv_image_requirements,
+                3,
+                "Readable callsign, high contrast, simple composition, no tiny text, …",
+            ),
+            (
+                "LLM/model notes",
+                &mut self.llm_model_notes,
+                2,
+                "Use an image-capable model; avoid text-only models for image generation",
+            ),
+        ] {
+            ui.label(RichText::new(label).strong());
+            changed |= ui
+                .add(
+                    egui::TextEdit::multiline(value)
+                        .desired_width(ui.available_width())
+                        .desired_rows(rows)
+                        .hint_text(hint),
+                )
+                .changed();
+        }
+        if changed {
+            self.profile_dirty = true;
+            self.persist_profile("Station and LLM notes saved to");
+        }
+    }
 
-        let mut station_details_changed = false;
+    pub(in super::super) fn draw_station_profile_fields(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Radio setup");
+        ui.label(
+            RichText::new("Hardware associated with this radio profile.")
+                .small()
+                .color(Color32::GRAY),
+        );
+        let mut changed = false;
         ui.label(RichText::new("Rig").strong());
-        station_details_changed |= ui
+        changed |= ui
             .add(
                 egui::TextEdit::singleline(&mut self.station_rig)
                     .desired_width(ui.available_width())
@@ -168,61 +199,23 @@ impl QsonautGuiApp {
             )
             .changed();
         ui.label(RichText::new("Antenna").strong());
-        station_details_changed |= ui
+        changed |= ui
             .add(
                 egui::TextEdit::singleline(&mut self.station_antenna)
                     .desired_width(ui.available_width())
                     .hint_text("Dipole, vertical, beam, …"),
             )
             .changed();
-        ui.label(RichText::new("Station notes").strong());
-        station_details_changed |= ui
-            .add(
-                egui::TextEdit::multiline(&mut self.station_notes)
-                    .desired_width(ui.available_width())
-                    .desired_rows(2)
-                    .hint_text("Location, propagation, operating preferences, or constraints"),
-            )
-            .changed();
-        ui.label(RichText::new("General LLM prompt context").strong());
-        station_details_changed |= ui
-            .add(
-                egui::TextEdit::multiline(&mut self.llm_prompt_context)
-                    .desired_width(ui.available_width())
-                    .desired_rows(2)
-                    .hint_text("Style, audience, branding, or recurring subjects"),
-            )
-            .changed();
-        ui.label(RichText::new("SSTV image requirements").strong());
-        station_details_changed |= ui
-            .add(
-                egui::TextEdit::multiline(&mut self.sstv_image_requirements)
-                    .desired_width(ui.available_width())
-                    .desired_rows(3)
-                    .hint_text(
-                        "Readable callsign, high contrast, simple composition, no tiny text, …",
-                    ),
-            )
-            .changed();
-        ui.label(RichText::new("LLM/model notes").strong());
-        station_details_changed |= ui
-            .add(
-                egui::TextEdit::multiline(&mut self.llm_model_notes)
-                    .desired_width(ui.available_width())
-                    .desired_rows(2)
-                    .hint_text(
-                        "Use an image-capable model; avoid text-only models for image generation",
-                    ),
-            )
-            .changed();
-        if station_details_changed {
+        if changed {
             self.profile_dirty = true;
-            self.persist_profile("Station and LLM notes saved to");
+            self.persist_profile("Radio setup saved to");
         }
     }
 
     pub(in super::super) fn draw_profile_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("Profile");
+        ui.separator();
+        self.draw_station_profile_fields(ui);
         ui.separator();
         ui.label(
             RichText::new("Rename or delete this radio profile.")

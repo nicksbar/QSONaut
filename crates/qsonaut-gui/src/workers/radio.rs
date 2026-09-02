@@ -135,7 +135,25 @@ pub(crate) fn spawn_radio_worker(
             let mut s = state.lock().expect("ui state lock poisoned");
             s.radio_power_supported = radio.capabilities().can_set_power;
             s.supported_controls = radio.supported_controls().into_iter().collect();
-            s.supported_meters = radio.supported_meters().into_iter().collect();
+            s.supported_meters = if matches!(radio, ConfiguredRadio::Null(_)) {
+                // NullRadio intentionally has no physical meter source. Keep
+                // the UI deterministic for offline decoding by exposing
+                // zero-valued synthetic meters rather than leaving stale or
+                // blank readings from another tab.
+                MeterId::ALL.iter().copied().collect()
+            } else {
+                radio.supported_meters().into_iter().collect()
+            };
+            if matches!(radio, ConfiguredRadio::Null(_)) {
+                s.signal_meter = Some(0);
+                s.power_meter = Some(0);
+                s.swr = Some(0);
+                s.alc_meter = Some(0);
+                s.compression_meter = Some(0);
+                s.current_meter = Some(0);
+                s.voltage_meter = Some(0);
+                s.temperature_meter = Some(0);
+            }
             info!(
                 supported_meters = ?s.supported_meters,
                 temperature_supported = radio.supports_meter(MeterId::Temperature),
@@ -320,8 +338,8 @@ pub(crate) fn spawn_radio_worker(
                                 warn!(error = %err, view = ?config.view, "Radio scope configuration failed");
                                 let mut s = stream_state.lock().expect("ui state lock poisoned");
                                 s.radio_waterfall_status = "CONFIG ERROR".to_string();
-                                s.last_error = Some(err.to_string());
                                 drop(s);
+                                warn!(error = %err, "Radio spectrum stream configuration failed; core radio remains available");
                                 thread::sleep(Duration::from_millis(500));
                                 continue;
                             }
@@ -341,7 +359,6 @@ pub(crate) fn spawn_radio_worker(
                             }
                             Err(err) => {
                                 s.radio_waterfall_status = "DISABLE ERROR".to_string();
-                                s.last_error = Some(err.to_string());
                                 error!(error = %err, "Radio spectrum stream disable failed");
                             }
                         }
@@ -375,7 +392,6 @@ pub(crate) fn spawn_radio_worker(
                             let mut s = stream_state.lock().expect("ui state lock poisoned");
                             s.radio_spectrum_enabled = false;
                             s.radio_waterfall_status = "ENABLE RETRY".to_string();
-                            s.last_error = Some(err.to_string());
                             warn!(error = %err, "Radio spectrum stream enable failed; retrying");
                             drop(s);
                             thread::sleep(Duration::from_millis(1_000));
@@ -490,12 +506,12 @@ pub(crate) fn spawn_radio_worker(
 
         info!("Initial radio poll started");
         // Establish frequency/mode state before entering the normal polling
-        // schedule. Icom control state is also read here so the capability
-        // panel is useful immediately; non-Icom level reads begin on the next
-        // scheduled poll and cannot delay startup.
-        // The Icom scope worker owns high-rate meter reads, but it must not
-        // suppress live state for controls such as TUNE, NB, IP+, and notch.
-        poll_radio_core_state(&rt, &radio, &state, radio.as_icom().is_some());
+        // schedule. Do not perform the full Icom level/control sweep here:
+        // that is many serial transactions and can leave the newly-started
+        // worker looking offline while the radio is still settling. The
+        // normal level poll will populate controls and meters shortly after
+        // the lightweight core probe completes.
+        poll_radio_core_state(&rt, &radio, &state, false);
         info!("Initial radio poll completed");
         let mut next_core_poll = Instant::now() + RADIO_CORE_POLL_INTERVAL;
         let mut next_level_poll = Instant::now() + RADIO_LEVEL_POLL_INTERVAL;
@@ -738,6 +754,12 @@ pub(crate) fn spawn_radio_worker(
                                 state.lock().expect("ui state lock poisoned").last_error =
                                     Some(error.to_string());
                             } else {
+                                let mut s = state.lock().expect("ui state lock poisoned");
+                                s.mode = icom_base_mode_label(preset.base_mode).to_string();
+                                s.data_mode = Some(preset.data_mode);
+                                s.frequency_hz = Some(frequency_hz);
+                                s.radio_power_on = Some(true);
+                                s.last_error = None;
                                 info!(workspace = %workspace_mode.label(), frequency_hz, mode = ?preset.base_mode, data_mode = preset.data_mode, filter, "Radio workspace preset accepted");
                             }
                         } else {
@@ -1604,9 +1626,15 @@ fn apply_icom_mode_details(
 ) {
     // Keep the base mode independent from the data flag. On the IC-7300 the
     // ordinary 0x04 response can carry a stale or misleading data byte;
-    // DataMode is read back separately when the profile supports it.
+    // DataMode is read back separately when the profile supports it. If that
+    // dedicated read is temporarily unavailable, retain the last confirmed
+    // value instead of treating the failed read as a real false response.
     state.mode = icom_base_mode_label(details.base).to_string();
-    state.data_mode = Some(data_mode_override.unwrap_or(details.data_mode));
+    state.data_mode = Some(
+        data_mode_override
+            .or(state.data_mode)
+            .unwrap_or(details.data_mode),
+    );
     // Some Icom responses omit FIL even though the mode is valid. Do not
     // erase a known filter while waiting for the dedicated read.
     if let Some(filter) = details.filter {
@@ -2136,6 +2164,26 @@ mod tests {
         assert_eq!(state.mode, "USB");
         assert_eq!(state.data_mode, Some(false));
         assert_eq!(state.filter, Some(2));
+    }
+
+    #[test]
+    fn icom_mode_readback_preserves_data_state_when_dedicated_read_is_unavailable() {
+        let mut state = GuiState {
+            data_mode: Some(true),
+            ..GuiState::default()
+        };
+        apply_icom_mode_details(
+            &mut state,
+            OperatingMode {
+                base: BaseMode::Usb,
+                data_mode: false,
+                filter: Some(2),
+            },
+            None,
+        );
+
+        assert_eq!(state.mode, "USB");
+        assert_eq!(state.data_mode, Some(true));
     }
 
     #[test]
