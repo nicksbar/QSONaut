@@ -30,6 +30,11 @@ impl QsonautGuiApp {
         let baud_rate = self.config.radio.baud_rate;
         let controller_civ_address = self.config.radio.controller_civ_address;
         let radio_civ_address = self.config.radio.civ_address;
+        let hostbridge_access_key = self.config.radio.hostbridge_access_key.clone();
+        let hostbridge_password = self.config.radio.hostbridge_password.clone();
+        let hostbridge_radio_id = self.config.radio.hostbridge_radio_id.clone();
+        let hostbridge_audio_source_id = self.config.radio.hostbridge_audio_source_id.clone();
+        let hostbridge_audio_output_id = self.config.radio.hostbridge_audio_output_id.clone();
         let should_restart_audio = self.config.audio.enabled && self.audio_worker_handle.is_none();
         apply_radio_reconnect(
             &mut self.radio_init_rx,
@@ -46,11 +51,11 @@ impl QsonautGuiApp {
                     baud_rate,
                     controller_civ_address,
                     radio_civ_address,
-                    String::new(),
-                    String::new(),
-                    None,
-                    None,
-                    None,
+                    hostbridge_access_key,
+                    hostbridge_password,
+                    hostbridge_radio_id,
+                    hostbridge_audio_source_id,
+                    hostbridge_audio_output_id,
                 )
             },
             || {},
