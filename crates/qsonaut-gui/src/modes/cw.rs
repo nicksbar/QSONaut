@@ -30,7 +30,79 @@ fn next_auto_target_state(scanning: bool, retarget: bool) -> (bool, bool) {
     }
 }
 
+fn detected_callsigns(text: &str, own_call: &str) -> Vec<String> {
+    let mut calls: Vec<String> = Vec::new();
+    for token in text.split_whitespace() {
+        let call = token.trim_matches(|character: char| !character.is_ascii_alphanumeric());
+        if call.is_empty()
+            || call.eq_ignore_ascii_case(own_call)
+            || !is_probable_callsign(call)
+            || calls.iter().any(|seen| seen.eq_ignore_ascii_case(call))
+        {
+            continue;
+        }
+        calls.push(call.to_ascii_uppercase());
+        if calls.len() == 8 {
+            break;
+        }
+    }
+    calls
+}
+
 impl QsonautGuiApp {
+    fn build_cw_qso_record(&self, snapshot: &GuiState, now: u64) -> Option<QsoRecord> {
+        let callsign = self.cw_qso_callsign.trim().to_ascii_uppercase();
+        if !is_probable_callsign(&callsign) {
+            return None;
+        }
+        let frequency_hz = snapshot.frequency_hz.unwrap_or_default();
+        let mut record = QsoRecord::new(
+            &callsign,
+            "CW",
+            band_for_frequency(frequency_hz),
+            frequency_hz,
+            self.cw_qso_started_at.unwrap_or(now),
+            now,
+        );
+        record.operation_mode = if self.contest_enabled {
+            "Contest".to_string()
+        } else {
+            self.activity.label().to_string()
+        };
+        record.report_sent = self.cw_qso_rst_sent.trim().to_ascii_uppercase();
+        record.report_received = self.cw_qso_rst_received.trim().to_ascii_uppercase();
+        if self.contest_enabled {
+            record.contest_serial_sent = Some(self.contest_serial_current.max(1));
+            record.contest_exchange_sent = self.contest_exchange_preview(&callsign);
+            record.contest_exchange_received = self.cw_qso_exchange_received.trim().to_string();
+        }
+        record.notes = self.cw_qso_notes.trim().to_string();
+        Some(record)
+    }
+
+    fn log_cw_qso(&mut self, snapshot: &GuiState) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        let Some(record) = self.build_cw_qso_record(snapshot, now) else {
+            self.digital_tx_status = "CW QSO needs a valid callsign".to_string();
+            return;
+        };
+        if self.contest_enabled {
+            self.advance_contest_serial();
+            self.profile_dirty = true;
+            self.persist_profile("Auto-saved");
+        }
+        self.append_qso(record, "CW QSO saved");
+        self.cw_qso_callsign.clear();
+        self.cw_qso_rst_sent = "599".to_string();
+        self.cw_qso_rst_received = "599".to_string();
+        self.cw_qso_exchange_received.clear();
+        self.cw_qso_notes.clear();
+        self.cw_qso_started_at = None;
+    }
+
     pub(crate) fn draw_cw_workspace(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         if let Some(tone_hz) = snapshot.cw_auto_target_tone_hz {
             self.cw_tone_hz = tone_hz.clamp(200, 3_000) as u16;
@@ -132,6 +204,13 @@ impl QsonautGuiApp {
                         .strong()
                         .color(theme_success(ui)),
                 );
+                if ui.small_button("Clear").clicked() {
+                    self.state
+                        .lock()
+                        .expect("ui state lock poisoned")
+                        .cw_live_text
+                        .clear();
+                }
                 ui.label(
                     RichText::new(if snapshot.cw_live_text.is_empty() {
                         "Listening…"
@@ -143,6 +222,195 @@ impl QsonautGuiApp {
                     .size(18.0),
                 );
             });
+        ui.separator();
+
+        let own_call = self.station_callsign_or_default().to_string();
+        let calls = detected_callsigns(&snapshot.cw_live_text, &own_call);
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_min_height(190.0);
+            ui.columns(2, |columns| {
+            let left = &mut columns[0];
+            left.heading("QSO ASSIST");
+            left.label("Detected callsigns");
+            if calls.is_empty() {
+                left.label(
+                    RichText::new("A callsign will appear here as CW is decoded.")
+                        .small()
+                        .color(theme_muted(left)),
+                );
+            } else {
+                for call in &calls {
+                    if left
+                        .add(egui::Button::new(format!("{call} · use")))
+                        .clicked()
+                    {
+                        self.cw_qso_callsign.clone_from(call);
+                        self.cw_qso_started_at.get_or_insert_with(|| {
+                            SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .map(|duration| duration.as_secs())
+                                .unwrap_or_default()
+                        });
+                        self.digital_compose = format!("{call} {own_call} 599");
+                    }
+                }
+            }
+            left.horizontal(|ui| {
+                ui.label("Call");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.cw_qso_callsign)
+                        .desired_width(120.0)
+                        .hint_text("W1AW"),
+                );
+                if ui.button("Start").clicked() {
+                    self.cw_qso_started_at = Some(
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|duration| duration.as_secs())
+                            .unwrap_or_default(),
+                    );
+                }
+            });
+            left.horizontal(|ui| {
+                ui.label("RST out");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.cw_qso_rst_sent)
+                        .desired_width(55.0)
+                        .hint_text("599"),
+                );
+                ui.label("RST in");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.cw_qso_rst_received)
+                        .desired_width(55.0)
+                        .hint_text("599"),
+                );
+            });
+            left.horizontal(|ui| {
+                ui.label("Exchange in");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.cw_qso_exchange_received)
+                        .desired_width(150.0)
+                        .hint_text("optional contest exchange"),
+                );
+                ui.label("Notes");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.cw_qso_notes)
+                        .desired_width(150.0)
+                        .hint_text("optional"),
+                );
+            });
+            let can_log = is_probable_callsign(self.cw_qso_callsign.trim());
+            if left
+                .add_enabled(can_log, egui::Button::new("LOG CW QSO").min_size(egui::vec2(140.0, 30.0)))
+                .clicked()
+            {
+                self.log_cw_qso(snapshot);
+            }
+
+            let right = &mut columns[1];
+            right.heading("CW OPERATING DESK");
+            right.horizontal_wrapped(|ui| {
+                for (label, message) in [
+                    ("CQ", format!("CQ CQ DE {own_call}")),
+                    ("599", "599".to_string()),
+                    ("TU", "TU 73".to_string()),
+                ] {
+                    if ui.small_button(label).clicked() {
+                        self.digital_compose = message;
+                    }
+                }
+                if self.contest_enabled
+                    && ui.small_button("EXCHANGE").on_hover_text("Insert the configured contest exchange").clicked()
+                {
+                    self.digital_compose = self.contest_exchange_preview(
+                        self.cw_qso_callsign.trim(),
+                    );
+                }
+            });
+            if right.checkbox(&mut self.contest_enabled, "Contest mode").changed() {
+                self.emit_contest_profile_hooks();
+                self.profile_dirty = true;
+                self.persist_profile("CW contest settings saved to");
+            }
+            if self.contest_enabled {
+                right.horizontal(|ui| {
+                    ui.label(format!("Next serial {:03}", self.contest_serial_current.max(1)));
+                    egui::ComboBox::from_id_salt("cw_contest_operator_mode")
+                        .selected_text(match self.contest_operating_mode {
+                            ContestOperatingMode::Run => "Run",
+                            ContestOperatingMode::SearchAndPounce => "Search & Pounce",
+                        })
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_value(
+                                    &mut self.contest_operating_mode,
+                                    ContestOperatingMode::Run,
+                                    "Run",
+                                )
+                                .changed()
+                            {
+                                self.emit_contest_profile_hooks();
+                                self.profile_dirty = true;
+                                self.persist_profile("CW contest settings saved to");
+                            }
+                            if ui
+                                .selectable_value(
+                                    &mut self.contest_operating_mode,
+                                    ContestOperatingMode::SearchAndPounce,
+                                    "Search & Pounce",
+                                )
+                                .changed()
+                            {
+                                self.emit_contest_profile_hooks();
+                                self.profile_dirty = true;
+                                self.persist_profile("CW contest settings saved to");
+                            }
+                        });
+                    ui.label(self.contest_guidance_text());
+                });
+                right.horizontal(|ui| {
+                    ui.label("Template");
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.contest_exchange_template)
+                                .desired_width(180.0)
+                                .hint_text("5NN ${serial}"),
+                        )
+                        .changed()
+                    {
+                        self.emit_contest_profile_hooks();
+                        self.profile_dirty = true;
+                        self.persist_profile("CW contest settings saved to");
+                    }
+                    if ui.checkbox(&mut self.contest_dupe_check, "Dupe check").changed() {
+                        self.emit_contest_profile_hooks();
+                        self.profile_dirty = true;
+                        self.persist_profile("CW contest settings saved to");
+                    }
+                });
+                right.label(
+                    RichText::new(format!(
+                        "Exchange: {}",
+                        self.contest_exchange_preview(self.cw_qso_callsign.trim())
+                    ))
+                    .small()
+                    .color(theme_accent(right)),
+                );
+            }
+            right.label(
+                RichText::new("Select a detected callsign to prepare the next transmission and start a log entry.")
+                    .small()
+                    .color(theme_muted(right)),
+            );
+            if !self.cw_qso_callsign.trim().is_empty() {
+                right.label(
+                    RichText::new(format!("ACTIVE QSO · {}", self.cw_qso_callsign.trim()))
+                        .strong()
+                        .color(theme_success(right)),
+                );
+            }
+            });
+        });
         ui.separator();
         ui.horizontal_wrapped(|ui| {
             ui.label("TX speed");
@@ -218,7 +486,12 @@ impl QsonautGuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{next_auto_target_state, workspace_description, BAND_PLAN};
+    use std::sync::{Arc, Mutex};
+
+    use crate::{AppConfig, GraphicsPreferences, GuiState, QsonautGuiApp, QSONAUT_ICON_PNG};
+    use eframe::egui;
+
+    use super::{detected_callsigns, next_auto_target_state, workspace_description, BAND_PLAN};
 
     #[test]
     fn exposes_the_complete_cw_band_plan() {
@@ -238,5 +511,115 @@ mod tests {
         assert_eq!(next_auto_target_state(false, false), (true, false));
         assert_eq!(next_auto_target_state(true, false), (false, true));
         assert_eq!(next_auto_target_state(false, true), (false, false));
+    }
+
+    #[test]
+    fn detects_clickable_callsigns_without_echoing_the_operator() {
+        assert_eq!(
+            detected_callsigns("CQ K1ABC K1ABC N0CALL 599", "N0CALL"),
+            vec!["K1ABC"]
+        );
+    }
+
+    #[test]
+    fn renders_cw_operator_desk_for_idle_live_and_contest_states() {
+        let icon = eframe::icon_data::from_png_bytes(QSONAUT_ICON_PNG).expect("test icon");
+        let context = egui::Context::default();
+        let mut app = QsonautGuiApp::new_with_context(
+            AppConfig::default(),
+            false,
+            false,
+            &context,
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+        let mut snapshot = GuiState {
+            frequency_hz: Some(14_050_000),
+            cw_live_text: "CQ K1ABC 599".to_string(),
+            cw_character_count: 12,
+            cw_envelope_rate: 4.5,
+            cw_auto_target_tone_hz: Some(700),
+            recording_enabled: true,
+            cw_recording_status: "Recording".to_string(),
+            ..GuiState::default()
+        };
+
+        app.cw_qso_callsign = " k1abc ".to_string();
+        app.cw_qso_rst_sent = " 599 ".to_string();
+        app.cw_qso_rst_received = " 579 ".to_string();
+        app.cw_qso_notes = "good copy".to_string();
+        let normal = app
+            .build_cw_qso_record(&snapshot, 100)
+            .expect("valid CW record");
+        assert_eq!(normal.callsign, "K1ABC");
+        assert_eq!(normal.mode, "CW");
+        assert_eq!(normal.band, "20m");
+        assert_eq!(normal.report_sent, "599");
+        assert_eq!(normal.report_received, "579");
+        assert_eq!(normal.notes, "good copy");
+
+        app.contest_enabled = true;
+        app.contest_serial_current = 7;
+        app.cw_qso_exchange_received = "MA".to_string();
+        let contest = app
+            .build_cw_qso_record(&snapshot, 100)
+            .expect("valid contest CW record");
+        assert_eq!(contest.operation_mode, "Contest");
+        assert_eq!(contest.contest_serial_sent, Some(7));
+        assert_eq!(contest.contest_exchange_received, "MA");
+
+        app.cw_qso_callsign = "not-a-call".to_string();
+        assert!(app.build_cw_qso_record(&snapshot, 100).is_none());
+        app.log_cw_qso(&snapshot);
+        assert_eq!(app.digital_tx_status, "CW QSO needs a valid callsign");
+        app.cw_qso_callsign = "K1ABC".to_string();
+
+        app.digital_tx_chat.push_back(crate::DigitalTxChatEntry {
+            mode: crate::WorkspaceMode::Cw,
+            period: 0,
+            utc: "00:00:00".to_string(),
+            message: "CQ CQ DE N0CALL".to_string(),
+        });
+        app.digital_tx_chat.push_back(crate::DigitalTxChatEntry {
+            mode: crate::WorkspaceMode::Ft8,
+            period: 0,
+            utc: "00:00:01".to_string(),
+            message: "not CW".to_string(),
+        });
+
+        for (scanning, retarget, contest_enabled) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, true),
+        ] {
+            app.contest_enabled = contest_enabled;
+            app.cw_qso_callsign = "K1ABC".to_string();
+            snapshot.cw_auto_target = scanning;
+            snapshot.cw_auto_retarget = retarget;
+            let mut state = app.state.lock().expect("ui state lock poisoned");
+            state.cw_auto_target = scanning;
+            state.cw_auto_retarget = retarget;
+            drop(state);
+            let _ = context.run(Default::default(), |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    app.draw_cw_workspace(ui, &snapshot);
+                });
+            });
+            snapshot.recording_enabled = false;
+            snapshot.cw_auto_target_tone_hz = None;
+        }
+
+        snapshot.cw_live_text.clear();
+        app.cw_qso_callsign.clear();
+        let _ = context.run(Default::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                app.draw_cw_workspace(ui, &snapshot);
+            });
+        });
     }
 }

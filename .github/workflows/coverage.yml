@@ -16,7 +16,7 @@ jobs:
     env:
       # Rendering-only, UI-callback, and hardware-dependent paths are reported separately;
       # the gate covers executable application, HAL, worker, and contract code.
-      QSONAUT_COVERAGE_IGNORE_REGEX: crates/qsonaut-gui/src/panels/(devices|profile_server|radio_ui)\.rs|crates/qsonaut-gui/src/modes/(sstv|ft8|ft4|voice|cw|jt9|jt65|q65|wspr|fst4)\.rs
+      QSONAUT_COVERAGE_IGNORE_REGEX: crates/qsonaut-gui/src/panels/(devices|profile_server|radio_ui)\.rs|crates/qsonaut-gui/src/modes/(sstv|ft8|ft4|voice|jt9|jt65|q65|wspr|fst4)\.rs
     steps:
       - name: Check out QSONaut
         uses: actions/checkout@v6
@@ -39,6 +39,7 @@ jobs:
           set -o pipefail
           cargo llvm-cov --locked --all-features --workspace --ignore-filename-regex "$QSONAUT_COVERAGE_IGNORE_REGEX" --summary-only | tee coverage-summary.txt
           bash scripts/check-coverage.sh coverage-summary.txt 60 80
+          bash scripts/check-cw-coverage.sh coverage-summary.txt 80
 
       - name: Enforce changed-file coverage
         if: github.event_name == 'pull_request'

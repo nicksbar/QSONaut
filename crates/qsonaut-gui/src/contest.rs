@@ -223,6 +223,10 @@ impl QsonautGuiApp {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use eframe::egui;
+
     use super::{
         advance_contest_serial, contest_effective_tx_tone, contest_exchange_preview,
         contest_guidance_text, contest_operating_mode_label, fox_hound_role_label,
@@ -322,5 +326,41 @@ mod tests {
         );
         assert!(contest_guidance_text(SplitPolicy::Rig, FoxHoundRole::Hound)
             .contains("stay on the caller"));
+    }
+
+    #[test]
+    fn duplicate_guard_covers_safe_noop_and_blocking_paths() {
+        let icon = eframe::icon_data::from_png_bytes(crate::QSONAUT_ICON_PNG).expect("test icon");
+        let context = egui::Context::default();
+        let mut app = crate::QsonautGuiApp::new_with_context(
+            crate::AppConfig::default(),
+            false,
+            false,
+            &context,
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            crate::GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+
+        assert!(!app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "K1ABC N0CALL 599"));
+        app.contest_dupe_check = true;
+        assert!(!app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "K1ABC N0CALL 599"));
+        app.state
+            .lock()
+            .expect("ui state lock poisoned")
+            .frequency_hz = Some(14_050_000);
+        assert!(!app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "CQ CQ DE N0CALL"));
+        assert!(!app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "N0CALL N0CALL 599"));
+
+        app.qso_log
+            .contacts
+            .push(QsoRecord::new("K1ABC", "CW", "20m", 14_050_000, 0, 1));
+        assert!(app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "K1ABC N0CALL 599"));
+        assert_eq!(app.hunter_dupe_blocks, 1);
+        assert!(!app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "K2ABC N0CALL 599"));
     }
 }
