@@ -17,6 +17,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   synthesis coverage that verifies each mode produces a usable waveform.
 
 ### Changed
+- Integrated the merged `qsonaut-third-party` WSJT update, including the full
+  wired Q65 submode API, and pinned Rigwright, HostBridge, modem contracts, and
+  third-party adapters to immutable revisions for reproducible builds.
 - Decomposed the GUI coordinator into dedicated runtime, radio-session,
   profile, reporting, mode-type, and rendering packages while preserving the
   global station identity and per-profile radio/audio settings boundaries.

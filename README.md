@@ -295,13 +295,11 @@ device enrollment and proxy-friendly WSS configuration.
 - `crates/qsonaut-gui` — operator console and timed mode workflows
 - [`rigwright`](https://github.com/nicksbar/rigwright) — sibling radio HAL and native Icom CI-V implementation
 
-QSONaut resolves the published `rigwright` crate from crates.io, and
-`Cargo.lock` pins the exact release for reproducible CI and release builds.
-For local development against the paired sibling checkout, copy
-`.cargo/config.toml.example` to `.cargo/config.toml`; the ignored local file
-patches the unpublished dependency with `../rigwright` without changing
-committed manifests. CI does not use this override and does not need a
-Rigwright checkout.
+QSONaut resolves `rigwright` and the shared modem/third-party components from
+immutable Git revisions recorded in the manifests and `Cargo.lock`. This keeps
+CI and release builds reproducible while allowing local sibling checkouts to be
+used temporarily for development validation. CI does not require any sibling
+repository checkout.
 - `crates/qsonaut-audio` — real-time audio and high-quality 48→12 kHz decimation
 - `qsonaut-modems` — shared consumer-neutral modem contracts
 - `qsonaut-third-party` — pinned third-party modem adapters, including SSTV, CW, and WSJT-family modes

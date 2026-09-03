@@ -33,7 +33,7 @@ graph TB
     subgraph External["External Services"]
         Q[qsonaut-third-party<br/>Pinned modem adapters]
         U[qsonaut-modems<br/>Consumer-neutral contracts]
-        R[rigwright v0.1.19<br/>Radio HAL and drivers]
+        R[rigwright v0.1.20<br/>Radio HAL and drivers]
         S[PSK Reporter<br/>UDP]
         T[Discord/IRC<br/>Automation]
     end
@@ -100,7 +100,7 @@ graph LR
     accelerate[qsonaut-accelerate]
     third-party[qsonaut-third-party]
     modems[qsonaut-modems]
-    rigwright[rigwright<br/>v0.1.19]
+    rigwright[rigwright<br/>v0.1.20]
     
     qsonaut -->|path| gui
     qsonaut -->|path| core
@@ -186,7 +186,7 @@ graph TB
 | QSONaut Server | 0.1.0 | Independent release |
 | qsonaut-third-party | pinned revision | GPL/third-party modem adapters |
 | qsonaut-modems | pinned revision | Consumer-neutral modem contracts |
-| rigwright | 0.1.19 | crates.io |
+| rigwright | 0.1.20 pinned Git revision | Radio HAL and native drivers |
 | eframe | 0.33 | GUI framework |
 | tokio | 1.0 | Async runtime |
 | sqlx | 0.8.6 | Server DB |

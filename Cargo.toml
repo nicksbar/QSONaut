@@ -13,11 +13,6 @@ members = [
 ]
 resolver = "2"
 
-# Keep the in-flight local rigwright checkout authoritative for both direct
-# dependencies and the remote qsonaut-hostbridge-protocol dependency.
-[patch."https://github.com/nicksbar/rigwright.git"]
-rigwright = { path = "../rigwright" }
-
 # Keep the GUI and application debuggable, but do not run the modem DSP in
 # unoptimized debug code. FST4/Q65 operate on large 12 kHz slot buffers and
 # their debug-build cost can make the GUI appear frozen while decoding.

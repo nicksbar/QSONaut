@@ -3493,6 +3493,7 @@ dependencies = [
 [[package]]
 name = "qsonaut-hostbridge-protocol"
 version = "0.1.0"
+source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?rev=25126ed37e374a349bfb0dc881e44d7f73d08dea#25126ed37e374a349bfb0dc881e44d7f73d08dea"
 dependencies = [
  "rigwright",
  "serde",
@@ -3547,6 +3548,7 @@ dependencies = [
 [[package]]
 name = "qsonaut-third-party"
 version = "0.1.0"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=5660c03#5660c0334f9b5430c5e3090226ddd205dad8baaf"
 dependencies = [
  "cwdit-dsp",
  "cwdit-morse",
@@ -3973,6 +3975,7 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 [[package]]
 name = "rigwright"
 version = "0.1.20"
+source = "git+https://github.com/nicksbar/rigwright.git?rev=fbf0a256e777485f96535069f333833795057f54#fbf0a256e777485f96535069f333833795057f54"
 dependencies = [
  "anyhow",
  "async-trait",

@@ -16,7 +16,7 @@ qsonaut-audio = { path = "../../crates/qsonaut-audio" }
 qsonaut-hostbridge-client = { path = "../../crates/qsonaut-hostbridge-client" }
 qsonaut-core = { path = "../../crates/qsonaut-core" }
 qsonaut-log = { path = "../../crates/qsonaut-log" }
-qsonaut-radio = { package = "rigwright", version = "0.1.19", path = "../../../rigwright" }
+qsonaut-radio = { package = "rigwright", git = "https://github.com/nicksbar/rigwright.git", rev = "fbf0a256e777485f96535069f333833795057f54", version = "0.1.20" }
 qsonaut-gui = { path = "../../crates/qsonaut-gui" }
 
 [target.'cfg(windows)'.dependencies]
