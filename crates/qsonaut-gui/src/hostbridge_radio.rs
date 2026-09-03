@@ -190,26 +190,11 @@ impl Radio for RadioHandle {
             Self::Remote(radio) => {
                 radio.ensure_connected()?;
                 let key = control_id_key(id);
-                if let Ok(mut state) = radio.state.lock() {
-                    state.controls.remove(&key);
-                }
-                let request_id = HostBridgeClient::new_request_id();
-                radio
-                    .client
-                    .get_control_with_request_id(Some(request_id), key.clone())?;
-                let deadline = std::time::Instant::now() + Duration::from_millis(150);
-                loop {
-                    radio.pump_events();
-                    if let Ok(state) = radio.state.lock() {
-                        if let Some(value) = state.controls.get(&key).cloned() {
-                            return Ok(Some(value.into()));
-                        }
-                    }
-                    if std::time::Instant::now() >= deadline {
-                        return Ok(None);
-                    }
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                }
+                // Remote replies are delivered by the session event pump.
+                // Never wait here: this method is called from the radio
+                // worker, which must keep pumping media and control events.
+                radio.client.get_control(key.clone())?;
+                Ok(radio.state().controls.get(&key).cloned().map(Into::into))
             }
         }
     }
@@ -234,32 +219,11 @@ impl Radio for RadioHandle {
             Self::Remote(radio) => {
                 radio.ensure_connected()?;
                 let wire_id = id.into();
-                if let Ok(mut state) = radio.state.lock() {
-                    state.meters.remove(&wire_id);
-                }
-                let request_id = HostBridgeClient::new_request_id();
-                radio
-                    .client
-                    .get_meter_with_request_id(Some(request_id.clone()), wire_id)?;
-                // HostBridge replies asynchronously. A state read immediately
-                // after sending the request is usually one event-loop turn too
-                // early, which made every remote meter appear permanently blank.
-                // HostBridge may be forwarding a CI-V request whose driver
-                // timeout is 1.5 seconds. A 150 ms client deadline made every
-                // valid remote meter response look absent.
-                let deadline = std::time::Instant::now() + Duration::from_secs(2);
-                loop {
-                    radio.pump_events();
-                    if let Ok(state) = radio.state.lock() {
-                        if let Some(value) = state.meters.get(&wire_id).copied() {
-                            return Ok(Some(value));
-                        }
-                    }
-                    if std::time::Instant::now() >= deadline {
-                        return Ok(None);
-                    }
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                }
+                // Meter replies are asynchronous for the same reason as
+                // controls. Return the last sample while the event pump
+                // applies the newly requested sample when it arrives.
+                radio.client.get_meter(wire_id)?;
+                Ok(radio.state().meters.get(&wire_id).copied())
             }
         }
     }
