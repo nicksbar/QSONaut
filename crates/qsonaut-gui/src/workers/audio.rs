@@ -2100,6 +2100,23 @@ mod tests {
     }
 
     #[test]
+    fn null_audio_generator_handles_zero_chunks_and_submode_changes_without_stale_audio() {
+        let state = Arc::new(Mutex::new(GuiState {
+            workspace_mode: WorkspaceMode::Fst4,
+            fst4_submode: crate::modes::fst4::Submode::S15,
+            ..GuiState::default()
+        }));
+        let mut generator = NullAudioGenerator::default();
+        assert!(generator.read_chunk(0, &state).is_empty());
+        assert_eq!(generator.fst4_submode, crate::modes::fst4::Submode::S15);
+
+        state.lock().expect("state lock").fst4_submode = crate::modes::fst4::Submode::S300;
+        assert_eq!(generator.read_chunk(0, &state), Vec::<f32>::new());
+        assert_eq!(generator.fst4_submode, crate::modes::fst4::Submode::S300);
+        assert!(generator.next_deadline.is_some());
+    }
+
+    #[test]
     fn audio_worker_disabled_path_reports_disabled_without_opening_devices() {
         let state = Arc::new(Mutex::new(GuiState::default()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -2293,6 +2310,10 @@ mod tests {
         spectrum[256] = Complex::new(1.0, 0.0);
         let tone_hz = strongest_cw_tone_hz(&spectrum, 12_000).expect("CW peak");
         assert_eq!(tone_hz, 1_500);
+
+        spectrum[256] = Complex::new(f32::NAN, 0.0);
+        assert_eq!(strongest_cw_tone_hz(&spectrum, 12_000), None);
+        assert_eq!(strongest_cw_tone_hz(&spectrum, 48_000), None);
     }
 
     #[test]

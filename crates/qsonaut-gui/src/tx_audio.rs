@@ -219,6 +219,9 @@ fn play_ft8_tx_pcm(pcm: &[i16], abort: Arc<AtomicBool>, output_device: Option<&s
 }
 
 fn wait_until_epoch(target_s: f64, abort: &AtomicBool) -> Result<()> {
+    if !target_s.is_finite() {
+        anyhow::bail!("TX deadline is not finite");
+    }
     loop {
         if abort.load(Ordering::Relaxed) {
             anyhow::bail!("TX aborted by operator");
@@ -575,6 +578,72 @@ mod tests {
             600
         )
         .is_err());
+        assert!(build_native_digital_tx_pcm(
+            WorkspaceMode::Wspr,
+            "K1ABC FN42 30 extra",
+            1_000,
+            crate::modes::fst4::Submode::default(),
+            20,
+            600
+        )
+        .is_err());
+        assert!(build_native_digital_tx_pcm(
+            WorkspaceMode::Cw,
+            "CQ\nK1ABC",
+            1_000,
+            crate::modes::fst4::Submode::default(),
+            20,
+            600
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn cw_synthesis_normalizes_text_clamps_controls_and_preserves_silence_tail() {
+        let baseline = build_native_digital_tx_pcm(
+            WorkspaceMode::Cw,
+            " cq  n7uf ",
+            1_000,
+            crate::modes::fst4::Submode::default(),
+            20,
+            1_000,
+        )
+        .expect("baseline CW synthesis")
+        .0;
+        let clamped = build_native_digital_tx_pcm(
+            WorkspaceMode::Cw,
+            "CQ N7UF",
+            1_000,
+            crate::modes::fst4::Submode::default(),
+            0,
+            0,
+        )
+        .expect("clamped CW synthesis")
+        .0;
+        let explicit = build_native_digital_tx_pcm(
+            WorkspaceMode::Cw,
+            "CQ N7UF",
+            1_000,
+            crate::modes::fst4::Submode::default(),
+            5,
+            200,
+        )
+        .expect("explicit clamped CW synthesis")
+        .0;
+        assert_eq!(clamped, explicit);
+        assert!(baseline[baseline.len() - 12_000..]
+            .iter()
+            .all(|sample| *sample == 0));
+        assert!(baseline.iter().any(|sample| *sample != 0));
+    }
+
+    #[test]
+    fn cw_synthesis_covers_every_supported_character_and_word_gap() {
+        let message = "ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789";
+        let pcm = synthesize_cw_pcm(message, 700.0, 20.0).expect("all CW characters");
+        assert!(pcm.len() > 24_000);
+        assert!(pcm.windows(3).any(|window| window == [0, 0, 0]));
+        assert!(pcm[pcm.len() - 24_000..].iter().all(|sample| *sample == 0));
     }
 
     #[test]
@@ -597,6 +666,37 @@ mod tests {
             assert!(!pcm.is_empty(), "{} produced no PCM", mode.label());
             assert!(audio_start_s >= 0.0, "{} has invalid start", mode.label());
         }
+    }
+
+    #[test]
+    fn fst4_tx_uses_the_correct_audio_offset_for_each_submode() {
+        for (submode, expected_offset) in [
+            (crate::modes::fst4::Submode::S15, 0.5),
+            (crate::modes::fst4::Submode::S30, 1.0),
+            (crate::modes::fst4::Submode::S60, 1.0),
+            (crate::modes::fst4::Submode::S120, 1.0),
+            (crate::modes::fst4::Submode::S300, 1.0),
+        ] {
+            let (pcm, offset) = build_native_digital_tx_pcm(
+                WorkspaceMode::Fst4,
+                "CQ W1AW AA00",
+                1_500,
+                submode,
+                20,
+                600,
+            )
+            .expect("FST4 synthesis");
+            assert!(!pcm.is_empty());
+            assert_eq!(offset, expected_offset);
+        }
+    }
+
+    #[test]
+    fn ft8_builder_rejects_unpackable_messages_and_produces_audio_for_valid_ones() {
+        assert!(build_ft8_tx_pcm("not an FT8 message", 1_500).is_err());
+        let pcm = build_ft8_tx_pcm("CQ W1AW AA00", 1_500).expect("FT8 synthesis");
+        assert!(!pcm.is_empty());
+        assert!(pcm.iter().any(|sample| *sample != 0));
     }
 
     #[test]
@@ -678,6 +778,10 @@ mod tests {
         .is_err());
         let clear = AtomicBool::new(false);
         assert!(wait_until_epoch(0.0, &clear).is_ok());
+        for deadline in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let error = wait_until_epoch(deadline, &clear).expect_err("invalid deadline");
+            assert!(error.to_string().contains("not finite"));
+        }
     }
 
     #[test]
@@ -710,5 +814,105 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         drop(rx);
         assert!(request_ptt(&tx, false, Duration::from_secs(1)).is_err());
+    }
+
+    #[test]
+    fn remote_playback_checks_abort_and_requires_an_active_session() {
+        let aborted = AtomicBool::new(true);
+        let error = play_ft8_tx_pcm(&[1, -1], Arc::new(aborted), Some("hostbridge://output"))
+            .expect_err("aborted remote playback");
+        assert!(error.to_string().contains("aborted"));
+
+        let inactive = AtomicBool::new(false);
+        let error = play_ft8_tx_pcm(&[1, -1], Arc::new(inactive), Some("hostbridge://output"))
+            .expect_err("inactive remote playback");
+        assert!(error.to_string().contains("HostBridge audio output failed"));
+    }
+
+    #[test]
+    fn digital_tx_abort_still_releases_ptt_and_reports_failure() {
+        let (command_tx, command_rx) = mpsc::channel();
+        let command_thread = thread::spawn(move || {
+            let GuiCommand::SetPttWithAck(enabled, ack) = command_rx.recv().expect("unkey command")
+            else {
+                panic!("unexpected command");
+            };
+            assert!(!enabled, "aborted TX must never remain keyed");
+            ack.send(Ok(())).expect("unkey acknowledgement");
+        });
+        let (event_tx, event_rx) = mpsc::channel();
+        let abort = Arc::new(AtomicBool::new(true));
+        let active = Arc::new(AtomicBool::new(true));
+        run_digital_tx_job(DigitalTxJob {
+            mode: WorkspaceMode::Cw,
+            period: 0,
+            slot_seconds: 1.0,
+            audio_offset_s: 0.0,
+            audio_start_s: Some(0.0),
+            pcm: Arc::new(vec![0; 12_000]),
+            ptt_lead: Duration::ZERO,
+            ptt_tail: Duration::ZERO,
+            output_device: None,
+            abort,
+            active: active.clone(),
+            command_tx,
+            event_tx,
+            state: Arc::new(Mutex::new(GuiState::default())),
+            repaint_ctx: Arc::new(OnceLock::new()),
+        });
+        command_thread.join().expect("command thread");
+        assert!(!active.load(Ordering::Acquire));
+        let DigitalTxEvent::Failed(error) = event_rx.recv().expect("TX failure event") else {
+            panic!("aborted TX must report failure");
+        };
+        assert!(error.contains("aborted"));
+    }
+
+    #[test]
+    fn tx_waterfall_monitor_honors_stop_abort_and_publishes_fft_rows() {
+        let stopped_state = Arc::new(Mutex::new(GuiState::default()));
+        monitor_ft8_tx_waterfall(
+            Arc::new(vec![0; FT8_TX_MONITOR_FFT_SIZE]),
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(AtomicBool::new(false)),
+            stopped_state.clone(),
+            Arc::new(OnceLock::new()),
+        );
+        assert!(stopped_state
+            .lock()
+            .expect("stopped state")
+            .audio_waterfall_rows
+            .is_empty());
+
+        let aborted_state = Arc::new(Mutex::new(GuiState::default()));
+        monitor_ft8_tx_waterfall(
+            Arc::new(vec![0; FT8_TX_MONITOR_FFT_SIZE]),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(true)),
+            aborted_state.clone(),
+            Arc::new(OnceLock::new()),
+        );
+        assert!(aborted_state
+            .lock()
+            .expect("aborted state")
+            .audio_waterfall_rows
+            .is_empty());
+
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let repaint_ctx = Arc::new(OnceLock::new());
+        repaint_ctx
+            .set(egui::Context::default())
+            .expect("repaint context not already initialized");
+        monitor_ft8_tx_waterfall(
+            Arc::new(vec![0; FT8_TX_MONITOR_FFT_SIZE]),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            state.clone(),
+            repaint_ctx,
+        );
+        let state = state.lock().expect("updated state");
+        assert_eq!(state.audio_spectrum_status, "TX OUTPUT");
+        assert_eq!(state.audio_waterfall_revision, 5);
+        assert_eq!(state.audio_waterfall_rows.len(), 5);
     }
 }
