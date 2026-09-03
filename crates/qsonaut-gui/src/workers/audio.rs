@@ -725,6 +725,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut last_audio_read_error: Option<String> = None;
         let mut last_monitor_clock_log = Instant::now() - Duration::from_secs(30);
         let mut remote_media_seen = false;
+        let mut remote_audio_deadline = Instant::now();
 
         while !stop.load(Ordering::Relaxed) {
             let chunk_samples = {
@@ -756,6 +757,18 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 ))
             } {
                 Ok(Some(samples)) => {
+                    if remote_audio && !samples.is_empty() {
+                        let now = Instant::now();
+                        if remote_audio_deadline < now {
+                            remote_audio_deadline = now;
+                        }
+                        let frame_duration =
+                            Duration::from_secs_f64(samples.len() as f64 / sample_rate_hz as f64);
+                        if remote_audio_deadline > now {
+                            thread::sleep(remote_audio_deadline - now);
+                        }
+                        remote_audio_deadline += frame_duration;
+                    }
                     if remote_audio && !samples.is_empty() && !remote_media_seen {
                         info!(
                             samples = samples.len(),

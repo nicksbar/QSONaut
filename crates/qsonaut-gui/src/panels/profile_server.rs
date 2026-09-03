@@ -1238,6 +1238,7 @@ impl QsonautGuiApp {
                     edit_optional_u8(ui, value, 0, 255);
                 }
             });
+            let negotiated_controls = snapshot.supported_controls.clone();
             if native_profile.is_some_and(|profile| {
                 [
                     ControlId::Preamp,
@@ -1247,7 +1248,15 @@ impl QsonautGuiApp {
                 ]
                 .into_iter()
                 .any(|id| profile.supports_control(id))
-            }) {
+            }) || [
+                ControlId::Preamp,
+                ControlId::Attenuator,
+                ControlId::NoiseBlanker,
+                ControlId::NoiseReduction,
+            ]
+            .into_iter()
+            .any(|id| negotiated_controls.contains(&id))
+            {
                 ui.add_space(4.0);
                 ui.label(RichText::new("Icom CI-V controls").strong());
                 ui.horizontal_wrapped(|ui| {

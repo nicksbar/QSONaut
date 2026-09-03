@@ -23,6 +23,10 @@ pub(crate) struct HostBridgeRadio {
     capabilities: Mutex<RadioCapabilitiesInfo>,
     hello: HostHello,
     device_id: String,
+    driver: qsonaut_hostbridge_protocol::RadioDriver,
+    model: Option<String>,
+    baud_rate: Option<u32>,
+    radio_address: Option<u8>,
     connected: Arc<Mutex<bool>>,
     media_queue: Arc<Mutex<VecDeque<Vec<f32>>>>,
     audio_source: Option<(String, qsonaut_hostbridge_protocol::AudioFormat)>,
@@ -158,8 +162,26 @@ impl Radio for RadioHandle {
             Self::Remote(radio) => {
                 radio.ensure_connected()?;
                 let key = control_id_key(id);
-                radio.client.get_control(key.clone())?;
-                Ok(radio.state().controls.get(&key).cloned().map(Into::into))
+                if let Ok(mut state) = radio.state.lock() {
+                    state.controls.remove(&key);
+                }
+                let request_id = HostBridgeClient::new_request_id();
+                radio
+                    .client
+                    .get_control_with_request_id(Some(request_id), key.clone())?;
+                let deadline = std::time::Instant::now() + Duration::from_millis(150);
+                loop {
+                    radio.pump_events();
+                    if let Ok(state) = radio.state.lock() {
+                        if let Some(value) = state.controls.get(&key).cloned() {
+                            return Ok(Some(value.into()));
+                        }
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Ok(None);
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
             }
         }
     }
@@ -183,8 +205,24 @@ impl Radio for RadioHandle {
             Self::Local(radio) => radio.get_meter(id).await,
             Self::Remote(radio) => {
                 radio.ensure_connected()?;
-                radio.client.get_meter(id.into())?;
-                Ok(radio.state().meters.get(&id.into()).copied())
+                let wire_id = id.into();
+                radio.client.get_meter(wire_id)?;
+                // HostBridge replies asynchronously. A state read immediately
+                // after sending the request is usually one event-loop turn too
+                // early, which made every remote meter appear permanently blank.
+                let deadline = std::time::Instant::now() + Duration::from_millis(150);
+                loop {
+                    radio.pump_events();
+                    if let Ok(state) = radio.state.lock() {
+                        if let Some(value) = state.meters.get(&wire_id).copied() {
+                            return Ok(Some(value));
+                        }
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Ok(None);
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
             }
         }
     }
@@ -218,6 +256,10 @@ impl HostBridgeRadio {
         let requested_device_id = config.radio_device_id.clone();
         let requested_audio_source_id = config.audio_source_id.clone();
         let requested_audio_output_id = config.audio_output_id.clone();
+        let driver = config.radio_driver;
+        let model = config.radio_model.clone();
+        let baud_rate = config.radio_baud_rate;
+        let radio_address = config.radio_address;
         let (client, mut events) = HostBridgeClient::spawn(config);
         let client = Arc::new(client);
         let hello = tokio::time::timeout(Duration::from_secs(12), async {
@@ -238,26 +280,39 @@ impl HostBridgeRadio {
         .await
         .map_err(|_| anyhow!("timed out waiting for HostBridge authentication"))??;
 
-        let device_id = requested_device_id
-            .filter(|id| {
-                hello
-                    .capabilities
-                    .radio_devices
-                    .iter()
-                    .any(|device| &device.id == id)
-            })
-            .or_else(|| {
-                hello
-                    .capabilities
-                    .radio_devices
-                    .iter()
-                    .find(|device| !device.in_use)
-                    .or_else(|| hello.capabilities.radio_devices.first())
-                    .map(|device| device.id.clone())
-            })
-            .ok_or_else(|| anyhow!("HostBridge advertised no selectable radio devices"))?;
+        let device_id = if let Some(requested) = requested_device_id {
+            let device = hello.capabilities.radio_devices.iter().find(|device| {
+                device.id == requested
+                    || requested
+                        .rsplit_once(':')
+                        .is_some_and(|(physical_id, _)| device.id == physical_id)
+            });
+            let device = device.ok_or_else(|| {
+                anyhow!("saved HostBridge radio selection is no longer advertised")
+            })?;
+            if device.in_use {
+                anyhow::bail!("saved HostBridge radio selection is currently in use")
+            }
+            device.id.clone()
+        } else {
+            hello
+                .capabilities
+                .radio_devices
+                .iter()
+                .find(|device| !device.in_use)
+                .or_else(|| hello.capabilities.radio_devices.first())
+                .map(|device| device.id.clone())
+                .ok_or_else(|| anyhow!("HostBridge advertised no selectable radio devices"))?
+        };
 
-        client.select_radio(device_id.clone())?;
+        let driver = driver.ok_or_else(|| anyhow!("HostBridge radio driver was not selected"))?;
+        client.select_radio(
+            device_id.clone(),
+            driver,
+            model.clone(),
+            baud_rate,
+            radio_address,
+        )?;
         let audio_source = hello.capabilities.audio_sources.iter().find_map(|source| {
             if requested_audio_source_id
                 .as_deref()
@@ -346,6 +401,10 @@ impl HostBridgeRadio {
             capabilities: Mutex::new(capabilities),
             hello,
             device_id,
+            driver,
+            model,
+            baud_rate,
+            radio_address,
             connected: Arc::new(Mutex::new(true)),
             media_queue: remote_media_queue(),
             audio_source,
@@ -427,6 +486,13 @@ impl HostBridgeRadio {
                         state.tuner = status;
                     }
                 }
+                HostBridgeEvent::Server(ServerMessage::Error {
+                    code,
+                    message,
+                    request_id,
+                }) => {
+                    tracing::warn!(?request_id, %code, %message, "HostBridge request failed");
+                }
                 HostBridgeEvent::SafetyDisarmed { .. }
                 | HostBridgeEvent::Disconnected { .. }
                 | HostBridgeEvent::Reconnecting => {
@@ -444,7 +510,13 @@ impl HostBridgeRadio {
                     // A reconnect creates a new host session and releases the
                     // old lease. Reacquire only the selected host radio; TX
                     // state is intentionally never replayed.
-                    let _ = self.client.select_radio(self.device_id.clone());
+                    let _ = self.client.select_radio(
+                        self.device_id.clone(),
+                        self.driver,
+                        self.model.clone(),
+                        self.baud_rate,
+                        self.radio_address,
+                    );
                     if let Some((source_id, format)) = &self.audio_source {
                         let _ = self
                             .client

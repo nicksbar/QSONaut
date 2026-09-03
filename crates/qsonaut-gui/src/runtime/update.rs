@@ -1,8 +1,47 @@
 use super::super::*;
 
+fn migrate_hostbridge_radio_id(config: &mut RadioConfig, hello: &HostHello) -> bool {
+    let Some(saved_id) = config.hostbridge_radio_id.clone() else {
+        return false;
+    };
+    if hello
+        .capabilities
+        .radio_devices
+        .iter()
+        .any(|device| device.id == saved_id)
+    {
+        return false;
+    }
+    let Some((physical_id, _legacy_driver)) = saved_id.rsplit_once(':') else {
+        return false;
+    };
+    if hello
+        .capabilities
+        .radio_devices
+        .iter()
+        .any(|device| device.id == physical_id)
+    {
+        info!(old_id = %saved_id, new_id = %physical_id, "Migrated legacy HostBridge radio selection to physical device ID");
+        config.hostbridge_radio_id = Some(physical_id.to_string());
+        true
+    } else {
+        false
+    }
+}
+
 impl QsonautGuiApp {
     pub(crate) fn update_impl(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.pump_hamdb_lookup();
+        // The HostBridge catalog is independent of exclusive radio leasing.
+        // Load it at startup so remote audio devices remain selectable even
+        // when a radio session is temporarily busy or offline.
+        if self.config.radio.backend.eq_ignore_ascii_case("hostbridge")
+            && self.hostbridge_catalog.is_none()
+            && self.hostbridge_scan.is_none()
+            && self.hostbridge_scan_status.is_empty()
+        {
+            self.enumerate_hostbridge();
+        }
         let mut cat_test_finished = false;
         if let Some(rx) = &self.cat_test_rx {
             match rx.try_recv() {
@@ -99,6 +138,10 @@ impl QsonautGuiApp {
         if let Some(rx) = &self.hostbridge_scan {
             match rx.try_recv() {
                 Ok(Ok(hello)) => {
+                    if self.config.radio.backend.eq_ignore_ascii_case("hostbridge") {
+                        self.profile_dirty |=
+                            migrate_hostbridge_radio_id(&mut self.config.radio, &hello);
+                    }
                     self.hostbridge_catalog = Some(hello);
                     self.hostbridge_scan = None;
                     self.hostbridge_scan_status = "Connected · options loaded".to_string();
@@ -154,6 +197,10 @@ impl QsonautGuiApp {
                         // Radio initialization succeeded; start the worker
                         self.radio_init_attempted = true;
                         if let Some(catalog) = radio.hostbridge_catalog() {
+                            if self.config.radio.backend.eq_ignore_ascii_case("hostbridge") {
+                                self.profile_dirty |=
+                                    migrate_hostbridge_radio_id(&mut self.config.radio, &catalog);
+                            }
                             self.hostbridge_catalog = Some(catalog);
                             self.hostbridge_scan_status = "Connected · options loaded".to_string();
                         }

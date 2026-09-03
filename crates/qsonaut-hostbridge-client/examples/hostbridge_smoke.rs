@@ -1,6 +1,6 @@
 use qsonaut_hostbridge_client::{HostBridgeClient, HostBridgeConfig, HostBridgeEvent};
 use qsonaut_hostbridge_protocol::{
-    AudioCodec, MediaDirection, MediaFrameHeader, MEDIA_HEADER_VERSION,
+    AudioCodec, MediaDirection, MediaFrameHeader, RadioDriver, WireMeterId, MEDIA_HEADER_VERSION,
 };
 use std::time::Duration;
 
@@ -29,13 +29,44 @@ async fn main() -> anyhow::Result<()> {
             _ => println!("{event:?}"),
         }
         if let HostBridgeEvent::Connected(hello) = &event {
-            if let Some(radio) = hello
-                .capabilities
-                .radio_devices
-                .iter()
-                .find(|device| !device.in_use)
-            {
-                client.select_radio(radio.id.clone())?;
+            let requested_radio_id = std::env::var("HOSTBRIDGE_RADIO_ID").ok();
+            if let Some(radio) = hello.capabilities.radio_devices.iter().find(|device| {
+                !device.in_use
+                    && requested_radio_id
+                        .as_deref()
+                        .is_none_or(|requested| requested == device.id)
+            }) {
+                let driver = match std::env::var("HOSTBRIDGE_DRIVER")
+                    .unwrap_or_else(|_| "icom_civ".into())
+                    .as_str()
+                {
+                    "yaesu_cat" => RadioDriver::YaesuCat,
+                    "yaesu_legacy_cat" => RadioDriver::YaesuLegacyCat,
+                    "kenwood_cat" => RadioDriver::KenwoodCat,
+                    _ => RadioDriver::IcomCiv,
+                };
+                let model = std::env::var("HOSTBRIDGE_MODEL").ok();
+                let baud_rate = std::env::var("HOSTBRIDGE_BAUD")
+                    .ok()
+                    .and_then(|baud| baud.parse().ok());
+                println!(
+                    "Selecting physical radio {} ({}) with {:?} {:?}",
+                    radio.id, radio.label, driver, model
+                );
+                client.select_radio(radio.id.clone(), driver, model, baud_rate, None)?;
+                for meter in [
+                    WireMeterId::Signal,
+                    WireMeterId::Power,
+                    WireMeterId::Swr,
+                    WireMeterId::Alc,
+                    WireMeterId::Compression,
+                    WireMeterId::Current,
+                    WireMeterId::Voltage,
+                    WireMeterId::Temperature,
+                ] {
+                    client.get_meter(meter)?;
+                }
+                client.get_control("IpPlus")?;
             }
             let source_id = std::env::var("HOSTBRIDGE_SOURCE_ID").ok();
             if let Some(source) = hello.capabilities.audio_sources.iter().find(|source| {

@@ -40,7 +40,7 @@ use qsonaut_core::{
     FoxHoundRole, RadioConfig, SplitPolicy,
 };
 use qsonaut_hostbridge_client::{HostBridgeClient, HostBridgeConfig, HostBridgeEvent};
-use qsonaut_hostbridge_protocol::HostHello;
+use qsonaut_hostbridge_protocol::{HostHello, RadioDriver};
 use qsonaut_log::{
     app_config_dir, clear_log, hamdb_cache_path, log_file_path, read_log_tail, AdifExportFilter,
     HamDbCache, HamDbCacheEntry, QsoLog, QsoRecord,

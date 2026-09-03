@@ -150,11 +150,12 @@ pub(super) fn native_radio_profile(
     backend: &str,
     model: &str,
 ) -> Option<&'static qsonaut_radio::models::RadioModelProfile> {
-    backend
-        .trim()
-        .eq_ignore_ascii_case("native")
-        .then(|| find_model(model))
-        .flatten()
+    matches!(
+        backend.trim().to_ascii_lowercase().as_str(),
+        "native" | "hostbridge"
+    )
+    .then(|| find_model(model))
+    .flatten()
 }
 
 pub(super) fn radio_control_max(

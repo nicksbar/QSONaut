@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use futures_util::{Sink, SinkExt, StreamExt};
 use qsonaut_hostbridge_protocol::{
     AudioFormat, ClientHello, ClientMessage, HostHello, MediaDirection, MediaFrameHeader,
-    ServerMessage,
+    RadioDriver, ServerMessage,
 };
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -25,6 +25,10 @@ pub struct HostBridgeConfig {
     pub access_key: String,
     pub password: String,
     pub radio_device_id: Option<String>,
+    pub radio_driver: Option<RadioDriver>,
+    pub radio_model: Option<String>,
+    pub radio_baud_rate: Option<u32>,
+    pub radio_address: Option<u8>,
     pub audio_source_id: Option<String>,
     pub audio_output_id: Option<String>,
     pub reconnect_delay: Duration,
@@ -38,6 +42,10 @@ impl Default for HostBridgeConfig {
             access_key: String::new(),
             password: String::new(),
             radio_device_id: None,
+            radio_driver: None,
+            radio_model: None,
+            radio_baud_rate: None,
+            radio_address: None,
             audio_source_id: None,
             audio_output_id: None,
             reconnect_delay: Duration::from_secs(2),
@@ -112,18 +120,33 @@ impl HostBridgeClient {
         )
     }
 
-    pub fn select_radio(&self, device_id: impl Into<String>) -> Result<()> {
-        self.select_radio_with_request_id(None, device_id)
+    pub fn select_radio(
+        &self,
+        device_id: impl Into<String>,
+        driver: RadioDriver,
+        model: Option<String>,
+        baud_rate: Option<u32>,
+        radio_address: Option<u8>,
+    ) -> Result<()> {
+        self.select_radio_with_request_id(None, device_id, driver, model, baud_rate, radio_address)
     }
 
     pub fn select_radio_with_request_id(
         &self,
         request_id: Option<String>,
         device_id: impl Into<String>,
+        driver: RadioDriver,
+        model: Option<String>,
+        baud_rate: Option<u32>,
+        radio_address: Option<u8>,
     ) -> Result<()> {
         self.send(ClientMessage::SelectRadio {
             request_id,
             device_id: device_id.into(),
+            driver,
+            model,
+            baud_rate,
+            radio_address,
         })
     }
 
@@ -198,8 +221,16 @@ impl HostBridgeClient {
     }
 
     pub fn get_control(&self, control_id: impl Into<String>) -> Result<()> {
+        self.get_control_with_request_id(None, control_id)
+    }
+
+    pub fn get_control_with_request_id(
+        &self,
+        request_id: Option<String>,
+        control_id: impl Into<String>,
+    ) -> Result<()> {
         self.send(ClientMessage::GetControl {
-            request_id: None,
+            request_id,
             control_id: control_id.into(),
         })
     }

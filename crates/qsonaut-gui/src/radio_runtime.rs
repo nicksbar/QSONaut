@@ -3,6 +3,16 @@ use super::*;
 const HOSTBRIDGE_STARTUP_ATTEMPTS: u32 = 3;
 const HOSTBRIDGE_STARTUP_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
 
+fn hostbridge_driver_for_model(model: &str) -> Option<RadioDriver> {
+    match find_model(model).map(|profile| profile.protocol) {
+        Some(Protocol::IcomCiV { .. }) => Some(RadioDriver::IcomCiv),
+        Some(Protocol::YaesuCat) => Some(RadioDriver::YaesuCat),
+        Some(Protocol::YaesuLegacyCat) => Some(RadioDriver::YaesuLegacyCat),
+        Some(Protocol::KenwoodCat) => Some(RadioDriver::KenwoodCat),
+        Some(Protocol::ElecraftCat) | None => None,
+    }
+}
+
 /// Initialize a configured radio off the UI thread and verify native radios
 /// with a real CI-V transaction before reporting success.
 #[allow(dead_code)]
@@ -63,6 +73,10 @@ pub(super) fn spawn_radio_init_with_hostbridge(
                     access_key: hostbridge_access_key,
                     password: hostbridge_password,
                     radio_device_id: hostbridge_radio_id,
+                    radio_driver: hostbridge_driver_for_model(&model),
+                    radio_model: Some(model),
+                    radio_baud_rate: Some(baud_rate),
+                    radio_address: Some(radio_civ_address),
                     audio_source_id: hostbridge_audio_source_id,
                     audio_output_id: hostbridge_audio_output_id,
                     ..Default::default()

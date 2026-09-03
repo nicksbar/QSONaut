@@ -2,7 +2,7 @@ use super::super::*;
 use qsonaut_hostbridge_client::normalize_endpoint;
 
 impl QsonautGuiApp {
-    fn enumerate_hostbridge(&mut self) {
+    pub(crate) fn enumerate_hostbridge(&mut self) {
         let endpoint = match normalize_endpoint(&self.config.radio.endpoint) {
             Ok(endpoint) => endpoint,
             Err(error) => {
@@ -273,6 +273,9 @@ impl QsonautGuiApp {
                         &hostbridge_catalog,
                         &mut self.config.radio.hostbridge_radio_id,
                     );
+                    ui.end_row();
+                    ui.label("Remote driver/model");
+                    hostbridge_model_combo(ui, &mut self.config.radio.model);
                     ui.end_row();
                     ui.label("Remote audio input");
                     hostbridge_audio_combo(
@@ -906,6 +909,27 @@ fn hostbridge_radio_combo(
                         format!("{}{}", device.label, suffix),
                     );
                 }
+            }
+        });
+}
+
+fn hostbridge_model_combo(ui: &mut egui::Ui, selected: &mut String) {
+    let selected_text = find_model(selected)
+        .map(|model| format!("{} · {}", model.model, model.protocol.label()))
+        .unwrap_or_else(|| selected.clone());
+    egui::ComboBox::from_id_salt("hostbridge_model_choice")
+        .selected_text(selected_text)
+        .width(ui.available_width().max(220.0))
+        .show_ui(ui, |ui| {
+            for model in POPULAR_RADIOS
+                .iter()
+                .filter(|model| !matches!(model.protocol, Protocol::ElecraftCat))
+            {
+                ui.selectable_value(
+                    selected,
+                    model.model.to_string(),
+                    format!("{} · {}", model.model, model.protocol.label()),
+                );
             }
         });
 }
