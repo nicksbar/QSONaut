@@ -262,7 +262,15 @@ pub(crate) fn spawn_radio_worker(
                     let mut remote_scope_started = false;
                     let mut last_remote_config: Option<RadioScopeStreamConfig> = None;
                     while !stream_stop.load(Ordering::Relaxed) {
-                        let (desired, scope_config, settings_dirty) = {
+                        let (
+                            desired,
+                            power_on,
+                            power_settling,
+                            power_command_pending,
+                            radio_error,
+                            scope_config,
+                            settings_dirty,
+                        ) = {
                             let s = stream_state.lock().expect("ui state lock poisoned");
                             let sweep_code = {
                                 let tuning =
@@ -286,6 +294,10 @@ pub(crate) fn spawn_radio_worker(
                             };
                             (
                                 s.radio_spectrum_desired,
+                                s.radio_power_on,
+                                s.radio_power_settling,
+                                s.radio_power_command_pending,
+                                s.last_error.is_some(),
                                 config,
                                 s.radio_scope_settings_dirty,
                             )
@@ -301,6 +313,20 @@ pub(crate) fn spawn_radio_worker(
                             }
                             last_remote_config = None;
                             thread::sleep(Duration::from_millis(100));
+                            continue;
+                        }
+                        if power_on != Some(true) || power_settling || power_command_pending {
+                            if let Ok(mut s) = stream_state.lock() {
+                                s.radio_spectrum_enabled = false;
+                                s.radio_waterfall_status = if power_on == Some(false) {
+                                    "OFF (radio off)".to_string()
+                                } else if radio_error {
+                                    "CONFIG ERROR".to_string()
+                                } else {
+                                    "WAITING FOR RADIO".to_string()
+                                };
+                            }
+                            thread::sleep(Duration::from_millis(250));
                             continue;
                         }
                         if !settings_dirty && last_remote_config.is_none() {
