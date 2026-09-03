@@ -384,12 +384,23 @@ impl NullAudioGenerator {
         }
         let started = Instant::now();
         self.next_deadline = Some(started + chunk_duration);
-        let snapshot = state.lock().expect("ui state lock poisoned").clone();
-        if self.mode != Some(snapshot.workspace_mode)
-            || self.fst4_submode != snapshot.fst4_submode
-            || self.q65_submode != snapshot.q65_submode
+        let (workspace_mode, fst4_submode, q65_submode) = {
+            let shared = state.lock().expect("ui state lock poisoned");
+            (
+                shared.workspace_mode,
+                shared.fst4_submode,
+                shared.q65_submode,
+            )
+        };
+        if self.mode != Some(workspace_mode)
+            || self.fst4_submode != fst4_submode
+            || self.q65_submode != q65_submode
         {
-            self.rebuild(snapshot.workspace_mode, &snapshot);
+            // Rebuilds are infrequent; keep the full snapshot on this path only.
+            // The normal audio path must not clone waterfall rows, decode history,
+            // SSTV images, and other GUI-owned state for every chunk.
+            let snapshot = state.lock().expect("ui state lock poisoned").clone();
+            self.rebuild(workspace_mode, &snapshot);
         }
         let now_s = SystemTime::now()
             .duration_since(UNIX_EPOCH)

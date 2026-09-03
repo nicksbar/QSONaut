@@ -95,6 +95,7 @@ pub(super) fn build_waterfall_image_with_theme(
     ColorImage::new([width, height], pixels)
 }
 
+#[allow(dead_code)]
 pub(super) fn build_audio_waterfall_image_with_theme(
     rows: &VecDeque<Vec<u8>>,
     visible_bandwidth_hz: u32,
@@ -102,20 +103,41 @@ pub(super) fn build_audio_waterfall_image_with_theme(
     height: usize,
     theme: WaterfallTheme,
 ) -> ColorImage {
+    let display_rows = rows
+        .iter()
+        .map(|row| prepare_audio_display_row(row, visible_bandwidth_hz, width))
+        .collect::<Vec<_>>();
+    build_audio_waterfall_image_from_display_rows(&display_rows, width, height, theme)
+}
+
+pub(super) fn prepare_audio_display_row(
+    row: &[u8],
+    visible_bandwidth_hz: u32,
+    width: usize,
+) -> Vec<u8> {
+    if row.is_empty() {
+        return Vec::new();
+    }
     let fraction = (visible_bandwidth_hz.min(AUDIO_MAX_FREQ_HZ) as f32 / AUDIO_MAX_FREQ_HZ as f32)
         .clamp(0.0, 1.0);
+    let end = (((row.len() - 1) as f32 * fraction).round() as usize).clamp(1, row.len() - 1);
+    (0..width)
+        .map(|x| sample_row_linear(row, end, x, width))
+        .collect()
+}
+
+pub(super) fn build_audio_waterfall_image_from_display_rows(
+    rows: &[Vec<u8>],
+    width: usize,
+    height: usize,
+    theme: WaterfallTheme,
+) -> ColorImage {
     let pixels = (0..height)
         .flat_map(|y| {
             let missing = height.saturating_sub(rows.len());
             let row = rows.get(y.saturating_sub(missing));
-            let end = row.filter(|row| !row.is_empty()).map(|row| {
-                (((row.len() - 1) as f32 * fraction).round() as usize).clamp(1, row.len() - 1)
-            });
             (0..width).map(move |x| {
-                let value = match (row, end) {
-                    (Some(row), Some(end)) => sample_row_linear(row, end, x, width),
-                    _ => 0,
-                };
+                let value = row.and_then(|row| row.get(x)).copied().unwrap_or(0);
                 waterfall_color(value, theme)
             })
         })

@@ -1118,6 +1118,8 @@ struct QsonautGuiApp {
     audio_waterfall_texture_revision: u64,
     audio_waterfall_texture_bins: usize,
     audio_waterfall_texture_theme: WaterfallTheme,
+    audio_waterfall_cached_rows: VecDeque<Vec<u8>>,
+    audio_waterfall_cached_source_revision: u64,
     sstv_texture: Option<TextureHandle>,
     sstv_texture_revision: u64,
     sstv_tx_armed: bool,

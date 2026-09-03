@@ -542,6 +542,8 @@ impl QsonautGuiApp {
         }
         self.radio_waterfall_texture = None;
         self.audio_waterfall_texture = None;
+        self.audio_waterfall_cached_rows.clear();
+        self.audio_waterfall_cached_source_revision = 0;
         self.sstv_texture = None;
         self.profile_io_status = format!("Radio tab ‘{name}’ active");
     }

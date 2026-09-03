@@ -813,6 +813,8 @@ impl QsonautGuiApp {
             audio_waterfall_texture_revision: 0,
             audio_waterfall_texture_bins: 0,
             audio_waterfall_texture_theme: WaterfallTheme::RadioBlue,
+            audio_waterfall_cached_rows: VecDeque::new(),
+            audio_waterfall_cached_source_revision: 0,
             sstv_texture: None,
             sstv_texture_revision: 0,
             sstv_tx_armed: false,
