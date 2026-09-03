@@ -1,6 +1,7 @@
 use qsonaut_hostbridge_client::{HostBridgeClient, HostBridgeConfig, HostBridgeEvent};
 use qsonaut_hostbridge_protocol::{
-    AudioCodec, MediaDirection, MediaFrameHeader, RadioDriver, WireMeterId, MEDIA_HEADER_VERSION,
+    AudioCodec, MediaDirection, MediaFrameHeader, RadioDriver, ScopeConfiguration, WireMeterId,
+    MEDIA_HEADER_VERSION,
 };
 use std::time::Duration;
 
@@ -18,6 +19,8 @@ async fn main() -> anyhow::Result<()> {
         password,
         ..Default::default()
     });
+    let exercise_scope = std::env::var_os("HOSTBRIDGE_SCOPE").is_some();
+    let mut scope_started = false;
 
     let deadline = tokio::time::sleep(Duration::from_secs(8));
     tokio::pin!(deadline);
@@ -54,6 +57,14 @@ async fn main() -> anyhow::Result<()> {
                     radio.id, radio.label, driver, model
                 );
                 client.select_radio(radio.id.clone(), driver, model, baud_rate, None)?;
+                if exercise_scope {
+                    client.configure_scope(
+                        Some("scope-config".into()),
+                        ScopeConfiguration::default(),
+                    )?;
+                    client.start_scope(Some("scope-start".into()))?;
+                    scope_started = true;
+                }
                 for meter in [
                     WireMeterId::Signal,
                     WireMeterId::Power,
@@ -106,6 +117,9 @@ async fn main() -> anyhow::Result<()> {
             }
             client.get_state()?;
         }
+    }
+    if scope_started {
+        client.stop_scope(Some("scope-stop".into()))?;
     }
     client.shutdown()?;
     Ok(())

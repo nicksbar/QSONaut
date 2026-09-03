@@ -8,6 +8,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- Added explicit HostBridge scope configuration and lifecycle commands to the
+  existing remote radio worker, preserving the direct-port scope workflow and
+  client-owned retry/recovery behavior.
 - Added selectable Q65 submodes (A15, A30, A60, B60, C60, D60, E60, D120,
   E120, and A300), with matching slot timing, decode-worker configuration,
   transmit synthesis, null-audio simulation, and regression coverage.

@@ -110,6 +110,33 @@ struct RadioScopeStreamConfig {
     reference_tenths_db: i16,
 }
 
+fn wire_scope_config(
+    config: &RadioScopeStreamConfig,
+) -> qsonaut_hostbridge_protocol::ScopeConfiguration {
+    let (center_mode, span_hz, fixed_edges_hz, fixed_edge_number) = match config.view {
+        RadioScopeView::Narrow => match config.edges {
+            Some(edges) => (Some(true), None, Some(edges), Some(4)),
+            None => (
+                Some(false),
+                Some(scope_span_hz(config.span_code)),
+                None,
+                None,
+            ),
+        },
+        RadioScopeView::Overview => (Some(true), None, config.edges, Some(1)),
+    };
+    qsonaut_hostbridge_protocol::ScopeConfiguration {
+        span_hz,
+        fixed_edges_hz,
+        fixed_edge_number,
+        hold: Some(config.hold),
+        reference_level_tenths_db: Some(config.reference_tenths_db),
+        sweep_speed: Some(config.sweep_code),
+        center_mode,
+        vbw_wide: Some(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
+    }
+}
+
 fn workspace_audio_controls_clear_noise() -> (ControlId, ControlValue, ControlId, ControlValue) {
     (
         ControlId::NoiseReduction,
@@ -190,6 +217,8 @@ pub(crate) fn spawn_radio_worker(
         let stream_state = state.clone();
         let stream_radio = radio.as_icom().cloned();
         let remote_scope_queue = radio.remote_scope_queue();
+        let remote_scope_client = radio.remote_scope_client();
+        let remote_scope_supported = radio.remote_scope_supported();
         let stream_stop = stop.clone();
         let stream_repaint = repaint_ctx.clone();
         let stream_display_tuning = display_tuning.clone();
@@ -223,13 +252,92 @@ pub(crate) fn spawn_radio_worker(
             let mut meter_scheduler = MeterPollScheduler::new();
 
             let Some(stream_radio) = stream_radio else {
-                if let Some(queue) = remote_scope_queue {
+                if let (Some(queue), Some(client), true) = (
+                    remote_scope_queue,
+                    remote_scope_client,
+                    remote_scope_supported,
+                ) {
                     let mut last_remote_row = Instant::now() - Duration::from_millis(66);
+                    let mut last_remote_start = Instant::now() - Duration::from_secs(2);
+                    let mut remote_scope_started = false;
+                    let mut last_remote_config: Option<RadioScopeStreamConfig> = None;
                     while !stream_stop.load(Ordering::Relaxed) {
-                        let desired = stream_state
-                            .lock()
-                            .map(|s| s.radio_spectrum_desired)
-                            .unwrap_or(false);
+                        let (desired, scope_config, settings_dirty) = {
+                            let s = stream_state.lock().expect("ui state lock poisoned");
+                            let sweep_code = {
+                                let tuning =
+                                    stream_display_tuning.lock().expect("tuning lock poisoned");
+                                effective_visual_profile(&tuning, &s.mode, true).1
+                            };
+                            let config = RadioScopeStreamConfig {
+                                view: s.radio_scope_view,
+                                span_code: s.radio_scope_span_code,
+                                vbw_wide: s.radio_scope_vbw_wide,
+                                edges: scope_edges_for_view(
+                                    s.radio_scope_view,
+                                    s.workspace_mode,
+                                    s.frequency_hz,
+                                    s.radio_scope_span_code,
+                                    &s.mode,
+                                ),
+                                sweep_code,
+                                hold: s.radio_scope_hold,
+                                reference_tenths_db: s.radio_scope_reference_tenths_db,
+                            };
+                            (
+                                s.radio_spectrum_desired,
+                                config,
+                                s.radio_scope_settings_dirty,
+                            )
+                        };
+                        if !desired {
+                            if remote_scope_started {
+                                let _ = client.stop_scope(None);
+                                remote_scope_started = false;
+                            }
+                            if let Ok(mut s) = stream_state.lock() {
+                                s.radio_spectrum_enabled = false;
+                                s.radio_waterfall_status = "OFF".to_string();
+                            }
+                            last_remote_config = None;
+                            thread::sleep(Duration::from_millis(100));
+                            continue;
+                        }
+                        if !settings_dirty && last_remote_config.is_none() {
+                            last_remote_config = Some(scope_config);
+                        } else if settings_dirty || last_remote_config != Some(scope_config) {
+                            if let Err(error) =
+                                client.configure_scope(None, wire_scope_config(&scope_config))
+                            {
+                                warn!(%error, "failed to send remote scope configuration");
+                            } else {
+                                last_remote_config = Some(scope_config);
+                                if let Ok(mut s) = stream_state.lock() {
+                                    s.radio_scope_settings_dirty = false;
+                                }
+                            }
+                        }
+                        if remote_scope_started
+                            && last_remote_start.elapsed() >= Duration::from_secs(2)
+                            && queue.lock().map(|rows| rows.is_empty()).unwrap_or(true)
+                        {
+                            remote_scope_started = false;
+                        }
+                        if !remote_scope_started
+                            && last_remote_start.elapsed() >= Duration::from_secs(1)
+                        {
+                            if let Err(error) = client.start_scope(None) {
+                                warn!(%error, "failed to start remote scope");
+                            } else {
+                                remote_scope_started = true;
+                                last_remote_start = Instant::now();
+                                if let Ok(mut s) = stream_state.lock() {
+                                    s.radio_spectrum_enabled = true;
+                                    s.radio_waterfall_status =
+                                        "STARTING · remote scope".to_string();
+                                }
+                            }
+                        }
                         if desired && last_remote_row.elapsed() >= Duration::from_millis(66) {
                             let bins = queue.lock().ok().and_then(|mut rows| rows.pop_back());
                             if let Some(bins) = bins {
@@ -242,6 +350,9 @@ pub(crate) fn spawn_radio_worker(
                             }
                         }
                         thread::sleep(Duration::from_millis(10));
+                    }
+                    if remote_scope_started {
+                        let _ = client.stop_scope(None);
                     }
                     return;
                 }

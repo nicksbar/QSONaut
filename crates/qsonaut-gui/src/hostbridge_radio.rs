@@ -92,6 +92,20 @@ impl RadioHandle {
         }
     }
 
+    pub(crate) fn remote_scope_client(&self) -> Option<Arc<HostBridgeClient>> {
+        match self {
+            Self::Local(_) => None,
+            Self::Remote(radio) => Some(radio.client.clone()),
+        }
+    }
+
+    pub(crate) fn remote_scope_supported(&self) -> bool {
+        match self {
+            Self::Local(_) => false,
+            Self::Remote(radio) => radio.capabilities_snapshot().scope,
+        }
+    }
+
     pub(crate) fn capabilities(&self) -> RadioCapabilities {
         match self {
             Self::Local(radio) => radio.capabilities(),

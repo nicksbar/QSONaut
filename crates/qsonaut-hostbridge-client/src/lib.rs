@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use futures_util::{Sink, SinkExt, StreamExt};
 use qsonaut_hostbridge_protocol::{
     AudioFormat, ClientHello, ClientMessage, HostHello, MediaDirection, MediaFrameHeader,
-    RadioDriver, ServerMessage,
+    RadioDriver, ScopeConfiguration, ServerMessage,
 };
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -176,6 +176,22 @@ impl HostBridgeClient {
             output_id: output_id.into(),
             format,
         })
+    }
+
+    pub fn configure_scope(
+        &self,
+        request_id: Option<String>,
+        config: ScopeConfiguration,
+    ) -> Result<()> {
+        self.send(ClientMessage::ConfigureScope { request_id, config })
+    }
+
+    pub fn start_scope(&self, request_id: Option<String>) -> Result<()> {
+        self.send(ClientMessage::StartScope { request_id })
+    }
+
+    pub fn stop_scope(&self, request_id: Option<String>) -> Result<()> {
+        self.send(ClientMessage::StopScope { request_id })
     }
 
     pub fn set_frequency(&self, frequency_hz: u64) -> Result<()> {
