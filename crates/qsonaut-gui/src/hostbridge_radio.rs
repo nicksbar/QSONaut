@@ -216,7 +216,10 @@ impl Radio for RadioHandle {
                 // HostBridge replies asynchronously. A state read immediately
                 // after sending the request is usually one event-loop turn too
                 // early, which made every remote meter appear permanently blank.
-                let deadline = std::time::Instant::now() + Duration::from_millis(150);
+                // HostBridge may be forwarding a CI-V request whose driver
+                // timeout is 1.5 seconds. A 150 ms client deadline made every
+                // valid remote meter response look absent.
+                let deadline = std::time::Instant::now() + Duration::from_secs(2);
                 loop {
                     radio.pump_events();
                     if let Ok(state) = radio.state.lock() {
