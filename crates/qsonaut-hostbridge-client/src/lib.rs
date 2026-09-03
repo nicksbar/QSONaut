@@ -248,8 +248,16 @@ impl HostBridgeClient {
     }
 
     pub fn get_meter(&self, meter_id: qsonaut_hostbridge_protocol::WireMeterId) -> Result<()> {
+        self.get_meter_with_request_id(None, meter_id)
+    }
+
+    pub fn get_meter_with_request_id(
+        &self,
+        request_id: Option<String>,
+        meter_id: qsonaut_hostbridge_protocol::WireMeterId,
+    ) -> Result<()> {
         self.send(ClientMessage::GetMeter {
-            request_id: None,
+            request_id,
             meter_id,
         })
     }

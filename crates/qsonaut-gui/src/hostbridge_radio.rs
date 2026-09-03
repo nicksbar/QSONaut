@@ -206,7 +206,13 @@ impl Radio for RadioHandle {
             Self::Remote(radio) => {
                 radio.ensure_connected()?;
                 let wire_id = id.into();
-                radio.client.get_meter(wire_id)?;
+                if let Ok(mut state) = radio.state.lock() {
+                    state.meters.remove(&wire_id);
+                }
+                let request_id = HostBridgeClient::new_request_id();
+                radio
+                    .client
+                    .get_meter_with_request_id(Some(request_id.clone()), wire_id)?;
                 // HostBridge replies asynchronously. A state read immediately
                 // after sending the request is usually one event-loop turn too
                 // early, which made every remote meter appear permanently blank.

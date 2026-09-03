@@ -863,17 +863,27 @@ pub(crate) fn spawn_radio_worker(
                             workspace_radio_preset_for_frequency(workspace_mode, frequency_hz);
                         let target_filter = n.clamp(1, 3);
                         info!(filter = target_filter, workspace = %workspace_mode.label(), "Radio filter change requested");
-                        let result = if let Some(icom) = radio.as_icom() {
-                            rt.block_on(icom.set_operating_mode_details(
-                                preset.base_mode,
-                                preset.data_mode,
-                                target_filter,
-                            ))
-                        } else {
-                            Err(anyhow::anyhow!(
-                                "filter selection is unavailable for this radio profile"
-                            ))
-                        };
+                        let result =
+                            if let Some(icom) = radio.as_icom() {
+                                rt.block_on(icom.set_operating_mode_details(
+                                    preset.base_mode,
+                                    preset.data_mode,
+                                    target_filter,
+                                ))
+                            } else if radio.supports_control_write(ControlId::Filter) {
+                                // HostBridge exposes the typed control surface, not
+                                // the local Icom object. Route filter changes through
+                                // that surface so remote IC-7300 sessions do not
+                                // report the control as unavailable.
+                                rt.block_on(radio.set_control(
+                                    ControlId::Filter,
+                                    ControlValue::U8(target_filter),
+                                ))
+                            } else {
+                                Err(anyhow::anyhow!(
+                                    "filter selection is unavailable for this radio profile"
+                                ))
+                            };
                         match result {
                             Ok(()) => {
                                 info!(filter = target_filter, workspace = %workspace_mode.label(), "Radio filter change accepted")
