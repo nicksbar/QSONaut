@@ -31,7 +31,7 @@ qsonaut-audio = { path = "../qsonaut-audio" }
 qsonaut-accelerate = { path = "../qsonaut-accelerate" }
 qsonaut-core = { path = "../qsonaut-core" }
 qsonaut-hostbridge-client = { path = "../qsonaut-hostbridge-client" }
-qsonaut-hostbridge-protocol = { git = "https://github.com/nicksbar/QSONaut-HostBridge.git", rev = "c73ce34176fd22464f4a2d6dff1bd40c06c4e7fa" }
+qsonaut-hostbridge-protocol = { git = "https://github.com/nicksbar/QSONaut-HostBridge.git", rev = "4dca49be0f08451286438a494009007915729784" }
 qsonaut-automation = { path = "../qsonaut-automation" }
 qsonaut-log = { path = "../qsonaut-log" }
 qsonaut-radio = { package = "rigwright", git = "https://github.com/nicksbar/rigwright.git", rev = "fbf0a256e777485f96535069f333833795057f54", version = "0.1.20" }

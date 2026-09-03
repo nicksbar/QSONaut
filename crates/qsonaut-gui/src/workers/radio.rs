@@ -189,6 +189,7 @@ pub(crate) fn spawn_radio_worker(
 
         let stream_state = state.clone();
         let stream_radio = radio.as_icom().cloned();
+        let remote_scope_queue = radio.remote_scope_queue();
         let stream_stop = stop.clone();
         let stream_repaint = repaint_ctx.clone();
         let stream_display_tuning = display_tuning.clone();
@@ -222,6 +223,28 @@ pub(crate) fn spawn_radio_worker(
             let mut meter_scheduler = MeterPollScheduler::new();
 
             let Some(stream_radio) = stream_radio else {
+                if let Some(queue) = remote_scope_queue {
+                    let mut last_remote_row = Instant::now() - Duration::from_millis(66);
+                    while !stream_stop.load(Ordering::Relaxed) {
+                        let desired = stream_state
+                            .lock()
+                            .map(|s| s.radio_spectrum_desired)
+                            .unwrap_or(false);
+                        if desired && last_remote_row.elapsed() >= Duration::from_millis(66) {
+                            let bins = queue.lock().ok().and_then(|mut rows| rows.pop_back());
+                            if let Some(bins) = bins {
+                                let mut s = stream_state.lock().expect("ui state lock poisoned");
+                                s.radio_spectrum_enabled = true;
+                                apply_waterfall_bins(&mut s, &bins);
+                                s.radio_waterfall_status = format!("REMOTE · {} bins", bins.len());
+                                last_remote_row = Instant::now();
+                                request_gui_repaint(&stream_repaint);
+                            }
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    return;
+                }
                 warn!("Radio scope worker unavailable: radio has no scope stream");
                 let mut s = stream_state.lock().expect("ui state lock poisoned");
                 s.radio_spectrum_enabled = false;

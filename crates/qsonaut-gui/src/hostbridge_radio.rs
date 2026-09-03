@@ -29,6 +29,7 @@ pub(crate) struct HostBridgeRadio {
     radio_address: Option<u8>,
     connected: Arc<Mutex<bool>>,
     media_queue: Arc<Mutex<VecDeque<Vec<f32>>>>,
+    scope_queue: Arc<Mutex<VecDeque<Vec<u8>>>>,
     audio_source: Option<(String, qsonaut_hostbridge_protocol::AudioFormat)>,
     audio_output: Option<(String, qsonaut_hostbridge_protocol::AudioFormat)>,
     media_seen: AtomicBool,
@@ -42,6 +43,10 @@ pub(crate) fn remote_media_queue() -> Arc<Mutex<VecDeque<Vec<f32>>>> {
     REMOTE_MEDIA_QUEUE
         .get_or_init(|| Arc::new(Mutex::new(VecDeque::with_capacity(8))))
         .clone()
+}
+
+fn new_scope_queue() -> Arc<Mutex<VecDeque<Vec<u8>>>> {
+    Arc::new(Mutex::new(VecDeque::with_capacity(8)))
 }
 
 pub(crate) enum RadioHandle {
@@ -77,6 +82,13 @@ impl RadioHandle {
         match self {
             Self::Local(radio) => radio.as_icom(),
             Self::Remote(_) => None,
+        }
+    }
+
+    pub(crate) fn remote_scope_queue(&self) -> Option<Arc<Mutex<VecDeque<Vec<u8>>>>> {
+        match self {
+            Self::Local(_) => None,
+            Self::Remote(radio) => Some(radio.scope_queue.clone()),
         }
     }
 
@@ -416,6 +428,7 @@ impl HostBridgeRadio {
             radio_address,
             connected: Arc::new(Mutex::new(true)),
             media_queue: remote_media_queue(),
+            scope_queue: new_scope_queue(),
             audio_source,
             audio_output,
             media_seen: AtomicBool::new(false),
@@ -570,6 +583,14 @@ impl HostBridgeRadio {
                             queue.pop_front();
                         }
                         queue.push_back(samples);
+                    }
+                }
+                HostBridgeEvent::Server(ServerMessage::ScopeFrame { bins }) => {
+                    if let Ok(mut queue) = self.scope_queue.lock() {
+                        if queue.len() >= 8 {
+                            queue.pop_front();
+                        }
+                        queue.push_back(bins);
                     }
                 }
                 HostBridgeEvent::Server(_) => {}

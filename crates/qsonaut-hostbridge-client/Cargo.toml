@@ -8,7 +8,7 @@ authors.workspace = true
 [dependencies]
 anyhow.workspace = true
 futures-util.workspace = true
-qsonaut-hostbridge-protocol = { git = "https://github.com/nicksbar/QSONaut-HostBridge.git", rev = "c73ce34176fd22464f4a2d6dff1bd40c06c4e7fa" }
+qsonaut-hostbridge-protocol = { git = "https://github.com/nicksbar/QSONaut-HostBridge.git", rev = "4dca49be0f08451286438a494009007915729784" }
 rustls.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
