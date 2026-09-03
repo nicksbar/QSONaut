@@ -37,6 +37,7 @@ pub(crate) struct HostBridgeRadio {
     audio_output: Option<(String, qsonaut_hostbridge_protocol::AudioFormat)>,
     media_seen: Arc<AtomicBool>,
     meter_seen: Arc<AtomicBool>,
+    pending_read: Arc<Mutex<Option<String>>>,
 }
 
 static REMOTE_MEDIA_QUEUE: OnceLock<Arc<Mutex<VecDeque<Vec<f32>>>>> = OnceLock::new();
@@ -149,6 +150,16 @@ impl RadioHandle {
             Self::Remote(radio) => radio.link_health(),
         }
     }
+
+    pub(crate) fn refresh_state(&self) -> Result<()> {
+        match self {
+            Self::Local(_) => Ok(()),
+            Self::Remote(radio) => {
+                radio.ensure_connected()?;
+                radio.schedule_read("state", || radio.client.get_state())
+            }
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -198,7 +209,9 @@ impl Radio for RadioHandle {
                 // Remote replies are delivered by the session event pump.
                 // Never wait here: this method is called from the radio
                 // worker, which must keep pumping media and control events.
-                radio.client.get_control(key.clone())?;
+                radio.schedule_read(format!("control:{key}"), || {
+                    radio.client.get_control(key.clone())
+                })?;
                 Ok(radio.state().controls.get(&key).cloned().map(Into::into))
             }
         }
@@ -227,7 +240,9 @@ impl Radio for RadioHandle {
                 // Meter replies are asynchronous for the same reason as
                 // controls. Return the last sample while the event pump
                 // applies the newly requested sample when it arrives.
-                radio.client.get_meter(wire_id)?;
+                radio.schedule_read(format!("meter:{wire_id:?}"), || {
+                    radio.client.get_meter(wire_id)
+                })?;
                 Ok(radio.state().meters.get(&wire_id).copied())
             }
         }
@@ -247,7 +262,7 @@ impl Radio for RadioHandle {
             Self::Local(radio) => radio.get_tuner_status().await,
             Self::Remote(radio) => {
                 radio.ensure_connected()?;
-                radio.client.get_tuner_status()?;
+                radio.schedule_read("tuner", || radio.client.get_tuner_status())?;
                 Ok(radio.state().tuner.map(Into::into))
             }
         }
@@ -420,6 +435,7 @@ impl HostBridgeRadio {
             audio_output,
             media_seen: Arc::new(AtomicBool::new(false)),
             meter_seen: Arc::new(AtomicBool::new(false)),
+            pending_read: Arc::new(Mutex::new(None)),
         };
         let event_pump = radio.clone();
         std::thread::Builder::new()
@@ -457,6 +473,7 @@ impl HostBridgeRadio {
             };
             match event {
                 HostBridgeEvent::Server(ServerMessage::State(next)) => {
+                    self.clear_pending_read("state");
                     if let Ok(mut state) = self.state.lock() {
                         // HostBridge state snapshots currently contain core
                         // state. Meter/control replies arrive asynchronously;
@@ -487,6 +504,7 @@ impl HostBridgeRadio {
                 HostBridgeEvent::Server(ServerMessage::ControlValue {
                     control_id, value, ..
                 }) => {
+                    self.clear_pending_read(&format!("control:{control_id}"));
                     if let Some(value) = value {
                         if let Ok(mut state) = self.state.lock() {
                             state.controls.insert(control_id, value);
@@ -496,6 +514,7 @@ impl HostBridgeRadio {
                 HostBridgeEvent::Server(ServerMessage::MeterValue {
                     meter_id, value, ..
                 }) => {
+                    self.clear_pending_read(&format!("meter:{meter_id:?}"));
                     if let Some(value) = value {
                         if !self.meter_seen.swap(true, Ordering::Relaxed) {
                             tracing::info!(meter = ?meter_id, value, "First HostBridge meter response received");
@@ -506,6 +525,7 @@ impl HostBridgeRadio {
                     }
                 }
                 HostBridgeEvent::Server(ServerMessage::TunerStatus { status, .. }) => {
+                    self.clear_pending_read("tuner");
                     if let Ok(mut state) = self.state.lock() {
                         state.tuner = status;
                     }
@@ -528,11 +548,15 @@ impl HostBridgeRadio {
                     message,
                     request_id,
                 }) => {
+                    if code != "media_frames_dropped" {
+                        self.clear_all_pending_reads();
+                    }
                     tracing::warn!(?request_id, %code, %message, "HostBridge request failed");
                 }
                 HostBridgeEvent::SafetyDisarmed { .. }
                 | HostBridgeEvent::Disconnected { .. }
                 | HostBridgeEvent::Reconnecting => {
+                    self.clear_all_pending_reads();
                     if let Ok(mut connected) = self.connected.lock() {
                         *connected = false;
                     }
@@ -634,6 +658,37 @@ impl HostBridgeRadio {
             .unwrap_or_default()
     }
 
+    fn schedule_read<F>(&self, key: impl Into<String>, send: F) -> Result<()>
+    where
+        F: FnOnce() -> Result<()>,
+    {
+        let key = key.into();
+        let mut pending = self
+            .pending_read
+            .lock()
+            .map_err(|_| anyhow!("HostBridge pending-read state poisoned"))?;
+        if pending.is_some() {
+            return Ok(());
+        }
+        send()?;
+        *pending = Some(key);
+        Ok(())
+    }
+
+    fn clear_pending_read(&self, key: &str) {
+        if let Ok(mut pending) = self.pending_read.lock() {
+            if pending.as_deref() == Some(key) {
+                *pending = None;
+            }
+        }
+    }
+
+    fn clear_all_pending_reads(&self) {
+        if let Ok(mut pending) = self.pending_read.lock() {
+            *pending = None;
+        }
+    }
+
     fn capabilities_snapshot(&self) -> RadioCapabilitiesInfo {
         self.capabilities
             .lock()
@@ -699,7 +754,9 @@ fn send_remote_pcm_with_client(
 impl Radio for HostBridgeRadio {
     async fn get_frequency_hz(&self) -> Result<u64> {
         self.ensure_connected()?;
-        self.client.get_state()?;
+        // HostBridge pushes state changes through the background event pump.
+        // Do not issue a synchronous GetState request on every 100 ms GUI
+        // poll; that competes with CI-V scope and media delivery.
         self.state()
             .frequency_hz
             .ok_or_else(|| anyhow!("HostBridge has not supplied a radio frequency yet"))
@@ -786,7 +843,6 @@ impl Radio for HostBridgeRadio {
             .any(|capability| capability.id == control_id_key(id) && capability.writable)
     }
     fn link_health(&self) -> LinkHealth {
-        let _ = self.client.get_link_health(None);
         self.pump_events();
         self.link_health
             .lock()

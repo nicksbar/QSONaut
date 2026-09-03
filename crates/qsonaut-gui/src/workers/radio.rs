@@ -330,15 +330,13 @@ pub(crate) fn spawn_radio_worker(
                             thread::sleep(Duration::from_millis(250));
                             continue;
                         }
-                        // A remote session has a fresh driver instance and
-                        // cannot inherit the host radio's scope state. Push
-                        // the complete client-owned configuration on the
-                        // first start even when the profile is not dirty;
-                        // subsequent updates remain change-driven.
-                        if last_remote_config.is_none()
-                            || settings_dirty
-                            || last_remote_config != Some(scope_config)
-                        {
+                        // Scope startup must not synchronously replay every
+                        // CI-V setting. The host radio already has a valid
+                        // native scope configuration; apply changes when the
+                        // client explicitly dirties the settings. This keeps
+                        // startup audio/control traffic responsive and avoids
+                        // moving the scope away from the live dial.
+                        if settings_dirty {
                             if let Err(error) =
                                 client.configure_scope(None, wire_scope_config(&scope_config))
                             {
@@ -349,6 +347,8 @@ pub(crate) fn spawn_radio_worker(
                                     s.radio_scope_settings_dirty = false;
                                 }
                             }
+                        } else if last_remote_config.is_none() {
+                            last_remote_config = Some(scope_config);
                         }
                         if remote_scope_started
                             && last_remote_start.elapsed() >= Duration::from_secs(2)
@@ -766,6 +766,8 @@ pub(crate) fn spawn_radio_worker(
                             );
                             match rt.block_on(radio.set_frequency_hz(target)) {
                                 Ok(()) => {
+                                    state.lock().expect("ui state lock poisoned").frequency_hz =
+                                        Some(target);
                                     info!(frequency_hz = target, "Radio tune command accepted")
                                 }
                                 Err(err) => {
@@ -786,6 +788,8 @@ pub(crate) fn spawn_radio_worker(
                         info!(target_hz = target, "Radio direct tune command requested");
                         match rt.block_on(radio.set_frequency_hz(target)) {
                             Ok(()) => {
+                                state.lock().expect("ui state lock poisoned").frequency_hz =
+                                    Some(target);
                                 info!(frequency_hz = target, "Radio direct tune command accepted")
                             }
                             Err(err) => {
@@ -1074,6 +1078,11 @@ pub(crate) fn spawn_radio_worker(
                         };
                         match result {
                             Ok(()) => {
+                                project_control_write(
+                                    &mut state.lock().expect("ui state lock poisoned"),
+                                    id,
+                                    &value,
+                                );
                                 if id == ControlId::RfPower {
                                     if let ControlValue::U8(level) = &value {
                                         let mut s = state.lock().expect("ui state lock poisoned");
@@ -1467,7 +1476,12 @@ fn poll_radio_core_state(
             link_health.consecutive_timeouts.unwrap_or(0)
         );
     }
-    let reported_vfo = read_vfo_control(rt, radio);
+    // VFO is already part of the pushed radio state for remote sessions.
+    // A request here every 100 ms serializes behind CI-V scope traffic and
+    // can starve the HostBridge media event pump.
+    let reported_vfo = (!radio.is_remote())
+        .then(|| read_vfo_control(rt, radio))
+        .flatten();
     if radio.as_icom().is_none() {
         let instrument_poll = FIRST_RADIO_CORE_POLL.swap(false, Ordering::Relaxed);
         if instrument_poll {
@@ -1546,6 +1560,10 @@ fn poll_radio_core_state(
         }
         if poll_levels {
             if radio.is_remote() {
+                // The radio may be changed from its front panel. Refresh the
+                // compact HostBridge core snapshot at the level cadence so
+                // the UI follows hardware without polling every 100 ms.
+                let _ = radio.refresh_state();
                 poll_remote_level_state(rt, radio, state);
             } else {
                 poll_radio_level_state(rt, radio, state);
@@ -1763,6 +1781,41 @@ fn control_vfo_value(value: &ControlValue) -> Option<u8> {
     match value {
         ControlValue::U8(value) | ControlValue::Vfo(value) if *value <= 1 => Some(*value),
         _ => None,
+    }
+}
+
+fn project_control_write(state: &mut GuiState, id: ControlId, value: &ControlValue) {
+    match (id, value) {
+        (ControlId::AfGain, ControlValue::U8(value)) => state.af_gain = Some(*value),
+        (ControlId::RfGain, ControlValue::U8(value)) => state.rf_gain = Some(*value),
+        (ControlId::Squelch, ControlValue::U8(value)) => state.squelch = Some(*value),
+        (ControlId::RfPower, ControlValue::U8(value)) => state.rf_power = Some(*value),
+        (ControlId::Preamp, ControlValue::U8(value)) => state.preamp = Some(*value),
+        (ControlId::Attenuator, ControlValue::U8(value)) => state.attenuator = Some(*value),
+        (ControlId::Agc, ControlValue::U8(value)) => state.agc = Some(*value),
+        (ControlId::NoiseReductionLevel, ControlValue::U8(value)) => {
+            state.noise_reduction_level = Some(*value)
+        }
+        (ControlId::Filter, ControlValue::U8(value)) => state.filter = Some(*value),
+        (ControlId::NoiseBlanker, ControlValue::Bool(value)) => state.noise_blank = Some(*value),
+        (ControlId::NoiseReduction, ControlValue::Bool(value)) => {
+            state.noise_reduction = Some(*value)
+        }
+        (ControlId::IpPlus, ControlValue::Bool(value)) => state.ip_plus = Some(*value),
+        (ControlId::Notch, ControlValue::Bool(value)) => state.notch_auto = Some(*value),
+        (ControlId::ManualNotch, ControlValue::Bool(value)) => state.notch_manual = Some(*value),
+        (ControlId::Tuner, ControlValue::Bool(value)) => {
+            state.tuner_status = Some(qsonaut_radio::TunerStatus {
+                enabled: *value,
+                tuning: false,
+            });
+        }
+        (ControlId::Vfo, value) => {
+            if let Some(vfo) = control_vfo_value(value) {
+                state.active_vfo = vfo;
+            }
+        }
+        _ => {}
     }
 }
 
@@ -2004,7 +2057,30 @@ fn poll_remote_level_state(
     // Send one request per level cycle; the event pump applies the reply and
     // the next cycle observes it. A bulk read here starves the service's
     // media sender and makes the remote waterfall/audio appear degraded.
-    let slot = REMOTE_LEVEL_POLL_INDEX.fetch_add(1, Ordering::Relaxed) % 20;
+    let cycle = REMOTE_LEVEL_POLL_INDEX.fetch_add(1, Ordering::Relaxed);
+    if cycle % 4 == 1 {
+        if let Ok(Some(status)) = rt.block_on(radio.get_tuner_status()) {
+            state.lock().expect("ui state lock poisoned").tuner_status = Some(status);
+        }
+        return;
+    }
+    if cycle % 4 == 3 {
+        if let Ok(Some(ControlValue::U8(filter))) =
+            rt.block_on(radio.get_control(ControlId::Filter))
+        {
+            state.lock().expect("ui state lock poisoned").filter = Some(filter);
+        }
+        return;
+    }
+    // Signal is the primary RX meter. Sample it every second while still
+    // giving the remaining advertised controls/meters a bounded rotation.
+    if cycle.is_multiple_of(2) {
+        update_remote_meter(rt, radio, state, MeterId::Signal, |s, v| {
+            s.signal_meter = Some(v)
+        });
+        return;
+    }
+    let slot = (cycle / 2) % 20;
     match slot {
         0 => update_remote_u8(rt, radio, state, ControlId::AfGain, |s, v| {
             s.af_gain = Some(v)
@@ -2043,8 +2119,8 @@ fn poll_remote_level_state(
         12 => update_remote_bool(rt, radio, state, ControlId::ManualNotch, |s, v| {
             s.notch_manual = Some(v)
         }),
-        13 => update_remote_meter(rt, radio, state, MeterId::Signal, |s, v| {
-            s.signal_meter = Some(v)
+        13 => update_remote_u8(rt, radio, state, ControlId::Filter, |s, v| {
+            s.filter = Some(v)
         }),
         14 => update_remote_meter(rt, radio, state, MeterId::Power, |s, v| {
             s.power_meter = Some(v)
