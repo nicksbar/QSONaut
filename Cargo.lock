@@ -3393,7 +3393,7 @@ dependencies = [
  "qsonaut-gui",
  "qsonaut-hostbridge-client",
  "qsonaut-log",
- "rigwright 0.1.20",
+ "rigwright",
  "tokio",
  "tracing",
  "windows-sys 0.59.0",
@@ -3461,7 +3461,7 @@ dependencies = [
  "qsonaut-server-client",
  "qsonaut-third-party",
  "reqwest",
- "rigwright 0.1.21",
+ "rigwright",
  "rusqlite",
  "rustfft",
  "serde",
@@ -3495,7 +3495,7 @@ name = "qsonaut-hostbridge-protocol"
 version = "0.1.0"
 source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?rev=0ec1a9c#0ec1a9c7699c7d537bf4e6cd04a3723e5b585f4f"
 dependencies = [
- "rigwright 0.1.21",
+ "rigwright",
  "serde",
  "serde_json",
  "uuid",
@@ -3971,17 +3971,6 @@ name = "rgb"
 version = "0.8.53"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
-
-[[package]]
-name = "rigwright"
-version = "0.1.20"
-source = "git+https://github.com/nicksbar/rigwright.git?rev=fbf0a256e777485f96535069f333833795057f54#fbf0a256e777485f96535069f333833795057f54"
-dependencies = [
- "anyhow",
- "async-trait",
- "futures",
- "serialport",
-]
 
 [[package]]
 name = "rigwright"
