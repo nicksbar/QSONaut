@@ -9,7 +9,8 @@ fn hostbridge_driver_for_model(model: &str) -> Option<RadioDriver> {
         Some(Protocol::YaesuCat) => Some(RadioDriver::YaesuCat),
         Some(Protocol::YaesuLegacyCat) => Some(RadioDriver::YaesuLegacyCat),
         Some(Protocol::KenwoodCat) => Some(RadioDriver::KenwoodCat),
-        Some(Protocol::ElecraftCat) | None => None,
+        Some(Protocol::ElecraftCat) => Some(RadioDriver::ElecraftCat),
+        None => None,
     }
 }
 

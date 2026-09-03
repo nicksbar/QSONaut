@@ -921,10 +921,7 @@ fn hostbridge_model_combo(ui: &mut egui::Ui, selected: &mut String) {
         .selected_text(selected_text)
         .width(ui.available_width().max(220.0))
         .show_ui(ui, |ui| {
-            for model in POPULAR_RADIOS
-                .iter()
-                .filter(|model| !matches!(model.protocol, Protocol::ElecraftCat))
-            {
+            for model in POPULAR_RADIOS {
                 ui.selectable_value(
                     selected,
                     model.model.to_string(),
