@@ -120,6 +120,20 @@ async fn main() -> anyhow::Result<()> {
             client.start_scope(Some("scope-start".into()))?;
             scope_started = true;
         }
+        if let HostBridgeEvent::Server(ServerMessage::Error {
+            code,
+            request_id: Some(request_id),
+            ..
+        }) = &event
+        {
+            if exercise_scope
+                && scope_started
+                && code == "request_failed"
+                && request_id == "scope-start"
+            {
+                client.start_scope(Some("scope-start".into()))?;
+            }
+        }
     }
     if scope_started {
         client.stop_scope(Some("scope-stop".into()))?;

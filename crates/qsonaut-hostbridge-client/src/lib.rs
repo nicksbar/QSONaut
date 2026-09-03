@@ -286,6 +286,14 @@ impl HostBridgeClient {
         self.send(ClientMessage::GetTunerStatus { request_id: None })
     }
 
+    pub fn get_link_health(&self, request_id: Option<String>) -> Result<()> {
+        self.send(ClientMessage::GetLinkHealth { request_id })
+    }
+
+    pub fn raw_protocol(&self, request_id: Option<String>, frame: Vec<u8>) -> Result<()> {
+        self.send(ClientMessage::RawProtocol { request_id, frame })
+    }
+
     pub fn send_media(&self, header: MediaFrameHeader, payload: &[u8]) -> Result<()> {
         validate_outgoing_media(header, payload)?;
         let mut bytes = Vec::with_capacity(MediaFrameHeader::BYTES + payload.len());

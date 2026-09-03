@@ -3493,7 +3493,7 @@ dependencies = [
 [[package]]
 name = "qsonaut-hostbridge-protocol"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?rev=5e00795#5e00795fad2929298d38edd43d5f9568a9cf2cf9"
+source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?rev=c042db0#c042db0f419496fab35654780ecd6fddb7b573f8"
 dependencies = [
  "rigwright",
  "serde",

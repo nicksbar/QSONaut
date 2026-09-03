@@ -8,7 +8,7 @@ use qsonaut_radio::{
     drivers::ConfiguredRadio, ControlId, IcomCiVRadio, LinkHealth, MeterId, Mode, Radio,
     RadioCapabilities, TunerStatus,
 };
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -21,6 +21,8 @@ pub(crate) struct HostBridgeRadio {
     events: Mutex<tokio::sync::mpsc::UnboundedReceiver<HostBridgeEvent>>,
     state: Mutex<RadioState>,
     capabilities: Mutex<RadioCapabilitiesInfo>,
+    link_health: Mutex<LinkHealth>,
+    raw_responses: Mutex<HashMap<String, Vec<u8>>>,
     hello: HostHello,
     device_id: String,
     driver: qsonaut_hostbridge_protocol::RadioDriver,
@@ -434,6 +436,8 @@ impl HostBridgeRadio {
             events: Mutex::new(events),
             state: Mutex::new(initial_state),
             capabilities: Mutex::new(capabilities),
+            link_health: Mutex::new(LinkHealth::default()),
+            raw_responses: Mutex::new(HashMap::new()),
             hello,
             device_id,
             driver,
@@ -520,6 +524,19 @@ impl HostBridgeRadio {
                 HostBridgeEvent::Server(ServerMessage::TunerStatus { status, .. }) => {
                     if let Ok(mut state) = self.state.lock() {
                         state.tuner = status;
+                    }
+                }
+                HostBridgeEvent::Server(ServerMessage::LinkHealth { health, .. }) => {
+                    if let Ok(mut current) = self.link_health.lock() {
+                        *current = LinkHealth::from(health);
+                    }
+                }
+                HostBridgeEvent::Server(ServerMessage::RawProtocol {
+                    request_id: Some(request_id),
+                    response,
+                }) => {
+                    if let Ok(mut responses) = self.raw_responses.lock() {
+                        responses.insert(request_id, response);
                     }
                 }
                 HostBridgeEvent::Server(ServerMessage::Error {
@@ -785,10 +802,36 @@ impl Radio for HostBridgeRadio {
             .any(|capability| capability.id == control_id_key(id) && capability.writable)
     }
     fn link_health(&self) -> LinkHealth {
-        LinkHealth::default()
+        let _ = self.client.get_link_health(None);
+        self.pump_events();
+        self.link_health
+            .lock()
+            .map(|health| *health)
+            .unwrap_or_default()
     }
     async fn get_tuner_status(&self) -> Result<Option<TunerStatus>> {
-        Ok(None)
+        self.ensure_connected()?;
+        self.client.get_tuner_status()?;
+        Ok(self.state().tuner.map(Into::into))
+    }
+    async fn protocol_write_read(&self, request: &[u8]) -> Result<Vec<u8>> {
+        self.ensure_connected()?;
+        let request_id = HostBridgeClient::new_request_id();
+        self.client
+            .raw_protocol(Some(request_id.clone()), request.to_vec())?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            self.pump_events();
+            if let Ok(mut responses) = self.raw_responses.lock() {
+                if let Some(response) = responses.remove(&request_id) {
+                    return Ok(response);
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                anyhow::bail!("timed out waiting for HostBridge raw protocol response")
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
     }
 }
 
