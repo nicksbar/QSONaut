@@ -1,5 +1,6 @@
 use super::super::*;
 use super::request_gui_repaint;
+use std::sync::atomic::AtomicUsize;
 
 const RADIO_CORE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const RADIO_LEVEL_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -15,6 +16,7 @@ const RADIO_METER_RESPONSE_TIMEOUT: Duration = Duration::from_millis(150);
 // stall is visible in the normal application log without logging every 100 ms
 // poll forever.
 static FIRST_RADIO_CORE_POLL: AtomicBool = AtomicBool::new(true);
+static REMOTE_LEVEL_POLL_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScheduledMeter {
@@ -281,13 +283,12 @@ pub(crate) fn spawn_radio_worker(
                                 view: s.radio_scope_view,
                                 span_code: s.radio_scope_span_code,
                                 vbw_wide: s.radio_scope_vbw_wide,
-                                edges: scope_edges_for_view(
-                                    s.radio_scope_view,
-                                    s.workspace_mode,
-                                    s.frequency_hz,
-                                    s.radio_scope_span_code,
-                                    &s.mode,
-                                ),
+                                // The remote IC-7300 USB scope path is
+                                // centered by span. Do not replay QSONaut's
+                                // local mode-aware fixed-edge projection;
+                                // that emits 27 1E and can move the radio's
+                                // scope away from the live dial frequency.
+                                edges: None,
                                 sweep_code,
                                 hold: s.radio_scope_hold,
                                 reference_tenths_db: s.radio_scope_reference_tenths_db,
@@ -1544,7 +1545,11 @@ fn poll_radio_core_state(
             }
         }
         if poll_levels {
-            poll_radio_level_state(rt, radio, state);
+            if radio.is_remote() {
+                poll_remote_level_state(rt, radio, state);
+            } else {
+                poll_radio_level_state(rt, radio, state);
+            }
         }
         return;
     }
@@ -1987,6 +1992,118 @@ fn poll_radio_level_state(
     }
     if tuner_status.is_some() {
         s.tuner_status = tuner_status;
+    }
+}
+
+fn poll_remote_level_state(
+    rt: &tokio::runtime::Runtime,
+    radio: &RadioHandle,
+    state: &Arc<Mutex<GuiState>>,
+) {
+    // A HostBridge radio shares one physical CI-V link with scope traffic.
+    // Send one request per level cycle; the event pump applies the reply and
+    // the next cycle observes it. A bulk read here starves the service's
+    // media sender and makes the remote waterfall/audio appear degraded.
+    let slot = REMOTE_LEVEL_POLL_INDEX.fetch_add(1, Ordering::Relaxed) % 20;
+    match slot {
+        0 => update_remote_u8(rt, radio, state, ControlId::AfGain, |s, v| {
+            s.af_gain = Some(v)
+        }),
+        1 => update_remote_u8(rt, radio, state, ControlId::RfGain, |s, v| {
+            s.rf_gain = Some(v)
+        }),
+        2 => update_remote_u8(rt, radio, state, ControlId::Squelch, |s, v| {
+            s.squelch = Some(v)
+        }),
+        3 => update_remote_u8(rt, radio, state, ControlId::RfPower, |s, v| {
+            s.rf_power = Some(v)
+        }),
+        4 => update_remote_u8(rt, radio, state, ControlId::Preamp, |s, v| {
+            s.preamp = Some(v)
+        }),
+        5 => update_remote_u8(rt, radio, state, ControlId::Attenuator, |s, v| {
+            s.attenuator = Some(v)
+        }),
+        6 => update_remote_u8(rt, radio, state, ControlId::Agc, |s, v| s.agc = Some(v)),
+        7 => update_remote_u8(rt, radio, state, ControlId::NoiseReductionLevel, |s, v| {
+            s.noise_reduction_level = Some(v)
+        }),
+        8 => update_remote_bool(rt, radio, state, ControlId::NoiseBlanker, |s, v| {
+            s.noise_blank = Some(v)
+        }),
+        9 => update_remote_bool(rt, radio, state, ControlId::NoiseReduction, |s, v| {
+            s.noise_reduction = Some(v)
+        }),
+        10 => update_remote_bool(rt, radio, state, ControlId::IpPlus, |s, v| {
+            s.ip_plus = Some(v)
+        }),
+        11 => update_remote_bool(rt, radio, state, ControlId::Notch, |s, v| {
+            s.notch_auto = Some(v)
+        }),
+        12 => update_remote_bool(rt, radio, state, ControlId::ManualNotch, |s, v| {
+            s.notch_manual = Some(v)
+        }),
+        13 => update_remote_meter(rt, radio, state, MeterId::Signal, |s, v| {
+            s.signal_meter = Some(v)
+        }),
+        14 => update_remote_meter(rt, radio, state, MeterId::Power, |s, v| {
+            s.power_meter = Some(v)
+        }),
+        15 => update_remote_meter(rt, radio, state, MeterId::Swr, |s, v| s.swr = Some(v)),
+        16 => update_remote_meter(rt, radio, state, MeterId::Alc, |s, v| s.alc_meter = Some(v)),
+        17 => update_remote_meter(rt, radio, state, MeterId::Compression, |s, v| {
+            s.compression_meter = Some(v)
+        }),
+        18 => update_remote_meter(rt, radio, state, MeterId::Current, |s, v| {
+            s.current_meter = Some(v)
+        }),
+        19 => update_remote_meter(rt, radio, state, MeterId::Voltage, |s, v| {
+            s.voltage_meter = Some(v);
+            record_voltage_sample(&mut s.voltage_history, v);
+        }),
+        _ => unreachable!(),
+    }
+}
+
+fn update_remote_u8<F>(
+    rt: &tokio::runtime::Runtime,
+    radio: &RadioHandle,
+    state: &Arc<Mutex<GuiState>>,
+    id: ControlId,
+    apply: F,
+) where
+    F: FnOnce(&mut GuiState, u8),
+{
+    if let Ok(Some(ControlValue::U8(value))) = rt.block_on(radio.get_control(id)) {
+        apply(&mut state.lock().expect("ui state lock poisoned"), value);
+    }
+}
+
+fn update_remote_bool<F>(
+    rt: &tokio::runtime::Runtime,
+    radio: &RadioHandle,
+    state: &Arc<Mutex<GuiState>>,
+    id: ControlId,
+    apply: F,
+) where
+    F: FnOnce(&mut GuiState, bool),
+{
+    if let Ok(Some(ControlValue::Bool(value))) = rt.block_on(radio.get_control(id)) {
+        apply(&mut state.lock().expect("ui state lock poisoned"), value);
+    }
+}
+
+fn update_remote_meter<F>(
+    rt: &tokio::runtime::Runtime,
+    radio: &RadioHandle,
+    state: &Arc<Mutex<GuiState>>,
+    id: MeterId,
+    apply: F,
+) where
+    F: FnOnce(&mut GuiState, u8),
+{
+    if let Ok(Some(value)) = rt.block_on(radio.get_meter(id)) {
+        apply(&mut state.lock().expect("ui state lock poisoned"), value);
     }
 }
 

@@ -88,6 +88,10 @@ impl RadioHandle {
         }
     }
 
+    pub(crate) fn is_remote(&self) -> bool {
+        matches!(self, Self::Remote(_))
+    }
+
     pub(crate) fn remote_scope_queue(&self) -> Option<Arc<Mutex<VecDeque<Vec<u8>>>>> {
         match self {
             Self::Local(_) => None,
