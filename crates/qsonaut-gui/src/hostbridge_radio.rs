@@ -16,13 +16,14 @@ use std::time::Duration;
 /// QSONaut-owned remote radio handle. Host device paths and leases remain
 /// entirely inside HostBridge; this handle only retains the negotiated
 /// catalog entry and the session transport.
+#[derive(Clone)]
 pub(crate) struct HostBridgeRadio {
     client: Arc<HostBridgeClient>,
-    events: Mutex<tokio::sync::mpsc::UnboundedReceiver<HostBridgeEvent>>,
-    state: Mutex<RadioState>,
-    capabilities: Mutex<RadioCapabilitiesInfo>,
-    link_health: Mutex<LinkHealth>,
-    raw_responses: Mutex<HashMap<String, Vec<u8>>>,
+    events: Arc<Mutex<tokio::sync::mpsc::UnboundedReceiver<HostBridgeEvent>>>,
+    state: Arc<Mutex<RadioState>>,
+    capabilities: Arc<Mutex<RadioCapabilitiesInfo>>,
+    link_health: Arc<Mutex<LinkHealth>>,
+    raw_responses: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     hello: HostHello,
     device_id: String,
     driver: qsonaut_hostbridge_protocol::RadioDriver,
@@ -34,8 +35,8 @@ pub(crate) struct HostBridgeRadio {
     scope_queue: Arc<Mutex<VecDeque<Vec<u8>>>>,
     audio_source: Option<(String, qsonaut_hostbridge_protocol::AudioFormat)>,
     audio_output: Option<(String, qsonaut_hostbridge_protocol::AudioFormat)>,
-    media_seen: AtomicBool,
-    meter_seen: AtomicBool,
+    media_seen: Arc<AtomicBool>,
+    meter_seen: Arc<AtomicBool>,
 }
 
 static REMOTE_MEDIA_QUEUE: OnceLock<Arc<Mutex<VecDeque<Vec<f32>>>>> = OnceLock::new();
@@ -395,13 +396,13 @@ impl HostBridgeRadio {
         })
         .await
         .map_err(|_| anyhow!("timed out waiting for initial HostBridge radio state"))??;
-        Ok(Self {
+        let radio = Self {
             client,
-            events: Mutex::new(events),
-            state: Mutex::new(initial_state),
-            capabilities: Mutex::new(capabilities),
-            link_health: Mutex::new(LinkHealth::default()),
-            raw_responses: Mutex::new(HashMap::new()),
+            events: Arc::new(Mutex::new(events)),
+            state: Arc::new(Mutex::new(initial_state)),
+            capabilities: Arc::new(Mutex::new(capabilities)),
+            link_health: Arc::new(Mutex::new(LinkHealth::default())),
+            raw_responses: Arc::new(Mutex::new(HashMap::new())),
             hello,
             device_id,
             driver,
@@ -413,9 +414,19 @@ impl HostBridgeRadio {
             scope_queue: new_scope_queue(),
             audio_source,
             audio_output,
-            media_seen: AtomicBool::new(false),
-            meter_seen: AtomicBool::new(false),
-        })
+            media_seen: Arc::new(AtomicBool::new(false)),
+            meter_seen: Arc::new(AtomicBool::new(false)),
+        };
+        let event_pump = radio.clone();
+        std::thread::Builder::new()
+            .name("qsonaut-hostbridge-events".to_string())
+            .spawn(move || {
+                while event_pump.pump_events() {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            })
+            .map_err(|error| anyhow!("failed to start HostBridge event pump: {error}"))?;
+        Ok(radio)
     }
 
     pub(crate) fn host_name(&self) -> &str {
@@ -430,11 +441,16 @@ impl HostBridgeRadio {
         &self.hello.capabilities
     }
 
-    pub(crate) fn pump_events(&self) {
+    pub(crate) fn pump_events(&self) -> bool {
         let Ok(mut events) = self.events.lock() else {
-            return;
+            return false;
         };
-        while let Ok(event) = events.try_recv() {
+        loop {
+            let event = match events.try_recv() {
+                Ok(event) => event,
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return true,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return false,
+            };
             match event {
                 HostBridgeEvent::Server(ServerMessage::State(next)) => {
                     if let Ok(mut state) = self.state.lock() {
