@@ -47,11 +47,15 @@ impl WorkspaceMode {
         }
     }
 
-    pub(super) fn slot_seconds(self, fst4_submode: crate::modes::fst4::Submode) -> Option<f64> {
-        if self == Self::Fst4 {
-            Some(fst4_submode.seconds())
-        } else {
-            self.core_slot_seconds()
+    pub(super) fn slot_seconds(
+        self,
+        fst4_submode: crate::modes::fst4::Submode,
+        q65_submode: qsonaut_third_party::wsjt::Q65Submode,
+    ) -> Option<f64> {
+        match self {
+            Self::Fst4 => Some(fst4_submode.seconds()),
+            Self::Q65 => Some(q65_submode.seconds() as f64),
+            _ => self.core_slot_seconds(),
         }
     }
 

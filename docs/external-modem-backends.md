@@ -9,9 +9,9 @@ This project is intentionally moving toward **integration-first** modem strategy
   `qsonaut-third-party`)
   - FT8/FT4/FST4/WSPR/JT9/JT65/all wired Q65 submodes/MSK144 support
   - QSONaut wires mode-specific receive adapters for each of those families.
-  - FT8, FT4, FST4-60, JT9, JT65, and Q65-A30 also have scheduled transmit
-    synthesis in the current QSONaut UI; the adapter exposes every wired Q65
-    submode. WSPR and MSK144 are receive-only in the current UI.
+  - FT8, FT4, FST4-60, JT9, JT65, and all selectable Q65 submodes have
+    scheduled transmit synthesis in the current QSONaut UI. WSPR and MSK144
+    are receive-only in the current UI.
 - [`komitoto-sstv`](https://github.com/IRendy/komitoto/tree/c98945f7c89f714b3182457a86b15a0c43cb6de6/crates/komitoto-sstv)
   (MIT, pinned Git revision)
   - Complete-frame codecs and timing definitions for 13 Martin, Scottie,

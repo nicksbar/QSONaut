@@ -5,6 +5,7 @@ use super::decode::{
     run_native_digital_decode, warm_ft8_decoder,
 };
 use super::request_gui_repaint;
+use crate::tx_audio::build_native_digital_tx_pcm_with_q65;
 use hound::{SampleFormat, WavSpec, WavWriter};
 use qsonaut_audio::{CANONICAL_CHANNELS, CANONICAL_SAMPLE_RATE_HZ};
 use qsonaut_modems::AudioNormalizer;
@@ -190,6 +191,8 @@ fn null_sim_stations(mode: WorkspaceMode) -> Vec<QsonautPerson> {
 
 struct NullAudioGenerator {
     mode: Option<WorkspaceMode>,
+    fst4_submode: crate::modes::fst4::Submode,
+    q65_submode: qsonaut_third_party::wsjt::Q65Submode,
     waveforms: Vec<Vec<f32>>,
     period_s: f64,
     start_s: f64,
@@ -200,6 +203,8 @@ impl Default for NullAudioGenerator {
     fn default() -> Self {
         Self {
             mode: None,
+            fst4_submode: crate::modes::fst4::Submode::default(),
+            q65_submode: qsonaut_third_party::wsjt::Q65Submode::A30,
             waveforms: Vec::new(),
             period_s: 15.0,
             start_s: 0.5,
@@ -211,10 +216,14 @@ impl Default for NullAudioGenerator {
 impl NullAudioGenerator {
     fn rebuild(&mut self, mode: WorkspaceMode, state: &GuiState) {
         self.mode = Some(mode);
-        self.period_s = mode.slot_seconds(state.fst4_submode).unwrap_or(match mode {
-            WorkspaceMode::Sstv => 60.0,
-            _ => 15.0,
-        });
+        self.fst4_submode = state.fst4_submode;
+        self.q65_submode = state.q65_submode;
+        self.period_s = mode
+            .slot_seconds(state.fst4_submode, state.q65_submode)
+            .unwrap_or(match mode {
+                WorkspaceMode::Sstv => 60.0,
+                _ => 15.0,
+            });
         self.start_s = if mode == WorkspaceMode::Sstv {
             1.0
         } else {
@@ -272,11 +281,12 @@ impl NullAudioGenerator {
                 | WorkspaceMode::Jt9
                 | WorkspaceMode::Jt65
                 | WorkspaceMode::Q65
-                | WorkspaceMode::Wspr => build_native_digital_tx_pcm(
+                | WorkspaceMode::Wspr => build_native_digital_tx_pcm_with_q65(
                     mode,
                     &message,
                     tone_hz,
                     state.fst4_submode,
+                    state.q65_submode,
                     state.cw_wpm,
                     state.selected_audio_hz as u16,
                 )
@@ -377,7 +387,10 @@ impl NullAudioGenerator {
         let started = Instant::now();
         self.next_deadline = Some(started + chunk_duration);
         let snapshot = state.lock().expect("ui state lock poisoned").clone();
-        if self.mode != Some(snapshot.workspace_mode) {
+        if self.mode != Some(snapshot.workspace_mode)
+            || self.fst4_submode != snapshot.fst4_submode
+            || self.q65_submode != snapshot.q65_submode
+        {
             self.rebuild(snapshot.workspace_mode, &snapshot);
         }
         let now_s = SystemTime::now()
@@ -716,6 +729,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut ft4_slot_gate = Ft8SlotGate::default();
         let mut decode_workspace_last: Option<WorkspaceMode> = None;
         let mut decode_fst4_submode_last: Option<crate::modes::fst4::Submode> = None;
+        let mut decode_q65_submode_last: Option<qsonaut_third_party::wsjt::Q65Submode> = None;
         // Waterfall rows arrive far faster than a human can see. Redrawing the
         // whole UI on every chunk is what pins the GPU, so cap the repaint rate
         // and let egui coalesce the rest.
@@ -918,8 +932,14 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                         } else {
                             crate::modes::fst4::Submode::default()
                         };
+                        let active_q65_submode = if active_workspace_mode == WorkspaceMode::Q65 {
+                            state.lock().expect("ui state lock poisoned").q65_submode
+                        } else {
+                            qsonaut_third_party::wsjt::Q65Submode::A30
+                        };
                         if decode_workspace_last != Some(active_workspace_mode)
                             || decode_fst4_submode_last != Some(active_fst4_submode)
+                            || decode_q65_submode_last != Some(active_q65_submode)
                         {
                             info!(workspace = %active_workspace_mode.label(), "Audio decoder workspace changed");
                             if recording_active {
@@ -928,6 +948,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             }
                             decode_workspace_last = Some(active_workspace_mode);
                             decode_fst4_submode_last = Some(active_fst4_submode);
+                            decode_q65_submode_last = Some(active_q65_submode);
                             ft8_buf.clear();
                             digital_buf.clear();
                             cw_stream_decoder = None;
@@ -1899,8 +1920,8 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                             .to_string();
                                 }
                             }
-                        } else if let Some(slot_seconds) =
-                            active_workspace_mode.slot_seconds(active_fst4_submode)
+                        } else if let Some(slot_seconds) = active_workspace_mode
+                            .slot_seconds(active_fst4_submode, active_q65_submode)
                         {
                             digital_buf.extend_from_slice(&ds);
                             let slot_samples = (slot_seconds * 12_000.0).round() as usize;

@@ -1,8 +1,6 @@
 use super::super::*;
 use qsonaut_modems::{extract_aligned_window, AudioBlock};
-use qsonaut_third_party::wsjt::{
-    decode as decode_wsjt, Fst4Submode, Q65Submode, WsjtDecodeConfig, WsjtMode,
-};
+use qsonaut_third_party::wsjt::{decode as decode_wsjt, Fst4Submode, WsjtDecodeConfig, WsjtMode};
 
 const FT8_SLOT_MS: u128 = 15_000;
 const FT8_DEEP_RUNTIME_BUDGET_MS: u128 = 12_000;
@@ -67,7 +65,9 @@ pub(in super::super) fn run_native_digital_decode(
         .lock()
         .expect("ui state lock poisoned")
         .compute_backend;
-    let budget = Duration::from_secs_f64(mode.core_slot_seconds().unwrap_or(15.0));
+    let q65_submode = state.lock().expect("ui state lock poisoned").q65_submode;
+    let budget =
+        Duration::from_secs_f64(mode.slot_seconds(fst4_submode, q65_submode).unwrap_or(15.0));
     let mut trace = DecodeTrace::new(mode.label(), backend, samples.len(), budget);
     let mut decoded = Vec::new();
     let mut push = |snr_db: f32, dt_s: f32, freq_hz: f32, message: String| {
@@ -177,7 +177,7 @@ pub(in super::super) fn run_native_digital_decode(
         WorkspaceMode::Q65 => {
             if let Ok(batch) = decode_wsjt(
                 &AudioBlock::new(12_000, samples.clone()).expect("normalized audio is valid"),
-                WsjtMode::Q65(Q65Submode::A30),
+                WsjtMode::Q65(q65_submode),
                 &q65_live_decode_config(),
             ) {
                 for event in batch.events {
@@ -224,7 +224,8 @@ pub(in super::super) fn run_native_digital_decode(
         let shared = state.lock().expect("ui state lock poisoned");
         (shared.psk_report_sender.clone(), shared.frequency_hz)
     };
-    let received_at = (period as f64 * mode.core_slot_seconds().unwrap_or(15.0)) as u32;
+    let received_at =
+        (period as f64 * mode.slot_seconds(fst4_submode, q65_submode).unwrap_or(15.0)) as u32;
     for result in &decoded {
         submit_psk_report(
             &psk_sender,

@@ -128,7 +128,7 @@ can be advertised to the UI.
 | FT8 | Integrated / Validated path | Slot-aligned decode, activity, compose/reply flow, sequencing, TX history, logging, duplicate guards, and global TX disarm. |
 | FT4 | Integrated | Native decode and scheduled TX workflow with activity, conversation, sequencing, logging, and TX disarm. |
 | FST4-60 | Experimental | Native decoder/workspace and scheduled-TX path; broader timing and hardware validation remains open. |
-| JT9, JT65, Q65-30A | Experimental | Native receive/decode and manual or scheduled waveform TX paths; Q65 is currently configured around the A30 submode. |
+| JT9, JT65, Q65 | Experimental | Native receive/decode and manual or scheduled waveform TX paths; QSONaut exposes the adapter's wired Q65 submodes, with matching slot timing and synthesis. |
 | WSPR | RX-only | Receive/decode integration; no native automatic transmit workflow. |
 | MSK144 | RX-only | Receive/decode integration; no complete native TX workflow. |
 | CW | Experimental | Software audio decode, selected-channel monitoring, adaptive timing, and generated subband TX. Paddle input, prosigns, punctuation, and automatic sequencing are not implemented. |

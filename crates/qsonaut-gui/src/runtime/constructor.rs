@@ -855,6 +855,7 @@ impl QsonautGuiApp {
             workspace_mode,
             activity: OperatingActivity::General,
             fst4_submode: modes::fst4::Submode::default(),
+            q65_submode: qsonaut_third_party::wsjt::Q65Submode::A30,
             display_tuning,
             repaint_ctx,
             ft8_log: Vec::new(),

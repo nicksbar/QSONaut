@@ -62,6 +62,7 @@ use qsonaut_server_client::{
     ConnectionState as ServerConnectionState, Presence as ServerPresence, ServerClient,
 };
 use qsonaut_third_party::sstv as qsonaut_sstv;
+use qsonaut_third_party::wsjt::Q65Submode;
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -732,6 +733,7 @@ struct GuiState {
     digital_tx_period: Option<(WorkspaceMode, u64)>,
     selected_audio_hz: u32,
     fst4_submode: modes::fst4::Submode,
+    q65_submode: Q65Submode,
     compute_backend: ActiveBackend,
     ft8_compute_telemetry: Option<DecodeTelemetry>,
     digital_compute_telemetry: Option<DecodeTelemetry>,
@@ -854,6 +856,7 @@ impl Default for GuiState {
             digital_tx_period: None,
             selected_audio_hz: default_rx_tone_hz(),
             fst4_submode: modes::fst4::Submode::default(),
+            q65_submode: Q65Submode::A30,
             compute_backend: ActiveBackend::CpuSimd,
             ft8_compute_telemetry: None,
             digital_compute_telemetry: None,
@@ -1154,6 +1157,7 @@ struct QsonautGuiApp {
     workspace_mode: WorkspaceMode,
     activity: OperatingActivity,
     fst4_submode: modes::fst4::Submode,
+    q65_submode: Q65Submode,
     display_tuning: Arc<Mutex<DisplayTuning>>,
     repaint_ctx: Arc<OnceLock<egui::Context>>,
     // FT8 workspace UX state (app-local, not shared with workers)
@@ -3273,6 +3277,39 @@ mod tests {
             assert!(!pcm.is_empty(), "{} synthesis was empty", mode.label());
             assert!(pcm.iter().any(|sample| *sample != 0));
             assert!(offset >= 0.0);
+        }
+    }
+
+    #[test]
+    fn q65_builder_generates_audio_for_every_submode() {
+        let submodes = [
+            Q65Submode::A15,
+            Q65Submode::A30,
+            Q65Submode::A60,
+            Q65Submode::B60,
+            Q65Submode::C60,
+            Q65Submode::D60,
+            Q65Submode::E60,
+            Q65Submode::D120,
+            Q65Submode::E120,
+            Q65Submode::A300,
+        ];
+        for submode in submodes {
+            let (pcm, _) = tx_audio::build_native_digital_tx_pcm_with_q65(
+                WorkspaceMode::Q65,
+                "CQ W1AW AA00",
+                1_500,
+                modes::fst4::Submode::default(),
+                submode,
+                20,
+                600,
+            )
+            .unwrap_or_else(|error| panic!("Q65 synthesis failed for {}: {error}", submode.name()));
+            assert!(
+                !pcm.is_empty(),
+                "Q65 synthesis was empty for {}",
+                submode.name()
+            );
         }
     }
 

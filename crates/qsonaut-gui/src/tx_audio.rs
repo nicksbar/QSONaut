@@ -26,6 +26,26 @@ pub(super) fn build_native_digital_tx_pcm(
     cw_wpm: u8,
     cw_tone_hz: u16,
 ) -> Result<(Vec<i16>, f64)> {
+    build_native_digital_tx_pcm_with_q65(
+        mode,
+        compose,
+        tx_tone_hz,
+        fst4_submode,
+        Q65Submode::A30,
+        cw_wpm,
+        cw_tone_hz,
+    )
+}
+
+pub(super) fn build_native_digital_tx_pcm_with_q65(
+    mode: WorkspaceMode,
+    compose: &str,
+    tx_tone_hz: u32,
+    fst4_submode: crate::modes::fst4::Submode,
+    q65_submode: Q65Submode,
+    cw_wpm: u8,
+    cw_tone_hz: u16,
+) -> Result<(Vec<i16>, f64)> {
     let tokens: Vec<&str> = compose.split_whitespace().collect();
     if mode != WorkspaceMode::Cw && tokens.len() != 3 {
         anyhow::bail!("{} TX needs exactly 3 message fields", mode.label());
@@ -65,7 +85,7 @@ pub(super) fn build_native_digital_tx_pcm(
             .map(|audio| (audio, 0.0))
             .ok_or_else(|| anyhow!("unable to pack JT65 message")),
         WorkspaceMode::Q65 => {
-            synthesize_q65_standard(compose, Q65Submode::A30, tone, FT8_TX_AMPLITUDE_I16)
+            synthesize_q65_standard(compose, q65_submode, tone, FT8_TX_AMPLITUDE_I16)
                 .map(|audio| (audio, 1.0))
                 .ok_or_else(|| anyhow!("unable to pack Q65 message"))
         }

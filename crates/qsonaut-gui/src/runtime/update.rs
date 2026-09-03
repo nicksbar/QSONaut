@@ -283,6 +283,7 @@ impl QsonautGuiApp {
             let mut s = self.state.lock().expect("ui state lock poisoned");
             s.workspace_mode = self.workspace_mode;
             s.fst4_submode = self.fst4_submode;
+            s.q65_submode = self.q65_submode;
             s.ft8_deep_decode = self.ft8_deep_decode;
             s.ft4_deep_decode = self.ft4_deep_decode;
             s.selected_audio_hz = if self.workspace_mode == WorkspaceMode::Cw {

@@ -29,8 +29,12 @@ fn native_radio_mode_label(preset: crate::band_plan::WorkspaceRadioPreset) -> &'
     }
 }
 
-fn native_slot_label(mode: WorkspaceMode, fst4_submode: crate::modes::fst4::Submode) -> String {
-    mode.slot_seconds(fst4_submode).map_or_else(
+fn native_slot_label(
+    mode: WorkspaceMode,
+    fst4_submode: crate::modes::fst4::Submode,
+    q65_submode: qsonaut_third_party::wsjt::Q65Submode,
+) -> String {
+    mode.slot_seconds(fst4_submode, q65_submode).map_or_else(
         || "Continuous".to_string(),
         |seconds| {
             if seconds.fract() == 0.0 {
@@ -132,7 +136,7 @@ impl QsonautGuiApp {
     ) {
         let preset = workspace_radio_preset(mode);
         let preset_label = native_radio_mode_label(preset);
-        let slot_s = native_slot_label(mode, self.fst4_submode);
+        let slot_s = native_slot_label(mode, self.fst4_submode, self.q65_submode);
 
         ui.heading(mode.label());
         ui.separator();
@@ -209,7 +213,7 @@ impl QsonautGuiApp {
             });
         }
         ui.add_space(4.0);
-        if let Some(slot_seconds) = mode.slot_seconds(self.fst4_submode) {
+        if let Some(slot_seconds) = mode.slot_seconds(self.fst4_submode, self.q65_submode) {
             let now_s = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|duration| duration.as_secs_f64())
@@ -407,12 +411,27 @@ mod tests {
     #[test]
     fn formats_continuous_and_timed_native_slots() {
         assert_eq!(
-            native_slot_label(WorkspaceMode::Wspr, Submode::S60),
+            native_slot_label(
+                WorkspaceMode::Wspr,
+                Submode::S60,
+                qsonaut_third_party::wsjt::Q65Submode::A30
+            ),
             "120 s"
         );
-        assert_eq!(native_slot_label(WorkspaceMode::Jt9, Submode::S60), "60 s");
         assert_eq!(
-            native_slot_label(WorkspaceMode::Cw, Submode::S60),
+            native_slot_label(
+                WorkspaceMode::Jt9,
+                Submode::S60,
+                qsonaut_third_party::wsjt::Q65Submode::A30
+            ),
+            "60 s"
+        );
+        assert_eq!(
+            native_slot_label(
+                WorkspaceMode::Cw,
+                Submode::S60,
+                qsonaut_third_party::wsjt::Q65Submode::A30
+            ),
             "Continuous"
         );
     }
