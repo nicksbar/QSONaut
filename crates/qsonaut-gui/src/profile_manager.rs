@@ -102,6 +102,7 @@ impl QsonautGuiApp {
             ptt_tail_ms: self.ptt_tail_ms.clamp(0, 500),
             cw_wpm: self.cw_wpm.clamp(5, 40),
             cw_tone_hz: self.cw_tone_hz.clamp(200, 3_000),
+            cw_auto_target_timeout_s: self.cw_auto_target_timeout_s.clamp(1, 10),
             recording_enabled: self.recording_enabled,
             recording_modes: self.recording_modes.clone(),
             recording_full_width: self.recording_full_width,
@@ -201,12 +202,14 @@ impl QsonautGuiApp {
         self.ptt_tail_ms = profile.ptt_tail_ms.clamp(0, 500);
         self.cw_wpm = profile.cw_wpm.clamp(5, 40);
         self.cw_tone_hz = profile.cw_tone_hz.clamp(200, 3_000);
+        self.cw_auto_target_timeout_s = profile.cw_auto_target_timeout_s.clamp(1, 10);
         self.recording_enabled = profile.recording_enabled;
         self.recording_modes = profile.recording_modes.clone();
         self.recording_full_width = profile.recording_full_width;
         self.recording_stream = profile.recording_stream;
         if let Ok(mut state) = self.state.lock() {
             state.recording_enabled = self.recording_enabled;
+            state.cw_auto_target_timeout_s = self.cw_auto_target_timeout_s;
             state.recording_modes = self
                 .recording_modes
                 .iter()

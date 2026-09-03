@@ -35,40 +35,12 @@ impl QsonautGuiApp {
         if let Some(tone_hz) = snapshot.cw_auto_target_tone_hz {
             self.cw_tone_hz = tone_hz.clamp(200, 3_000) as u16;
         }
-        let preset = workspace_radio_preset(WorkspaceMode::Cw);
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             ui.heading(workspace_description());
             ui.separator();
-            ui.label(
-                RichText::new("Backend: cw-dit")
-                    .strong()
-                    .color(theme_success(ui)),
-            );
+            ui.hyperlink_to("cw-dit", "https://github.com/swilcox/cw-dit");
+            ui.label("Software audio");
             ui.separator();
-            ui.label("Timing: Continuous");
-            ui.separator();
-            ui.label(format!("Radio preset: USB-D FIL{}", preset.filter));
-            ui.separator();
-            ui.label(format!(
-                "Radio: {:.3} MHz · {}",
-                snapshot.frequency_hz.unwrap_or_default() as f64 / 1_000_000.0,
-                snapshot.mode
-            ));
-        });
-
-        ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.label(
-                RichText::new(&snapshot.digital_decode_status)
-                    .monospace()
-                    .color(theme_success(ui)),
-            );
-            if let Some(level) = snapshot.audio_level_dbfs {
-                ui.separator();
-                ui.label(format!("Input {level:.0} dBFS"));
-            }
-        });
-        ui.horizontal(|ui| {
             let target_label = if snapshot.cw_auto_target {
                 if snapshot.cw_auto_retarget {
                     "🎯 RETARGETING".to_string()
@@ -76,44 +48,40 @@ impl QsonautGuiApp {
                     "🎯 AUTO TARGET".to_string()
                 }
             } else if snapshot.cw_auto_retarget {
-                match snapshot.cw_retarget_remaining_s {
-                    Some(seconds) => "🎯 RETARGET".to_string() + &format!(" {seconds}s"),
-                    None => "🎯 RETARGET AFTER 10s".to_string(),
-                }
+                "🎯 LOCKED".to_string()
             } else {
                 "🎯 AUTO TARGET".to_string()
             };
             let auto_target = ui
-                .add(
+                .add_sized(
+                    [112.0, 24.0],
                     egui::Button::new(&target_label)
                         .selected(snapshot.cw_auto_target || snapshot.cw_auto_retarget),
                 )
                 .on_hover_text(
-                    "Click cycles: off → scan and lock → keep locked, then scan again after 10 seconds without a signal",
+                    "Click cycles: off → scan and lock → keep locked, then scan again after the configured timeout without a signal",
                 );
             if auto_target.clicked() {
                 let mut state = self.state.lock().expect("ui state lock poisoned");
                 (state.cw_auto_target, state.cw_auto_retarget) =
                     next_auto_target_state(state.cw_auto_target, state.cw_auto_retarget);
                 state.cw_auto_target_tone_hz = None;
-                state.cw_retarget_remaining_s = if state.cw_auto_retarget {
-                    Some(10)
-                } else {
-                    None
-                };
-                state.digital_decode_status = if state.cw_auto_target {
-                    "CW AUTO TARGET: scanning for a stable carrier".to_string()
-                } else if state.cw_auto_retarget {
-                    "CW AUTO TARGET: locked; will rescan after 10 seconds without a signal"
-                        .to_string()
-                } else {
-                    "CW auto target disarmed".to_string()
-                };
                 info!(
                     scanning = state.cw_auto_target,
                     retarget = state.cw_auto_retarget,
                     "CW auto target changed"
                 );
+            }
+            ui.label("Retarget");
+            if ui
+                .add(
+                    egui::Slider::new(&mut self.cw_auto_target_timeout_s, 1..=10)
+                        .suffix(" s")
+                )
+                .changed()
+            {
+                let mut state = self.state.lock().expect("ui state lock poisoned");
+                state.cw_auto_target_timeout_s = self.cw_auto_target_timeout_s;
             }
             if let Some(tone_hz) = snapshot.cw_auto_target_tone_hz {
                 ui.label(
@@ -122,23 +90,30 @@ impl QsonautGuiApp {
                         .color(theme_success(ui)),
                 );
             }
-        });
-        ui.horizontal_wrapped(|ui| {
-            let recording = self
-                .state
-                .lock()
-                .expect("ui state lock poisoned")
-                .recording_enabled;
-            ui.label(if recording {
-                "Recording is controlled by Profile → Recording"
-            } else {
-                "Recording disabled · configure it in Profile → Recording"
-            });
-            ui.label(
-                RichText::new(&snapshot.cw_recording_status)
-                    .small()
-                    .color(theme_muted(ui)),
+            ui.separator();
+            ui.add_sized(
+                [145.0, 22.0],
+                egui::Label::new(
+                    RichText::new(format!(
+                        "{} chars · {:.1} env/s",
+                        snapshot.cw_character_count, snapshot.cw_envelope_rate
+                    ))
+                        .monospace()
+                        .color(theme_muted(ui)),
+                )
+                .truncate(),
             );
+            if snapshot.recording_enabled {
+                ui.add_sized(
+                    [220.0, 22.0],
+                    egui::Label::new(
+                        RichText::new(&snapshot.cw_recording_status)
+                            .small()
+                            .color(theme_muted(ui)),
+                    )
+                    .truncate(),
+                );
+            }
         });
         ui.separator();
 
@@ -146,6 +121,11 @@ impl QsonautGuiApp {
             .fill(Color32::from_rgb(20, 34, 28))
             .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgb(90, 210, 130)))
             .show(ui, |ui| {
+                ui.label(
+                    RichText::new(&self.digital_tx_status)
+                        .small()
+                        .color(theme_muted(ui)),
+                );
                 ui.label(
                     RichText::new("LIVE DECODE")
                         .small()
@@ -163,49 +143,6 @@ impl QsonautGuiApp {
                     .size(18.0),
                 );
             });
-        ui.add_space(6.0);
-
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("UTC          New transcript text")
-                    .monospace()
-                    .strong(),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Clear").clicked() {
-                    info!("CW transcript cleared by operator");
-                    let mut state = self.state.lock().expect("ui state lock poisoned");
-                    state
-                        .digital_decodes
-                        .retain(|entry| entry.mode != WorkspaceMode::Cw);
-                    state.cw_live_text.clear();
-                }
-            });
-        });
-        egui::ScrollArea::vertical()
-            .id_salt("cw-decodes")
-            .max_height((ui.available_height() * 0.45).max(140.0))
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                let mut shown = 0;
-                for entry in snapshot
-                    .digital_decodes
-                    .iter()
-                    .filter(|entry| entry.mode == WorkspaceMode::Cw)
-                {
-                    shown += 1;
-                    ui.label(
-                        RichText::new(format!("{:12}  {}", entry.utc, entry.message)).monospace(),
-                    );
-                }
-                if shown == 0 {
-                    ui.label(
-                        RichText::new("Listening for the first stable CW characters…")
-                            .color(theme_muted(ui)),
-                    );
-                }
-            });
-
         ui.separator();
         ui.horizontal_wrapped(|ui| {
             ui.label("TX speed");
@@ -261,28 +198,6 @@ impl QsonautGuiApp {
                 self.stop_native_digital_tx();
             }
         });
-        ui.label(RichText::new(&self.digital_tx_status).color(theme_muted(ui)));
-        ui.label(
-            RichText::new(
-                "Software CW uses USB-D and cw-dit. The selected tone feeds an adaptive Goertzel, noise-floor slicer, debouncer, and streaming Morse decoder. A-Z, 0-9, and spaces are supported; prosigns, punctuation, paddle/keyed-carrier CW, and automatic QSO sequencing are not yet available.",
-            )
-            .small()
-            .color(theme_warning(ui)),
-        );
-        ui.label(
-            RichText::new(
-                "RX uses a 240 Hz audio channel centered on the selected tone. That same filtered channel feeds cw-dit and the RX monitor. The decoder adapts to the local noise floor; there is no fixed squelch to tune.",
-            )
-            .small()
-            .color(theme_muted(ui)),
-        );
-        ui.label(
-            RichText::new(
-                "CW is channel-based, not a whole-waterfall decoder: QSONaut feeds the selected audio tone continuously into cw-dit. Align the green CW CENTER marker with the audible carrier; the waterfall is for choosing the channel, not decoding every signal at once.",
-            )
-            .small()
-            .color(theme_accent(ui)),
-        );
 
         let cw_tx: Vec<_> = self
             .digital_tx_chat

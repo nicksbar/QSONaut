@@ -216,6 +216,8 @@ pub(super) struct OperatorProfile {
     pub(super) cw_wpm: u8,
     #[serde(default = "default_cw_tone_hz")]
     pub(super) cw_tone_hz: u16,
+    #[serde(default = "default_cw_auto_target_timeout_s")]
+    pub(super) cw_auto_target_timeout_s: u8,
     #[serde(flatten, default)]
     pub(super) audio: AudioProfileSettings,
     #[serde(default)]
@@ -488,6 +490,10 @@ pub(super) fn default_cw_wpm() -> u8 {
 
 pub(super) fn default_cw_tone_hz() -> u16 {
     600
+}
+
+pub(super) fn default_cw_auto_target_timeout_s() -> u8 {
+    3
 }
 
 fn default_audio_monitor_volume() -> f32 {

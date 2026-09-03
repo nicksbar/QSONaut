@@ -17,8 +17,6 @@ use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU32;
 
-const CW_RETARGET_TIMEOUT_S: u64 = 10;
-
 struct SignalRecording {
     full_width: Option<WavWriter<BufWriter<File>>>,
     stream: Option<WavWriter<BufWriter<File>>>,
@@ -973,10 +971,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 s.ft8_decode_status =
                                     "READY: collecting a fresh FT8 slot".to_string();
                             } else if active_workspace_mode == WorkspaceMode::Cw {
-                                s.digital_decode_status =
-                                    "READY: live CW decode starts after 3 seconds".to_string();
                                 s.cw_live_text.clear();
-                                s.cw_retarget_remaining_s = None;
+                                s.cw_character_count = 0;
+                                s.cw_envelope_rate = 0.0;
                             } else if active_workspace_mode == WorkspaceMode::Sstv {
                                 s.sstv_status = format!(
                                     "READY: {} · {}",
@@ -1017,6 +1014,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             recording_mode,
                             recording_full_width,
                             recording_stream,
+                            cw_target_scanning,
                         ) = {
                             let shared = state.lock().expect("ui state lock poisoned");
                             (
@@ -1024,10 +1022,12 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 shared.recording_modes.contains(&active_workspace_mode),
                                 shared.recording_full_width,
                                 shared.recording_stream,
+                                active_workspace_mode == WorkspaceMode::Cw && shared.cw_auto_target,
                             )
                         };
                         if !recording_enabled
                             || !recording_mode
+                            || cw_target_scanning
                             || (!recording_full_width && !recording_stream)
                         {
                             if recording_active {
@@ -1604,20 +1604,22 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             {
                                 let mut shared = state.lock().expect("ui state lock poisoned");
                                 shared.cw_live_text.clear();
-                                shared.digital_decode_status =
-                                    "CW TX active; receive window reset".to_string();
                                 continue;
                             }
-                            let (mut auto_target, auto_retarget) = {
+                            let (mut auto_target, auto_retarget, retarget_timeout_s) = {
                                 let shared = state.lock().expect("ui state lock poisoned");
-                                (shared.cw_auto_target, shared.cw_auto_retarget)
+                                (
+                                    shared.cw_auto_target,
+                                    shared.cw_auto_retarget,
+                                    u64::from(shared.cw_auto_target_timeout_s.max(1)),
+                                )
                             };
                             let candidate = strongest_cw_tone_hz(&fft_buf, sample_rate_hz);
                             if auto_retarget && !auto_target {
                                 if cw_filtered_signal_present {
                                     cw_retarget_last_signal = Instant::now();
                                 } else if cw_retarget_last_signal.elapsed()
-                                    >= Duration::from_secs(CW_RETARGET_TIMEOUT_S)
+                                    >= Duration::from_secs(retarget_timeout_s)
                                 {
                                     if recording_active {
                                         let _ = recording_tx.try_send(RecordingMessage::Stop);
@@ -1625,11 +1627,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     }
                                     let mut shared = state.lock().expect("ui state lock poisoned");
                                     shared.cw_auto_target = true;
-                                    shared.cw_retarget_remaining_s = None;
                                     shared.cw_auto_target_tone_hz = None;
-                                    shared.digital_decode_status =
-                                        "CW AUTO TARGET: no signal for 10 seconds; scanning"
-                                            .to_string();
                                     auto_target = true;
                                     cw_auto_target_candidate = None;
                                     cw_auto_target_observations = 0;
@@ -1653,14 +1651,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     let mut shared = state.lock().expect("ui state lock poisoned");
                                     shared.selected_audio_hz = tone_hz;
                                     shared.cw_auto_target = false;
-                                    shared.cw_retarget_remaining_s = if auto_retarget {
-                                        Some(CW_RETARGET_TIMEOUT_S as u8)
-                                    } else {
-                                        None
-                                    };
                                     shared.cw_auto_target_tone_hz = Some(tone_hz);
-                                    shared.digital_decode_status =
-                                        format!("CW AUTO TARGET: locked {tone_hz} Hz");
                                     cw_auto_target_candidate = None;
                                     cw_auto_target_observations = 0;
                                     cw_retarget_last_signal = Instant::now();
@@ -1716,18 +1707,6 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         .sqrt()
                                 };
                                 cw_filtered_signal_present = channel_rms >= 0.002;
-                                if auto_retarget && !auto_target {
-                                    let elapsed = cw_retarget_last_signal.elapsed().as_secs();
-                                    let remaining = CW_RETARGET_TIMEOUT_S.saturating_sub(elapsed);
-                                    let remaining = u8::try_from(remaining).unwrap_or(u8::MAX);
-                                    let mut shared = state.lock().expect("ui state lock poisoned");
-                                    shared.cw_retarget_remaining_s = Some(remaining);
-                                    if remaining > 0 {
-                                        shared.digital_decode_status = format!(
-                                            "CW AUTO TARGET: locked; retarget in {remaining}s"
-                                        );
-                                    }
-                                }
                                 if channel_rms < 0.002 {
                                     cw_silence_samples =
                                         cw_silence_samples.saturating_add(channel_audio.len());
@@ -1746,36 +1725,11 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     };
                                     let mut shared = state.lock().expect("ui state lock poisoned");
                                     shared.cw_live_text.push_str(&text);
-                                    shared.digital_decode_status =
-                                        format!("LIVE CW · cw-dit · +{}", text);
-                                    shared.digital_decodes.push_back(DigitalDecodeEntry {
-                                        mode: WorkspaceMode::Cw,
-                                        period: SystemTime::now()
-                                            .duration_since(UNIX_EPOCH)
-                                            .map(|d| d.as_secs())
-                                            .unwrap_or_default(),
-                                        utc: utc_hhmmss_millis(
-                                            SystemTime::now()
-                                                .duration_since(UNIX_EPOCH)
-                                                .map(|d| d.as_secs_f64())
-                                                .unwrap_or_default(),
-                                        ),
-                                        snr_db: 0.0,
-                                        dt_s: 0.0,
-                                        freq_hz: selected_tone_hz,
-                                        message: text,
-                                    });
                                 }
                                 if last_cw_status.elapsed() >= Duration::from_secs(1) {
-                                    let status = format!(
-                                        "LIVE CW · cw-dit · {} chars · {:.1} env/s",
-                                        decoder.text().len(),
-                                        decoder.envelope_rate(),
-                                    );
-                                    state
-                                        .lock()
-                                        .expect("ui state lock poisoned")
-                                        .digital_decode_status = status;
+                                    let mut shared = state.lock().expect("ui state lock poisoned");
+                                    shared.cw_character_count = decoder.text().len();
+                                    shared.cw_envelope_rate = decoder.envelope_rate();
                                     last_cw_status = Instant::now();
                                 }
                                 if last_cw_diagnostics.elapsed() >= Duration::from_secs(10) {

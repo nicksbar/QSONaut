@@ -284,6 +284,7 @@ impl QsonautGuiApp {
             s.workspace_mode = self.workspace_mode;
             s.fst4_submode = self.fst4_submode;
             s.q65_submode = self.q65_submode;
+            s.cw_auto_target_timeout_s = self.cw_auto_target_timeout_s;
             s.ft8_deep_decode = self.ft8_deep_decode;
             s.ft4_deep_decode = self.ft4_deep_decode;
             s.selected_audio_hz = if self.workspace_mode == WorkspaceMode::Cw {
