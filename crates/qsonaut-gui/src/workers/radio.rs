@@ -329,9 +329,15 @@ pub(crate) fn spawn_radio_worker(
                             thread::sleep(Duration::from_millis(250));
                             continue;
                         }
-                        if !settings_dirty && last_remote_config.is_none() {
-                            last_remote_config = Some(scope_config);
-                        } else if settings_dirty || last_remote_config != Some(scope_config) {
+                        // A remote session has a fresh driver instance and
+                        // cannot inherit the host radio's scope state. Push
+                        // the complete client-owned configuration on the
+                        // first start even when the profile is not dirty;
+                        // subsequent updates remain change-driven.
+                        if last_remote_config.is_none()
+                            || settings_dirty
+                            || last_remote_config != Some(scope_config)
+                        {
                             if let Err(error) =
                                 client.configure_scope(None, wire_scope_config(&scope_config))
                             {

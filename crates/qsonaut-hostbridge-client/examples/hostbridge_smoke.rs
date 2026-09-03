@@ -116,7 +116,18 @@ async fn main() -> anyhow::Result<()> {
             && radio_selected
             && !scope_started
         {
-            client.configure_scope(Some("scope-config".into()), ScopeConfiguration::default())?;
+            client.configure_scope(
+                Some("scope-config".into()),
+                ScopeConfiguration {
+                    span_hz: Some(500_000),
+                    hold: Some(false),
+                    reference_level_tenths_db: Some(-55),
+                    sweep_speed: Some(1),
+                    center_mode: Some(true),
+                    vbw_wide: Some(false),
+                    ..ScopeConfiguration::default()
+                },
+            )?;
             client.start_scope(Some("scope-start".into()))?;
             scope_started = true;
         }
