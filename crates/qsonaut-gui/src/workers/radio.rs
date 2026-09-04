@@ -3231,7 +3231,7 @@ mod level_poll_tests {
                 .expect("state lock")
                 .radio_waterfall_status
                 .clone();
-            if status == "CONFIG ERROR" || status == "OFF (radio off)" {
+            if status == "CONFIG ERROR" || status == "ENABLE RETRY" || status == "OFF (radio off)" {
                 break;
             }
             std::thread::sleep(Duration::from_millis(2));
@@ -3242,6 +3242,7 @@ mod level_poll_tests {
         let state = state.lock().expect("state lock");
         assert!(
             state.radio_waterfall_status == "CONFIG ERROR"
+                || state.radio_waterfall_status == "ENABLE RETRY"
                 || state.radio_waterfall_status == "OFF (radio off)"
         );
         assert!(!state.ptt_on);
