@@ -386,10 +386,25 @@ impl HostBridgeRadio {
             client.select_audio_output(true, output_id.clone(), format.clone())?;
         }
         client.get_state()?;
-        let _ = REMOTE_CLIENT
-            .get_or_init(|| Mutex::new(None))
-            .lock()
-            .map(|mut current| *current = Some(client.clone()));
+        {
+            let mut current = REMOTE_CLIENT
+                .get_or_init(|| Mutex::new(None))
+                .lock()
+                .map_err(|_| anyhow!("HostBridge client registry is poisoned"))?;
+            if current
+                .as_ref()
+                .is_some_and(|active| !Arc::ptr_eq(active, &client))
+            {
+                let _ = client.shutdown();
+                anyhow::bail!(
+                    "another HostBridge session is active; stop it before connecting this profile"
+                );
+            }
+            if let Ok(mut queue) = remote_media_queue().lock() {
+                queue.clear();
+            }
+            *current = Some(client.clone());
+        }
         let (initial_state, capabilities) = tokio::time::timeout(Duration::from_secs(5), async {
             let mut capabilities = None;
             loop {
@@ -719,6 +734,17 @@ impl Drop for HostBridgeRadio {
         // HostBridge's exclusive radio lease. Explicit shutdown is idempotent
         // and causes the pump to exit after the session is closed.
         let _ = self.client.shutdown();
+        if let Ok(mut current) = REMOTE_CLIENT.get_or_init(|| Mutex::new(None)).lock() {
+            if current
+                .as_ref()
+                .is_some_and(|client| Arc::ptr_eq(client, &self.client))
+            {
+                *current = None;
+            }
+        }
+        if let Ok(mut queue) = self.media_queue.lock() {
+            queue.clear();
+        }
     }
 }
 

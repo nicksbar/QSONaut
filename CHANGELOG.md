@@ -8,6 +8,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [0.3.15] - 2026-09-03
 
 ### Added
+- Added a client-owned HostBridge session with remote radio/driver selection,
+  host audio input/output enumeration, bidirectional PCM media, meters,
+  controls, state synchronization, and independent audio and CI-V scope
+  streams.
 - Added explicit HostBridge scope configuration and lifecycle commands to the
   existing remote radio worker, preserving the direct-port scope workflow and
   client-owned retry/recovery behavior.
@@ -21,6 +25,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   supported workspace modes.
 - Added generated native decode fixtures for FST4, JT9, JT65, and Q65, plus
   synthesis coverage that verifies each mode produces a usable waveform.
+- Added CW panel auto-target configuration, recording coordination, contest
+  exchange helpers, and expanded TX-audio edge-case coverage.
 
 ### Changed
 - Integrated the merged `qsonaut-third-party` WSJT update, including the full
@@ -36,6 +42,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   placeholders remain visibly disabled.
 - Hardened native digital runtime sequencing, adaptive FT4 decoding, decode
   publication, and worker-state handling across rolling audio buffers.
+- Made remote radio commands, meter reads, scope delivery, and media workers
+  asynchronous and nonblocking, including recovery from stalled scope streams
+  and lock-order protection between audio and radio workers.
+- Persisted HostBridge endpoint credentials, selected driver/model, radio and
+  audio device identities per profile, with strict profile isolation.
+- Enforced one active remote HostBridge session per QSONaut process so a
+  stopped or competing profile cannot inherit another profile's media or TX
+  route.
+- Raised the CI coverage gates for radio integration and CW behavior and made
+  locked dependency resolution mandatory for CI and release builds.
+- Updated the application and GUI to Rigwright `0.1.21`, including the
+  released IC-7300 scope lifecycle and nonblocking stream startup fixes.
+- Carried forward Rigwright's profile-driven CAT RTS / hardware-flow-control
+  probing from the `0.1.19` line, including the FT-991A `EX033;` selector.
 
 ### Removed
 - Removed the obsolete FLDIGI mode, placeholder backend references, and direct
@@ -53,14 +73,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added regression coverage ensuring NullRadio, IC-7300, and FT-817ND profile
   files retain independent radio identities and enabled states.
 
-### Changed
-- Update the application and GUI to Rigwright `0.1.21`, which includes the
-  released IC-7300 scope lifecycle and nonblocking stream startup fixes.
-- Carry forward Rigwright's profile-driven CAT RTS / hardware-flow-control
-  probing from the `0.1.19` line. The FT-991A is probed through its own flat
-  `EX033;` menu selector, fixing CAT timeouts when its CAT RTS setting is
-  enabled while the host port was opened without RTS/CTS flow control.
-- Pause the GUI radio worker before running the CAT connection test so the
+- Paused the GUI radio worker before running the CAT connection test so the
   probe can open the exclusively-owned serial port, then restore the worker
   once the test completes. This removes the spurious "failed to open Yaesu
   CAT port" failures seen when testing a connection that was already live.

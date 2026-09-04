@@ -1,6 +1,6 @@
 # QSONaut project roadmap
 
-Status: reconciliation baseline  
+Status: reconciliation baseline
 Date: 2026-09-01
 
 This is the current planning source for the QSONaut family after radio HAL and

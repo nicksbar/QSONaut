@@ -9,6 +9,7 @@ use qsonaut_hostbridge_protocol::{
     AudioFormat, ClientHello, ClientMessage, HostHello, MediaDirection, MediaFrameHeader,
     RadioDriver, ScopeConfiguration, ServerMessage,
 };
+use std::collections::VecDeque;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -331,8 +332,9 @@ async fn run(
     mut commands: mpsc::UnboundedReceiver<Command>,
     events: mpsc::UnboundedSender<HostBridgeEvent>,
 ) {
+    let mut pending = VecDeque::new();
     loop {
-        match connect(&config, &mut commands, &events).await {
+        match connect(&config, &mut commands, &events, &mut pending).await {
             Ok(ConnectionEnd::Shutdown) => return,
             Ok(ConnectionEnd::Disconnected(reason)) => {
                 let _ = events.send(HostBridgeEvent::SafetyDisarmed {
@@ -353,8 +355,18 @@ async fn run(
         tokio::select! {
             () = tokio::time::sleep(config.reconnect_delay) => {},
             command = commands.recv() => {
-                if matches!(command, Some(Command::Shutdown) | None) { return; }
+                if retain_reconnecting_command(&mut pending, command) { return; }
             }
+        }
+    }
+}
+
+fn retain_reconnecting_command(pending: &mut VecDeque<Command>, command: Option<Command>) -> bool {
+    match command {
+        Some(Command::Shutdown) | None => true,
+        Some(command) => {
+            pending.push_back(command);
+            false
         }
     }
 }
@@ -368,6 +380,7 @@ async fn connect(
     config: &HostBridgeConfig,
     commands: &mut mpsc::UnboundedReceiver<Command>,
     events: &mpsc::UnboundedSender<HostBridgeEvent>,
+    pending: &mut VecDeque<Command>,
 ) -> Result<ConnectionEnd> {
     let endpoint = normalize_endpoint(&config.endpoint)?;
     let (socket, _) =
@@ -397,6 +410,25 @@ async fn connect(
     let _ = events.send(HostBridgeEvent::Connected(hello));
     let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
     loop {
+        if let Some(command) = pending.pop_front() {
+            match command {
+                Command::Message(message) => send_json(&mut writer, &message).await?,
+                Command::Media(bytes) => writer.send(Message::Binary(bytes.into())).await?,
+                Command::Shutdown => {
+                    let _ = send_json(
+                        &mut writer,
+                        &ClientMessage::SetPtt {
+                            request_id: None,
+                            enabled: false,
+                        },
+                    )
+                    .await;
+                    let _ = writer.send(Message::Close(None)).await;
+                    return Ok(ConnectionEnd::Shutdown);
+                }
+            }
+            continue;
+        }
         tokio::select! {
             _ = heartbeat.tick() => {
                 send_json(&mut writer, &ClientMessage::Ping { nonce: 0 }).await?;
@@ -526,5 +558,20 @@ mod tests {
         };
         assert!(validate_outgoing_media(header, &[0, 0]).is_ok());
         assert!(validate_outgoing_media(header, &[0]).is_err());
+    }
+
+    #[test]
+    fn reconnect_backoff_retains_work_for_the_next_connection() {
+        let mut pending = VecDeque::new();
+        let command = Command::Message(ClientMessage::Ping { nonce: 7 });
+        assert!(!retain_reconnecting_command(&mut pending, Some(command)));
+        assert!(matches!(
+            pending.pop_front(),
+            Some(Command::Message(ClientMessage::Ping { nonce: 7 }))
+        ));
+        assert!(retain_reconnecting_command(
+            &mut pending,
+            Some(Command::Shutdown)
+        ));
     }
 }
