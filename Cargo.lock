@@ -3493,7 +3493,7 @@ dependencies = [
 [[package]]
 name = "qsonaut-hostbridge-protocol"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?rev=86cab7e3bb70a3daa9a96216a8492225247e52d8#86cab7e3bb70a3daa9a96216a8492225247e52d8"
+source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?rev=a329e56f43549ce54087dfcc2785c69c77b440d3#a329e56f43549ce54087dfcc2785c69c77b440d3"
 dependencies = [
  "rigwright",
  "serde",
@@ -3975,7 +3975,7 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 [[package]]
 name = "rigwright"
 version = "0.1.22"
-source = "git+https://github.com/nicksbar/rigwright.git?rev=bd936d3c8ea0d72f6f69367470347c4fc193e5c6#bd936d3c8ea0d72f6f69367470347c4fc193e5c6"
+source = "git+https://github.com/nicksbar/rigwright.git?rev=fa93571a016a00575fa592c227fd7478d29be7ca#fa93571a016a00575fa592c227fd7478d29be7ca"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4701,7 +4701,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",

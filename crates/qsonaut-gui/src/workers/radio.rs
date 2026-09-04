@@ -968,119 +968,65 @@ pub(crate) fn spawn_radio_worker(
                             .into_iter()
                             .filter(|(id, _)| radio.supports_control_write(*id))
                             .try_for_each(|(id, value)| rt.block_on(radio.set_control(id, value)));
-                        if let Some(icom) = radio.as_icom() {
-                            let mode_result = rt.block_on(icom.set_operating_mode_details(
-                                preset.base_mode,
-                                preset.data_mode,
-                                filter,
-                            ));
-                            let data_mode_result =
-                                if workspace_mode == WorkspaceMode::Voice {
-                                    rt.block_on(radio.set_control(
-                                        ControlId::DataMode,
-                                        ControlValue::Bool(false),
-                                    ))
-                                } else {
-                                    Ok(())
-                                };
-                            if let Err(error) = frequency_result
-                                .and(mode_result)
-                                .and(data_mode_result)
-                                .and(noise_result)
-                            {
-                                error!(
-                                    workspace = %workspace_mode.label(),
-                                    frequency_hz,
-                                    error = %error,
-                                    "Radio workspace preset failed"
-                                );
-                                state.lock().expect("ui state lock poisoned").last_error =
-                                    Some(error.to_string());
-                            } else {
-                                let mut s = state.lock().expect("ui state lock poisoned");
-                                s.mode = icom_base_mode_label(preset.base_mode).to_string();
-                                s.data_mode = Some(preset.data_mode);
-                                s.frequency_hz = Some(frequency_hz);
-                                s.radio_power_on = Some(true);
-                                s.last_error = None;
-                                info!(workspace = %workspace_mode.label(), frequency_hz, mode = ?preset.base_mode, data_mode = preset.data_mode, filter, "Radio workspace preset accepted");
-                            }
+                        let mode = if preset.data_mode {
+                            Mode::Data
                         } else {
-                            let mode = if preset.data_mode {
-                                Mode::Data
-                            } else {
-                                match preset.base_mode {
-                                    BaseMode::Lsb => Mode::Lsb,
-                                    BaseMode::Cw | BaseMode::CwR => Mode::Cw,
-                                    BaseMode::Fm => Mode::Fm,
-                                    _ => Mode::Usb,
-                                }
-                            };
-                            let mode_result = rt.block_on(Radio::set_mode(&radio, mode));
-                            match frequency_result.and(mode_result) {
-                                Ok(()) => {
-                                    // Reflect a successful write immediately. The follow-up
-                                    // CAT read is useful confirmation, but a compatible radio
-                                    // may briefly return an incomplete status frame after a
-                                    // mode change.
-                                    let mut s = state.lock().expect("ui state lock poisoned");
-                                    s.frequency_hz = Some(frequency_hz);
-                                    s.mode = match mode {
-                                        Mode::Usb => "USB",
-                                        Mode::Lsb => "LSB",
-                                        Mode::Cw => "CW",
-                                        // HostBridge represents digital USB as
-                                        // Mode::Data; present it consistently
-                                        // with native IC-7300 operation.
-                                        Mode::Data => "USB",
-                                        Mode::Am => "AM",
-                                        Mode::Fm => "FM",
-                                        Mode::Wfm => "WFM",
-                                        Mode::Rtty => "RTTY",
-                                        Mode::CwReverse => "CW-R",
-                                        Mode::RttyReverse => "RTTY-R",
-                                    }
-                                    .to_string();
-                                    s.data_mode = Some(mode == Mode::Data);
-                                    s.radio_power_on = Some(true);
-                                    s.last_error = None;
-                                    info!(workspace = %workspace_mode.label(), frequency_hz, mode = ?preset.base_mode, data_mode = preset.data_mode, "Radio workspace preset accepted");
-                                }
-                                Err(error) => {
-                                    error!(
-                                        workspace = %workspace_mode.label(),
-                                        frequency_hz,
-                                        error = %error,
-                                        "Radio workspace preset failed"
-                                    );
-                                    state.lock().expect("ui state lock poisoned").last_error =
-                                        Some(error.to_string());
-                                }
+                            match preset.base_mode {
+                                BaseMode::Lsb => Mode::Lsb,
+                                BaseMode::Cw | BaseMode::CwR => Mode::Cw,
+                                BaseMode::Fm => Mode::Fm,
+                                _ => Mode::Usb,
                             }
+                        };
+                        let mode_result = rt.block_on(Radio::set_mode(&radio, mode));
+                        let data_mode_result = if radio.supports_control_write(ControlId::DataMode)
+                        {
+                            rt.block_on(radio.set_control(
+                                ControlId::DataMode,
+                                ControlValue::Bool(preset.data_mode),
+                            ))
+                        } else {
+                            Ok(())
+                        };
+                        let filter_result = if radio.supports_control_write(ControlId::Filter) {
+                            rt.block_on(
+                                radio.set_control(ControlId::Filter, ControlValue::U8(filter)),
+                            )
+                        } else {
+                            Ok(())
+                        };
+                        if let Err(error) = frequency_result
+                            .and(mode_result)
+                            .and(data_mode_result)
+                            .and(filter_result)
+                            .and(noise_result)
+                        {
+                            error!(
+                                workspace = %workspace_mode.label(),
+                                frequency_hz,
+                                error = %error,
+                                "Radio workspace preset failed"
+                            );
+                            state.lock().expect("ui state lock poisoned").last_error =
+                                Some(error.to_string());
+                        } else {
+                            let mut s = state.lock().expect("ui state lock poisoned");
+                            s.mode = icom_base_mode_label(preset.base_mode).to_string();
+                            s.data_mode = Some(preset.data_mode);
+                            s.frequency_hz = Some(frequency_hz);
+                            s.radio_power_on = Some(true);
+                            s.last_error = None;
+                            info!(workspace = %workspace_mode.label(), frequency_hz, mode = ?preset.base_mode, data_mode = preset.data_mode, filter, "Radio workspace preset accepted");
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::SetFilter(n) => {
                         let workspace_mode =
                             state.lock().expect("ui state lock poisoned").workspace_mode;
-                        let frequency_hz =
-                            state.lock().expect("ui state lock poisoned").frequency_hz;
-                        let preset =
-                            workspace_radio_preset_for_frequency(workspace_mode, frequency_hz);
                         let target_filter = n.clamp(1, 3);
                         info!(filter = target_filter, workspace = %workspace_mode.label(), "Radio filter change requested");
                         let result =
-                            if let Some(icom) = radio.as_icom() {
-                                rt.block_on(icom.set_operating_mode_details(
-                                    preset.base_mode,
-                                    preset.data_mode,
-                                    target_filter,
-                                ))
-                            } else if radio.supports_control_write(ControlId::Filter) {
-                                // HostBridge exposes the typed control surface, not
-                                // the local Icom object. Route filter changes through
-                                // that surface so remote IC-7300 sessions do not
-                                // report the control as unavailable.
+                            if radio.supports_control_write(ControlId::Filter) {
                                 rt.block_on(radio.set_control(
                                     ControlId::Filter,
                                     ControlValue::U8(target_filter),
@@ -2253,41 +2199,35 @@ fn configure_radio_scope(
     hold_update: Option<bool>,
     reference_tenths_db_update: Option<i16>,
 ) -> Result<()> {
-    if let Some(reference_tenths_db) = reference_tenths_db_update {
-        rt.block_on(radio.set_scope_reference_level_tenths_db(reference_tenths_db))?;
-    }
-    match config.view {
-        RadioScopeView::Narrow => {
-            if let Some((low_hz, high_hz)) = config.edges {
-                // Edge 4 is reserved for QSONaut's mode-aware passband window,
-                // leaving the operator's first three radio edge memories alone.
-                rt.block_on(radio.set_scope_fixed_edge_frequencies(4, low_hz, high_hz))?;
-                rt.block_on(radio.set_scope_fixed_edge_number(4))?;
-                rt.block_on(radio.set_scope_center_fixed_mode(true))?;
-            } else {
-                rt.block_on(radio.set_scope_center_fixed_mode(false))?;
-                rt.block_on(radio.set_scope_span_hz(scope_span_hz(config.span_code)))?;
-            }
-            rt.block_on(
-                radio.set_scope_vbw_wide(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
-            )?;
-        }
-        RadioScopeView::Overview => {
-            let (low_hz, high_hz) = config.edges.context("active band edges unavailable")?;
-            rt.block_on(radio.set_scope_fixed_edge_frequencies(1, low_hz, high_hz))?;
-            rt.block_on(radio.set_scope_fixed_edge_number(1))?;
-            rt.block_on(radio.set_scope_center_fixed_mode(true))?;
-            rt.block_on(
-                radio.set_scope_vbw_wide(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
-            )?;
-        }
-    }
-    if let Some(hold) = hold_update {
-        rt.block_on(radio.set_scope_hold(hold))?;
-    }
-    // Geometry and mode changes can restore the radio's stored sweep setting,
-    // so make the requested speed the final configuration command.
-    rt.block_on(radio.set_scope_sweep_speed(config.sweep_code))?;
+    let (span_hz, fixed_edges_hz, fixed_edge_number, center_mode) = match config.view {
+        RadioScopeView::Narrow => match config.edges {
+            Some(edges) => (None, Some(edges), Some(4), Some(true)),
+            None => (
+                Some(scope_span_hz(config.span_code)),
+                None,
+                None,
+                Some(false),
+            ),
+        },
+        RadioScopeView::Overview => (
+            None,
+            Some(config.edges.context("active band edges unavailable")?),
+            Some(1),
+            Some(true),
+        ),
+    };
+    rt.block_on(
+        radio.set_scope_configuration(qsonaut_radio::ScopeConfiguration {
+            span_hz,
+            fixed_edges_hz,
+            fixed_edge_number,
+            hold: hold_update,
+            reference_level_tenths_db: reference_tenths_db_update,
+            sweep_speed: Some(config.sweep_code),
+            center_mode,
+            vbw_wide: Some(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
+        }),
+    )?;
     Ok(())
 }
 
