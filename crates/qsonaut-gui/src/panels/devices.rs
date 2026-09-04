@@ -1103,7 +1103,7 @@ mod tests {
             ConfiguredRadio::Null(qsonaut_radio::NullRadio::new()),
         )
         .expect_err("offline profile has no CAT verification");
-        assert!(null.contains("not implemented"));
+        assert!(null.contains("CAT probe failed for offline"));
 
         let yaesu = QsonautGuiApp::cat_probe_result(
             "FT-818",
