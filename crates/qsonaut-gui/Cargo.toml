@@ -31,11 +31,11 @@ qsonaut-audio = { path = "../qsonaut-audio" }
 qsonaut-accelerate = { path = "../qsonaut-accelerate" }
 qsonaut-core = { path = "../qsonaut-core" }
 qsonaut-hostbridge-client = { path = "../qsonaut-hostbridge-client" }
-qsonaut-hostbridge-protocol = { git = "https://github.com/nicksbar/QSONaut-HostBridge.git", rev = "5718e52" }
+qsonaut-hostbridge-protocol = { git = "https://github.com/nicksbar/QSONaut-HostBridge.git", rev = "7c42e5afdd382c21fb290e08342c48b0f935555d" }
 qsonaut-automation = { path = "../qsonaut-automation" }
 qsonaut-log = { path = "../qsonaut-log" }
-qsonaut-radio = { package = "rigwright", git = "https://github.com/nicksbar/rigwright.git", rev = "c5a6bc1", version = "0.1.21" }
+qsonaut-radio = { package = "rigwright", git = "https://github.com/nicksbar/rigwright.git", rev = "6a480c8d3de3dd914ce9ac9ac995acb5d999a5fa", version = "0.1.21" }
 qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }
 qsonaut-server-client = { path = "../qsonaut-server-client" }
 qsonaut-modems = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "6cc26b8" }
-qsonaut-third-party = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "5660c03" }
+qsonaut-third-party = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "261061fedbc4daaff766c088a8f9cfcdbfa319e2" }

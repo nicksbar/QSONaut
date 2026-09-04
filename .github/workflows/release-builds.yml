@@ -70,7 +70,7 @@ jobs:
         with:
           path: QSONaut
 
-      # Rigwright v0.1.19 is resolved from crates.io by the Cargo manifests.
+      # Rigwright v0.1.21 and shared components are resolved from immutable Git revisions.
 
       - name: Install Linux native libraries
         if: matrix.os == 'linux'
@@ -84,7 +84,7 @@ jobs:
         env:
           QSONAUT_CONTRIBUTORS: ${{ vars.QSONAUT_CONTRIBUTORS }}
           QSONAUT_TESTERS: ${{ vars.QSONAUT_TESTERS }}
-        run: cargo build --release --target ${{ matrix.target }} -p qsonaut
+        run: cargo build --locked --release --target ${{ matrix.target }} -p qsonaut
 
       - name: Package Linux distribution
         if: matrix.os == 'linux'

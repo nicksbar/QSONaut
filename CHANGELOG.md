@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.15] - 2026-09-03
 
 ### Added
 - Added explicit HostBridge scope configuration and lifecycle commands to the
@@ -53,21 +53,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added regression coverage ensuring NullRadio, IC-7300, and FT-817ND profile
   files retain independent radio identities and enabled states.
 
-## [0.3.15] - 2026-08-31
-
 ### Changed
-- Update the application and GUI to Rigwright `0.1.19`, which probes the
-  Yaesu CAT RTS / hardware-flow-control setting per model profile. The
-  FT-991A is now probed through its own flat `EX033;` menu selector, fixing
-  CAT timeouts when the radio's menu 033 CAT RTS is enabled (factory
-  default) while the host port was opened without RTS/CTS flow control.
+- Update the application and GUI to Rigwright `0.1.21`, which includes the
+  released IC-7300 scope lifecycle and nonblocking stream startup fixes.
+- Carry forward Rigwright's profile-driven CAT RTS / hardware-flow-control
+  probing from the `0.1.19` line. The FT-991A is probed through its own flat
+  `EX033;` menu selector, fixing CAT timeouts when its CAT RTS setting is
+  enabled while the host port was opened without RTS/CTS flow control.
 - Pause the GUI radio worker before running the CAT connection test so the
   probe can open the exclusively-owned serial port, then restore the worker
   once the test completes. This removes the spurious "failed to open Yaesu
   CAT port" failures seen when testing a connection that was already live.
-- Update the application and GUI to Rigwright `0.1.18`, including the
-  driver-owned radio profiles, normalized controls, meters, and session
-  behavior.
 - Align all workspace package metadata and release documentation with QSONaut
   `0.3.15`.
 - Restrict release builds to manually pushed matching version tags.

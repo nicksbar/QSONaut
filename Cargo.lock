@@ -2440,7 +2440,7 @@ dependencies = [
 [[package]]
 name = "mfsk-core"
 version = "0.10.1"
-source = "git+https://github.com/jl1nie/mfsk-core.git?rev=a3fd6744df0a064e035df9b63ff76251ed0e2ec1#a3fd6744df0a064e035df9b63ff76251ed0e2ec1"
+source = "git+https://github.com/jl1nie/mfsk-core.git?rev=acc94e42a6b2132b6ff44349b7e058f0d756e966#acc94e42a6b2132b6ff44349b7e058f0d756e966"
 dependencies = [
  "crc",
  "num-complex",
@@ -3393,7 +3393,7 @@ dependencies = [
  "qsonaut-gui",
  "qsonaut-hostbridge-client",
  "qsonaut-log",
- "rigwright 0.1.21 (git+https://github.com/nicksbar/rigwright.git?rev=6f79271eead7ec613d8d65c0180830c1e01437cc)",
+ "rigwright",
  "tokio",
  "tracing",
  "windows-sys 0.59.0",
@@ -3461,7 +3461,7 @@ dependencies = [
  "qsonaut-server-client",
  "qsonaut-third-party",
  "reqwest",
- "rigwright 0.1.21 (git+https://github.com/nicksbar/rigwright.git?rev=c5a6bc1)",
+ "rigwright",
  "rusqlite",
  "rustfft",
  "serde",
@@ -3493,9 +3493,9 @@ dependencies = [
 [[package]]
 name = "qsonaut-hostbridge-protocol"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?rev=5718e52#5718e526f4880d5dce5df29a227a327eca35960c"
+source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?rev=7c42e5afdd382c21fb290e08342c48b0f935555d#7c42e5afdd382c21fb290e08342c48b0f935555d"
 dependencies = [
- "rigwright 0.1.21 (git+https://github.com/nicksbar/rigwright.git?rev=c5a6bc1)",
+ "rigwright",
  "serde",
  "serde_json",
  "uuid",
@@ -3548,7 +3548,7 @@ dependencies = [
 [[package]]
 name = "qsonaut-third-party"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=5660c03#5660c0334f9b5430c5e3090226ddd205dad8baaf"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=261061fedbc4daaff766c088a8f9cfcdbfa319e2#261061fedbc4daaff766c088a8f9cfcdbfa319e2"
 dependencies = [
  "cwdit-dsp",
  "cwdit-morse",
@@ -3975,18 +3975,7 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 [[package]]
 name = "rigwright"
 version = "0.1.21"
-source = "git+https://github.com/nicksbar/rigwright.git?rev=6f79271eead7ec613d8d65c0180830c1e01437cc#6f79271eead7ec613d8d65c0180830c1e01437cc"
-dependencies = [
- "anyhow",
- "async-trait",
- "futures",
- "serialport",
-]
-
-[[package]]
-name = "rigwright"
-version = "0.1.21"
-source = "git+https://github.com/nicksbar/rigwright.git?rev=c5a6bc1#c5a6bc1291575da91be58a03184bc687d22c1a7d"
+source = "git+https://github.com/nicksbar/rigwright.git?rev=6a480c8d3de3dd914ce9ac9ac995acb5d999a5fa#6a480c8d3de3dd914ce9ac9ac995acb5d999a5fa"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4712,7 +4701,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
