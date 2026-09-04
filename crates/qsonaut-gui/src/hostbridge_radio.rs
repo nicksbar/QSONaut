@@ -37,7 +37,7 @@ pub(crate) struct HostBridgeRadio {
     audio_output: Option<(String, qsonaut_hostbridge_protocol::AudioFormat)>,
     media_seen: Arc<AtomicBool>,
     meter_seen: Arc<AtomicBool>,
-    pending_read: Arc<Mutex<Option<String>>>,
+    pending_read: Arc<Mutex<Option<(String, std::time::Instant)>>>,
 }
 
 static REMOTE_MEDIA_QUEUE: OnceLock<Arc<Mutex<VecDeque<Vec<f32>>>>> = OnceLock::new();
@@ -667,17 +667,32 @@ impl HostBridgeRadio {
             .pending_read
             .lock()
             .map_err(|_| anyhow!("HostBridge pending-read state poisoned"))?;
-        if pending.is_some() {
+        const REMOTE_READ_TIMEOUT: Duration = Duration::from_secs(2);
+        if pending
+            .as_ref()
+            .is_some_and(|(_, started)| started.elapsed() < REMOTE_READ_TIMEOUT)
+        {
             return Ok(());
         }
-        send()?;
-        *pending = Some(key);
+        // Record the request before enqueueing it. The transport can receive
+        // a very fast HostBridge reply on its event thread before send()
+        // returns; recording afterwards loses that clear and permanently
+        // suppresses later control/meter reads.
+        *pending = Some((key.clone(), std::time::Instant::now()));
+        drop(pending);
+        if let Err(error) = send() {
+            self.clear_pending_read(&key);
+            return Err(error);
+        }
         Ok(())
     }
 
     fn clear_pending_read(&self, key: &str) {
         if let Ok(mut pending) = self.pending_read.lock() {
-            if pending.as_deref() == Some(key) {
+            if pending
+                .as_ref()
+                .is_some_and(|(pending_key, _)| pending_key == key)
+            {
                 *pending = None;
             }
         }
@@ -694,6 +709,16 @@ impl HostBridgeRadio {
             .lock()
             .map(|value| value.clone())
             .unwrap_or_default()
+    }
+}
+
+impl Drop for HostBridgeRadio {
+    fn drop(&mut self) {
+        // The event-pump thread owns a clone of this handle, so dropping the
+        // radio worker alone does not otherwise close the transport or release
+        // HostBridge's exclusive radio lease. Explicit shutdown is idempotent
+        // and causes the pump to exit after the session is closed.
+        let _ = self.client.shutdown();
     }
 }
 

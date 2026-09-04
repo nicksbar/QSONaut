@@ -17,6 +17,7 @@ const RADIO_METER_RESPONSE_TIMEOUT: Duration = Duration::from_millis(150);
 // poll forever.
 static FIRST_RADIO_CORE_POLL: AtomicBool = AtomicBool::new(true);
 static REMOTE_LEVEL_POLL_INDEX: AtomicUsize = AtomicUsize::new(0);
+static REMOTE_CORE_POLL_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScheduledMeter {
@@ -273,16 +274,49 @@ pub(crate) fn spawn_radio_worker(
                             scope_config,
                             settings_dirty,
                         ) = {
-                            let s = stream_state.lock().expect("ui state lock poisoned");
+                            // Snapshot GUI state before touching DisplayTuning. The audio worker
+                            // uses the opposite resources in its hot path (DisplayTuning, then
+                            // GuiState); acquiring them in one expression here creates a classic
+                            // cross-worker deadlock when both workers wake together.
+                            let (
+                                mode,
+                                desired,
+                                power_on,
+                                power_settling,
+                                power_command_pending,
+                                radio_error,
+                                view,
+                                span_code,
+                                vbw_wide,
+                                hold,
+                                reference_tenths_db,
+                                settings_dirty,
+                            ) = {
+                                let s = stream_state.lock().expect("ui state lock poisoned");
+                                (
+                                    s.mode.clone(),
+                                    s.radio_spectrum_desired,
+                                    s.radio_power_on,
+                                    s.radio_power_settling,
+                                    s.radio_power_command_pending,
+                                    s.last_error.is_some(),
+                                    s.radio_scope_view,
+                                    s.radio_scope_span_code,
+                                    s.radio_scope_vbw_wide,
+                                    s.radio_scope_hold,
+                                    s.radio_scope_reference_tenths_db,
+                                    s.radio_scope_settings_dirty,
+                                )
+                            };
                             let sweep_code = {
                                 let tuning =
                                     stream_display_tuning.lock().expect("tuning lock poisoned");
-                                effective_visual_profile(&tuning, &s.mode, true).1
+                                effective_visual_profile(&tuning, &mode, true).1
                             };
                             let config = RadioScopeStreamConfig {
-                                view: s.radio_scope_view,
-                                span_code: s.radio_scope_span_code,
-                                vbw_wide: s.radio_scope_vbw_wide,
+                                view,
+                                span_code,
+                                vbw_wide,
                                 // The remote IC-7300 USB scope path is
                                 // centered by span. Do not replay QSONaut's
                                 // local mode-aware fixed-edge projection;
@@ -290,17 +324,17 @@ pub(crate) fn spawn_radio_worker(
                                 // scope away from the live dial frequency.
                                 edges: None,
                                 sweep_code,
-                                hold: s.radio_scope_hold,
-                                reference_tenths_db: s.radio_scope_reference_tenths_db,
+                                hold,
+                                reference_tenths_db,
                             };
                             (
-                                s.radio_spectrum_desired,
-                                s.radio_power_on,
-                                s.radio_power_settling,
-                                s.radio_power_command_pending,
-                                s.last_error.is_some(),
+                                desired,
+                                power_on,
+                                power_settling,
+                                power_command_pending,
+                                radio_error,
                                 config,
-                                s.radio_scope_settings_dirty,
+                                settings_dirty,
                             )
                         };
                         if !desired {
@@ -1483,6 +1517,13 @@ fn poll_radio_core_state(
         .then(|| read_vfo_control(rt, radio))
         .flatten();
     if radio.as_icom().is_none() {
+        // Refresh remote core state at a bounded 500 ms cadence. The remote
+        // scheduler permits only one outstanding read, so sending GetState on
+        // a level tick would starve every meter and control read.
+        let remote_core_tick = REMOTE_CORE_POLL_INDEX.fetch_add(1, Ordering::Relaxed);
+        if !poll_levels && radio.is_remote() && remote_core_tick.is_multiple_of(5) {
+            let _ = radio.refresh_state();
+        }
         let instrument_poll = FIRST_RADIO_CORE_POLL.swap(false, Ordering::Relaxed);
         if instrument_poll {
             info!("Initial radio core frequency read started");
@@ -1560,10 +1601,10 @@ fn poll_radio_core_state(
         }
         if poll_levels {
             if radio.is_remote() {
-                // The radio may be changed from its front panel. Refresh the
-                // compact HostBridge core snapshot at the level cadence so
-                // the UI follows hardware without polling every 100 ms.
-                let _ = radio.refresh_state();
+                // Reserve this tick for one level read. The remote scheduler
+                // permits only one outstanding read, so refreshing GetState
+                // immediately before this call would starve every meter and
+                // control read indefinitely.
                 poll_remote_level_state(rt, radio, state);
             } else {
                 poll_radio_level_state(rt, radio, state);
