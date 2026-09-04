@@ -3452,6 +3452,7 @@ mod level_poll_tests {
     #[test]
     fn remote_level_scheduler_uses_nonblocking_hostbridge_requests() {
         let (remote, client) = test_remote_radio();
+        remote.mark_disconnected_for_test();
         let radio = RadioHandle::Remote(Box::new(remote));
         let state = Arc::new(Mutex::new(GuiState::default()));
         let rt = tokio::runtime::Runtime::new().expect("test runtime");
@@ -3509,6 +3510,7 @@ mod level_poll_tests {
     #[test]
     fn remote_core_poll_refreshes_on_its_bounded_cadence() {
         let (remote, client) = test_remote_radio();
+        remote.mark_disconnected_for_test();
         let radio = RadioHandle::Remote(Box::new(remote));
         let state = Arc::new(Mutex::new(GuiState::default()));
         let rt = tokio::runtime::Runtime::new().expect("test runtime");

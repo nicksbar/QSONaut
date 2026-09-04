@@ -4,3 +4,12 @@ apps/qsonaut/src/main.rs
 crates/qsonaut-gui/src/panels/profile_server.rs
 crates/qsonaut-gui/src/panels/spectrum.rs
 crates/qsonaut-gui/src/workers/cwdit_adapter.rs
+crates/qsonaut-gui/src/rendering/activity.rs
+crates/qsonaut-gui/src/rendering/banner.rs
+crates/qsonaut-gui/src/rendering/connection.rs
+crates/qsonaut-gui/src/rendering/meter_drawer.rs
+crates/qsonaut-gui/src/rendering/radio_controls.rs
+crates/qsonaut-gui/src/rendering/safety.rs
+crates/qsonaut-gui/src/rendering/waterfall_controls.rs
+crates/qsonaut-gui/src/reporting/pota.rs
+crates/qsonaut-gui/src/runtime/update.rs

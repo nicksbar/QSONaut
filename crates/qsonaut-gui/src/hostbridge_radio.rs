@@ -846,6 +846,13 @@ impl HostBridgeRadio {
             .map(|value| value.clone())
             .unwrap_or_default()
     }
+
+    #[cfg(test)]
+    pub(crate) fn mark_disconnected_for_test(&self) {
+        if let Ok(mut connected) = self.connected.lock() {
+            *connected = false;
+        }
+    }
 }
 
 impl Drop for HostBridgeRadio {
