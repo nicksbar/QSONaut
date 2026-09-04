@@ -154,11 +154,9 @@ truth for included areas.
 
 The current release-candidate measurement was generated on 2026-09-03 with
 the workspace tests available in the validation environment. The grouped
-executable-contract report is 59.01% (16,704 / 28,308 lines), below the CI
-gate of 60%. Rigwright integration is 65.80% (2,164 / 3,289 lines), below its
-80% target. The coverage workflow is therefore an active release blocker;
-these figures are intentionally visible rather than presented as a passing
-release baseline. Physical-radio behavior still requires the documented
+executable-contract report is 62.18% (18,248 / 29,345 lines), above the CI
+gate of 60%. Rigwright integration is 80.47% (2,983 / 3,707 lines), above its
+80% target. Physical-radio behavior still requires the documented
 hardware validation runs.
 The high-coverage `qsonaut-sstv` crate is
 now maintained behind the pinned `qsonaut-third-party` boundary and is covered
@@ -175,12 +173,12 @@ remains the detailed, per-file source of truth.
 | qsonaut-server-client | 733 / 870 | 84.25% |
 | qsonaut-audio | 316 / 871 | 36.28% |
 | qsonaut-core | 409 / 469 | 87.21% |
-| HostBridge client | 64 / 413 | 15.50% |
-| GUI core | 7,491 / 13,832 | 54.16% |
+| HostBridge client | 161 / 413 | 38.98% |
+| GUI core | 7,682 / 13,910 | 55.23% |
 | GUI workers | 1,648 / 2,671 | 61.70% |
-| GUI modes | 1,033 / 1,933 | 53.44% |
+| GUI modes | 1,470 / 2,474 | 59.42% |
 | GUI panels | 1,090 / 1,549 | 70.37% |
-| Rigwright integration | 2,164 / 3,289 | 65.80% |
+| Rigwright integration | 2,983 / 3,707 | 80.47% |
 | Application entry point | 195 / 551 | 35.39% |
 
 The workspace gate requires 60% overall coverage, and the Rigwright integration

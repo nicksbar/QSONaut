@@ -4,6 +4,8 @@ use qsonaut_hostbridge_protocol::{
     control_id_key, HostHello, RadioCapabilitiesInfo, RadioState, ServerMessage, WireControlValue,
     WireMode,
 };
+#[cfg(test)]
+use qsonaut_radio::ControlValue;
 use qsonaut_radio::{
     drivers::ConfiguredRadio, ControlId, IcomCiVRadio, LinkHealth, MeterId, Mode, Radio,
     RadioCapabilities, TunerStatus,
@@ -40,6 +42,75 @@ pub(crate) struct HostBridgeRadio {
     pending_read: Arc<Mutex<Option<(String, std::time::Instant)>>>,
 }
 
+#[cfg(test)]
+pub(crate) fn test_remote_radio() -> (HostBridgeRadio, Arc<HostBridgeClient>) {
+    let (client, events) = HostBridgeClient::spawn(HostBridgeConfig {
+        endpoint: "ws://127.0.0.1:1".to_string(),
+        reconnect_delay: Duration::from_secs(60),
+        ..HostBridgeConfig::default()
+    });
+    let client = Arc::new(client);
+    let mut cached_state = qsonaut_hostbridge_protocol::RadioState {
+        frequency_hz: Some(14_074_000),
+        mode: Some(qsonaut_hostbridge_protocol::WireMode::Data),
+        ..Default::default()
+    };
+    for (id, value) in [
+        (ControlId::AfGain, ControlValue::U8(11)),
+        (ControlId::RfGain, ControlValue::U8(22)),
+        (ControlId::Squelch, ControlValue::U8(33)),
+        (ControlId::RfPower, ControlValue::U8(44)),
+        (ControlId::Preamp, ControlValue::U8(55)),
+        (ControlId::Attenuator, ControlValue::U8(66)),
+        (ControlId::Agc, ControlValue::U8(77)),
+        (ControlId::NoiseReductionLevel, ControlValue::U8(88)),
+        (ControlId::NoiseBlanker, ControlValue::Bool(true)),
+        (ControlId::NoiseReduction, ControlValue::Bool(true)),
+        (ControlId::IpPlus, ControlValue::Bool(true)),
+        (ControlId::Notch, ControlValue::Bool(true)),
+        (ControlId::ManualNotch, ControlValue::Bool(true)),
+        (ControlId::Filter, ControlValue::U8(2)),
+    ] {
+        cached_state
+            .controls
+            .insert(control_id_key(id), value.into());
+    }
+    for id in MeterId::ALL.iter().copied() {
+        cached_state.meters.insert(id.into(), 48);
+    }
+    let radio = HostBridgeRadio {
+        client: client.clone(),
+        events: Arc::new(Mutex::new(events)),
+        state: Arc::new(Mutex::new(cached_state)),
+        capabilities: Arc::new(Mutex::new(RadioCapabilitiesInfo {
+            scope: true,
+            ..RadioCapabilitiesInfo::default()
+        })),
+        link_health: Arc::new(Mutex::new(LinkHealth::default())),
+        raw_responses: Arc::new(Mutex::new(HashMap::new())),
+        hello: HostHello {
+            protocol_version: qsonaut_hostbridge_protocol::PROTOCOL_VERSION,
+            session_id: uuid::Uuid::nil(),
+            host_name: "test-host".to_string(),
+            capabilities: qsonaut_hostbridge_protocol::Capabilities::default(),
+        },
+        device_id: "test-radio".to_string(),
+        driver: qsonaut_hostbridge_protocol::RadioDriver::IcomCiv,
+        model: Some("IC-7300".to_string()),
+        baud_rate: Some(115_200),
+        radio_address: Some(0x94),
+        connected: Arc::new(Mutex::new(true)),
+        media_queue: remote_media_queue(),
+        scope_queue: Arc::new(Mutex::new(VecDeque::from([vec![1, 2, 3]]))),
+        audio_source: None,
+        audio_output: None,
+        media_seen: Arc::new(AtomicBool::new(false)),
+        meter_seen: Arc::new(AtomicBool::new(false)),
+        pending_read: Arc::new(Mutex::new(None)),
+    };
+    (radio, client)
+}
+
 static REMOTE_MEDIA_QUEUE: OnceLock<Arc<Mutex<VecDeque<Vec<f32>>>>> = OnceLock::new();
 static REMOTE_CLIENT: OnceLock<Mutex<Option<Arc<HostBridgeClient>>>> = OnceLock::new();
 
@@ -56,6 +127,8 @@ fn new_scope_queue() -> Arc<Mutex<VecDeque<Vec<u8>>>> {
 pub(crate) enum RadioHandle {
     Local(ConfiguredRadio),
     Remote(Box<HostBridgeRadio>),
+    #[cfg(test)]
+    Test(Arc<dyn Radio + Send + Sync>),
 }
 
 impl From<ConfiguredRadio> for RadioHandle {
@@ -69,6 +142,8 @@ impl RadioHandle {
         match self {
             Self::Local(_) => None,
             Self::Remote(radio) => Some(radio.hello.clone()),
+            #[cfg(test)]
+            Self::Test(_) => None,
         }
     }
 
@@ -79,6 +154,8 @@ impl RadioHandle {
                 radio.pump_events();
                 Some(radio.connected())
             }
+            #[cfg(test)]
+            Self::Test(_) => None,
         }
     }
 
@@ -86,6 +163,8 @@ impl RadioHandle {
         match self {
             Self::Local(radio) => radio.as_icom(),
             Self::Remote(_) => None,
+            #[cfg(test)]
+            Self::Test(_) => None,
         }
     }
 
@@ -97,6 +176,8 @@ impl RadioHandle {
         match self {
             Self::Local(_) => None,
             Self::Remote(radio) => Some(radio.scope_queue.clone()),
+            #[cfg(test)]
+            Self::Test(_) => None,
         }
     }
 
@@ -104,6 +185,8 @@ impl RadioHandle {
         match self {
             Self::Local(_) => None,
             Self::Remote(radio) => Some(radio.client.clone()),
+            #[cfg(test)]
+            Self::Test(_) => None,
         }
     }
 
@@ -111,6 +194,8 @@ impl RadioHandle {
         match self {
             Self::Local(_) => false,
             Self::Remote(radio) => radio.capabilities_snapshot().scope,
+            #[cfg(test)]
+            Self::Test(_) => false,
         }
     }
 
@@ -118,36 +203,48 @@ impl RadioHandle {
         match self {
             Self::Local(radio) => radio.capabilities(),
             Self::Remote(radio) => radio.capabilities(),
+            #[cfg(test)]
+            Self::Test(radio) => radio.capabilities(),
         }
     }
     pub(crate) fn supported_controls(&self) -> Vec<ControlId> {
         match self {
             Self::Local(radio) => radio.supported_controls(),
             Self::Remote(radio) => radio.supported_controls(),
+            #[cfg(test)]
+            Self::Test(radio) => radio.supported_controls(),
         }
     }
     pub(crate) fn supported_meters(&self) -> Vec<MeterId> {
         match self {
             Self::Local(radio) => radio.supported_meters(),
             Self::Remote(radio) => radio.supported_meters(),
+            #[cfg(test)]
+            Self::Test(radio) => radio.supported_meters(),
         }
     }
     pub(crate) fn supports_meter(&self, id: MeterId) -> bool {
         match self {
             Self::Local(radio) => radio.supports_meter(id),
             Self::Remote(radio) => radio.supports_meter(id),
+            #[cfg(test)]
+            Self::Test(radio) => radio.supports_meter(id),
         }
     }
     pub(crate) fn supports_control_write(&self, id: ControlId) -> bool {
         match self {
             Self::Local(radio) => radio.supports_control_write(id),
             Self::Remote(radio) => radio.supports_control_write(id),
+            #[cfg(test)]
+            Self::Test(radio) => radio.supports_control_write(id),
         }
     }
     pub(crate) fn link_health(&self) -> LinkHealth {
         match self {
             Self::Local(radio) => radio.link_health(),
             Self::Remote(radio) => radio.link_health(),
+            #[cfg(test)]
+            Self::Test(radio) => radio.link_health(),
         }
     }
 
@@ -158,6 +255,8 @@ impl RadioHandle {
                 radio.ensure_connected()?;
                 radio.schedule_read("state", || radio.client.get_state())
             }
+            #[cfg(test)]
+            Self::Test(_) => Ok(()),
         }
     }
 }
@@ -168,36 +267,48 @@ impl Radio for RadioHandle {
         match self {
             Self::Local(radio) => radio.get_frequency_hz().await,
             Self::Remote(radio) => radio.get_frequency_hz().await,
+            #[cfg(test)]
+            Self::Test(radio) => radio.get_frequency_hz().await,
         }
     }
     async fn set_frequency_hz(&self, hz: u64) -> Result<()> {
         match self {
             Self::Local(radio) => radio.set_frequency_hz(hz).await,
             Self::Remote(radio) => radio.set_frequency_hz(hz).await,
+            #[cfg(test)]
+            Self::Test(radio) => radio.set_frequency_hz(hz).await,
         }
     }
     async fn get_mode(&self) -> Result<Mode> {
         match self {
             Self::Local(radio) => radio.get_mode().await,
             Self::Remote(radio) => radio.get_mode().await,
+            #[cfg(test)]
+            Self::Test(radio) => radio.get_mode().await,
         }
     }
     async fn set_mode(&self, mode: Mode) -> Result<()> {
         match self {
             Self::Local(radio) => radio.set_mode(mode).await,
             Self::Remote(radio) => radio.set_mode(mode).await,
+            #[cfg(test)]
+            Self::Test(radio) => radio.set_mode(mode).await,
         }
     }
     async fn set_ptt(&self, enabled: bool) -> Result<()> {
         match self {
             Self::Local(radio) => radio.set_ptt(enabled).await,
             Self::Remote(radio) => radio.set_ptt(enabled).await,
+            #[cfg(test)]
+            Self::Test(radio) => radio.set_ptt(enabled).await,
         }
     }
     async fn get_ptt(&self) -> Result<bool> {
         match self {
             Self::Local(radio) => radio.get_ptt().await,
             Self::Remote(radio) => radio.get_ptt().await,
+            #[cfg(test)]
+            Self::Test(radio) => radio.get_ptt().await,
         }
     }
     async fn get_control(&self, id: ControlId) -> Result<Option<qsonaut_radio::ControlValue>> {
@@ -214,6 +325,8 @@ impl Radio for RadioHandle {
                 })?;
                 Ok(radio.state().controls.get(&key).cloned().map(Into::into))
             }
+            #[cfg(test)]
+            Self::Test(radio) => radio.get_control(id).await,
         }
     }
     async fn set_control(&self, id: ControlId, value: qsonaut_radio::ControlValue) -> Result<()> {
@@ -229,6 +342,8 @@ impl Radio for RadioHandle {
                 }
                 Ok(())
             }
+            #[cfg(test)]
+            Self::Test(radio) => radio.set_control(id, value).await,
         }
     }
     async fn get_meter(&self, id: MeterId) -> Result<Option<u8>> {
@@ -245,6 +360,8 @@ impl Radio for RadioHandle {
                 })?;
                 Ok(radio.state().meters.get(&wire_id).copied())
             }
+            #[cfg(test)]
+            Self::Test(radio) => radio.get_meter(id).await,
         }
     }
     async fn start_tuner(&self) -> Result<()> {
@@ -255,6 +372,8 @@ impl Radio for RadioHandle {
                 radio.client.start_tuner()?;
                 Ok(())
             }
+            #[cfg(test)]
+            Self::Test(radio) => radio.start_tuner().await,
         }
     }
     async fn get_tuner_status(&self) -> Result<Option<TunerStatus>> {
@@ -265,6 +384,8 @@ impl Radio for RadioHandle {
                 radio.schedule_read("tuner", || radio.client.get_tuner_status())?;
                 Ok(radio.state().tuner.map(Into::into))
             }
+            #[cfg(test)]
+            Self::Test(radio) => radio.get_tuner_status().await,
         }
     }
     fn capabilities(&self) -> RadioCapabilities {

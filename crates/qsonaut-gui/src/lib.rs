@@ -26,6 +26,8 @@ mod workers;
 
 use anyhow::{anyhow, Context, Result};
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
+#[cfg(test)]
+use hostbridge_radio::test_remote_radio;
 use hostbridge_radio::{remote_media_queue, HostBridgeRadio, RadioHandle};
 use qsonaut_accelerate::{
     AccelerationReport, ActiveBackend, ComputePreference, DecodeTelemetry, DecodeTrace,

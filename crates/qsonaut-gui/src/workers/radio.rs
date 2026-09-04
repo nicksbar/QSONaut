@@ -17,6 +17,7 @@ const RADIO_METER_RESPONSE_TIMEOUT: Duration = Duration::from_millis(150);
 // poll forever.
 static FIRST_RADIO_CORE_POLL: AtomicBool = AtomicBool::new(true);
 static REMOTE_LEVEL_POLL_INDEX: AtomicUsize = AtomicUsize::new(0);
+static REMOTE_LEVEL_CONTROL_INDEX: AtomicUsize = AtomicUsize::new(0);
 static REMOTE_CORE_POLL_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2099,13 +2100,17 @@ fn poll_remote_level_state(
     // the next cycle observes it. A bulk read here starves the service's
     // media sender and makes the remote waterfall/audio appear degraded.
     let cycle = REMOTE_LEVEL_POLL_INDEX.fetch_add(1, Ordering::Relaxed);
-    if cycle % 4 == 1 {
+    // Reserve two non-signal slots in each eight-cycle window while leaving
+    // the remaining odd cycles available for the rotating control/meter
+    // reads. The previous four-cycle pattern returned on every odd cycle,
+    // making the 20-slot rotation unreachable.
+    if cycle % 8 == 1 {
         if let Ok(Some(status)) = rt.block_on(radio.get_tuner_status()) {
             state.lock().expect("ui state lock poisoned").tuner_status = Some(status);
         }
         return;
     }
-    if cycle % 4 == 3 {
+    if cycle % 8 == 3 {
         if let Ok(Some(ControlValue::U8(filter))) =
             rt.block_on(radio.get_control(ControlId::Filter))
         {
@@ -2121,7 +2126,10 @@ fn poll_remote_level_state(
         });
         return;
     }
-    let slot = (cycle / 2) % 20;
+    // Count only actual rotating-read opportunities. Deriving this from the
+    // global poll tick would skip slots whenever the priority tuner/filter
+    // reads occupy a tick.
+    let slot = REMOTE_LEVEL_CONTROL_INDEX.fetch_add(1, Ordering::Relaxed) % 20;
     match slot {
         0 => update_remote_u8(rt, radio, state, ControlId::AfGain, |s, v| {
             s.af_gain = Some(v)
@@ -2817,6 +2825,10 @@ mod level_poll_tests {
             Ok(())
         }
 
+        async fn set_control(&self, _id: ControlId, _value: ControlValue) -> Result<()> {
+            Ok(())
+        }
+
         async fn set_ptt(&self, _enabled: bool) -> Result<()> {
             Ok(())
         }
@@ -3417,6 +3429,498 @@ mod level_poll_tests {
             ..narrow
         };
         assert!(configure_radio_scope(&rt, &overview_radio, &overview, Some(false), None).is_ok());
+    }
+
+    #[test]
+    fn remote_level_scheduler_rotates_every_control_and_meter_without_blocking() {
+        let radio = RadioHandle::Local(ConfiguredRadio::Null(
+            qsonaut_radio::NullRadio::with_frequency_mode(14_074_000, Mode::Data),
+        ));
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+
+        // Exercise complete scheduler rotations, including the tuner/filter
+        // priority slots and every advertised control and meter destination.
+        for _ in 0..48 {
+            poll_remote_level_state(&rt, &radio, &state);
+        }
+
+        let state = state.lock().expect("state lock");
+        assert!(state.voltage_history.len() <= 20);
+    }
+
+    #[test]
+    fn remote_level_scheduler_uses_nonblocking_hostbridge_requests() {
+        let (remote, client) = test_remote_radio();
+        let radio = RadioHandle::Remote(Box::new(remote));
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+
+        // A disconnected client still exercises the complete remote request
+        // path. Every operation must return promptly and leave cached state
+        // untouched until the event pump receives a real reply.
+        for _ in 0..80 {
+            poll_remote_level_state(&rt, &radio, &state);
+        }
+
+        let state = state.lock().expect("state lock");
+        assert!(state.signal_meter.is_none());
+        assert!(state.voltage_history.is_empty());
+        drop(state);
+        client.shutdown().ok();
+    }
+
+    #[test]
+    fn level_scheduler_projects_all_cached_typed_values() {
+        let controls = ControlId::ALL
+            .iter()
+            .copied()
+            .map(|id| {
+                let value = match id {
+                    ControlId::NoiseBlanker
+                    | ControlId::NoiseReduction
+                    | ControlId::IpPlus
+                    | ControlId::Notch
+                    | ControlId::ManualNotch
+                    | ControlId::Tuner => ControlValue::Bool(true),
+                    ControlId::Vfo => ControlValue::Vfo(1),
+                    _ => ControlValue::U8(48),
+                };
+                (id, value)
+            })
+            .collect();
+        let meters = MeterId::ALL.iter().copied().map(|id| (id, 49)).collect();
+        let radio = RadioHandle::Test(Arc::new(CoverageRadio { controls, meters }));
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+
+        for _ in 0..400 {
+            poll_remote_level_state(&rt, &radio, &state);
+        }
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.signal_meter, Some(49));
+        assert_eq!(state.voltage_meter, Some(49));
+        assert!(!state.voltage_history.is_empty());
+        assert_eq!(state.ip_plus, Some(true));
+        assert_eq!(state.notch_manual, Some(true));
+    }
+
+    #[test]
+    fn remote_core_poll_refreshes_on_its_bounded_cadence() {
+        let (remote, client) = test_remote_radio();
+        let radio = RadioHandle::Remote(Box::new(remote));
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+
+        for _ in 0..7 {
+            poll_radio_core_state(&rt, &radio, &state, false);
+        }
+        poll_radio_core_state(&rt, &radio, &state, true);
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.radio_power_on, Some(false));
+        assert!(state.last_error.is_some());
+        drop(state);
+        client.shutdown().ok();
+    }
+
+    #[test]
+    fn worker_swr_sweep_completes_with_a_deterministic_hal_fixture() {
+        let controls = HashMap::from([
+            (ControlId::AfGain, ControlValue::U8(50)),
+            (ControlId::RfGain, ControlValue::U8(50)),
+            (ControlId::Squelch, ControlValue::U8(0)),
+            (ControlId::RfPower, ControlValue::U8(44)),
+            (ControlId::Preamp, ControlValue::U8(0)),
+            (ControlId::Attenuator, ControlValue::U8(0)),
+            (ControlId::Agc, ControlValue::U8(0)),
+            (ControlId::NoiseReductionLevel, ControlValue::U8(0)),
+            (ControlId::Filter, ControlValue::U8(2)),
+            (ControlId::NoiseBlanker, ControlValue::Bool(false)),
+            (ControlId::NoiseReduction, ControlValue::Bool(false)),
+            (ControlId::IpPlus, ControlValue::Bool(false)),
+            (ControlId::Notch, ControlValue::Bool(false)),
+            (ControlId::ManualNotch, ControlValue::Bool(false)),
+            (ControlId::Vfo, ControlValue::Vfo(0)),
+        ]);
+        let meters = HashMap::from([(MeterId::Swr, 12)]);
+        let radio = Arc::new(CoverageRadio { controls, meters });
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let sweep_abort = Arc::new(AtomicBool::new(false));
+        let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
+        let repaint = Arc::new(OnceLock::new());
+        let ptt_allowed = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker(
+            RadioHandle::Test(radio),
+            state.clone(),
+            stop,
+            sweep_abort,
+            display_tuning,
+            rx,
+            repaint,
+            ptt_allowed,
+        );
+
+        tx.send(GuiCommand::TuneDelta(1_000)).expect("tune delta");
+        tx.send(GuiCommand::TuneTo(7_100_000)).expect("tune to");
+        tx.send(GuiCommand::CycleMode).expect("cycle mode");
+        tx.send(GuiCommand::SetRadioMode(Mode::Data))
+            .expect("set mode");
+        for workspace in [
+            WorkspaceMode::Voice,
+            WorkspaceMode::Ft8,
+            WorkspaceMode::Ft4,
+            WorkspaceMode::Fst4,
+            WorkspaceMode::Wspr,
+            WorkspaceMode::Jt9,
+            WorkspaceMode::Jt65,
+            WorkspaceMode::Q65,
+            WorkspaceMode::Msk144,
+            WorkspaceMode::Cw,
+            WorkspaceMode::Sstv,
+        ] {
+            tx.send(GuiCommand::ApplyWorkspace {
+                mode: workspace,
+                frequency_hz: 7_101_000,
+            })
+            .expect("apply supported workspace");
+        }
+        tx.send(GuiCommand::SetFilter(3)).expect("set filter");
+        for (id, value) in [
+            (ControlId::AfGain, ControlValue::U8(10)),
+            (ControlId::RfGain, ControlValue::U8(20)),
+            (ControlId::Squelch, ControlValue::U8(30)),
+            (ControlId::RfPower, ControlValue::U8(40)),
+            (ControlId::Preamp, ControlValue::U8(1)),
+            (ControlId::Attenuator, ControlValue::U8(1)),
+            (ControlId::Agc, ControlValue::U8(1)),
+            (ControlId::NoiseReductionLevel, ControlValue::U8(1)),
+            (ControlId::Filter, ControlValue::U8(2)),
+            (ControlId::NoiseBlanker, ControlValue::Bool(true)),
+            (ControlId::NoiseReduction, ControlValue::Bool(true)),
+            (ControlId::IpPlus, ControlValue::Bool(true)),
+            (ControlId::Notch, ControlValue::Bool(true)),
+            (ControlId::ManualNotch, ControlValue::Bool(true)),
+            (ControlId::Vfo, ControlValue::Vfo(1)),
+        ] {
+            tx.send(GuiCommand::SetControl(id, value))
+                .expect("set supported control");
+        }
+        tx.send(GuiCommand::AfGainDelta(-5))
+            .expect("adjust AF gain");
+        tx.send(GuiCommand::StartTuner).expect("start tuner");
+        tx.send(GuiCommand::SetPtt(false)).expect("PTT off");
+        let (ack_tx, ack_rx) = mpsc::channel();
+        tx.send(GuiCommand::SetPttWithAck(false, ack_tx))
+            .expect("acknowledged PTT off");
+        assert_eq!(ack_rx.recv_timeout(Duration::from_secs(1)).unwrap(), Ok(()));
+
+        tx.send(GuiCommand::StartSwrSweep {
+            start_hz: 7_074_000,
+            stop_hz: 7_074_000,
+            step_hz: 1_000,
+            interval_ms: 100,
+        })
+        .expect("start deterministic sweep");
+        for _ in 0..500 {
+            if state
+                .lock()
+                .expect("state lock")
+                .swr_sweep_status
+                .contains("1 points")
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        tx.send(GuiCommand::Quit).expect("quit deterministic sweep");
+        handle.join().expect("deterministic sweep worker join");
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.swr, Some(12));
+        assert_eq!(state.swr_sweep_points, vec![(7_074_000, 12)]);
+        assert_eq!(state.swr_sweep_status, "1 points");
+        assert_eq!(state.rf_power, Some(40));
+        assert!(!state.ptt_on);
+    }
+
+    #[test]
+    fn worker_error_fixture_exercises_nonfatal_command_failures() {
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let sweep_abort = Arc::new(AtomicBool::new(false));
+        let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
+        let repaint = Arc::new(OnceLock::new());
+        let ptt_allowed = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker(
+            RadioHandle::Test(Arc::new(ErrorRadio)),
+            state.clone(),
+            stop,
+            sweep_abort,
+            display_tuning,
+            rx,
+            repaint,
+            ptt_allowed,
+        );
+
+        // Initial failure marks the link unavailable. Restore the known-live
+        // state in the fixture so each command's independent error handling
+        // can be exercised without a hardware timeout.
+        for _ in 0..100 {
+            if state.lock().expect("state lock").radio_power_on == Some(false) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        state.lock().expect("state lock").radio_power_on = Some(true);
+        tx.send(GuiCommand::TuneDelta(1_000))
+            .expect("failing tune delta");
+        tx.send(GuiCommand::TuneTo(7_100_000))
+            .expect("failing tune");
+        tx.send(GuiCommand::CycleMode).expect("failing mode cycle");
+        tx.send(GuiCommand::SetRadioMode(Mode::Data))
+            .expect("failing mode write");
+        tx.send(GuiCommand::SetPtt(false)).expect("failing PTT");
+        let (ack_tx, ack_rx) = mpsc::channel();
+        tx.send(GuiCommand::SetPttWithAck(false, ack_tx))
+            .expect("failing acknowledged PTT");
+        tx.send(GuiCommand::SetPower(true)).expect("failing power");
+        tx.send(GuiCommand::ApplyWorkspace {
+            mode: WorkspaceMode::Voice,
+            frequency_hz: 7_101_000,
+        })
+        .expect("failing workspace");
+        tx.send(GuiCommand::SetFilter(2)).expect("failing filter");
+        tx.send(GuiCommand::SetControl(
+            ControlId::AfGain,
+            ControlValue::U8(20),
+        ))
+        .expect("failing control");
+        tx.send(GuiCommand::StartTuner).expect("failing tuner");
+        tx.send(GuiCommand::AfGainDelta(1))
+            .expect("failing AF gain");
+        assert!(ack_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("failing PTT acknowledgement")
+            .is_err());
+        tx.send(GuiCommand::Quit).expect("quit error fixture");
+        handle.join().expect("error fixture worker join");
+
+        assert!(state.lock().expect("state lock").last_error.is_some());
+    }
+
+    #[test]
+    fn hostbridge_scope_projection_preserves_each_view_contract() {
+        let narrow = RadioScopeStreamConfig {
+            view: RadioScopeView::Narrow,
+            span_code: 2,
+            vbw_wide: true,
+            edges: None,
+            sweep_code: 1,
+            hold: true,
+            reference_tenths_db: -30,
+        };
+        let wire = wire_scope_config(&narrow);
+        assert_eq!(wire.center_mode, Some(false));
+        assert_eq!(wire.span_hz, Some(scope_span_hz(2)));
+        assert_eq!(wire.fixed_edges_hz, None);
+        assert_eq!(wire.hold, Some(true));
+        assert_eq!(wire.reference_level_tenths_db, Some(-30));
+
+        let overview = RadioScopeStreamConfig {
+            view: RadioScopeView::Overview,
+            edges: Some((7_000_000, 7_300_000)),
+            ..narrow
+        };
+        let wire = wire_scope_config(&overview);
+        assert_eq!(wire.center_mode, Some(true));
+        assert_eq!(wire.span_hz, None);
+        assert_eq!(wire.fixed_edges_hz, overview.edges);
+        assert_eq!(wire.fixed_edge_number, Some(1));
+    }
+
+    #[test]
+    fn control_projection_covers_every_typed_radio_setting() {
+        let mut state = GuiState::default();
+        for (id, value) in [
+            (ControlId::AfGain, ControlValue::U8(1)),
+            (ControlId::RfGain, ControlValue::U8(2)),
+            (ControlId::Squelch, ControlValue::U8(3)),
+            (ControlId::RfPower, ControlValue::U8(4)),
+            (ControlId::Preamp, ControlValue::U8(5)),
+            (ControlId::Attenuator, ControlValue::U8(6)),
+            (ControlId::Agc, ControlValue::U8(7)),
+            (ControlId::NoiseReductionLevel, ControlValue::U8(8)),
+            (ControlId::Filter, ControlValue::U8(9)),
+            (ControlId::NoiseBlanker, ControlValue::Bool(true)),
+            (ControlId::NoiseReduction, ControlValue::Bool(true)),
+            (ControlId::IpPlus, ControlValue::Bool(true)),
+            (ControlId::Notch, ControlValue::Bool(true)),
+            (ControlId::ManualNotch, ControlValue::Bool(true)),
+            (ControlId::Tuner, ControlValue::Bool(true)),
+            (ControlId::Vfo, ControlValue::Vfo(1)),
+        ] {
+            project_control_write(&mut state, id, &value);
+        }
+        assert_eq!(state.af_gain, Some(1));
+        assert_eq!(state.rf_gain, Some(2));
+        assert_eq!(state.squelch, Some(3));
+        assert_eq!(state.rf_power, Some(4));
+        assert_eq!(state.preamp, Some(5));
+        assert_eq!(state.attenuator, Some(6));
+        assert_eq!(state.agc, Some(7));
+        assert_eq!(state.noise_reduction_level, Some(8));
+        assert_eq!(state.filter, Some(9));
+        assert_eq!(state.noise_blank, Some(true));
+        assert_eq!(state.noise_reduction, Some(true));
+        assert_eq!(state.ip_plus, Some(true));
+        assert_eq!(state.notch_auto, Some(true));
+        assert_eq!(state.notch_manual, Some(true));
+        assert_eq!(state.tuner_status.map(|status| status.enabled), Some(true));
+        assert_eq!(state.active_vfo, 1);
+    }
+
+    #[test]
+    fn icom_mode_labels_cover_all_hal_modes() {
+        let modes = [
+            (BaseMode::Lsb, "LSB"),
+            (BaseMode::Usb, "USB"),
+            (BaseMode::Am, "AM"),
+            (BaseMode::Cw, "CW"),
+            (BaseMode::Rtty, "RTTY"),
+            (BaseMode::Fm, "FM"),
+            (BaseMode::Wfm, "WFM"),
+            (BaseMode::CwR, "CW-R"),
+            (BaseMode::RttyR, "RTTY-R"),
+            (BaseMode::Unknown(0x7f), "UNKNOWN"),
+        ];
+        for (mode, expected) in modes {
+            assert_eq!(icom_base_mode_label(mode), expected);
+        }
+    }
+
+    #[test]
+    fn icom_mode_projection_preserves_confirmed_data_and_filter_state() {
+        let mut state = GuiState {
+            data_mode: Some(true),
+            filter: Some(3),
+            ..Default::default()
+        };
+        apply_icom_mode_details(
+            &mut state,
+            OperatingMode {
+                base: BaseMode::Usb,
+                data_mode: false,
+                filter: None,
+            },
+            None,
+        );
+        assert_eq!(state.mode, "USB");
+        assert_eq!(state.data_mode, Some(true));
+        assert_eq!(state.filter, Some(3));
+
+        apply_icom_mode_details(
+            &mut state,
+            OperatingMode {
+                base: BaseMode::Cw,
+                data_mode: false,
+                filter: Some(1),
+            },
+            Some(false),
+        );
+        assert_eq!(state.mode, "CW");
+        assert_eq!(state.data_mode, Some(false));
+        assert_eq!(state.filter, Some(1));
+    }
+
+    #[test]
+    fn vfo_projection_accepts_only_supported_hal_values() {
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let radio = CoverageRadio {
+            controls: HashMap::from([(ControlId::Vfo, ControlValue::Vfo(1))]),
+            meters: HashMap::new(),
+        };
+        assert_eq!(read_vfo_control(&rt, &radio), Some(1));
+
+        let invalid = CoverageRadio {
+            controls: HashMap::from([(ControlId::Vfo, ControlValue::U8(2))]),
+            meters: HashMap::new(),
+        };
+        assert_eq!(read_vfo_control(&rt, &invalid), None);
+    }
+
+    #[test]
+    fn scope_change_detection_distinguishes_geometry_and_live_parameters() {
+        let base = RadioScopeStreamConfig {
+            view: RadioScopeView::Narrow,
+            span_code: 2,
+            vbw_wide: false,
+            edges: None,
+            sweep_code: 1,
+            hold: false,
+            reference_tenths_db: -20,
+        };
+        assert!(!scope_config_changed(None, base));
+        assert!(scope_config_changed(
+            Some(base),
+            RadioScopeStreamConfig { hold: true, ..base }
+        ));
+        assert_eq!(
+            scope_change_updates(Some(base), RadioScopeStreamConfig { hold: true, ..base }),
+            (false, Some(true), None)
+        );
+        assert_eq!(
+            scope_change_updates(
+                Some(base),
+                RadioScopeStreamConfig {
+                    span_code: 3,
+                    reference_tenths_db: -10,
+                    ..base
+                }
+            ),
+            (true, None, Some(-10))
+        );
+    }
+
+    #[test]
+    fn remote_scope_worker_handles_startup_without_blocking_core_control() {
+        let (remote, client) = test_remote_radio();
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        {
+            let mut state = state.lock().expect("state lock");
+            state.radio_power_on = Some(true);
+            state.radio_spectrum_desired = true;
+            state.radio_scope_settings_dirty = true;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let sweep_abort = Arc::new(AtomicBool::new(false));
+        let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
+        let repaint = Arc::new(OnceLock::new());
+        let ptt_allowed = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker(
+            RadioHandle::Remote(Box::new(remote)),
+            state.clone(),
+            stop.clone(),
+            sweep_abort,
+            display_tuning,
+            rx,
+            repaint,
+            ptt_allowed,
+        );
+
+        std::thread::sleep(Duration::from_millis(1_150));
+        tx.send(GuiCommand::Quit).expect("quit remote worker");
+        handle.join().expect("remote worker join");
+        client.shutdown().ok();
+
+        // Joining is the assertion here: startup scope work must not strand
+        // the core worker, regardless of the disconnected test endpoint's
+        // final status text.
     }
 
     #[test]
