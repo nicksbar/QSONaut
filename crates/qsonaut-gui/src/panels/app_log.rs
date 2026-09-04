@@ -267,4 +267,51 @@ mod tests {
             AppLogLevelFilter::Warning
         ));
     }
+
+    #[test]
+    fn log_filters_and_colors_cover_every_operator_facing_category() {
+        let context = egui::Context::default();
+        let lines = [
+            (" TRACE parser", AppLogLineLevel::Trace),
+            (" DEBUG parser", AppLogLineLevel::Debug),
+            (" INFO PTT asserted", AppLogLineLevel::Info),
+            (" INFO RX DECODE complete", AppLogLineLevel::Info),
+            (" INFO radio ready", AppLogLineLevel::Info),
+            (" WARNING retry", AppLogLineLevel::Warning),
+            (" PANIC worker", AppLogLineLevel::Error),
+        ];
+        let _ = context.run(Default::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                for (line, expected) in lines {
+                    assert_eq!(app_log_line_level(line), expected);
+                    let _ = app_log_line_color(ui, line);
+                }
+            });
+        });
+        for level in [
+            AppLogLineLevel::Trace,
+            AppLogLineLevel::Debug,
+            AppLogLineLevel::Info,
+            AppLogLineLevel::Warning,
+            AppLogLineLevel::Error,
+        ] {
+            assert!(app_log_level_matches(level, AppLogLevelFilter::All));
+        }
+        assert!(app_log_level_matches(
+            AppLogLineLevel::Warning,
+            AppLogLevelFilter::Info
+        ));
+        assert!(!app_log_level_matches(
+            AppLogLineLevel::Debug,
+            AppLogLevelFilter::Info
+        ));
+        assert!(app_log_level_matches(
+            AppLogLineLevel::Error,
+            AppLogLevelFilter::Error
+        ));
+        assert!(!app_log_level_matches(
+            AppLogLineLevel::Warning,
+            AppLogLevelFilter::Error
+        ));
+    }
 }

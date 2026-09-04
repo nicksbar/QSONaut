@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::tx_audio::build_native_digital_tx_pcm_with_q65;
 
 fn native_sequence_enabled(
     mode: WorkspaceMode,
@@ -25,7 +26,7 @@ impl QsonautGuiApp {
             .frequency_hz
             .unwrap_or_default();
         let slot_seconds = mode
-            .slot_seconds(self.fst4_submode)
+            .slot_seconds(self.fst4_submode, self.q65_submode)
             .unwrap_or(FT4_SLOT_SECONDS);
         let started_at = (session.started_period as f64 * slot_seconds) as u64;
         let ended_at = (session.last_rx_period.saturating_add(1) as f64 * slot_seconds) as u64;
@@ -301,17 +302,18 @@ impl QsonautGuiApp {
             self.digital_tx_status = "TX unavailable: radio control is disabled".to_string();
             return;
         };
-        let slot_seconds = mode.slot_seconds(self.fst4_submode);
+        let slot_seconds = mode.slot_seconds(self.fst4_submode, self.q65_submode);
         if slot_seconds.is_none() && mode != WorkspaceMode::Cw {
             self.digital_tx_status = format!("{} TX backend is not available", mode.label());
             return;
         }
         let tx_tone_hz = self.contest_effective_tx_tone_hz();
-        match build_native_digital_tx_pcm(
+        match build_native_digital_tx_pcm_with_q65(
             mode,
             &self.digital_compose,
             tx_tone_hz,
             self.fst4_submode,
+            self.q65_submode,
             self.cw_wpm,
             self.cw_tone_hz,
         ) {
@@ -423,7 +425,10 @@ impl QsonautGuiApp {
                     }
                     if let Some(message) = self.digital_queued_tx_message.clone() {
                         let utc = utc_hhmmss_millis(
-                            period as f64 * mode.slot_seconds(self.fst4_submode).unwrap_or(1.0),
+                            period as f64
+                                * mode
+                                    .slot_seconds(self.fst4_submode, self.q65_submode)
+                                    .unwrap_or(1.0),
                         );
                         self.digital_tx_chat.push_back(DigitalTxChatEntry {
                             mode,

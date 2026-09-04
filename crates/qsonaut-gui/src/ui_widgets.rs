@@ -1,12 +1,7 @@
 use eframe::egui;
 use eframe::egui::Color32;
 
-use qsonaut_radio::models::find_model;
-
-const ICOM_BAUD_RATES: &[u32] = &[4_800, 9_600, 19_200, 38_400, 57_600, 115_200];
-const GENERIC_YAESU_BAUD_RATES: &[u32] = &[4_800, 9_600, 19_200, 38_400];
-const GENERIC_CLASSIC_YAESU_BAUD_RATES: &[u32] = &[4_800, 9_600, 38_400];
-const GENERIC_KENWOOD_BAUD_RATES: &[u32] = &[4_800, 9_600, 19_200, 38_400, 57_600, 115_200];
+use qsonaut_radio::{models::find_model, MeterId};
 
 /// Paint the AI tab icon with egui primitives so it does not depend on an
 /// emoji or a platform font containing a particular Unicode glyph.
@@ -155,38 +150,29 @@ pub(super) fn native_radio_profile(
     backend: &str,
     model: &str,
 ) -> Option<&'static qsonaut_radio::models::RadioModelProfile> {
-    backend
-        .trim()
-        .eq_ignore_ascii_case("native")
-        .then(|| find_model(model))
-        .flatten()
+    matches!(
+        backend.trim().to_ascii_lowercase().as_str(),
+        "native" | "hostbridge"
+    )
+    .then(|| find_model(model))
+    .flatten()
+}
+
+pub(super) fn radio_control_max(
+    model: &str,
+    control: qsonaut_radio::ControlId,
+    fallback: u8,
+) -> u8 {
+    native_radio_profile("native", model)
+        .and_then(|profile| profile.control_max(control))
+        .unwrap_or(fallback)
 }
 
 pub(super) fn radio_baud_rates(model: &str) -> &'static [u32] {
-    use qsonaut_radio::{
-        kenwood::profile as kenwood,
-        models::Protocol,
-        yaesu::{legacy_profile as yaesu_legacy, profile as yaesu},
-        KenwoodCatModel, YaesuCatModel, YaesuLegacyModel,
-    };
-
     let Some(profile) = find_model(model) else {
-        return GENERIC_KENWOOD_BAUD_RATES;
+        return &[];
     };
-    match profile.protocol {
-        Protocol::IcomCiV { .. } => ICOM_BAUD_RATES,
-        Protocol::YaesuCat => YaesuCatModel::from_model_name(profile.model)
-            .map(yaesu::profile_for_model)
-            .map_or(GENERIC_YAESU_BAUD_RATES, |profile| profile.baud_rates),
-        Protocol::YaesuLegacyCat => YaesuLegacyModel::from_model_name(profile.model)
-            .map(yaesu_legacy::profile_for_model)
-            .map_or(GENERIC_CLASSIC_YAESU_BAUD_RATES, |profile| {
-                profile.baud_rates
-            }),
-        Protocol::KenwoodCat => KenwoodCatModel::from_model_name(profile.model)
-            .map(kenwood::profile_for_model)
-            .map_or(GENERIC_KENWOOD_BAUD_RATES, |profile| profile.baud_rates),
-    }
+    profile.supported_baud_rates()
 }
 
 pub(super) fn radio_supports_band(
@@ -210,44 +196,43 @@ pub(super) fn format_swr_display(model: &str, normalized: Option<u8>) -> String 
         return "unavailable".to_string();
     };
     let meter_percent = (f32::from(level) * 100.0 / 255.0).round();
-    if model.eq_ignore_ascii_case("IC-7300") {
+    if let Some(profile) = find_model(model) {
         // The IC-7300 manual documents these CI-V meter anchors. Interpolate
         // only between known points; do not invent a ratio above the documented
         // 3.0:1 anchor.
-        let anchors = [(0_u8, 1.0_f32), (48, 1.5), (80, 2.0), (120, 3.0)];
-        if let Some(window) = anchors.windows(2).find(|window| level <= window[1].0) {
-            let (low_level, low_ratio) = window[0];
-            let (high_level, high_ratio) = window[1];
-            let fraction =
-                f32::from(level.saturating_sub(low_level)) / f32::from(high_level - low_level);
-            return format!(
-                "{:.2}:1 ({meter_percent:.0}% meter)",
-                low_ratio + fraction * (high_ratio - low_ratio)
-            );
+        if profile
+            .calibrated_meter_value(MeterId::Swr, level)
+            .is_some()
+        {
+            let ratio = profile
+                .calibrated_meter_value(MeterId::Swr, level)
+                .unwrap_or(3.0);
+            if level > 120 {
+                return format!(">3.00:1 ({meter_percent:.0}% meter)");
+            }
+            return format!("{ratio:.2}:1 ({meter_percent:.0}% meter)");
         }
-        return format!(">3.00:1 ({meter_percent:.0}% meter)");
     }
     format!("SWR meter {meter_percent:.0}%")
 }
 
 pub(super) fn swr_chart_value(model: &str, normalized: u8) -> f32 {
-    if !model.eq_ignore_ascii_case("IC-7300") {
-        return f32::from(normalized) * 100.0 / 255.0;
+    if let Some(profile) = find_model(model) {
+        if let Some(value) = profile.calibrated_meter_value(MeterId::Swr, normalized) {
+            return value;
+        }
     }
-    let anchors = [(0_u8, 1.0_f32), (48, 1.5), (80, 2.0), (120, 3.0)];
-    if let Some(window) = anchors.windows(2).find(|window| normalized <= window[1].0) {
-        let (low_level, low_ratio) = window[0];
-        let (high_level, high_ratio) = window[1];
-        let fraction =
-            f32::from(normalized.saturating_sub(low_level)) / f32::from(high_level - low_level);
-        return low_ratio + fraction * (high_ratio - low_ratio);
-    }
-    3.0
+    f32::from(normalized) * 100.0 / 255.0
 }
 
 #[cfg(test)]
 mod tests {
-    use super::radio_baud_rates;
+    use super::{
+        draw_ai_icon, draw_radio_about_icon, draw_speaker_icon, format_swr_display,
+        native_radio_profile, radio_baud_rates, radio_supports_band, styled_selection_button,
+        swr_chart_value,
+    };
+    use eframe::egui::{self, Color32};
 
     #[test]
     fn baud_rates_follow_the_selected_radio_profile() {
@@ -256,5 +241,54 @@ mod tests {
         assert_eq!(radio_baud_rates("FT-857D"), &[4_800, 9_600, 38_400]);
         assert!(!radio_baud_rates("TS-2000").contains(&115_200));
         assert!(radio_baud_rates("IC-7300").contains(&115_200));
+    }
+
+    #[test]
+    fn swr_display_uses_model_calibration_and_safe_generic_fallbacks() {
+        assert_eq!(format_swr_display("IC-7300", None), "unavailable");
+        assert_eq!(format_swr_display("unknown", Some(128)), "SWR meter 50%");
+        assert!(format_swr_display("IC-7300", Some(80)).ends_with("meter)"));
+        assert!(format_swr_display("IC-7300", Some(121)).starts_with(">3.00:1"));
+        assert_eq!(swr_chart_value("unknown", 128), 128.0 * 100.0 / 255.0);
+        assert!(swr_chart_value("IC-7300", 80) > 1.0);
+    }
+
+    #[test]
+    fn band_capability_filtering_is_conservative_for_unknown_models() {
+        assert!(radio_supports_band(None, "20m"));
+        assert!(radio_supports_band(None, "2m"));
+        assert!(radio_supports_band(
+            super::native_radio_profile("native", "IC-7300"),
+            "20m"
+        ));
+        assert!(!radio_supports_band(
+            super::native_radio_profile("native", "IC-7300"),
+            "2m"
+        ));
+    }
+
+    #[test]
+    fn native_profile_selection_is_backend_and_model_aware() {
+        assert!(native_radio_profile("native", "IC-7300").is_some());
+        assert!(native_radio_profile(" NATIVE ", "IC-7300").is_some());
+        assert!(native_radio_profile("rigctld", "IC-7300").is_none());
+        assert!(native_radio_profile("native", "not-a-model").is_none());
+        assert!(radio_baud_rates("not-a-model").is_empty());
+    }
+
+    #[test]
+    fn widget_painters_and_selection_states_render_without_panicking() {
+        let context = egui::Context::default();
+        let color = Color32::from_rgb(20, 200, 240);
+        let _ = context.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let rect = ui.allocate_space(egui::vec2(32.0, 32.0)).1;
+                draw_ai_icon(ui.painter(), rect, color);
+                draw_speaker_icon(ui.painter(), rect, color);
+                draw_radio_about_icon(ui.painter(), rect, color);
+                let _ = styled_selection_button(ui, "ON", true, color, true);
+                let _ = styled_selection_button(ui, "OFF", false, color, false);
+            });
+        });
     }
 }

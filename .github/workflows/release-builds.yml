@@ -1,7 +1,6 @@
 name: Release builds
 
 on:
-  workflow_dispatch:
   push:
     tags:
       - "v*"
@@ -10,8 +9,34 @@ permissions:
   contents: read
 
 jobs:
+  verify-tag:
+    name: Verify release tag
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out QSONaut
+        uses: actions/checkout@v6
+        with:
+          path: QSONaut
+
+      - name: Verify SemVer tag and workspace version
+        working-directory: QSONaut
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag '$GITHUB_REF_NAME' is not SemVer (expected vMAJOR.MINOR.PATCH)."
+            exit 1
+          fi
+          PACKAGE_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "qsonaut") | .version')"
+          if [[ "$PACKAGE_VERSION" != "$TAG_VERSION" ]]; then
+            echo "Tag $TAG_VERSION does not match package version $PACKAGE_VERSION"
+            exit 1
+          fi
+
   build:
     name: ${{ matrix.name }}
+    needs: verify-tag
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -45,7 +70,7 @@ jobs:
         with:
           path: QSONaut
 
-      # Rigwright v0.1.16 is resolved from crates.io by the Cargo manifests.
+      # Rigwright v0.1.21 and shared components are resolved from immutable Git revisions.
 
       - name: Install Linux native libraries
         if: matrix.os == 'linux'
@@ -59,7 +84,7 @@ jobs:
         env:
           QSONAUT_CONTRIBUTORS: ${{ vars.QSONAUT_CONTRIBUTORS }}
           QSONAUT_TESTERS: ${{ vars.QSONAUT_TESTERS }}
-        run: cargo build --release --target ${{ matrix.target }} -p qsonaut
+        run: cargo build --locked --release --target ${{ matrix.target }} -p qsonaut
 
       - name: Package Linux distribution
         if: matrix.os == 'linux'
@@ -111,6 +136,11 @@ jobs:
           fi
           if ! grep -Eq "^## \[$TAG\] - " CHANGELOG.md; then
             echo "CHANGELOG.md is missing section: ## [$TAG] - YYYY-MM-DD"
+            exit 1
+          fi
+          PACKAGE_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "qsonaut") | .version')"
+          if [[ "$PACKAGE_VERSION" != "$TAG" ]]; then
+            echo "Tag $TAG does not match package version $PACKAGE_VERSION"
             exit 1
           fi
 

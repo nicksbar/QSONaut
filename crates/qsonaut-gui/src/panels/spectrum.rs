@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::visuals::build_audio_waterfall_image_with_theme;
+use crate::visuals::{build_audio_waterfall_image_from_display_rows, prepare_audio_display_row};
 use qsonaut_third_party::sstv as qsonaut_sstv;
 
 fn scope_attribution_layout(
@@ -553,10 +553,13 @@ impl QsonautGuiApp {
             match self.workspace_mode {
                 WorkspaceMode::Ft8 => 50,
                 WorkspaceMode::Ft4 => 90,
-                WorkspaceMode::Fst4 => 70,
+                WorkspaceMode::Fst4 => {
+                    native_channel_width_hz(self.workspace_mode, self.fst4_submode)
+                }
                 WorkspaceMode::Wspr => 6,
-                WorkspaceMode::Jt9 => 16,
-                WorkspaceMode::Jt65 | WorkspaceMode::Q65 => 180,
+                WorkspaceMode::Jt9 | WorkspaceMode::Jt65 | WorkspaceMode::Q65 => {
+                    native_channel_width_hz(self.workspace_mode, self.fst4_submode)
+                }
                 WorkspaceMode::Sstv if sstv_scanning => {
                     (2_300 + qsonaut_sstv::AUTO_TARGET_MAX_OFFSET_HZ
                         - (1_100 + qsonaut_sstv::AUTO_TARGET_MIN_OFFSET_HZ))
@@ -597,9 +600,33 @@ impl QsonautGuiApp {
                     "Rebuilding audio waterfall texture geometry"
                 );
             }
-            let image = build_audio_waterfall_image_with_theme(
-                &snapshot.audio_waterfall_rows,
-                bw_hz,
+            let geometry_changed = self.audio_waterfall_texture.is_none()
+                || self.audio_waterfall_texture_bins != display_bins
+                || self.audio_waterfall_texture_theme != self.waterfall_theme;
+            if geometry_changed {
+                self.audio_waterfall_cached_rows.clear();
+            }
+            let can_append = !geometry_changed
+                && self.audio_waterfall_cached_source_revision.wrapping_add(1)
+                    == snapshot.audio_waterfall_revision
+                && self.audio_waterfall_cached_rows.len() == snapshot.audio_waterfall_rows.len();
+            if can_append {
+                if let Some(row) = snapshot.audio_waterfall_rows.back() {
+                    self.audio_waterfall_cached_rows
+                        .push_back(prepare_audio_display_row(row, bw_hz, display_bins));
+                    if self.audio_waterfall_cached_rows.len() > render_height {
+                        self.audio_waterfall_cached_rows.pop_front();
+                    }
+                }
+            } else {
+                self.audio_waterfall_cached_rows = snapshot
+                    .audio_waterfall_rows
+                    .iter()
+                    .map(|row| prepare_audio_display_row(row, bw_hz, display_bins))
+                    .collect();
+            }
+            let image = build_audio_waterfall_image_from_display_rows(
+                self.audio_waterfall_cached_rows.make_contiguous(),
                 display_bins,
                 render_height,
                 self.waterfall_theme,
@@ -614,6 +641,7 @@ impl QsonautGuiApp {
                 ));
             }
             self.audio_waterfall_texture_revision = snapshot.audio_waterfall_revision;
+            self.audio_waterfall_cached_source_revision = snapshot.audio_waterfall_revision;
             self.audio_waterfall_texture_bins = display_bins;
             self.audio_waterfall_texture_theme = self.waterfall_theme;
         }
@@ -868,7 +896,7 @@ impl QsonautGuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::scope_attribution_layout;
+    use super::{draw_scope_attribution, scope_attribution_layout};
     use eframe::egui;
 
     #[test]
@@ -893,5 +921,18 @@ mod tests {
             scope_attribution_layout(wide, 1, 10).unwrap().width(),
             440.0
         );
+    }
+
+    #[test]
+    fn draws_scope_attribution_for_partial_history_without_panicking() {
+        let context = egui::Context::default();
+        let scope = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(640.0, 360.0));
+        let _ = context.run(Default::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                draw_scope_attribution(ui, scope, 0, 10, "Radio waterfall");
+                draw_scope_attribution(ui, scope, 5, 10, "Audio waterfall");
+                draw_scope_attribution(ui, scope, 10, 10, "Full");
+            });
+        });
     }
 }

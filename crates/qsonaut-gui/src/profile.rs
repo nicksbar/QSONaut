@@ -15,30 +15,142 @@ use super::{
 
 pub(super) const OPERATOR_PROFILE_FILE: &str = "profile.toml";
 pub(super) const OPERATOR_PROFILE_VERSION: u32 = 17;
+const GLOBAL_SETTINGS_FILE: &str = "settings.toml";
 const RADIO_PROFILE_LIBRARY_FILE: &str = "radio-profiles.toml";
 const LEGACY_OPERATOR_PROFILE_FILE: &str = ".rigforge_profile.toml";
 const DEFAULT_PROFILE_NAME: &str = "Default";
 const OPERATOR_PROFILES_DIR: &str = "profiles";
 const ACTIVE_PROFILE_FILE: &str = "active-profile";
 
+/// Persisted audio settings owned by a radio profile.
+///
+/// This is flattened during serialization to preserve the existing TOML
+/// format, while keeping audio ownership separate in Rust.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct AudioProfileSettings {
+    #[serde(rename = "audio_input_device", default)]
+    pub(super) input_device: Option<String>,
+    #[serde(rename = "audio_enabled", default = "default_audio_enabled")]
+    pub(super) enabled: bool,
+    #[serde(rename = "audio_output_device", default)]
+    pub(super) output_device: Option<String>,
+    #[serde(rename = "audio_monitor_enabled", default)]
+    pub(super) monitor_enabled: bool,
+    #[serde(rename = "audio_monitor_output_device", default)]
+    pub(super) monitor_output_device: Option<String>,
+    #[serde(
+        rename = "audio_monitor_volume",
+        default = "default_audio_monitor_volume"
+    )]
+    pub(super) monitor_volume: f32,
+    #[serde(
+        rename = "audio_sample_rate_hz",
+        default = "default_audio_sample_rate_hz"
+    )]
+    pub(super) sample_rate_hz: u32,
+    #[serde(rename = "audio_channels", default = "default_audio_channels")]
+    pub(super) channels: u8,
+}
+
+impl Default for AudioProfileSettings {
+    fn default() -> Self {
+        Self {
+            input_device: None,
+            enabled: default_audio_enabled(),
+            output_device: None,
+            monitor_enabled: false,
+            monitor_output_device: None,
+            monitor_volume: default_audio_monitor_volume(),
+            sample_rate_hz: default_audio_sample_rate_hz(),
+            channels: default_audio_channels(),
+        }
+    }
+}
+
+/// Persisted radio connection settings owned by a radio profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct RadioProfileSettings {
+    #[serde(rename = "radio_enabled", default = "default_radio_enabled")]
+    pub(super) enabled: bool,
+    #[serde(rename = "radio_serial_port", default)]
+    pub(super) serial_port: Option<String>,
+    #[serde(rename = "radio_backend", default = "default_radio_backend")]
+    pub(super) backend: String,
+    #[serde(rename = "radio_endpoint", default = "default_radio_endpoint")]
+    pub(super) endpoint: String,
+    #[serde(rename = "radio_model", default = "default_radio_model")]
+    pub(super) model: String,
+    #[serde(rename = "radio_baud_rate", default = "default_radio_baud_rate")]
+    pub(super) baud_rate: u32,
+    #[serde(rename = "radio_civ_address", default = "default_radio_civ_address")]
+    pub(super) civ_address: u8,
+    #[serde(
+        rename = "radio_controller_civ_address",
+        default = "default_controller_civ_address"
+    )]
+    pub(super) controller_civ_address: u8,
+    #[serde(default)]
+    pub(super) hostbridge_access_key: String,
+    #[serde(default)]
+    pub(super) hostbridge_password: String,
+    #[serde(default)]
+    pub(super) hostbridge_radio_id: Option<String>,
+    #[serde(default)]
+    pub(super) hostbridge_audio_source_id: Option<String>,
+    #[serde(default)]
+    pub(super) hostbridge_audio_output_id: Option<String>,
+}
+
+impl Default for RadioProfileSettings {
+    fn default() -> Self {
+        Self {
+            enabled: default_radio_enabled(),
+            serial_port: None,
+            backend: default_radio_backend(),
+            endpoint: default_radio_endpoint(),
+            model: default_radio_model(),
+            baud_rate: default_radio_baud_rate(),
+            civ_address: default_radio_civ_address(),
+            controller_civ_address: default_controller_civ_address(),
+            hostbridge_access_key: String::new(),
+            hostbridge_password: String::new(),
+            hostbridge_radio_id: None,
+            hostbridge_audio_source_id: None,
+            hostbridge_audio_output_id: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct OperatorProfile {
     #[serde(default)]
     pub(super) profile_version: u32,
+    // Station identity/context remain global. These legacy fields stay
+    // readable for compatibility but are not duplicated in profiles.
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) callsign: String,
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) grid: String,
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) qth: String,
     #[serde(default)]
     pub(super) station_rig: String,
     #[serde(default)]
     pub(super) station_antenna: String,
-    #[serde(default)]
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) station_notes: String,
-    #[serde(default)]
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) llm_prompt_context: String,
-    #[serde(default)]
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) sstv_image_requirements: String,
-    #[serde(default)]
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) llm_model_notes: String,
     pub(super) follow_log: bool,
     pub(super) max_log_entries: usize,
@@ -104,22 +216,10 @@ pub(super) struct OperatorProfile {
     pub(super) cw_wpm: u8,
     #[serde(default = "default_cw_tone_hz")]
     pub(super) cw_tone_hz: u16,
-    #[serde(default)]
-    pub(super) audio_input_device: Option<String>,
-    #[serde(default = "default_audio_enabled")]
-    pub(super) audio_enabled: bool,
-    #[serde(default)]
-    pub(super) audio_output_device: Option<String>,
-    #[serde(default)]
-    pub(super) audio_monitor_enabled: bool,
-    #[serde(default)]
-    pub(super) audio_monitor_output_device: Option<String>,
-    #[serde(default = "default_audio_monitor_volume")]
-    pub(super) audio_monitor_volume: f32,
-    #[serde(default = "default_audio_sample_rate_hz")]
-    pub(super) audio_sample_rate_hz: u32,
-    #[serde(default = "default_audio_channels")]
-    pub(super) audio_channels: u8,
+    #[serde(default = "default_cw_auto_target_timeout_s")]
+    pub(super) cw_auto_target_timeout_s: u8,
+    #[serde(flatten, default)]
+    pub(super) audio: AudioProfileSettings,
     #[serde(default)]
     pub(super) recording_enabled: bool,
     #[serde(default = "default_recording_modes")]
@@ -128,25 +228,13 @@ pub(super) struct OperatorProfile {
     pub(super) recording_full_width: bool,
     #[serde(default = "default_recording_stream")]
     pub(super) recording_stream: bool,
-    #[serde(default = "default_radio_enabled")]
-    pub(super) radio_enabled: bool,
-    #[serde(default)]
-    pub(super) radio_serial_port: Option<String>,
-    #[serde(default = "default_radio_backend")]
-    pub(super) radio_backend: String,
-    #[serde(default = "default_radio_endpoint")]
-    pub(super) radio_endpoint: String,
-    #[serde(default = "default_radio_model")]
-    pub(super) radio_model: String,
-    #[serde(default = "default_radio_baud_rate")]
-    pub(super) radio_baud_rate: u32,
-    #[serde(default = "default_radio_civ_address")]
-    pub(super) radio_civ_address: u8,
-    #[serde(default = "default_controller_civ_address")]
-    pub(super) radio_controller_civ_address: u8,
-    #[serde(default = "default_gui_scale")]
+    #[serde(flatten, default)]
+    pub(super) radio: RadioProfileSettings,
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default = "default_gui_scale")]
     pub(super) gui_scale: f32,
-    #[serde(default)]
+    #[allow(dead_code)]
+    #[serde(skip_serializing, default)]
     pub(super) compute_preference: ComputePreference,
     #[serde(default)]
     pub(super) psk_reporter_enabled: bool,
@@ -199,6 +287,83 @@ pub(super) struct OperatorProfile {
     pub(super) mode_radio_profile: std::collections::BTreeMap<String, String>,
     #[serde(default = "default_workspace_mode")]
     pub(super) workspace_mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct GlobalSettings {
+    // Station identity/context are application-wide. Keep these fields in the
+    // global settings file so changing radio tabs cannot replace them.
+    #[serde(default)]
+    pub(super) callsign: String,
+    #[serde(default)]
+    pub(super) grid: String,
+    #[serde(default)]
+    pub(super) qth: String,
+    // Legacy global copies; new saves keep these values in the radio profile.
+    #[serde(default, skip_serializing)]
+    pub(super) station_rig: String,
+    #[serde(default, skip_serializing)]
+    pub(super) station_antenna: String,
+    #[serde(default)]
+    pub(super) station_notes: String,
+    #[serde(default)]
+    pub(super) llm_prompt_context: String,
+    #[serde(default)]
+    pub(super) sstv_image_requirements: String,
+    #[serde(default)]
+    pub(super) llm_model_notes: String,
+    #[serde(default = "default_gui_scale")]
+    pub(super) gui_scale: f32,
+    #[serde(default)]
+    pub(super) compute_preference: ComputePreference,
+}
+
+fn global_settings_path() -> PathBuf {
+    app_config_dir().join(GLOBAL_SETTINGS_FILE)
+}
+
+pub(super) fn load_global_settings() -> GlobalSettings {
+    let path = global_settings_path();
+    if let Ok(source) = fs::read_to_string(&path) {
+        if let Ok(settings) = toml::from_str(&source) {
+            return settings;
+        }
+    }
+
+    let migrated = active_operator_profile_name();
+    let settings = named_operator_profile_path(&migrated)
+        .ok()
+        .and_then(|profile_path| fs::read_to_string(profile_path).ok())
+        .and_then(|source| toml::from_str::<GlobalSettings>(&source).ok())
+        .unwrap_or_else(|| GlobalSettings {
+            callsign: String::new(),
+            grid: String::new(),
+            qth: String::new(),
+            station_rig: String::new(),
+            station_antenna: String::new(),
+            station_notes: String::new(),
+            llm_prompt_context: String::new(),
+            sstv_image_requirements: String::new(),
+            llm_model_notes: String::new(),
+            gui_scale: default_gui_scale(),
+            compute_preference: ComputePreference::default(),
+        });
+    let _ = save_global_settings(&settings);
+    settings
+}
+
+pub(super) fn save_global_settings(settings: &GlobalSettings) -> Result<()> {
+    let path = global_settings_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, toml::to_string_pretty(settings)?)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 fn default_recording_modes() -> std::collections::BTreeMap<String, bool> {
@@ -325,6 +490,10 @@ pub(super) fn default_cw_wpm() -> u8 {
 
 pub(super) fn default_cw_tone_hz() -> u16 {
     600
+}
+
+pub(super) fn default_cw_auto_target_timeout_s() -> u8 {
+    3
 }
 
 fn default_audio_monitor_volume() -> f32 {
@@ -516,14 +685,22 @@ pub(super) fn load_operator_profile() -> Option<OperatorProfile> {
 pub(super) fn save_operator_profile_named(name: &str, profile: &OperatorProfile) -> Result<()> {
     let name = validate_profile_name(name)?;
     let path = named_operator_profile_path(name)?;
+    write_operator_profile_file(&path, profile)
+}
+
+fn write_operator_profile_file(path: &std::path::Path, profile: &OperatorProfile) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&path, toml::to_string_pretty(profile)?)?;
+    if path.is_file() {
+        let backup = path.with_extension("toml.backup");
+        fs::copy(path, backup)?;
+    }
+    fs::write(path, toml::to_string_pretty(profile)?)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
 }
@@ -542,7 +719,12 @@ pub(super) fn save_operator_profile(profile: &OperatorProfile) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_profile_name;
+    use std::fs;
+
+    use super::{
+        validate_profile_name, write_operator_profile_file, GlobalSettings, OperatorProfile,
+        RadioProfile,
+    };
 
     #[test]
     fn profile_names_allow_human_readable_safe_names() {
@@ -559,5 +741,125 @@ mod tests {
         assert!(validate_profile_name("").is_err());
         assert!(validate_profile_name("../other").is_err());
         assert!(validate_profile_name("club/profile").is_err());
+    }
+
+    #[test]
+    fn minimal_profile_deserialization_applies_safe_runtime_defaults() {
+        let legacy = r#"
+callsign = "N0CALL"
+grid = "AA00"
+qth = "Portable"
+    station_rig = "Test rig"
+follow_log = true
+max_log_entries = 300
+deep_decode = false
+    "#;
+        let profile: OperatorProfile =
+            toml::from_str(legacy).expect("minimal profile should deserialize");
+        assert_eq!(profile.workspace_mode, "FT8");
+        assert_eq!(profile.radio.backend, "native");
+        assert_eq!(profile.radio.model, "IC-7300");
+        assert_eq!(profile.radio.baud_rate, 115_200);
+        assert_eq!(profile.radio.civ_address, 0x94);
+        assert_eq!(profile.radio.controller_civ_address, 0xE0);
+        assert_eq!(profile.audio.sample_rate_hz, 48_000);
+        assert_eq!(profile.audio.channels, 1);
+        assert!(profile.audio.enabled);
+        assert_eq!(profile.cw_wpm, 20);
+        assert_eq!(profile.cw_tone_hz, 600);
+        assert_eq!(profile.contest_serial_start, 1);
+        assert_eq!(profile.contest_serial_step, 1);
+        assert!(profile.contest_dupe_check);
+        assert_eq!(profile.contest_fake_split_offset_hz, 250);
+        assert_eq!(profile.psk_batch_interval_secs, 300);
+        assert_eq!(profile.psk_repeat_cache_secs, 300);
+        assert_eq!(profile.psk_max_pending, 80);
+        assert!(profile.pota_enabled);
+        assert!(profile.hunter_alerts_enabled);
+        assert_eq!(
+            profile.recording_modes.len(),
+            super::super::WORKSPACE_MODES.len()
+        );
+        let global: GlobalSettings =
+            toml::from_str(legacy).expect("legacy settings should migrate");
+        assert_eq!(global.callsign, "N0CALL");
+        assert_eq!(global.station_rig, "Test rig");
+        let saved = toml::to_string(&profile).expect("profile encoding");
+        assert!(!saved.contains("callsign"));
+        assert!(saved.contains("station_rig = \"Test rig\""));
+    }
+
+    #[test]
+    fn radio_profile_defaults_serialize_only_persistent_controls() {
+        let profile = RadioProfile {
+            name: "Portable FT8".to_string(),
+            mode: Some("USB".to_string()),
+            data_mode: Some(true),
+            filter: Some(2),
+            af_gain: Some(40),
+            rf_gain: Some(80),
+            rf_power: Some(50),
+            preamp: Some(true),
+            attenuator: Some(false),
+            noise_blank: Some(true),
+            noise_reduction: Some(false),
+            agc: Some(3),
+        };
+        let encoded = toml::to_string(&profile).expect("radio profile encoding");
+        let decoded: RadioProfile = toml::from_str(&encoded).expect("radio profile decoding");
+        assert_eq!(decoded.name, "Portable FT8");
+        assert_eq!(decoded.rf_power, Some(50));
+        assert_eq!(decoded.agc, Some(3));
+    }
+
+    #[test]
+    fn saving_profile_snapshots_keeps_each_radio_file_owned_by_its_name() {
+        let root = tempfile::tempdir().expect("temporary profile directory");
+        let mut null_radio: OperatorProfile = toml::from_str(
+            r#"
+callsign = "N0CALL"
+grid = "AA00"
+qth = "Portable"
+follow_log = true
+max_log_entries = 300
+deep_decode = false
+"#,
+        )
+        .expect("default profile should deserialize");
+        null_radio.radio.enabled = true;
+        null_radio.radio.backend = "null".to_string();
+        null_radio.radio.model = "NullRadio".to_string();
+
+        let mut ic7300 = null_radio.clone();
+        ic7300.radio.backend = "native".to_string();
+        ic7300.radio.model = "IC-7300".to_string();
+        ic7300.radio.civ_address = 0x94;
+
+        let mut mchf = null_radio.clone();
+        mchf.radio.backend = "native".to_string();
+        mchf.radio.model = "FT-817ND".to_string();
+        mchf.radio.enabled = false;
+
+        write_operator_profile_file(&root.path().join("NullRadio.toml"), &null_radio)
+            .expect("save null profile");
+        write_operator_profile_file(&root.path().join("7300.toml"), &ic7300)
+            .expect("save 7300 profile");
+        write_operator_profile_file(&root.path().join("mcHF.toml"), &mchf)
+            .expect("save mcHF profile");
+
+        for (name, backend, model, enabled) in [
+            ("NullRadio", "null", "NullRadio", true),
+            ("7300", "native", "IC-7300", true),
+            ("mcHF", "native", "FT-817ND", false),
+        ] {
+            let saved: OperatorProfile = toml::from_str(
+                &fs::read_to_string(root.path().join(format!("{name}.toml")))
+                    .expect("saved profile should be readable"),
+            )
+            .expect("saved profile should deserialize");
+            assert_eq!(saved.radio.backend, backend, "backend for {name}");
+            assert_eq!(saved.radio.model, model, "model for {name}");
+            assert_eq!(saved.radio.enabled, enabled, "enabled state for {name}");
+        }
     }
 }

@@ -16,20 +16,6 @@ pub(crate) const MSK144_BAND_PLAN: &[(&str, u64)] = &[
     ("2m", 144_138_000),
     ("70cm", 432_075_000),
 ];
-pub(crate) const FLDIGI_BAND_PLAN: &[(&str, u64)] = &[
-    ("160m", 1_840_000),
-    ("80m", 3_573_000),
-    ("60m", 5_357_000),
-    ("40m", 7_074_000),
-    ("30m", 10_136_000),
-    ("20m", 14_074_000),
-    ("17m", 18_100_000),
-    ("15m", 21_074_000),
-    ("12m", 24_924_000),
-    ("10m", 28_074_000),
-    ("6m", 50_313_000),
-];
-
 fn native_radio_mode_label(preset: crate::band_plan::WorkspaceRadioPreset) -> &'static str {
     match (preset.base_mode, preset.data_mode) {
         (BaseMode::Usb, true) => "USB-D",
@@ -43,8 +29,12 @@ fn native_radio_mode_label(preset: crate::band_plan::WorkspaceRadioPreset) -> &'
     }
 }
 
-fn native_slot_label(mode: WorkspaceMode, fst4_submode: crate::modes::fst4::Submode) -> String {
-    mode.slot_seconds(fst4_submode).map_or_else(
+fn native_slot_label(
+    mode: WorkspaceMode,
+    fst4_submode: crate::modes::fst4::Submode,
+    q65_submode: qsonaut_third_party::wsjt::Q65Submode,
+) -> String {
+    mode.slot_seconds(fst4_submode, q65_submode).map_or_else(
         || "Continuous".to_string(),
         |seconds| {
             if seconds.fract() == 0.0 {
@@ -146,7 +136,7 @@ impl QsonautGuiApp {
     ) {
         let preset = workspace_radio_preset(mode);
         let preset_label = native_radio_mode_label(preset);
-        let slot_s = native_slot_label(mode, self.fst4_submode);
+        let slot_s = native_slot_label(mode, self.fst4_submode, self.q65_submode);
 
         ui.heading(mode.label());
         ui.separator();
@@ -155,8 +145,6 @@ impl QsonautGuiApp {
             ui.label(RichText::new("Backend:").strong());
             let backend = if mode.has_native_decoder() {
                 "shared WSJT adapter"
-            } else if mode == WorkspaceMode::Fldigi {
-                "external FLDIGI bridge"
             } else {
                 "CW backend pending"
             };
@@ -225,7 +213,7 @@ impl QsonautGuiApp {
             });
         }
         ui.add_space(4.0);
-        if let Some(slot_seconds) = mode.slot_seconds(self.fst4_submode) {
+        if let Some(slot_seconds) = mode.slot_seconds(self.fst4_submode, self.q65_submode) {
             let now_s = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|duration| duration.as_secs_f64())
@@ -371,14 +359,6 @@ impl QsonautGuiApp {
                     theme_warning(ui)
                 }),
             );
-        } else {
-            ui.separator();
-            ui.label(
-                RichText::new(
-                    "FLDIGI is currently a radio preset and waterfall view. No XML-RPC modem connection is active yet.",
-                )
-                .color(theme_warning(ui)),
-            );
         }
     }
 }
@@ -386,7 +366,11 @@ impl QsonautGuiApp {
 #[cfg(test)]
 mod tests {
     use super::{native_mode_guidance, native_radio_mode_label, native_slot_label};
-    use crate::{band_plan::WorkspaceRadioPreset, modes::fst4::Submode, BaseMode, WorkspaceMode};
+    use crate::{
+        band_plan::WorkspaceRadioPreset, modes::fst4::Submode, AppConfig, BaseMode,
+        GraphicsPreferences, GuiState, QsonautGuiApp, WorkspaceMode, QSONAUT_ICON_PNG,
+    };
+    use std::sync::{Arc, Mutex};
 
     fn preset(base_mode: BaseMode, data_mode: bool) -> WorkspaceRadioPreset {
         WorkspaceRadioPreset {
@@ -427,12 +411,27 @@ mod tests {
     #[test]
     fn formats_continuous_and_timed_native_slots() {
         assert_eq!(
-            native_slot_label(WorkspaceMode::Wspr, Submode::S60),
+            native_slot_label(
+                WorkspaceMode::Wspr,
+                Submode::S60,
+                qsonaut_third_party::wsjt::Q65Submode::A30
+            ),
             "120 s"
         );
-        assert_eq!(native_slot_label(WorkspaceMode::Jt9, Submode::S60), "60 s");
         assert_eq!(
-            native_slot_label(WorkspaceMode::Cw, Submode::S60),
+            native_slot_label(
+                WorkspaceMode::Jt9,
+                Submode::S60,
+                qsonaut_third_party::wsjt::Q65Submode::A30
+            ),
+            "60 s"
+        );
+        assert_eq!(
+            native_slot_label(
+                WorkspaceMode::Cw,
+                Submode::S60,
+                qsonaut_third_party::wsjt::Q65Submode::A30
+            ),
             "Continuous"
         );
     }
@@ -443,6 +442,52 @@ mod tests {
         assert!(native_mode_guidance(WorkspaceMode::Fst4).contains("FST4-60"));
         assert!(native_mode_guidance(WorkspaceMode::Jt65).contains("JT65"));
         assert!(native_mode_guidance(WorkspaceMode::Q65).contains("Q65-A30"));
-        assert!(native_mode_guidance(WorkspaceMode::Fldigi).contains("one-shot"));
+    }
+
+    #[test]
+    fn draws_native_details_for_every_supported_mode_without_hardware() {
+        let icon = eframe::icon_data::from_png_bytes(QSONAUT_ICON_PNG).expect("test icon");
+        let context = eframe::egui::Context::default();
+        let mut app = QsonautGuiApp::new_with_context(
+            AppConfig::default(),
+            false,
+            false,
+            &context,
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+        let snapshot = GuiState {
+            frequency_hz: Some(14_074_000),
+            mode: "USB-D".to_string(),
+            ..GuiState::default()
+        };
+        for mode in [
+            WorkspaceMode::Ft4,
+            WorkspaceMode::Fst4,
+            WorkspaceMode::Jt9,
+            WorkspaceMode::Jt65,
+            WorkspaceMode::Q65,
+            WorkspaceMode::Wspr,
+            WorkspaceMode::Msk144,
+            WorkspaceMode::Cw,
+        ] {
+            let _ = context.run(Default::default(), |context| {
+                eframe::egui::CentralPanel::default().show(context, |ui| {
+                    app.draw_mfsk_mode_details(ui, &snapshot, mode);
+                });
+            });
+        }
+        for mode in [WorkspaceMode::Ft4, WorkspaceMode::Wspr, WorkspaceMode::Cw] {
+            let _ = context.run(Default::default(), |context| {
+                eframe::egui::CentralPanel::default().show(context, |ui| {
+                    app.draw_mfsk_mode_workspace(ui, &snapshot, mode);
+                });
+            });
+        }
     }
 }

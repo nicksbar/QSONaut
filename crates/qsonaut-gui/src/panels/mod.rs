@@ -2,5 +2,8 @@ mod app_log;
 mod devices;
 mod log;
 mod pota;
+mod presets;
 mod profile_server;
+mod radio_contract;
+mod radio_ui;
 mod spectrum;

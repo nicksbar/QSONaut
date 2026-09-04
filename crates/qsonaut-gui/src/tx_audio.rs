@@ -2,7 +2,7 @@ use super::*;
 use qsonaut_third_party::wsjt::{
     synthesize_fst4_standard, synthesize_ft4_standard, synthesize_ft8_standard,
     synthesize_jt65_standard, synthesize_jt9_standard, synthesize_q65_standard,
-    synthesize_wspr_type1, Fst4Submode,
+    synthesize_wspr_type1, Fst4Submode, Q65Submode,
 };
 
 const FT8_TX_AMPLITUDE_I16: i16 = 18_000;
@@ -23,6 +23,26 @@ pub(super) fn build_native_digital_tx_pcm(
     compose: &str,
     tx_tone_hz: u32,
     fst4_submode: crate::modes::fst4::Submode,
+    cw_wpm: u8,
+    cw_tone_hz: u16,
+) -> Result<(Vec<i16>, f64)> {
+    build_native_digital_tx_pcm_with_q65(
+        mode,
+        compose,
+        tx_tone_hz,
+        fst4_submode,
+        Q65Submode::A30,
+        cw_wpm,
+        cw_tone_hz,
+    )
+}
+
+pub(super) fn build_native_digital_tx_pcm_with_q65(
+    mode: WorkspaceMode,
+    compose: &str,
+    tx_tone_hz: u32,
+    fst4_submode: crate::modes::fst4::Submode,
+    q65_submode: Q65Submode,
     cw_wpm: u8,
     cw_tone_hz: u16,
 ) -> Result<(Vec<i16>, f64)> {
@@ -64,9 +84,11 @@ pub(super) fn build_native_digital_tx_pcm(
         WorkspaceMode::Jt65 => synthesize_jt65_standard(compose, tone, FT8_TX_AMPLITUDE_I16)
             .map(|audio| (audio, 0.0))
             .ok_or_else(|| anyhow!("unable to pack JT65 message")),
-        WorkspaceMode::Q65 => synthesize_q65_standard(compose, tone, FT8_TX_AMPLITUDE_I16)
-            .map(|audio| (audio, 1.0))
-            .ok_or_else(|| anyhow!("unable to pack Q65 message")),
+        WorkspaceMode::Q65 => {
+            synthesize_q65_standard(compose, q65_submode, tone, FT8_TX_AMPLITUDE_I16)
+                .map(|audio| (audio, 1.0))
+                .ok_or_else(|| anyhow!("unable to pack Q65 message"))
+        }
         WorkspaceMode::Wspr => {
             tokens
                 .get(2)
@@ -185,11 +207,21 @@ fn morse_pattern(character: char) -> Option<&'static str> {
 }
 
 fn play_ft8_tx_pcm(pcm: &[i16], abort: Arc<AtomicBool>, output_device: Option<&str>) -> Result<()> {
+    if output_device.is_some_and(|device| device.starts_with("hostbridge://")) {
+        if abort.load(Ordering::Relaxed) {
+            anyhow::bail!("TX aborted by operator");
+        }
+        return super::hostbridge_radio::send_remote_pcm(pcm, FT8_TX_SAMPLE_RATE_HZ)
+            .context("HostBridge audio output failed");
+    }
     play_pcm_blocking(pcm, FT8_TX_SAMPLE_RATE_HZ, output_device, abort)
         .context("native audio output failed")
 }
 
 fn wait_until_epoch(target_s: f64, abort: &AtomicBool) -> Result<()> {
+    if !target_s.is_finite() {
+        anyhow::bail!("TX deadline is not finite");
+    }
     loop {
         if abort.load(Ordering::Relaxed) {
             anyhow::bail!("TX aborted by operator");
@@ -491,4 +523,396 @@ pub(super) enum DigitalTxEvent {
     AudioStarted(WorkspaceMode, u64),
     Complete,
     Failed(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qsonaut_modems::AudioBlock;
+    use qsonaut_third_party::wsjt::{decode as decode_wsjt, WsjtDecodeConfig, WsjtMode};
+
+    #[test]
+    fn morse_table_covers_alphanumeric_operator_text() {
+        for character in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".chars() {
+            assert!(morse_pattern(character).is_some(), "missing {character}");
+        }
+        assert_eq!(morse_pattern('?'), None);
+        assert_eq!(morse_pattern(' '), None);
+    }
+
+    #[test]
+    fn native_tx_validation_rejects_bad_shapes_and_unsupported_modes() {
+        assert!(build_native_digital_tx_pcm(
+            WorkspaceMode::Ft4,
+            "CQ K1ABC",
+            700,
+            crate::modes::fst4::Submode::default(),
+            20,
+            600
+        )
+        .is_err());
+        assert!(build_native_digital_tx_pcm(
+            WorkspaceMode::Wspr,
+            "K1ABC FN42 nope",
+            1_000,
+            crate::modes::fst4::Submode::default(),
+            20,
+            600
+        )
+        .is_err());
+        assert!(build_native_digital_tx_pcm(
+            WorkspaceMode::Cw,
+            "   ",
+            700,
+            crate::modes::fst4::Submode::default(),
+            20,
+            600
+        )
+        .is_err());
+        assert!(build_native_digital_tx_pcm(
+            WorkspaceMode::Voice,
+            "CQ K1ABC FN42",
+            700,
+            crate::modes::fst4::Submode::default(),
+            20,
+            600
+        )
+        .is_err());
+        assert!(build_native_digital_tx_pcm(
+            WorkspaceMode::Wspr,
+            "K1ABC FN42 30 extra",
+            1_000,
+            crate::modes::fst4::Submode::default(),
+            20,
+            600
+        )
+        .is_err());
+        assert!(build_native_digital_tx_pcm(
+            WorkspaceMode::Cw,
+            "CQ\nK1ABC",
+            1_000,
+            crate::modes::fst4::Submode::default(),
+            20,
+            600
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn cw_synthesis_normalizes_text_clamps_controls_and_preserves_silence_tail() {
+        let baseline = build_native_digital_tx_pcm(
+            WorkspaceMode::Cw,
+            " cq  n7uf ",
+            1_000,
+            crate::modes::fst4::Submode::default(),
+            20,
+            1_000,
+        )
+        .expect("baseline CW synthesis")
+        .0;
+        let clamped = build_native_digital_tx_pcm(
+            WorkspaceMode::Cw,
+            "CQ N7UF",
+            1_000,
+            crate::modes::fst4::Submode::default(),
+            0,
+            0,
+        )
+        .expect("clamped CW synthesis")
+        .0;
+        let explicit = build_native_digital_tx_pcm(
+            WorkspaceMode::Cw,
+            "CQ N7UF",
+            1_000,
+            crate::modes::fst4::Submode::default(),
+            5,
+            200,
+        )
+        .expect("explicit clamped CW synthesis")
+        .0;
+        assert_eq!(clamped, explicit);
+        assert!(baseline[baseline.len() - 12_000..]
+            .iter()
+            .all(|sample| *sample == 0));
+        assert!(baseline.iter().any(|sample| *sample != 0));
+    }
+
+    #[test]
+    fn cw_synthesis_covers_every_supported_character_and_word_gap() {
+        let message = "ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789";
+        let pcm = synthesize_cw_pcm(message, 700.0, 20.0).expect("all CW characters");
+        assert!(pcm.len() > 24_000);
+        assert!(pcm.windows(3).any(|window| window == [0, 0, 0]));
+        assert!(pcm[pcm.len() - 24_000..].iter().all(|sample| *sample == 0));
+    }
+
+    #[test]
+    fn native_digital_modes_produce_nonempty_fixtures() {
+        for mode in [
+            WorkspaceMode::Fst4,
+            WorkspaceMode::Jt9,
+            WorkspaceMode::Jt65,
+            WorkspaceMode::Q65,
+        ] {
+            let (pcm, audio_start_s) = build_native_digital_tx_pcm(
+                mode,
+                "CQ W1AW AA00",
+                1_500,
+                crate::modes::fst4::Submode::S15,
+                20,
+                600,
+            )
+            .unwrap_or_else(|error| panic!("{} synthesis failed: {error}", mode.label()));
+            assert!(!pcm.is_empty(), "{} produced no PCM", mode.label());
+            assert!(audio_start_s >= 0.0, "{} has invalid start", mode.label());
+        }
+    }
+
+    #[test]
+    fn fst4_tx_uses_the_correct_audio_offset_for_each_submode() {
+        for (submode, expected_offset) in [
+            (crate::modes::fst4::Submode::S15, 0.5),
+            (crate::modes::fst4::Submode::S30, 1.0),
+            (crate::modes::fst4::Submode::S60, 1.0),
+            (crate::modes::fst4::Submode::S120, 1.0),
+            (crate::modes::fst4::Submode::S300, 1.0),
+        ] {
+            let (pcm, offset) = build_native_digital_tx_pcm(
+                WorkspaceMode::Fst4,
+                "CQ W1AW AA00",
+                1_500,
+                submode,
+                20,
+                600,
+            )
+            .expect("FST4 synthesis");
+            assert!(!pcm.is_empty());
+            assert_eq!(offset, expected_offset);
+        }
+    }
+
+    #[test]
+    fn ft8_builder_rejects_unpackable_messages_and_produces_audio_for_valid_ones() {
+        assert!(build_ft8_tx_pcm("not an FT8 message", 1_500).is_err());
+        let pcm = build_ft8_tx_pcm("CQ W1AW AA00", 1_500).expect("FT8 synthesis");
+        assert!(!pcm.is_empty());
+        assert!(pcm.iter().any(|sample| *sample != 0));
+    }
+
+    #[test]
+    #[ignore = "slow native TX/RX round-trip; run in release mode"]
+    fn native_tx_waveforms_decode_back_through_the_adapter() {
+        for mode in [
+            WorkspaceMode::Fst4,
+            WorkspaceMode::Jt9,
+            WorkspaceMode::Jt65,
+            WorkspaceMode::Q65,
+        ] {
+            let (pcm, _) = build_native_digital_tx_pcm(
+                mode,
+                "CQ W1AW AA00",
+                1_500,
+                crate::modes::fst4::Submode::S15,
+                20,
+                600,
+            )
+            .unwrap_or_else(|error| panic!("{} synthesis failed: {error}", mode.label()));
+            let samples = pcm
+                .into_iter()
+                .map(|sample| sample as f32 / i16::MAX as f32 * 0.06)
+                .collect::<Vec<_>>();
+            let (wsjt_mode, config) = match mode {
+                WorkspaceMode::Fst4 => (
+                    WsjtMode::Fst4(Fst4Submode::S15),
+                    WsjtDecodeConfig {
+                        frequency_min_hz: 100.0,
+                        frequency_max_hz: 3_000.0,
+                        sync_min: 0.8,
+                        max_candidates: 50,
+                        frequency_hint_hz: Some(1_500.0),
+                        ..WsjtDecodeConfig::default()
+                    },
+                ),
+                WorkspaceMode::Jt9 => (WsjtMode::Jt9, WsjtDecodeConfig::default()),
+                WorkspaceMode::Jt65 => (WsjtMode::Jt65, WsjtDecodeConfig::default()),
+                WorkspaceMode::Q65 => (
+                    WsjtMode::Q65(Q65Submode::A30),
+                    WsjtDecodeConfig {
+                        score_threshold: 0.05,
+                        max_candidates: 8,
+                        time_tolerance_sec: 1.0,
+                        ..WsjtDecodeConfig::default()
+                    },
+                ),
+                _ => unreachable!(),
+            };
+            let batch = decode_wsjt(
+                &AudioBlock::new(12_000, samples).expect("native TX audio block"),
+                wsjt_mode,
+                &config,
+            )
+            .unwrap_or_else(|error| panic!("{} decode failed: {error}", mode.label()));
+            assert!(
+                batch
+                    .events
+                    .iter()
+                    .any(|event| event.message.contains("W1AW")),
+                "{} TX waveform did not decode: {:?}",
+                mode.label(),
+                batch.events
+            );
+        }
+    }
+
+    #[test]
+    fn wait_until_epoch_honors_abort_and_accepts_elapsed_deadlines() {
+        let abort = AtomicBool::new(true);
+        assert!(wait_until_epoch(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_secs_f64()
+                + 10.0,
+            &abort
+        )
+        .is_err());
+        let clear = AtomicBool::new(false);
+        assert!(wait_until_epoch(0.0, &clear).is_ok());
+        for deadline in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let error = wait_until_epoch(deadline, &clear).expect_err("invalid deadline");
+            assert!(error.to_string().contains("not finite"));
+        }
+    }
+
+    #[test]
+    fn request_ptt_distinguishes_acknowledgement_errors_timeouts_and_disconnects() {
+        let (tx, rx) = mpsc::channel();
+        let receiver = thread::spawn(move || {
+            let GuiCommand::SetPttWithAck(enabled, ack) = rx.recv().expect("PTT command") else {
+                panic!("unexpected command");
+            };
+            assert!(enabled);
+            ack.send(Ok(())).expect("ack receiver");
+        });
+        assert!(request_ptt(&tx, true, Duration::from_secs(1)).is_ok());
+        receiver.join().expect("ack thread");
+
+        let (tx, rx) = mpsc::channel();
+        let receiver = thread::spawn(move || {
+            let GuiCommand::SetPttWithAck(_, ack) = rx.recv().expect("PTT command") else {
+                panic!("unexpected command");
+            };
+            ack.send(Err("PTT rejected".to_string()))
+                .expect("ack receiver");
+        });
+        let error = request_ptt(&tx, false, Duration::from_secs(1)).expect_err("rejected PTT");
+        assert!(error.to_string().contains("PTT rejected"));
+        receiver.join().expect("ack thread");
+
+        let (tx, _rx) = mpsc::channel();
+        assert!(request_ptt(&tx, true, Duration::from_millis(1)).is_err());
+        let (tx, rx) = mpsc::channel();
+        drop(rx);
+        assert!(request_ptt(&tx, false, Duration::from_secs(1)).is_err());
+    }
+
+    #[test]
+    fn remote_playback_checks_abort_and_requires_an_active_session() {
+        let aborted = AtomicBool::new(true);
+        let error = play_ft8_tx_pcm(&[1, -1], Arc::new(aborted), Some("hostbridge://output"))
+            .expect_err("aborted remote playback");
+        assert!(error.to_string().contains("aborted"));
+
+        let inactive = AtomicBool::new(false);
+        let error = play_ft8_tx_pcm(&[1, -1], Arc::new(inactive), Some("hostbridge://output"))
+            .expect_err("inactive remote playback");
+        assert!(error.to_string().contains("HostBridge audio output failed"));
+    }
+
+    #[test]
+    fn digital_tx_abort_still_releases_ptt_and_reports_failure() {
+        let (command_tx, command_rx) = mpsc::channel();
+        let command_thread = thread::spawn(move || {
+            let GuiCommand::SetPttWithAck(enabled, ack) = command_rx.recv().expect("unkey command")
+            else {
+                panic!("unexpected command");
+            };
+            assert!(!enabled, "aborted TX must never remain keyed");
+            ack.send(Ok(())).expect("unkey acknowledgement");
+        });
+        let (event_tx, event_rx) = mpsc::channel();
+        let abort = Arc::new(AtomicBool::new(true));
+        let active = Arc::new(AtomicBool::new(true));
+        run_digital_tx_job(DigitalTxJob {
+            mode: WorkspaceMode::Cw,
+            period: 0,
+            slot_seconds: 1.0,
+            audio_offset_s: 0.0,
+            audio_start_s: Some(0.0),
+            pcm: Arc::new(vec![0; 12_000]),
+            ptt_lead: Duration::ZERO,
+            ptt_tail: Duration::ZERO,
+            output_device: None,
+            abort,
+            active: active.clone(),
+            command_tx,
+            event_tx,
+            state: Arc::new(Mutex::new(GuiState::default())),
+            repaint_ctx: Arc::new(OnceLock::new()),
+        });
+        command_thread.join().expect("command thread");
+        assert!(!active.load(Ordering::Acquire));
+        let DigitalTxEvent::Failed(error) = event_rx.recv().expect("TX failure event") else {
+            panic!("aborted TX must report failure");
+        };
+        assert!(error.contains("aborted"));
+    }
+
+    #[test]
+    fn tx_waterfall_monitor_honors_stop_abort_and_publishes_fft_rows() {
+        let stopped_state = Arc::new(Mutex::new(GuiState::default()));
+        monitor_ft8_tx_waterfall(
+            Arc::new(vec![0; FT8_TX_MONITOR_FFT_SIZE]),
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(AtomicBool::new(false)),
+            stopped_state.clone(),
+            Arc::new(OnceLock::new()),
+        );
+        assert!(stopped_state
+            .lock()
+            .expect("stopped state")
+            .audio_waterfall_rows
+            .is_empty());
+
+        let aborted_state = Arc::new(Mutex::new(GuiState::default()));
+        monitor_ft8_tx_waterfall(
+            Arc::new(vec![0; FT8_TX_MONITOR_FFT_SIZE]),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(true)),
+            aborted_state.clone(),
+            Arc::new(OnceLock::new()),
+        );
+        assert!(aborted_state
+            .lock()
+            .expect("aborted state")
+            .audio_waterfall_rows
+            .is_empty());
+
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let repaint_ctx = Arc::new(OnceLock::new());
+        repaint_ctx
+            .set(egui::Context::default())
+            .expect("repaint context not already initialized");
+        monitor_ft8_tx_waterfall(
+            Arc::new(vec![0; FT8_TX_MONITOR_FFT_SIZE]),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            state.clone(),
+            repaint_ctx,
+        );
+        let state = state.lock().expect("updated state");
+        assert_eq!(state.audio_spectrum_status, "TX OUTPUT");
+        assert_eq!(state.audio_waterfall_revision, 5);
+        assert_eq!(state.audio_waterfall_rows.len(), 5);
+    }
 }

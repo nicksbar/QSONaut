@@ -15,7 +15,6 @@ pub(super) enum WorkspaceMode {
     Cw,
     Voice,
     Sstv,
-    Fldigi,
 }
 
 impl WorkspaceMode {
@@ -32,7 +31,6 @@ impl WorkspaceMode {
             Self::Cw => "CW",
             Self::Voice => "VOICE",
             Self::Sstv => "SSTV",
-            Self::Fldigi => "FLDIGI",
         }
     }
 
@@ -45,20 +43,24 @@ impl WorkspaceMode {
             Self::Jt9 | Self::Jt65 => Some(60.0),
             Self::Q65 => Some(30.0),
             Self::Msk144 => Some(15.0),
-            Self::Cw | Self::Voice | Self::Sstv | Self::Fldigi => None,
+            Self::Cw | Self::Voice | Self::Sstv => None,
         }
     }
 
-    pub(super) fn slot_seconds(self, fst4_submode: crate::modes::fst4::Submode) -> Option<f64> {
-        if self == Self::Fst4 {
-            Some(fst4_submode.seconds())
-        } else {
-            self.core_slot_seconds()
+    pub(super) fn slot_seconds(
+        self,
+        fst4_submode: crate::modes::fst4::Submode,
+        q65_submode: qsonaut_third_party::wsjt::Q65Submode,
+    ) -> Option<f64> {
+        match self {
+            Self::Fst4 => Some(fst4_submode.seconds()),
+            Self::Q65 => Some(q65_submode.seconds() as f64),
+            _ => self.core_slot_seconds(),
         }
     }
 
     pub(super) fn has_native_decoder(self) -> bool {
-        !matches!(self, Self::Cw | Self::Voice | Self::Sstv | Self::Fldigi)
+        !matches!(self, Self::Cw | Self::Voice | Self::Sstv)
     }
 
     pub(super) fn is_uhf(self) -> bool {
@@ -66,7 +68,7 @@ impl WorkspaceMode {
     }
 }
 
-pub(super) const WORKSPACE_MODES: [WorkspaceMode; 12] = [
+pub(super) const WORKSPACE_MODES: [WorkspaceMode; 11] = [
     WorkspaceMode::Ft8,
     WorkspaceMode::Ft4,
     WorkspaceMode::Fst4,
@@ -78,24 +80,7 @@ pub(super) const WORKSPACE_MODES: [WorkspaceMode; 12] = [
     WorkspaceMode::Cw,
     WorkspaceMode::Voice,
     WorkspaceMode::Sstv,
-    WorkspaceMode::Fldigi,
 ];
-
-pub(super) const HF_WORKSPACE_MODES: [WorkspaceMode; 10] = [
-    WorkspaceMode::Ft8,
-    WorkspaceMode::Ft4,
-    WorkspaceMode::Fst4,
-    WorkspaceMode::Wspr,
-    WorkspaceMode::Jt9,
-    WorkspaceMode::Jt65,
-    WorkspaceMode::Q65,
-    WorkspaceMode::Cw,
-    WorkspaceMode::Voice,
-    WorkspaceMode::Sstv,
-];
-
-pub(super) const OTHER_WORKSPACE_MODES: [WorkspaceMode; 2] =
-    [WorkspaceMode::Msk144, WorkspaceMode::Fldigi];
 
 // Shared band vocabulary for higher-level activity profiles. Mode-specific
 // center frequencies remain owned by each workspace band plan below.
@@ -161,8 +146,20 @@ pub(super) fn workspace_band_plan(mode: WorkspaceMode) -> &'static [(&'static st
         WorkspaceMode::Cw => cw::BAND_PLAN,
         WorkspaceMode::Voice => voice::BAND_PLAN,
         WorkspaceMode::Sstv => sstv::BAND_PLAN,
-        WorkspaceMode::Fldigi => native::FLDIGI_BAND_PLAN,
     }
+}
+
+pub(super) fn workspace_frequency_for_current_band(
+    mode: WorkspaceMode,
+    current_frequency_hz: Option<u64>,
+) -> Option<u64> {
+    let band = current_frequency_hz
+        .map(band_for_frequency)
+        .filter(|band| !band.is_empty())?;
+    workspace_band_plan(mode)
+        .iter()
+        .find(|(label, _)| *label == band)
+        .map(|(_, frequency_hz)| *frequency_hz)
 }
 
 pub(super) fn band_picker_plan(mode: WorkspaceMode) -> Vec<(&'static str, u64)> {
@@ -201,7 +198,7 @@ pub(super) fn workspace_radio_preset_for_frequency(
     if mode == WorkspaceMode::Sstv {
         return WorkspaceRadioPreset {
             base_mode: BaseMode::Usb,
-            data_mode: false,
+            data_mode: true,
             filter: 1,
         };
     }
@@ -273,14 +270,14 @@ mod tests {
     }
 
     #[test]
-    fn sstv_uses_arrl_calling_centers_and_voice_usb() {
+    fn sstv_uses_arrl_calling_centers_and_data_usb() {
         let sstv = workspace_band_plan(WorkspaceMode::Sstv);
         assert!(sstv.contains(&("80m", 3_845_000)));
         assert!(sstv.contains(&("20m", 14_230_000)));
         assert!(sstv.contains(&("10m", 28_680_000)));
         let preset = workspace_radio_preset(WorkspaceMode::Sstv);
         assert_eq!(preset.base_mode, BaseMode::Usb);
-        assert!(!preset.data_mode);
+        assert!(preset.data_mode);
         assert_eq!(preset.filter, 1);
     }
 

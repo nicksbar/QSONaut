@@ -28,6 +28,24 @@ fn ft4_phase_label(ptt_on: bool, tx_active: bool, autoseq: bool) -> &'static str
     }
 }
 
+fn visible_ft4_decodes(
+    log: &std::collections::VecDeque<DigitalDecodeEntry>,
+    cq_only: bool,
+    max_entries: usize,
+) -> Vec<DigitalDecodeEntry> {
+    let mut entries: Vec<_> = log
+        .iter()
+        .filter(|entry| {
+            entry.mode == WorkspaceMode::Ft4 && (!cq_only || entry.message.starts_with("CQ "))
+        })
+        .cloned()
+        .collect();
+    if entries.len() > max_entries {
+        entries.drain(..entries.len() - max_entries);
+    }
+    entries
+}
+
 impl QsonautGuiApp {
     fn draw_ft4_conversation(&self, ui: &mut egui::Ui, snapshot: &GuiState, height: f32) {
         let operator_call = self.station_callsign_or_default().to_string();
@@ -460,18 +478,11 @@ impl QsonautGuiApp {
         });
         ui.add_space(4.0);
 
-        let mut entries: Vec<DigitalDecodeEntry> = snapshot
-            .digital_decodes
-            .iter()
-            .filter(|entry| {
-                entry.mode == WorkspaceMode::Ft4
-                    && (!self.ft4_cq_only_view || entry.message.starts_with("CQ "))
-            })
-            .cloned()
-            .collect();
-        if entries.len() > self.ft4_max_log_entries {
-            entries.drain(..entries.len() - self.ft4_max_log_entries);
-        }
+        let entries = visible_ft4_decodes(
+            &snapshot.digital_decodes,
+            self.ft4_cq_only_view,
+            self.ft4_max_log_entries,
+        );
         let operator_call = self.station_callsign_or_default().to_string();
         let active_band = snapshot.frequency_hz.map(band_for_frequency).unwrap_or("");
         let (decode_h, tx_h) = Self::split_decode_workspace_height(ui.available_height());
@@ -785,7 +796,21 @@ impl QsonautGuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{ft4_phase_label, BAND_PLAN};
+    use super::{ft4_phase_label, visible_ft4_decodes, BAND_PLAN};
+    use crate::{decode_model::DigitalDecodeEntry, WorkspaceMode};
+    use std::collections::VecDeque;
+
+    fn entry(mode: WorkspaceMode, period: u64, message: &str) -> DigitalDecodeEntry {
+        DigitalDecodeEntry {
+            mode,
+            period,
+            utc: format!("00:00:{period:02}"),
+            snr_db: -10.0,
+            dt_s: 0.0,
+            freq_hz: 1_500,
+            message: message.to_string(),
+        }
+    }
 
     #[test]
     fn prioritizes_active_tx_state_in_the_phase_label() {
@@ -801,5 +826,27 @@ mod tests {
         assert_eq!(BAND_PLAN.first(), Some(&("160m", 1_840_000)));
         assert_eq!(BAND_PLAN.last(), Some(&("70cm", 432_076_000)));
         assert!(BAND_PLAN.windows(2).all(|bands| bands[0].1 < bands[1].1));
+    }
+
+    #[test]
+    fn visible_ft4_decodes_filter_mode_cq_and_keep_latest_rows() {
+        let log = VecDeque::from([
+            entry(WorkspaceMode::Ft4, 1, "CQ W1AW AA00"),
+            entry(WorkspaceMode::Jt9, 2, "CQ K1ABC FN31"),
+            entry(WorkspaceMode::Ft4, 3, "W1AW N7UF -08"),
+            entry(WorkspaceMode::Ft4, 4, "CQ K2XYZ FN42"),
+        ]);
+
+        let all = visible_ft4_decodes(&log, false, 2);
+        assert_eq!(
+            all.iter().map(|entry| entry.period).collect::<Vec<_>>(),
+            [3, 4]
+        );
+
+        let cq = visible_ft4_decodes(&log, true, 10);
+        assert_eq!(
+            cq.iter().map(|entry| entry.period).collect::<Vec<_>>(),
+            [1, 4]
+        );
     }
 }

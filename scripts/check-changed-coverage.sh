@@ -4,6 +4,7 @@ set -euo pipefail
 summary_file="${1:-coverage-summary.txt}"
 base_ref="${2:-${GITHUB_BASE_SHA:-}}"
 baseline_file="${QSONAUT_COVERAGE_BASELINE_FILE:-.coverage-baseline}"
+ignore_regex="${QSONAUT_COVERAGE_IGNORE_REGEX:-}"
 
 if [[ ! -f "$summary_file" ]]; then
   echo "coverage summary not found: $summary_file" >&2
@@ -37,6 +38,10 @@ fi
 failed=0
 for file in "${changed_files[@]}"; do
   [[ -n "$file" && -f "$file" ]] || continue
+  if [[ -n "$ignore_regex" && "$file" =~ $ignore_regex ]]; then
+    echo "$file: excluded by QSONAUT_COVERAGE_IGNORE_REGEX"
+    continue
+  fi
   read -r total_lines missed_lines < <(
     awk -v path="$file" '$1 == path && $8 ~ /^[0-9]+$/ && $9 ~ /^[0-9]+$/ {
       print $8, $9

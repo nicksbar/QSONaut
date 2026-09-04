@@ -5,6 +5,82 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.15] - 2026-09-03
+
+### Added
+- Added a client-owned HostBridge session with remote radio/driver selection,
+  host audio input/output enumeration, bidirectional PCM media, meters,
+  controls, state synchronization, and independent audio and CI-V scope
+  streams.
+- Added explicit HostBridge scope configuration and lifecycle commands to the
+  existing remote radio worker, preserving the direct-port scope workflow and
+  client-owned retry/recovery behavior.
+- Added selectable Q65 submodes (A15, A30, A60, B60, C60, D60, E60, D120,
+  E120, and A300), with matching slot timing, decode-worker configuration,
+  transmit synthesis, null-audio simulation, and regression coverage.
+- Added FT4 rolling-buffer publication and realistic timing coverage, including
+  GUI filtering and rendering regression tests.
+- Added UTC-aligned WSPR 120-second slot timing and countdown presentation.
+- Added native MSK144 dispatch and expanded native decoder coverage for the
+  supported workspace modes.
+- Added generated native decode fixtures for FST4, JT9, JT65, and Q65, plus
+  synthesis coverage that verifies each mode produces a usable waveform.
+- Added CW panel auto-target configuration, recording coordination, contest
+  exchange helpers, and expanded TX-audio edge-case coverage.
+
+### Changed
+- Integrated the merged `qsonaut-third-party` WSJT update, including the full
+  wired Q65 submode API, and pinned Rigwright, HostBridge, modem contracts, and
+  third-party adapters to immutable revisions for reproducible builds.
+- Decomposed the GUI coordinator into dedicated runtime, radio-session,
+  profile, reporting, mode-type, and rendering packages while preserving the
+  global station identity and per-profile radio/audio settings boundaries.
+- Moved the frame update loop and constructor into runtime modules, reducing
+  `crates/qsonaut-gui/src/lib.rs` below the 5,000-line architecture target.
+- Reworked the header control deck into compact radio, meter, profile, and
+  operation-mode rows; functional mode controls retain icons while roadmap
+  placeholders remain visibly disabled.
+- Hardened native digital runtime sequencing, adaptive FT4 decoding, decode
+  publication, and worker-state handling across rolling audio buffers.
+- Made remote radio commands, meter reads, scope delivery, and media workers
+  asynchronous and nonblocking, including recovery from stalled scope streams
+  and lock-order protection between audio and radio workers.
+- Persisted HostBridge endpoint credentials, selected driver/model, radio and
+  audio device identities per profile, with strict profile isolation.
+- Enforced one active remote HostBridge session per QSONaut process so a
+  stopped or competing profile cannot inherit another profile's media or TX
+  route.
+- Raised the CI coverage gates for radio integration and CW behavior and made
+  locked dependency resolution mandatory for CI and release builds.
+- Updated the application and GUI to Rigwright `0.1.21`, including the
+  released IC-7300 scope lifecycle and nonblocking stream startup fixes.
+- Carried forward Rigwright's profile-driven CAT RTS / hardware-flow-control
+  probing from the `0.1.19` line, including the FT-991A `EX033;` selector.
+
+### Removed
+- Removed the obsolete FLDIGI mode, placeholder backend references, and direct
+  modem ownership that is now provided through the shared third-party boundary.
+
+### Fixed
+- Fixed profile-tab persistence so each tab saves its own explicit profile
+  snapshot and cannot overwrite another radio's settings during tab switches
+  or autosave operations.
+- Reset native decoder buffers and slot gates when changing FST4 submodes, and
+  clarified that background profile workers may produce valid null-radio test
+  decodes for their own selected modes.
+- Keep profile-owned audio assignments strict: an unavailable device fails only
+  that profile's worker rather than silently switching to another device.
+- Added regression coverage ensuring NullRadio, IC-7300, and FT-817ND profile
+  files retain independent radio identities and enabled states.
+
+- Paused the GUI radio worker before running the CAT connection test so the
+  probe can open the exclusively-owned serial port, then restore the worker
+  once the test completes. This removes the spurious "failed to open Yaesu
+  CAT port" failures seen when testing a connection that was already live.
+- Align all workspace package metadata and release documentation with QSONaut
+  `0.3.15`.
+- Restrict release builds to manually pushed matching version tags.
+
 ## [0.3.14] - 2026-08-30
 
 ### Changed

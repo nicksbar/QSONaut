@@ -6,24 +6,26 @@
 
 [![CI](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml)
 [![Coverage gate](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml)
-[![Line coverage 26.67%](https://img.shields.io/badge/line%20coverage-26.67%25-yellow)](#coverage-area-snapshot)
-[![GUI core 26.87%](https://img.shields.io/badge/GUI%20core-26.87%25-yellow)](#coverage-area-snapshot)
-[![GUI workers 27.12%](https://img.shields.io/badge/GUI%20workers-27.12%25-yellow)](#coverage-area-snapshot)
-[![GUI modes 12.95%](https://img.shields.io/badge/GUI%20modes-12.95%25-red)](#coverage-area-snapshot)
-[![GUI panels 4.02%](https://img.shields.io/badge/GUI%20panels-4.02%25-red)](#coverage-area-snapshot)
+[![Line coverage 59.01%](https://img.shields.io/badge/line%20coverage-59.01%25-yellow)](#coverage-area-snapshot)
+[![GUI core 54.16%](https://img.shields.io/badge/GUI%20core-54.16%25-yellow)](#coverage-area-snapshot)
+[![GUI workers 61.70%](https://img.shields.io/badge/GUI%20workers-61.70%25-yellow)](#coverage-area-snapshot)
+[![GUI modes 53.44%](https://img.shields.io/badge/GUI%20modes-53.44%25-yellow)](#coverage-area-snapshot)
+[![GUI panels 70.37%](https://img.shields.io/badge/GUI%20panels-70.37%25-yellow)](#coverage-area-snapshot)
 [![Audio 36.28%](https://img.shields.io/badge/audio-36.28%25-yellow)](#coverage-area-snapshot)
-[![Core 85.98%](https://img.shields.io/badge/core-85.98%25-brightgreen)](#coverage-area-snapshot)
+[![Core 87.21%](https://img.shields.io/badge/core-87.21%25-brightgreen)](#coverage-area-snapshot)
 [![Server client 84.25%](https://img.shields.io/badge/server%20client-84.25%25-brightgreen)](#coverage-area-snapshot)
 [![PSK Reporter 81.85%](https://img.shields.io/badge/PSK%20Reporter-81.85%25-brightgreen)](#coverage-area-snapshot)
-[![Logging 81.05%](https://img.shields.io/badge/logging-81.05%25-brightgreen)](#coverage-area-snapshot)
+[![Logging 83.65%](https://img.shields.io/badge/logging-83.65%25-brightgreen)](#coverage-area-snapshot)
 [![Release builds](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml/badge.svg)](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml)
 [![Latest release](https://img.shields.io/github/v/release/nicksbar/QSONaut?display_name=tag&sort=semver)](https://github.com/nicksbar/QSONaut/releases)
 
 **An enthusiast-built amateur-radio mission control console.**
 
 QSONaut combines radio control, live audio and spectrum views, WSJT-family
-digital modes, contact logging, and early operator-assist scaffolding in one native
-Rust desktop app.
+digital modes, contact logging, and early operator-assist scaffolding in one
+native Rust desktop app. Radios can be local or connected through the optional
+[QSONaut-HostBridge](https://github.com/nicksbar/QSONaut-HostBridge) station
+service.
 
 > [!IMPORTANT]
 > QSONaut is alpha software and is still evolving. Hardware support and
@@ -54,11 +56,12 @@ console. This is an honest capability snapshot, not a compatibility promise:
 
 | Area | Current maturity |
 | --- | --- |
-| Digital modes | FT8 and FT4 provide native decode, activity, conversation, TX history, sequencing, logging, and explicit global TX disarm. FST4-60, JT9, JT65, and Q65-30A have experimental receive/scheduled-TX paths; WSPR and MSK144 are receive-only integrations. |
+| Digital modes | FT8 and FT4 provide native decode, activity, conversation, TX history, sequencing, logging, and explicit global TX disarm. FST4, JT9, JT65, and all currently exposed Q65 submodes have experimental receive/scheduled-TX paths; WSPR and MSK144 are receive-only integrations. |
 | SSTV and local images | Single-channel auto-targeting finds shifted VIS headers across the audio baseband, and Auto VIS receive or manual receive filtering decodes 13 Martin/Scottie/Robot/PD modes. Waterfall clicking overrides targeting; acquisition, ranked-candidate, progress, and failure diagnostics use the filterable Application Log. The pinned adapter also provides selectable experimental TX. Existing images can be browsed or generated through local Ollama/Lemonade models, and TX remains explicitly armed. |
 | CW | Software audio CW through [cw-dit](https://github.com/nicksbar/cw-dit), with selected-channel streaming decode, adaptive timing, noise-floor slicing, and generated subband TX. Paddle/keyed-carrier input, prosigns, punctuation, and auto-sequencing are not implemented yet. |
 | Radio control | Rigwright profiles cover Icom CI-V, modern and classic Yaesu CAT, and Kenwood PC control, with generic and model-specific profiles. Capability-gated power, AF/RF gain, squelch, RF power, preamp/attenuator, NB, NR, IP+, notch, AGC, tuner, normalized meters, and SWR controls are exposed where supported. IC-7300 is hardware-validated; other serial drivers remain experimental. |
 | Spectrum and audio | Equal-height radio/audio waterfalls, narrow/active-band views, VBW controls, click-to-tune audio/radio scopes, upper-banner scope details, audio-device selection, decoder-channel monitoring, and RX monitor volume. Radio scope and vendor controls remain capability-gated. |
+| Remote stations | [`QSONaut-HostBridge`](https://github.com/nicksbar/QSONaut-HostBridge) is the optional background service for remote radio operation. QSONaut authenticates, enumerates host-owned radios and audio endpoints, selects the driver/model and devices, and consumes bidirectional PCM, meters, controls, state, and optional CI-V scope frames over its documented WebSocket protocol. HostBridge owns private device paths, leases, and hardware safety; one remote session is allowed per QSONaut process. |
 | SWR and tuner | Normalized live SWR display plus an experimental stepped active-band sweep with configurable range/step/interval, low-power carrier pipeline, tuner safety, stop/disarm handling, charting, and application-log diagnostics. |
 | Station workflow | Contact log with ADIF import/export, operator profiles, QSO history, PSK Reporter (optional and off by default), and a live in-app application log with filtering, highlighting, copy, and bottom-follow. |
 | QSONaut Server | Optional WSS event/catalog sync, station presence, radio metadata, idempotent QSO publication, shared channels, and manual diagnostics. Each outbound data category is independently opt-in. |
@@ -69,13 +72,17 @@ implementation-level status of radio controls, normalized meters, SWR/tuner
 workflows, digital modes, SSTV, station tools, server integration, automation,
 and deliberate gaps.
 
+The [project roadmap](docs/project-roadmap.md) is the current v0.4.0 through
+v1 planning source across QSONaut and its sibling repositories.
+
 For the settings split between application-wide station state, independent
 radio tabs, and shared radio-tuning definitions, see
 [Settings ownership](docs/settings-ownership.md).
 
 The primary development environment is Linux/WSL with USB audio and Icom CI-V.
-Windows and ARM build jobs exist, but a green build is not the same as hardware
-validation.
+Release builds currently cover Linux x86_64, Linux ARM64 (including supported
+Raspberry Pi environments), and Windows x86_64/ARM64. A green build is not the
+same as hardware validation.
 
 QSONaut is developed with AI-assisted tooling alongside human review, tests,
 and hardware validation. That development history is part of the project, but
@@ -89,6 +96,13 @@ QSONaut uses pinned Git revisions of the shared
 [`qsonaut-third-party`](https://github.com/nicksbar/qsonaut-third-party)
 components. No local shared-modem checkout is required:
 
+Remote operation additionally requires a running
+[`QSONaut-HostBridge`](https://github.com/nicksbar/QSONaut-HostBridge) service
+on the station computer. HostBridge is configured independently, then QSONaut
+connects to its WebSocket endpoint from the radio profile. See
+[`HostBridge client integration`](docs/hostbridge-client.md) for the protocol,
+selection flow, media format, capabilities, reconnect, and safety rules.
+
 ```bash
 git clone https://github.com/nicksbar/QSONaut.git
 cd QSONaut
@@ -98,7 +112,12 @@ cargo run --release -p qsonaut -- --gui
 Cargo resolves the pinned revisions and records those sources in `Cargo.lock`
 for reproducible builds.
 
-Use a release build for live decoding. Debug builds are substantially slower.
+Use a release build for maximum live-decoding performance. The workspace
+optimizes the lower-level modem DSP crates in dev builds by default, so the
+GUI remains debuggable without making FST4/Q65 appear frozen. Use
+`RUST_LOG=debug` (or a narrower module filter) for runtime diagnostics. When
+stepping through unoptimized modem code, use Cargo's `modem-debug` profile
+instead of the normal dev profile.
 
 ## Tests and coverage
 
@@ -114,21 +133,32 @@ tool once, then generate the terminal baseline with:
 ```bash
 rustup component add llvm-tools-preview
 cargo install cargo-llvm-cov --locked
-cargo llvm-cov --locked --all-features --workspace --summary-only
+cargo llvm-cov --locked --all-features --workspace \
+  --ignore-filename-regex 'crates/qsonaut-gui/src/panels/(devices|profile_server|radio_ui)\.rs|crates/qsonaut-gui/src/modes/(sstv|ft8|ft4|voice|cw|jt9|jt65|q65|wspr|fst4)\.rs' \
+  --summary-only
 ```
 
 To generate the browsable report, use `--html`; it is written beneath
 `target/llvm-cov/html`. Pull requests and pushes to `main` run the same
-coverage workflow, enforce the current 26.6% post-extraction workspace
-line-coverage baseline, enforce changed-file coverage on pull requests, and
-upload the HTML report as an artifact. The baseline is intentionally
-conservative while GUI and hardware-facing paths gain dedicated harnesses;
-the per-file report is the source of truth for those areas.
+coverage workflow, enforce a 60% executable-contract line-coverage gate,
+enforce changed-file coverage on pull requests, and upload the HTML report as
+an artifact. The report intentionally excludes rendering-heavy UI and callback paths that
+are unsuitable for deterministic unit coverage (`panels/devices.rs`,
+`panels/profile_server.rs`, `panels/radio_ui.rs`, and the listed mode renderers);
+`radio_ui.rs` contains only egui callback glue; its CAT/session transactions
+remain in the measured Rigwright contract. Hardware-only Rigwright implementation code is
+covered by Rigwright's own workflow. The per-file report remains the source of
+truth for included areas.
 
 ### Coverage area snapshot
 
-The current post-extraction baseline was measured on 2026-08-30 with 250 tests
-and 26.67% workspace line coverage. The high-coverage `qsonaut-sstv` crate is
+The current release-candidate measurement was generated on 2026-09-03 with
+the workspace tests available in the validation environment. The grouped
+executable-contract report is 62.18% (18,248 / 29,345 lines), above the CI
+gate of 60%. Rigwright integration is 80.47% (2,983 / 3,707 lines), above its
+80% target. Physical-radio behavior still requires the documented
+hardware validation runs.
+The high-coverage `qsonaut-sstv` crate is
 now maintained behind the pinned `qsonaut-third-party` boundary and is covered
 by that repository's workflow rather than this workspace. These are grouped
 line-coverage figures from the same LLVM report; the downloadable HTML artifact
@@ -137,22 +167,23 @@ remains the detailed, per-file source of truth.
 | Area | Covered / executable lines | Line coverage |
 | --- | ---: | ---: |
 | qsonaut-automation | 217 / 264 | 82.20% |
-| qsonaut-log | 740 / 913 | 81.05% |
+| qsonaut-log | 788 / 942 | 83.65% |
 | qsonaut-accelerate | 281 / 318 | 88.36% |
 | qsonaut-pskreporter | 275 / 336 | 81.85% |
 | qsonaut-server-client | 733 / 870 | 84.25% |
 | qsonaut-audio | 316 / 871 | 36.28% |
-| qsonaut-core | 368 / 428 | 85.98% |
-| GUI core | 2,874 / 10,695 | 26.87% |
-| GUI workers | 618 / 2,279 | 27.12% |
-| GUI modes | 727 / 5,614 | 12.95% |
-| GUI panels | 118 / 2,938 | 4.02% |
-| Rigwright integration | 205 / 2,189 | 9.37% |
-| Application entry point | 53 / 495 | 10.71% |
+| qsonaut-core | 409 / 469 | 87.21% |
+| HostBridge client | 161 / 413 | 38.98% |
+| GUI core | 7,682 / 13,910 | 55.23% |
+| GUI workers | 1,648 / 2,671 | 61.70% |
+| GUI modes | 1,470 / 2,474 | 59.42% |
+| GUI panels | 1,090 / 1,549 | 70.37% |
+| Rigwright integration | 2,983 / 3,707 | 80.47% |
+| Application entry point | 195 / 551 | 35.39% |
 
-The first improvement targets are the application entry point and GUI panels,
-modes, and workers. Changes to these areas should add deterministic seams or
-focused tests rather than weakening the post-extraction gate.
+The workspace gate requires 60% overall coverage, and the Rigwright integration
+target requires 80%; both are enforced by CI. Changes to these areas should add
+deterministic seams or focused tests rather than weakening the contract gates.
 
 Changed-file coverage is enforced with `scripts/check-changed-coverage.sh`.
 The small set of pre-existing zero-coverage files is explicitly tracked in
@@ -274,17 +305,16 @@ device enrollment and proxy-friendly WSS configuration.
 - `apps/qsonaut` — CLI and desktop entry point
 - `crates/qsonaut-gui` — operator console and timed mode workflows
 - [`rigwright`](https://github.com/nicksbar/rigwright) — sibling radio HAL and native Icom CI-V implementation
+- [`QSONaut-HostBridge`](https://github.com/nicksbar/QSONaut-HostBridge) — optional remote station service and host-device provider
 
-QSONaut resolves the published `rigwright` crate from crates.io, and
-`Cargo.lock` pins the exact release for reproducible CI and release builds.
-For local development against the paired sibling checkout, copy
-`.cargo/config.toml.example` to `.cargo/config.toml`; the ignored local file
-overrides the published dependency with `../rigwright` without changing
-committed manifests. CI does not use this override and does not need a
-Rigwright checkout.
+QSONaut resolves `rigwright` and the shared modem/third-party components from
+immutable Git revisions recorded in the manifests and `Cargo.lock`. This keeps
+CI and release builds reproducible while allowing local sibling checkouts to be
+used temporarily for development validation. CI does not require any sibling
+repository checkout.
 - `crates/qsonaut-audio` — real-time audio and high-quality 48→12 kHz decimation
-- `qsonaut-modems` — shared consumer-neutral modem contracts
-- `qsonaut-third-party` — pinned third-party modem adapters, including SSTV, CW, and WSJT-family modes
+- [`qsonaut-modems`](https://github.com/nicksbar/qsonaut-modems) — shared consumer-neutral modem contracts
+- [`qsonaut-third-party`](https://github.com/nicksbar/qsonaut-third-party) — pinned third-party modem adapters, including SSTV, CW, and WSJT-family modes
 - `mfsk-core` and [`cw-dit`](https://github.com/swilcox/cw-dit) — transitive implementations owned and maintained behind `qsonaut-third-party`
 - `crates/qsonaut-log`, `qsonaut-pskreporter` — local logging and opt-in reporting
 - `crates/qsonaut-server-client` — optional authenticated WSS synchronization

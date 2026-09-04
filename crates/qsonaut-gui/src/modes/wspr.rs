@@ -17,6 +17,15 @@ pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
 const WSPR_POWER_DBM: [i32; 19] = [
     0, 3, 7, 10, 13, 17, 20, 23, 27, 30, 33, 37, 40, 43, 47, 50, 53, 57, 60,
 ];
+const WSPR_SLOT_SECONDS: f64 = 120.0;
+
+fn wspr_slot_timing(now_s: f64) -> (f32, f64) {
+    let elapsed = now_s.rem_euclid(WSPR_SLOT_SECONDS);
+    (
+        (elapsed / WSPR_SLOT_SECONDS) as f32,
+        WSPR_SLOT_SECONDS - elapsed,
+    )
+}
 
 fn parse_beacon(message: &str) -> Option<(&str, &str, i32)> {
     let mut fields = message.split_whitespace();
@@ -82,6 +91,21 @@ impl QsonautGuiApp {
                     }
                 });
             ui.label("120-second slot · one-shot only");
+        });
+        let now_s = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64())
+            .unwrap_or_default();
+        let (slot_progress, seconds_to_boundary) = wspr_slot_timing(now_s);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("UTC slot").strong());
+            ui.add(
+                egui::ProgressBar::new(slot_progress)
+                    .desired_width(260.0)
+                    .text(format!(
+                        "{seconds_to_boundary:.1}s until next 2-minute boundary"
+                    )),
+            );
         });
         ui.separator();
         ui.label(RichText::new("Recent spots").strong());
@@ -178,7 +202,7 @@ impl QsonautGuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_beacon;
+    use super::{parse_beacon, wspr_slot_timing};
 
     #[test]
     fn parses_a_complete_type_one_beacon() {
@@ -191,5 +215,12 @@ mod tests {
         assert_eq!(parse_beacon("K1ABC FN42 nope"), None);
         assert_eq!(parse_beacon("K1ABC FN42 37 extra"), None);
         assert_eq!(parse_beacon(""), None);
+    }
+
+    #[test]
+    fn reports_wspr_utc_slot_progress_and_remaining_time() {
+        let (progress, remaining) = wspr_slot_timing(125.0);
+        assert!((progress - 0.041_666_668).abs() < 0.000_001);
+        assert!((remaining - 115.0).abs() < f64::EPSILON);
     }
 }

@@ -51,6 +51,16 @@ pub struct RadioConfig {
     pub civ_address: u8,
     #[serde(default = "default_controller_civ_address")]
     pub controller_civ_address: u8,
+    #[serde(default)]
+    pub hostbridge_access_key: String,
+    #[serde(default)]
+    pub hostbridge_password: String,
+    #[serde(default)]
+    pub hostbridge_radio_id: Option<String>,
+    #[serde(default)]
+    pub hostbridge_audio_source_id: Option<String>,
+    #[serde(default)]
+    pub hostbridge_audio_output_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -159,6 +169,11 @@ impl Default for AppConfig {
                 baud_rate: default_radio_baud_rate(),
                 civ_address: default_radio_civ_address(),
                 controller_civ_address: default_controller_civ_address(),
+                hostbridge_access_key: String::new(),
+                hostbridge_password: String::new(),
+                hostbridge_radio_id: None,
+                hostbridge_audio_source_id: None,
+                hostbridge_audio_output_id: None,
             },
             server: ServerConfig::default(),
             contest: ContestProfile::default(),
@@ -445,6 +460,52 @@ backend = "none"
         assert!(!cfg.audio.monitor_enabled);
         assert_eq!(cfg.audio.monitor_output_device, None);
         assert_eq!(cfg.audio.monitor_volume, 1.0);
+    }
+
+    #[test]
+    fn config_value_parsers_cover_aliases_invalid_values_and_defaults() {
+        assert!(parse_bool(" yes "));
+        assert!(parse_bool("ON"));
+        assert!(!parse_bool("no"));
+        assert!(!parse_bool("unknown"));
+        assert_eq!(
+            nonempty("  station  ".to_string()).as_deref(),
+            Some("station")
+        );
+        assert_eq!(nonempty("   ".to_string()), None);
+        assert_eq!(default_radio_baud_rate(), 115_200);
+        assert_eq!(default_radio_model(), "IC-7300");
+        assert_eq!(default_radio_endpoint(), "127.0.0.1:4532");
+        assert_eq!(default_radio_civ_address(), 0x94);
+        assert_eq!(default_controller_civ_address(), 0xE0);
+        assert_eq!(default_serial_start(), 1);
+        assert_eq!(default_serial_step(), 1);
+        assert!(default_dupe_check());
+
+        assert_eq!(
+            parse_contest_operating_mode("run"),
+            Some(ContestOperatingMode::Run)
+        );
+        assert_eq!(
+            parse_contest_operating_mode("search-and-pounce"),
+            Some(ContestOperatingMode::SearchAndPounce)
+        );
+        assert_eq!(parse_contest_operating_mode("invalid"), None);
+        assert_eq!(parse_split_policy("none"), Some(SplitPolicy::Off));
+        assert_eq!(parse_split_policy("fake_split"), Some(SplitPolicy::Fake));
+        assert_eq!(parse_split_policy("rig-split"), Some(SplitPolicy::Rig));
+        assert_eq!(parse_split_policy("invalid"), None);
+        assert_eq!(parse_fox_hound_role("off"), Some(FoxHoundRole::Disabled));
+        assert_eq!(parse_fox_hound_role("fox"), Some(FoxHoundRole::Fox));
+        assert_eq!(parse_fox_hound_role("hound"), Some(FoxHoundRole::Hound));
+        assert_eq!(parse_fox_hound_role("invalid"), None);
+
+        assert_eq!(parse_u8_flexible("148"), Some(148));
+        assert_eq!(parse_u8_flexible("0xE0"), Some(224));
+        assert_eq!(parse_u8_flexible("e0h"), Some(224));
+        assert_eq!(parse_u8_flexible("E0"), Some(224));
+        assert_eq!(parse_u8_flexible(""), None);
+        assert_eq!(parse_u8_flexible("1000"), None);
     }
 
     #[test]

@@ -1,111 +1,55 @@
 use super::super::*;
+use qsonaut_hostbridge_client::normalize_endpoint;
 
 impl QsonautGuiApp {
-    fn test_cat_connection(&mut self) {
-        let backend = self.config.radio.backend.clone();
-        let model = self.config.radio.model.clone();
-        let port = self.config.radio.serial_port.clone().unwrap_or_default();
-        let baud_rate = self.config.radio.baud_rate;
-        let controller_civ_address = self.config.radio.controller_civ_address;
-        let radio_civ_address = self.config.radio.civ_address;
+    pub(crate) fn enumerate_hostbridge(&mut self) {
+        let endpoint = match normalize_endpoint(&self.config.radio.endpoint) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                self.hostbridge_scan_status = error.to_string();
+                return;
+            }
+        };
+        self.config.radio.endpoint = endpoint.clone();
+        let config = HostBridgeConfig {
+            endpoint,
+            client_name: "QSONaut device setup".to_string(),
+            access_key: self.config.radio.hostbridge_access_key.clone(),
+            password: self.config.radio.hostbridge_password.clone(),
+            ..HostBridgeConfig::default()
+        };
         let (tx, rx) = mpsc::channel();
-
-        self.cat_test_status = None;
-        self.cat_test_rx = Some(rx);
-        info!(
-            backend = %backend,
-            model = %model,
-            port = %if port.is_empty() { "auto" } else { &port },
-            baud = baud_rate,
-            "CAT connection test requested"
-        );
-
+        self.hostbridge_catalog = None;
+        self.hostbridge_scan_status = "Connecting…".to_string();
+        self.hostbridge_scan = Some(rx);
         thread::spawn(move || {
-            let result = if !backend.eq_ignore_ascii_case("native") {
-                Err(format!(
-                    "CAT test requires the Native Rigwright backend; selected backend is '{}'.",
-                    backend
-                ))
-            } else if port.is_empty() {
-                Err("CAT test requires a specific serial port; select a radio USB/serial port first.".into())
-            } else {
-                match open_model_with_radio_address(
-                    &model,
-                    &port,
-                    baud_rate,
-                    controller_civ_address,
-                    Some(radio_civ_address),
-                ) {
-                    Ok(radio) => match radio {
-                        ConfiguredRadio::Yaesu(yaesu) => match yaesu.verify_model() {
-                            Ok(()) => Ok(format!(
-                                "CAT OK: {} answered and matched the selected profile at {} baud.",
-                                model, baud_rate
-                            )),
-                            Err(error) => Err(format!(
-                                "CAT probe failed for {} at {} baud: {error}",
-                                model, baud_rate
-                            )),
-                        },
-                        ConfiguredRadio::Kenwood(kenwood) => match kenwood.verify_model() {
-                            Ok(()) => Ok(format!(
-                                "CAT OK: {} answered and matched the selected profile at {} baud.",
-                                model, baud_rate
-                            )),
-                            Err(error) => Err(format!(
-                                "CAT probe failed for {} at {} baud: {error}",
-                                model, baud_rate
-                            )),
-                        },
-                        ConfiguredRadio::Icom(icom) => {
-                            match tokio::runtime::Builder::new_current_thread()
-                                .enable_all()
-                                .build()
-                            {
-                                Ok(runtime) => {
-                                    match runtime.block_on(Radio::get_frequency_hz(&icom)) {
-                                        Ok(frequency_hz) => Ok(format!(
-                                            "CAT OK: {} answered at {} baud (frequency {} Hz).",
-                                            model, baud_rate, frequency_hz
-                                        )),
-                                        Err(error) => Err(format!(
-                                            "CAT probe failed for {} at {} baud: {error}",
-                                            model, baud_rate
-                                        )),
-                                    }
+            let result = (|| -> Result<HostHello> {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .context("could not start HostBridge setup runtime")?;
+                runtime.block_on(async move {
+                    let (client, mut events) = HostBridgeClient::spawn(config);
+                    let result = tokio::time::timeout(Duration::from_secs(12), async {
+                        loop {
+                            match events.recv().await {
+                                Some(HostBridgeEvent::Connected(hello)) => break Ok(hello),
+                                Some(HostBridgeEvent::Disconnected { reason })
+                                | Some(HostBridgeEvent::SafetyDisarmed { reason }) => {
+                                    break Err(anyhow!(reason))
                                 }
-                                Err(error) => Err(format!("CAT test runtime failed: {error}")),
+                                Some(_) => {}
+                                None => break Err(anyhow!("HostBridge event stream closed")),
                             }
                         }
-                        _ => Err(format!(
-                            "CAT testing is not implemented for the selected native profile '{}'.",
-                            model
-                        )),
-                    },
-                    Err(error) => Err(format!(
-                        "Could not open CAT port '{}' at {} baud for {}: {error}",
-                        port, baud_rate, model
-                    )),
-                }
-            };
-
-            match &result {
-                Ok(message) => info!(
-                    model = %model,
-                    port = %port,
-                    baud = baud_rate,
-                    result = %message,
-                    "CAT connection test succeeded"
-                ),
-                Err(error) => warn!(
-                    model = %model,
-                    port = %port,
-                    baud = baud_rate,
-                    error = %error,
-                    "CAT connection test failed"
-                ),
-            }
-            let _ = tx.send(result);
+                    })
+                    .await
+                    .map_err(|_| anyhow!("timed out waiting for HostBridge authentication"))??;
+                    let _ = client.shutdown();
+                    Ok(result)
+                })
+            })();
+            let _ = tx.send(result.map_err(|error| error.to_string()));
         });
     }
 
@@ -144,48 +88,6 @@ impl QsonautGuiApp {
         }
     }
 
-    pub(in super::super) fn reconnect_radio(&mut self) {
-        info!(backend = %self.config.radio.backend, model = %self.config.radio.model, "Radio reconnect requested");
-        if let Some(tx) = &self.command_tx {
-            let _ = tx.send(GuiCommand::Quit);
-        }
-        self.radio_worker_stop.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.radio_worker_handle.take() {
-            let _ = handle.join();
-        }
-        self.command_tx = None;
-        self.radio_worker_stop = Arc::new(AtomicBool::new(false));
-
-        if !self.config.radio.enabled {
-            info!("Radio reconnect skipped: radio is disabled");
-            self.radio_init_rx = None;
-            self.radio_init_attempted = true;
-            let mut state = self.state.lock().expect("ui state lock poisoned");
-            state.radio_waterfall_status = "UNAVAILABLE (radio disabled)".to_string();
-            return;
-        }
-
-        let port = self.config.radio.serial_port.clone().unwrap_or_default();
-        self.radio_init_rx = Some(spawn_radio_init(
-            self.config.radio.backend.clone(),
-            self.config.radio.model.clone(),
-            port,
-            self.config.radio.endpoint.clone(),
-            self.config.radio.baud_rate,
-            self.config.radio.controller_civ_address,
-            self.config.radio.civ_address,
-        ));
-        self.radio_init_attempted = false;
-        self.device_restart_required = false;
-        if self.config.audio.enabled && self.audio_worker_handle.is_none() {
-            self.restart_audio();
-        }
-        info!(port = %self.config.radio.serial_port.as_deref().unwrap_or("auto"), "Radio reconnect initialization queued");
-        let mut state = self.state.lock().expect("ui state lock poisoned");
-        state.radio_waterfall_status = "CONNECTING…".to_string();
-        state.last_error = None;
-    }
-
     pub(in super::super) fn restart_audio(&mut self) {
         info!(enabled = self.config.audio.enabled, input = ?self.config.audio.input_device, "Audio worker restart requested");
         self.audio_worker_stop.store(true, Ordering::Relaxed);
@@ -207,15 +109,22 @@ impl QsonautGuiApp {
             self.ft8_tx_active.clone(),
             self.digital_tx_active.clone(),
             self.config.audio.enabled,
+            true,
             self.config.audio.sample_rate_hz,
             self.config.audio.channels,
-            self.config.audio.input_device.clone(),
+            effective_audio_input_device(
+                &self.config.radio.backend,
+                self.config.audio.input_device.clone(),
+            ),
             self.config.audio.monitor_enabled,
-            self.config
-                .audio
-                .monitor_output_device
-                .clone()
-                .or_else(|| self.config.audio.output_device.clone()),
+            effective_audio_output_device(
+                &self.config.radio.backend,
+                self.config
+                    .audio
+                    .monitor_output_device
+                    .clone()
+                    .or_else(|| self.config.audio.output_device.clone()),
+            ),
             self.monitor_volume.clone(),
             self.repaint_ctx.clone(),
             self.display_tuning.clone(),
@@ -262,28 +171,31 @@ impl QsonautGuiApp {
         let old_endpoint = self.config.radio.endpoint.clone();
         let old_model = self.config.radio.model.clone();
         let old_baud = self.config.radio.baud_rate;
+        let old_hostbridge_key = self.config.radio.hostbridge_access_key.clone();
+        let old_hostbridge_password = self.config.radio.hostbridge_password.clone();
+        let old_hostbridge_radio_id = self.config.radio.hostbridge_radio_id.clone();
+        let old_hostbridge_audio_source_id = self.config.radio.hostbridge_audio_source_id.clone();
+        let old_hostbridge_audio_output_id = self.config.radio.hostbridge_audio_output_id.clone();
         let old_monitor = self.config.audio.monitor_enabled;
         let old_monitor_device = self.config.audio.monitor_output_device.clone();
-        let null_radio = matches!(
-            self.config.radio.backend.to_ascii_lowercase().as_str(),
-            "null" | "mock"
-        );
         let input_users = self.profile_device_users(
-            |profile| profile.audio_input_device.as_ref(),
-            |profile| profile.audio_enabled,
+            |profile| profile.audio.input_device.as_ref(),
+            |profile| profile.audio.enabled,
         );
         let output_users = self.profile_device_users(
-            |profile| profile.audio_output_device.as_ref(),
-            |profile| profile.audio_enabled,
+            |profile| profile.audio.output_device.as_ref(),
+            |profile| profile.audio.enabled,
         );
         let monitor_users = self.profile_device_users(
-            |profile| profile.audio_monitor_output_device.as_ref(),
-            |profile| profile.audio_enabled && profile.audio_monitor_enabled,
+            |profile| profile.audio.monitor_output_device.as_ref(),
+            |profile| profile.audio.enabled && profile.audio.monitor_enabled,
         );
         let serial_users = self.profile_device_users(
-            |profile| profile.radio_serial_port.as_ref(),
-            |profile| profile.radio_enabled,
+            |profile| profile.radio.serial_port.as_ref(),
+            |profile| profile.radio.enabled,
         );
+        let is_hostbridge = self.config.radio.backend.eq_ignore_ascii_case("hostbridge");
+        let hostbridge_catalog = self.hostbridge_catalog.clone();
 
         egui::Grid::new("device_settings_grid")
             .num_columns(2)
@@ -318,6 +230,68 @@ impl QsonautGuiApp {
                 ) {
                     ui.label("Backend endpoint");
                     ui.text_edit_singleline(&mut self.config.radio.endpoint);
+                    ui.end_row();
+                }
+
+                if self.config.radio.backend.eq_ignore_ascii_case("hostbridge") {
+                    ui.label("HostBridge endpoint");
+                    ui.text_edit_singleline(&mut self.config.radio.endpoint);
+                    ui.end_row();
+                    ui.label("Access key");
+                    ui.text_edit_singleline(&mut self.config.radio.hostbridge_access_key);
+                    ui.end_row();
+                    ui.label("Password");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.config.radio.hostbridge_password)
+                            .password(true),
+                    );
+                    ui.end_row();
+                    ui.label("Host options");
+                    ui.vertical(|ui| {
+                        let scanning = self.hostbridge_scan.is_some();
+                        if ui
+                            .add_enabled(
+                                !scanning,
+                                egui::Button::new(if scanning {
+                                    "Enumerating…"
+                                } else {
+                                    "Connect and enumerate"
+                                }),
+                            )
+                            .clicked()
+                        {
+                            self.enumerate_hostbridge();
+                        }
+                        if !self.hostbridge_scan_status.is_empty() {
+                            ui.label(RichText::new(&self.hostbridge_scan_status).small());
+                        }
+                    });
+                    ui.end_row();
+                    ui.label("Remote radio");
+                    hostbridge_radio_combo(
+                        ui,
+                        &hostbridge_catalog,
+                        &mut self.config.radio.hostbridge_radio_id,
+                    );
+                    ui.end_row();
+                    ui.label("Remote driver/model");
+                    hostbridge_model_combo(ui, &mut self.config.radio.model);
+                    ui.end_row();
+                    ui.label("Remote audio input");
+                    hostbridge_audio_combo(
+                        ui,
+                        &hostbridge_catalog,
+                        &mut self.config.radio.hostbridge_audio_source_id,
+                        true,
+                    );
+                    ui.end_row();
+                    ui.label("Remote audio output");
+                    hostbridge_audio_combo(
+                        ui,
+                        &hostbridge_catalog,
+                        &mut self.config.radio.hostbridge_audio_output_id,
+                        false,
+                    );
                     ui.end_row();
                 }
 
@@ -391,15 +365,7 @@ impl QsonautGuiApp {
             .num_columns(2)
             .spacing([10.0, 6.0])
             .show(ui, |ui| {
-                if null_radio {
-                    ui.label("Audio devices");
-                    ui.label(
-                        RichText::new("QSONaut Null Sound Card · virtual input/output")
-                            .small()
-                            .color(theme_success(ui)),
-                    );
-                    ui.end_row();
-                } else {
+                if !is_hostbridge {
                     ui.label("Audio input");
                     ui.horizontal(|ui| {
                         egui::ComboBox::from_id_salt("audio_input_device")
@@ -436,7 +402,9 @@ impl QsonautGuiApp {
                         }
                     });
                     ui.end_row();
+                }
 
+                if !is_hostbridge {
                     ui.label("Audio output");
                     ui.horizontal(|ui| {
                         egui::ComboBox::from_id_salt("audio_output_device")
@@ -516,77 +484,112 @@ impl QsonautGuiApp {
                         });
                         ui.end_row();
                     }
-                }
 
-                ui.label("Radio / USB serial");
-                ui.horizontal(|ui| {
-                    egui::ComboBox::from_id_salt("radio_serial_port")
-                        .selected_text(match self.config.radio.serial_port.as_deref() {
-                            Some(port) => self
-                                .radio_serial_port_labels
-                                .get(port)
-                                .map(String::as_str)
-                                .unwrap_or(port),
-                            None => "Auto detect",
-                        })
-                        .width((ui.available_width() - 34.0).max(180.0))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.config.radio.serial_port,
-                                None,
-                                "Auto detect",
-                            );
-                            for name in &serial_ports {
-                                let port_label = self
+                    ui.label("Radio / USB serial");
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("radio_serial_port")
+                            .selected_text(match self.config.radio.serial_port.as_deref() {
+                                Some(port) => self
                                     .radio_serial_port_labels
-                                    .get(name)
+                                    .get(port)
                                     .map(String::as_str)
-                                    .unwrap_or(name.as_str());
-                                let label = match serial_users.get(name) {
-                                    Some(profiles) if !profiles.is_empty() => {
-                                        format!("{port_label} · used by {}", profiles.join(", "))
-                                    }
-                                    _ => format!("{port_label} · available"),
-                                };
+                                    .unwrap_or(port),
+                                None => "Auto detect",
+                            })
+                            .width((ui.available_width() - 34.0).max(180.0))
+                            .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut self.config.radio.serial_port,
-                                    Some(name.clone()),
-                                    label,
+                                    None,
+                                    "Auto detect",
                                 );
-                            }
-                        });
-                    if ui
-                        .small_button("↻")
-                        .on_hover_text("Re-scan radio and USB serial devices")
-                        .clicked()
-                    {
-                        self.refresh_device_lists();
-                    }
-                });
-                ui.end_row();
-
-                ui.label("CAT baud rate");
-                let baud_rates = radio_baud_rates(&self.config.radio.model);
-                if !baud_rates.contains(&self.config.radio.baud_rate) {
-                    self.config.radio.baud_rate = find_model(&self.config.radio.model)
-                        .map(|profile| profile.preferred_baud_rate())
-                        .filter(|baud| baud_rates.contains(baud))
-                        .unwrap_or(baud_rates[0]);
-                }
-                egui::ComboBox::from_id_salt("radio_baud_rate")
-                    .selected_text(self.config.radio.baud_rate.to_string())
-                    .width(ui.available_width().max(180.0))
-                    .show_ui(ui, |ui| {
-                        for baud_rate in baud_rates {
-                            ui.selectable_value(
-                                &mut self.config.radio.baud_rate,
-                                *baud_rate,
-                                baud_rate.to_string(),
-                            );
+                                for name in &serial_ports {
+                                    let port_label = self
+                                        .radio_serial_port_labels
+                                        .get(name)
+                                        .map(String::as_str)
+                                        .unwrap_or(name.as_str());
+                                    let label = match serial_users.get(name) {
+                                        Some(profiles) if !profiles.is_empty() => {
+                                            format!(
+                                                "{port_label} · used by {}",
+                                                profiles.join(", ")
+                                            )
+                                        }
+                                        _ => format!("{port_label} · available"),
+                                    };
+                                    ui.selectable_value(
+                                        &mut self.config.radio.serial_port,
+                                        Some(name.clone()),
+                                        label,
+                                    );
+                                }
+                            });
+                        if ui
+                            .small_button("↻")
+                            .on_hover_text("Re-scan radio and USB serial devices")
+                            .clicked()
+                        {
+                            self.refresh_device_lists();
                         }
                     });
-                ui.end_row();
+                    ui.end_row();
+                }
+
+                if self.config.radio.backend.eq_ignore_ascii_case("native") {
+                    let baud_rates = radio_baud_rates(&self.config.radio.model);
+                    if baud_rates.is_empty() {
+                        ui.label("CAT baud rate");
+                        ui.label(
+                            RichText::new("No baud rates available for this radio model")
+                                .small()
+                                .color(theme_warning(ui)),
+                        );
+                        ui.end_row();
+                    } else {
+                        ui.label("CAT baud rate");
+                        if !baud_rates.contains(&self.config.radio.baud_rate) {
+                            self.config.radio.baud_rate = find_model(&self.config.radio.model)
+                                .map(|profile| profile.preferred_baud_rate())
+                                .filter(|baud| baud_rates.contains(baud))
+                                .unwrap_or(baud_rates[0]);
+                        }
+                        egui::ComboBox::from_id_salt("radio_baud_rate")
+                            .selected_text(self.config.radio.baud_rate.to_string())
+                            .width(ui.available_width().max(180.0))
+                            .show_ui(ui, |ui| {
+                                for baud_rate in baud_rates {
+                                    ui.selectable_value(
+                                        &mut self.config.radio.baud_rate,
+                                        *baud_rate,
+                                        baud_rate.to_string(),
+                                    );
+                                }
+                            });
+                        ui.end_row();
+                    }
+                }
             });
+
+        if matches!(
+            self.config.radio.backend.to_ascii_lowercase().as_str(),
+            "null" | "mock"
+        ) {
+            // NullRadio is a complete virtual radio, not a native model with
+            // a missing serial device. Normalize the radio-side hardware
+            // fields, but deliberately leave the audio fields untouched so
+            // this tab can use real input/output devices for decoding.
+            self.config.radio.model = "NullRadio".to_string();
+            self.config.radio.serial_port = None;
+            self.config.radio.endpoint.clear();
+        }
+
+        if old_backend != self.config.radio.backend
+            && is_hostbridge
+            && (old_endpoint.is_empty() || old_endpoint == "127.0.0.1:4532")
+        {
+            self.config.radio.endpoint = "ws://127.0.0.1:8765".to_string();
+        }
 
         if self.config.radio.backend.eq_ignore_ascii_case("native") {
             ui.add_space(6.0);
@@ -707,15 +710,19 @@ impl QsonautGuiApp {
             )
         };
         ui.label(
-            RichText::new(format!(
-                "{} · serial: {}",
-                backend_details,
-                self.config
-                    .radio
-                    .serial_port
-                    .as_deref()
-                    .unwrap_or("auto-detect")
-            ))
+            RichText::new(if is_hostbridge {
+                backend_details
+            } else {
+                format!(
+                    "{} · serial: {}",
+                    backend_details,
+                    self.config
+                        .radio
+                        .serial_port
+                        .as_deref()
+                        .unwrap_or("auto-detect")
+                )
+            })
             .small()
             .color(theme_muted(ui)),
         );
@@ -731,6 +738,20 @@ impl QsonautGuiApp {
             || old_endpoint != self.config.radio.endpoint
             || old_model != self.config.radio.model
             || old_baud != self.config.radio.baud_rate;
+        let radio_changed = radio_changed
+            || old_hostbridge_key != self.config.radio.hostbridge_access_key
+            || old_hostbridge_password != self.config.radio.hostbridge_password
+            || old_hostbridge_radio_id != self.config.radio.hostbridge_radio_id
+            || old_hostbridge_audio_source_id != self.config.radio.hostbridge_audio_source_id
+            || old_hostbridge_audio_output_id != self.config.radio.hostbridge_audio_output_id;
+        if old_backend != self.config.radio.backend
+            && self.config.radio.backend.eq_ignore_ascii_case("hostbridge")
+            && (self.config.radio.endpoint.trim().is_empty()
+                || self.config.radio.endpoint.trim() == "127.0.0.1:4532"
+                || self.config.radio.endpoint.trim() == "ws://127.0.0.1:4532")
+        {
+            self.config.radio.endpoint = "127.0.0.1:8765".to_string();
+        }
         if audio_changed || radio_changed {
             if old_model != self.config.radio.model {
                 if let Some(profile) = find_model(&self.config.radio.model) {
@@ -850,10 +871,115 @@ impl QsonautGuiApp {
 
 const RADIO_BACKENDS: &[(&str, &str)] = &[
     ("native", "Native Rigwright"),
+    ("hostbridge", "Remote HostBridge"),
     ("rigctld", "Hamlib rigctld"),
     ("dxlab", "DX Lab Commander"),
     ("null", "Offline test radio"),
 ];
+
+fn hostbridge_radio_combo(
+    ui: &mut egui::Ui,
+    catalog: &Option<HostHello>,
+    selected: &mut Option<String>,
+) {
+    let label = catalog
+        .as_ref()
+        .and_then(|hello| {
+            selected.as_ref().and_then(|id| {
+                hello
+                    .capabilities
+                    .radio_devices
+                    .iter()
+                    .find(|device| &device.id == id)
+                    .map(|device| device.label.clone())
+            })
+        })
+        .unwrap_or_else(|| "Automatic radio selection".to_string());
+    egui::ComboBox::from_id_salt("hostbridge_radio_choice")
+        .selected_text(label)
+        .width(ui.available_width().max(220.0))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(selected, None, "Automatic radio selection");
+            if let Some(hello) = catalog {
+                for device in &hello.capabilities.radio_devices {
+                    let suffix = if device.in_use { " · in use" } else { "" };
+                    ui.selectable_value(
+                        selected,
+                        Some(device.id.clone()),
+                        format!("{}{}", device.label, suffix),
+                    );
+                }
+            }
+        });
+}
+
+fn hostbridge_model_combo(ui: &mut egui::Ui, selected: &mut String) {
+    let selected_text = find_model(selected)
+        .map(|model| format!("{} · {}", model.model, model.protocol.label()))
+        .unwrap_or_else(|| selected.clone());
+    egui::ComboBox::from_id_salt("hostbridge_model_choice")
+        .selected_text(selected_text)
+        .width(ui.available_width().max(220.0))
+        .show_ui(ui, |ui| {
+            for model in POPULAR_RADIOS {
+                ui.selectable_value(
+                    selected,
+                    model.model.to_string(),
+                    format!("{} · {}", model.model, model.protocol.label()),
+                );
+            }
+        });
+}
+
+fn hostbridge_audio_combo(
+    ui: &mut egui::Ui,
+    catalog: &Option<HostHello>,
+    selected: &mut Option<String>,
+    source: bool,
+) {
+    let label = catalog
+        .as_ref()
+        .and_then(|hello| {
+            if source {
+                hello
+                    .capabilities
+                    .audio_sources
+                    .iter()
+                    .find(|entry| selected.as_ref() == Some(&entry.id))
+                    .map(|entry| entry.label.clone())
+            } else {
+                hello
+                    .capabilities
+                    .audio_outputs
+                    .iter()
+                    .find(|entry| selected.as_ref() == Some(&entry.id))
+                    .map(|entry| entry.label.clone())
+            }
+        })
+        .unwrap_or_else(|| "Automatic compatible endpoint".to_string());
+    let combo_id = if source {
+        "hostbridge_audio_input_choice"
+    } else {
+        "hostbridge_audio_output_choice"
+    };
+    egui::ComboBox::from_id_salt(combo_id)
+        .selected_text(label)
+        .width(ui.available_width().max(220.0))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(selected, None, "Automatic compatible endpoint");
+            if let Some(hello) = catalog {
+                if source {
+                    for entry in &hello.capabilities.audio_sources {
+                        ui.selectable_value(selected, Some(entry.id.clone()), &entry.label);
+                    }
+                } else {
+                    for entry in &hello.capabilities.audio_outputs {
+                        ui.selectable_value(selected, Some(entry.id.clone()), &entry.label);
+                    }
+                }
+            }
+        });
+}
 
 fn radio_backend_label(backend: &str) -> &str {
     RADIO_BACKENDS
@@ -879,6 +1005,10 @@ fn selected_radio_label(model: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panels::radio_contract::{
+        apply_radio_reconnect, mark_radio_reconnect_disabled, spawn_cat_connection_test,
+        stop_radio_worker_for_reconnect,
+    };
 
     #[test]
     fn native_radio_labels_and_controls_follow_rigwright_profiles() {
@@ -911,5 +1041,194 @@ mod tests {
         assert_eq!(radio_backend_label("native"), "Native Rigwright");
         assert_eq!(radio_backend_label("RIGCTLD"), "Hamlib rigctld");
         assert_eq!(radio_backend_label("custom"), "custom");
+    }
+
+    #[test]
+    fn unknown_or_virtual_models_have_no_unsafe_baud_rate_fallback() {
+        assert!(radio_baud_rates("NullRadio").is_empty());
+        assert!(radio_baud_rates("not-a-model").is_empty());
+    }
+
+    #[test]
+    fn cat_probe_rejects_non_native_and_missing_port_before_opening_hardware() {
+        let non_native = QsonautGuiApp::cat_connection_result(
+            "rigctld",
+            "IC-7300",
+            "/dev/ttyUSB0",
+            115_200,
+            0xE0,
+            0x94,
+        )
+        .expect_err("external backends are not probed here");
+        assert!(non_native.contains("Native Rigwright backend"));
+
+        let missing_port =
+            QsonautGuiApp::cat_connection_result("native", "IC-7300", "", 115_200, 0xE0, 0x94)
+                .expect_err("a CAT probe requires a selected port");
+        assert!(missing_port.contains("specific serial port"));
+    }
+
+    #[test]
+    fn cat_probe_reports_model_and_serial_open_failures() {
+        let unknown_model = QsonautGuiApp::cat_connection_result(
+            "native",
+            "not-a-real-model",
+            "/dev/null",
+            115_200,
+            0xE0,
+            0x94,
+        )
+        .expect_err("unknown model");
+        assert!(unknown_model.contains("Could not open CAT port"));
+        assert!(unknown_model.contains("not-a-real-model"));
+
+        let missing_device = QsonautGuiApp::cat_connection_result(
+            "native",
+            "IC-7300",
+            "/definitely-not-a-real-serial-device",
+            115_200,
+            0xE0,
+            0x94,
+        )
+        .expect_err("missing serial device");
+        assert!(missing_device.contains("CAT probe failed"));
+        assert!(missing_device.contains("IC-7300"));
+    }
+
+    #[test]
+    fn cat_probe_projects_each_configured_vendor_result() {
+        let null = QsonautGuiApp::cat_probe_result(
+            "offline",
+            115_200,
+            ConfiguredRadio::Null(qsonaut_radio::NullRadio::new()),
+        )
+        .expect_err("offline profile has no CAT verification");
+        assert!(null.contains("not implemented"));
+
+        let yaesu = QsonautGuiApp::cat_probe_result(
+            "FT-818",
+            38_400,
+            ConfiguredRadio::Yaesu(qsonaut_radio::yaesu::YaesuCatRadio::new_generic(
+                "/definitely-not-a-real-serial-device",
+                38_400,
+            )),
+        )
+        .expect_err("unavailable Yaesu transport");
+        assert!(yaesu.contains("CAT probe failed for FT-818"));
+
+        let kenwood = QsonautGuiApp::cat_probe_result(
+            "TS-890S",
+            115_200,
+            ConfiguredRadio::Kenwood(qsonaut_radio::kenwood::KenwoodCatRadio::new_generic(
+                "/definitely-not-a-real-serial-device",
+                115_200,
+            )),
+        )
+        .expect_err("unavailable Kenwood transport");
+        assert!(kenwood.contains("CAT probe failed for TS-890S"));
+    }
+
+    #[test]
+    fn cat_connection_worker_propagates_validation_and_transport_errors() {
+        let invalid_backend = spawn_cat_connection_test(
+            "rigctld".to_string(),
+            "IC-7300".to_string(),
+            "/dev/null".to_string(),
+            115_200,
+            0xE0,
+            0x94,
+        )
+        .recv()
+        .expect("CAT worker result");
+        assert!(invalid_backend
+            .expect_err("non-native backend must be rejected")
+            .contains("Native Rigwright backend"));
+
+        let missing_port = spawn_cat_connection_test(
+            "native".to_string(),
+            "IC-7300".to_string(),
+            String::new(),
+            115_200,
+            0xE0,
+            0x94,
+        )
+        .recv()
+        .expect("CAT worker result");
+        assert!(missing_port
+            .expect_err("missing port must be rejected")
+            .contains("specific serial port"));
+    }
+
+    #[test]
+    fn radio_session_stop_clears_command_and_replaces_stop_token() {
+        let (tx, rx) = mpsc::channel();
+        let old_stop = Arc::new(AtomicBool::new(false));
+        let old_stop_identity = Arc::as_ptr(&old_stop);
+        let mut stop = old_stop;
+        let mut command_tx = Some(tx);
+        let mut worker_handle = Some(thread::spawn(|| {}));
+
+        stop_radio_worker_for_reconnect(&mut command_tx, &mut stop, &mut worker_handle);
+
+        assert!(command_tx.is_none());
+        assert!(worker_handle.is_none());
+        assert!(!stop.load(Ordering::Relaxed));
+        assert_ne!(Arc::as_ptr(&stop), old_stop_identity);
+        assert!(matches!(rx.try_recv(), Ok(GuiCommand::Quit)));
+    }
+
+    #[test]
+    fn disabled_radio_reconnect_clears_init_and_reports_unavailable() {
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let (_tx, rx) = mpsc::channel();
+        let mut init_rx = Some(rx);
+        let mut attempted = false;
+
+        mark_radio_reconnect_disabled(&state, &mut init_rx, &mut attempted);
+
+        assert!(init_rx.is_none());
+        assert!(attempted);
+        assert_eq!(
+            state.lock().expect("state lock").radio_waterfall_status,
+            "UNAVAILABLE (radio disabled)"
+        );
+    }
+
+    #[test]
+    fn enabled_radio_reconnect_queues_init_and_restarts_audio_when_requested() {
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let (_tx, rx) = mpsc::channel();
+        let mut init_rx = None;
+        let mut attempted = true;
+        let mut restart_count = 0;
+        let mut device_restart_required = true;
+
+        apply_radio_reconnect(
+            &mut init_rx,
+            &mut attempted,
+            &mut device_restart_required,
+            &state,
+            true,
+            || rx,
+            || restart_count += 1,
+        );
+
+        assert!(init_rx.is_some());
+        assert!(!attempted);
+        assert!(!device_restart_required);
+        assert_eq!(restart_count, 1);
+        assert_eq!(
+            state.lock().expect("state lock").radio_waterfall_status,
+            "CONNECTING…"
+        );
+    }
+
+    #[test]
+    fn selected_radio_label_keeps_unknown_profiles_explicit() {
+        assert_eq!(
+            selected_radio_label("not-a-real-model"),
+            "Unknown profile: not-a-real-model"
+        );
+        assert_eq!(radio_backend_label(" NATIVE "), " NATIVE ");
     }
 }

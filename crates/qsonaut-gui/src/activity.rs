@@ -98,12 +98,12 @@ impl OperatingActivity {
             Self::Satellite => ActivityProfile {
                 tx_cq: "CQ SAT",
                 bands: ActivityBandScope::Preferred(CORE_VHF_BAND_LABELS),
-                modes: ActivityModeScope::Preferred(&[WorkspaceMode::Cw, WorkspaceMode::Fldigi]),
+                modes: ActivityModeScope::Preferred(&[WorkspaceMode::Cw]),
             },
             Self::Emcomm => ActivityProfile {
                 tx_cq: "CQ EMCOMM",
                 bands: ActivityBandScope::Preferred(CORE_EMCOMM_BAND_LABELS),
-                modes: ActivityModeScope::Preferred(&[WorkspaceMode::Cw, WorkspaceMode::Fldigi]),
+                modes: ActivityModeScope::Preferred(&[WorkspaceMode::Cw]),
             },
         }
     }
@@ -289,5 +289,51 @@ mod tests {
             .modes
             .modes()
             .contains(&WorkspaceMode::Cw));
+    }
+
+    #[test]
+    fn every_activity_exposes_a_distinct_context_profile() {
+        let expected = [
+            (OperatingActivity::General, "General", "CQ"),
+            (OperatingActivity::Pota, "POTA", "CQ POTA"),
+            (OperatingActivity::Sota, "SOTA", "CQ SOTA"),
+            (OperatingActivity::Contest, "Contest", "CQ TEST"),
+            (OperatingActivity::FieldDay, "Field Day", "CQ FD"),
+            (OperatingActivity::Dx, "DX", "CQ DX"),
+            (OperatingActivity::Satellite, "Satellite", "CQ SAT"),
+            (OperatingActivity::Emcomm, "EMCOMM", "CQ EMCOMM"),
+        ];
+        assert_eq!(OperatingActivity::ALL.len(), expected.len());
+        for (activity, label, cq) in expected {
+            let profile = activity.profile();
+            assert_eq!(activity.label(), label);
+            assert_eq!(profile.tx_cq, cq);
+            assert!(!profile.bands.labels().is_empty());
+            assert!(!profile.modes.modes().is_empty());
+        }
+        assert!(OperatingActivity::General.profile().modes.is_unrestricted());
+        assert!(!OperatingActivity::Pota.profile().modes.is_unrestricted());
+        assert!(!OperatingActivity::Satellite
+            .profile()
+            .bands
+            .is_unrestricted());
+    }
+
+    #[test]
+    fn activity_icons_render_for_every_context() {
+        let context = egui::Context::default();
+        let _ = context.run(Default::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                let painter = ui.painter();
+                for (index, activity) in OperatingActivity::ALL.into_iter().enumerate() {
+                    draw_activity_icon(
+                        painter,
+                        activity,
+                        egui::pos2(20.0 + index as f32 * 24.0, 20.0),
+                        Color32::WHITE,
+                    );
+                }
+            });
+        });
     }
 }

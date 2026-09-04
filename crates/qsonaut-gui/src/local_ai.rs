@@ -876,4 +876,167 @@ mod tests {
             Some("first\nsecond")
         );
     }
+
+    #[test]
+    fn local_provider_and_role_labels_are_stable() {
+        assert_eq!(LocalImageProvider::Ollama.label(), "Ollama");
+        assert_eq!(LocalImageProvider::Lemonade.label(), "Lemonade");
+        assert_eq!(LocalModelRole::Vision.label(), "vision/context");
+        assert_eq!(LocalModelRole::Image.label(), "image generation");
+        assert_eq!(LocalModelRole::Edit.label(), "image editing");
+        assert_eq!(
+            LocalImageSettings::default().endpoint(),
+            "http://127.0.0.1:11434"
+        );
+        let settings = LocalImageSettings {
+            provider: LocalImageProvider::Lemonade,
+            ..LocalImageSettings::default()
+        };
+        assert_eq!(settings.endpoint(), "http://localhost:13305/api/v1");
+    }
+
+    #[test]
+    fn model_capabilities_report_supported_roles_and_empty_metadata() {
+        let no_metadata = LocalModelCapabilities {
+            vision: false,
+            image: false,
+            edit: false,
+            chat: false,
+            metadata_available: false,
+        };
+        assert_eq!(no_metadata.summary(), "capability metadata unavailable");
+        let advertised = LocalModelCapabilities {
+            vision: true,
+            image: true,
+            edit: true,
+            chat: true,
+            metadata_available: true,
+        };
+        assert_eq!(advertised.summary(), "vision + chat + image + edit");
+        assert!(advertised.supports(LocalModelRole::Vision));
+        assert!(advertised.supports(LocalModelRole::Image));
+        assert!(advertised.supports(LocalModelRole::Edit));
+        let vision_without_chat = LocalModelCapabilities {
+            chat: false,
+            ..advertised
+        };
+        assert!(!vision_without_chat.supports(LocalModelRole::Vision));
+    }
+
+    #[test]
+    fn model_selection_explains_empty_unknown_undownloaded_and_incompatible_models() {
+        let model = LocalModelInfo {
+            id: "vision".to_string(),
+            provider: LocalImageProvider::Lemonade,
+            recipe: Some("llamacpp".to_string()),
+            labels: vec!["vision".to_string()],
+            capabilities: LocalModelCapabilities {
+                vision: true,
+                image: false,
+                edit: false,
+                chat: true,
+                metadata_available: true,
+            },
+            downloaded: true,
+            size_gb: Some(2.5),
+            parameter_size: Some("8B".to_string()),
+        };
+        let models = [model.clone()];
+        assert!(model_for_role(&models, "", LocalModelRole::Vision).is_err());
+        assert!(model_for_role(&models, "missing", LocalModelRole::Vision).is_err());
+        assert!(model_for_role(&models, "vision", LocalModelRole::Vision).is_ok());
+        assert!(model_for_role(&models, "vision", LocalModelRole::Image).is_err());
+        assert!(model.detail().contains("recipe llamacpp"));
+        assert!(model.detail().contains("approx 2.50 GB"));
+
+        let undownloaded = LocalModelInfo {
+            downloaded: false,
+            ..model.clone()
+        };
+        assert!(undownloaded
+            .role_unavailable_reason(LocalModelRole::Vision)
+            .unwrap()
+            .contains("not downloaded"));
+        let unavailable_metadata = LocalModelInfo {
+            capabilities: LocalModelCapabilities {
+                metadata_available: false,
+                ..model.capabilities.clone()
+            },
+            ..model
+        };
+        assert!(unavailable_metadata
+            .role_unavailable_reason(LocalModelRole::Image)
+            .unwrap()
+            .contains("provider did not advertise"));
+    }
+
+    #[test]
+    fn capability_tokens_collect_nested_and_normalize_variants() {
+        let model = json!({
+            "labels": ["Vision", {"image generation": true}],
+            "capabilities": {"edit": "image-editing", "ignored": false},
+            "supports": {"nested": ["Chat", {"multimodal": true}]}
+        });
+        let labels = collect_capability_tokens(&model);
+        assert!(labels.contains(&"vision".to_string()));
+        assert!(labels.contains(&"image_generation".to_string()));
+        assert!(labels.contains(&"image-editing".to_string()));
+        assert!(labels.contains(&"chat".to_string()));
+        assert!(labels.contains(&"multimodal".to_string()));
+        assert_eq!(
+            normalize_capability_token("  Image Generation "),
+            "image_generation"
+        );
+    }
+
+    #[test]
+    fn lemonade_model_parser_accepts_compatibility_aliases_and_defaults() {
+        let model = parse_lemonade_model(
+            &json!({
+                "id": "editor",
+                "is_downloaded": false,
+                "supports": {"image-editing": true, "completions": true},
+                "metadata": {"recipe": "recipe-name"},
+                "size_bytes": 1_073_741_824u64,
+                "parameters": "4B"
+            }),
+            LocalImageProvider::Lemonade,
+        )
+        .expect("model id");
+        assert!(!model.downloaded);
+        assert_eq!(model.recipe.as_deref(), Some("recipe-name"));
+        assert_eq!(model.size_gb, Some(1.0));
+        assert_eq!(model.parameter_size.as_deref(), Some("4B"));
+        assert!(model.capabilities.edit);
+        assert!(model.capabilities.chat);
+        assert!(
+            parse_lemonade_model(&json!({"downloaded": true}), LocalImageProvider::Lemonade)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn loopback_validation_rejects_credentials_missing_hosts_and_non_http_urls() {
+        for url in [
+            "http://user@localhost:11434",
+            "http://localhost:pw@11434",
+            "http:///api/v1",
+            "file:///tmp/model",
+            "http://[2001:db8::1]:11434",
+        ] {
+            assert!(validate_loopback_endpoint(url).is_err(), "accepted {url}");
+        }
+    }
+
+    #[test]
+    fn assistant_content_and_ndjson_parser_handle_empty_or_malformed_values() {
+        assert_eq!(parse_assistant_content(&json!([])).as_deref(), Some(""));
+        assert_eq!(
+            parse_assistant_content(&json!([{"content":"part"}])).as_deref(),
+            Some("part")
+        );
+        assert_eq!(parse_assistant_content(&json!(42)), None);
+        assert!(parse_json_or_last_ndjson(b"\n  \n").is_err());
+        assert!(parse_json_or_last_ndjson(b"not-json\n").is_err());
+    }
 }

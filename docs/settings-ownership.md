@@ -14,7 +14,7 @@ not silently replace it.
 
 Examples:
 
-- station identity: callsign, grid, QTH, station notes, antenna, and rig notes
+- station identity and context: callsign, grid, QTH, station notes, and LLM/image notes
 - UI scale and compute-backend preference
 - session-only graphics power and GPU preference
 - application logging and other desktop presentation policy
@@ -31,6 +31,7 @@ or reloading an already-running session.
 Examples:
 
 - serial/backend/model/endpoint and radio enablement
+- the radio hardware and antenna connected to that radio
 - capture and monitor audio devices, sample rate, channels, monitor volume
 - digital timing, contest operation, decode policy, and mode assignments
 - waterfall theme and profile-specific radio-scope preferences
@@ -56,10 +57,10 @@ Radio-definition creation, editing, deletion, and mode assignment belong in
 
 | Data | Runtime owner | Persistence |
 | --- | --- | --- |
-| Station identity and station notes | Application session | Active profile file for current compatibility and restart persistence |
-| UI scale and compute preference | Application session | Active profile file; never reapplied during radio-tab switching |
+| Station identity and station context | Application session | `settings.toml` |
+| UI scale and compute preference | Application session | `settings.toml` |
 | Graphics power and GPU preference | Application session | Not persisted; applied by a GUI process restart |
-| Radio connection and audio devices | Radio tab | `profile.toml` or `profiles/<name>.toml` |
+| Radio connection, radio hardware, connected antenna, and audio devices | Radio tab | `profile.toml` or `profiles/<name>.toml` |
 | Digital timing and contest state | Radio tab | Selected operator-profile file |
 | Waterfall theme and profile scope settings | Radio tab | Selected operator-profile file |
 | Per-mode radio-definition assignments | Radio tab | Selected operator-profile file |
@@ -89,8 +90,15 @@ platform application-data locations.
 
 Older operator profiles may contain embedded `radio_profiles` arrays. Those
 arrays are read once when no global library exists, merged by name across the
-existing profiles, and written to `radio-profiles.toml`. New profile saves do
-not write reusable definitions back into operator-profile files.
+existing profiles, and written to `radio-profiles.toml`. Older operator
+profiles also contain copies of global station settings. On first launch after
+this split, identity and station context remain in `settings.toml`; legacy
+rig/antenna values migrate into the active radio profile. Subsequent profile
+saves omit the global station copies, and tab switching never reads them.
+
+The global settings file is written independently before an operator profile is
+saved. This prevents changing or saving one radio tab from changing station
+identity or desktop preferences for every other tab.
 
 When adding a setting, decide its scope before adding a field:
 

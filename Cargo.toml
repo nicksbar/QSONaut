@@ -8,12 +8,40 @@ members = [
     "crates/qsonaut-automation",
     "crates/qsonaut-pskreporter",
     "crates/qsonaut-server-client",
+    "crates/qsonaut-hostbridge-client",
     "crates/qsonaut-gui",
 ]
 resolver = "2"
 
+# Keep the GUI and application debuggable, but do not run the modem DSP in
+# unoptimized debug code. FST4/Q65 operate on large 12 kHz slot buffers and
+# their debug-build cost can make the GUI appear frozen while decoding.
+[profile.dev.package.mfsk-core]
+opt-level = 2
+
+[profile.dev.package.qsonaut-third-party]
+opt-level = 2
+
+[profile.dev.package.qsonaut-modems]
+opt-level = 2
+
+# Opt in to fully unoptimized modem code when stepping through the lower-level
+# DSP implementation. This is deliberately separate from the normal dev
+# profile so application/UI debugging remains fast enough for daily use.
+[profile.modem-debug]
+inherits = "dev"
+
+[profile.modem-debug.package.mfsk-core]
+opt-level = 0
+
+[profile.modem-debug.package.qsonaut-third-party]
+opt-level = 0
+
+[profile.modem-debug.package.qsonaut-modems]
+opt-level = 0
+
 [workspace.package]
-version = "0.3.14"
+version = "0.3.15"
 edition = "2021"
 license = "MIT"
 authors = ["QSONaut Contributors"]

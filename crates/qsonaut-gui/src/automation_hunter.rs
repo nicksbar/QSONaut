@@ -127,6 +127,59 @@ fn custom_rule_id(title: &str, existing: &[CustomAchievementRule]) -> String {
     id
 }
 
+fn achievement_progress(
+    achievement: AchievementKind,
+    qso_count: u32,
+    unique_heard: u32,
+    dupe_blocks: u32,
+    decode_bursts: u32,
+    contacts: &[QsoRecord],
+) -> (u32, u32) {
+    match achievement {
+        AchievementKind::FirstDecode => (decode_bursts.min(1), 1),
+        AchievementKind::DirectedCall => (0, 1),
+        AchievementKind::FirstQsoLogged => (qso_count.min(1), 1),
+        AchievementKind::TenQsosLogged => (qso_count.min(10), 10),
+        AchievementKind::FiftyQsosLogged => (qso_count.min(50), 50),
+        AchievementKind::DupeShield => (dupe_blocks.min(10), 10),
+        AchievementKind::CenturyHunter => (unique_heard.min(100), 100),
+        AchievementKind::BandCollector => {
+            let bands = contacts
+                .iter()
+                .map(|contact| contact.band.trim())
+                .filter(|band| !band.is_empty())
+                .collect::<HashSet<_>>()
+                .len() as u32;
+            (bands.min(5), 5)
+        }
+        AchievementKind::GridMapper => {
+            let grids = contacts
+                .iter()
+                .map(|contact| contact.grid.trim())
+                .filter(|grid| !grid.is_empty())
+                .collect::<HashSet<_>>()
+                .len() as u32;
+            (grids.min(25), 25)
+        }
+        AchievementKind::DXChaser => (0, 1),
+        AchievementKind::ModeExplorer => {
+            let modes = contacts
+                .iter()
+                .map(|contact| contact.mode.trim())
+                .filter(|mode| !mode.is_empty())
+                .collect::<HashSet<_>>()
+                .len() as u32;
+            (modes.min(3), 3)
+        }
+        AchievementKind::EarlyBird
+        | AchievementKind::NightOwl
+        | AchievementKind::ContestOperator
+        | AchievementKind::SignalSurvivor => (0, 1),
+        AchievementKind::AudioAlchemist => (decode_bursts.min(1_000), 1_000),
+        AchievementKind::QsoQuarter => (qso_count.min(25), 25),
+    }
+}
+
 impl QsonautGuiApp {
     pub(super) fn push_hunter_alert(
         &mut self,
@@ -390,57 +443,14 @@ impl QsonautGuiApp {
         let qso_count = self.qso_log.contacts.len() as u32;
         for achievement in AchievementKind::ALL {
             let (title, detail) = achievement.presentation();
-            let (progress, target) = match achievement {
-                AchievementKind::FirstDecode => (self.hunter_decode_bursts.min(1), 1),
-                AchievementKind::DirectedCall => (self.hunter_directed_hits.min(1), 1),
-                AchievementKind::FirstQsoLogged => (qso_count.min(1), 1),
-                AchievementKind::TenQsosLogged => (qso_count.min(10), 10),
-                AchievementKind::FiftyQsosLogged => (qso_count.min(50), 50),
-                AchievementKind::DupeShield => (self.hunter_dupe_blocks.min(10), 10),
-                AchievementKind::CenturyHunter => {
-                    ((self.hunter_unique_heard.len() as u32).min(100), 100)
-                }
-                AchievementKind::BandCollector => {
-                    let bands = self
-                        .qso_log
-                        .contacts
-                        .iter()
-                        .map(|contact| contact.band.trim())
-                        .filter(|band| !band.is_empty())
-                        .collect::<HashSet<_>>()
-                        .len() as u32;
-                    (bands.min(5), 5)
-                }
-                AchievementKind::GridMapper => {
-                    let grids = self
-                        .qso_log
-                        .contacts
-                        .iter()
-                        .map(|contact| contact.grid.trim())
-                        .filter(|grid| !grid.is_empty())
-                        .collect::<HashSet<_>>()
-                        .len() as u32;
-                    (grids.min(25), 25)
-                }
-                AchievementKind::DXChaser => (0, 1),
-                AchievementKind::ModeExplorer => {
-                    let modes = self
-                        .qso_log
-                        .contacts
-                        .iter()
-                        .map(|contact| contact.mode.trim())
-                        .filter(|mode| !mode.is_empty())
-                        .collect::<HashSet<_>>()
-                        .len() as u32;
-                    (modes.min(3), 3)
-                }
-                AchievementKind::EarlyBird
-                | AchievementKind::NightOwl
-                | AchievementKind::ContestOperator
-                | AchievementKind::SignalSurvivor => (0, 1),
-                AchievementKind::AudioAlchemist => (self.hunter_decode_bursts.min(1_000), 1_000),
-                AchievementKind::QsoQuarter => (qso_count.min(25), 25),
-            };
+            let (progress, target) = achievement_progress(
+                achievement,
+                qso_count,
+                self.hunter_unique_heard.len() as u32,
+                self.hunter_dupe_blocks,
+                self.hunter_decode_bursts,
+                &self.qso_log.contacts,
+            );
             let unlocked = self.hunter_unlocked.contains(&achievement);
             let acknowledged = self.hunter_acknowledged.contains(&achievement);
             if unlocked && acknowledged && !self.hunter_show_acknowledged {
@@ -952,7 +962,29 @@ impl QsonautGuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{custom_rule_id, AchievementKind, CustomAchievementRule, HunterMetric};
+    use super::*;
+    use super::{
+        achievement_progress, custom_rule_id, AchievementKind, CustomAchievementRule, HunterMetric,
+        QsoRecord,
+    };
+    use std::sync::{Arc, Mutex};
+
+    fn headless_app() -> QsonautGuiApp {
+        let icon = eframe::icon_data::from_png_bytes(QSONAUT_ICON_PNG).expect("test icon");
+        QsonautGuiApp::new_with_context(
+            AppConfig::default(),
+            false,
+            false,
+            &egui::Context::default(),
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        )
+    }
 
     fn existing(id: &str) -> CustomAchievementRule {
         CustomAchievementRule {
@@ -984,5 +1016,165 @@ mod tests {
             assert!(!title.is_empty());
             assert!(!detail.is_empty());
         }
+    }
+
+    #[test]
+    fn achievement_progress_normalizes_counts_and_distinct_contact_dimensions() {
+        let mut contacts = Vec::new();
+        for (band, grid, mode) in [
+            ("20m", "FN42", "FT8"),
+            ("40m", "EN50", "FT4"),
+            ("2m", "FN42", "CW"),
+            ("", "", ""),
+        ] {
+            let mut contact = QsoRecord::new("K1ABC", mode, band, 14_074_000, 0, 1);
+            contact.grid = grid.to_string();
+            contacts.push(contact);
+        }
+        assert_eq!(
+            achievement_progress(AchievementKind::FirstDecode, 80, 120, 20, 9, &contacts),
+            (1, 1)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::DirectedCall, 80, 120, 20, 9, &contacts),
+            (0, 1)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::TenQsosLogged, 80, 120, 20, 9, &contacts),
+            (10, 10)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::FiftyQsosLogged, 80, 120, 20, 9, &contacts),
+            (50, 50)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::DupeShield, 80, 120, 20, 9, &contacts),
+            (10, 10)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::CenturyHunter, 80, 120, 20, 9, &contacts),
+            (100, 100)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::BandCollector, 80, 120, 20, 9, &contacts),
+            (3, 5)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::GridMapper, 80, 120, 20, 9, &contacts),
+            (2, 25)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::ModeExplorer, 80, 120, 20, 9, &contacts),
+            (3, 3)
+        );
+        assert_eq!(
+            achievement_progress(
+                AchievementKind::AudioAlchemist,
+                80,
+                120,
+                20,
+                1_200,
+                &contacts
+            ),
+            (1_000, 1_000)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::QsoQuarter, 80, 120, 20, 9, &contacts),
+            (25, 25)
+        );
+        for kind in [
+            AchievementKind::DXChaser,
+            AchievementKind::EarlyBird,
+            AchievementKind::NightOwl,
+            AchievementKind::ContestOperator,
+            AchievementKind::SignalSurvivor,
+        ] {
+            assert_eq!(
+                achievement_progress(kind, 80, 120, 20, 9, &contacts),
+                (0, 1)
+            );
+        }
+    }
+
+    #[test]
+    fn hunter_rule_evaluation_unlocks_enabled_thresholds_and_ignores_disabled_rules() {
+        let mut app = headless_app();
+        app.hunter_unique_heard.insert("K1ABC".to_string());
+        app.hunter_custom_rules = vec![
+            CustomAchievementRule {
+                id: "heard".to_string(),
+                title: "Heard one".to_string(),
+                detail: "A station was heard".to_string(),
+                metric: HunterMetric::UniqueHeard,
+                threshold: 1,
+                enabled: true,
+                unlocked: false,
+            },
+            CustomAchievementRule {
+                id: "disabled".to_string(),
+                title: "Disabled".to_string(),
+                detail: "Must remain locked".to_string(),
+                metric: HunterMetric::DecodeBursts,
+                threshold: 1,
+                enabled: false,
+                unlocked: false,
+            },
+        ];
+        app.evaluate_custom_hunter_rules();
+        assert!(app.hunter_custom_rules[0].unlocked);
+        assert!(!app.hunter_custom_rules[1].unlocked);
+        assert_eq!(app.hunter_feed.len(), 1);
+    }
+
+    #[test]
+    fn automation_radio_commands_reject_unsafe_and_invalid_values() {
+        let mut app = headless_app();
+        app.config.radio.model = "unknown-model".to_string();
+        assert!(app
+            .execute_automation_radio_command("tune_delta_hz", "-25")
+            .contains("-25 Hz"));
+        assert!(app
+            .execute_automation_radio_command("tune_delta_hz", "bad")
+            .contains("invalid tune delta"));
+        assert!(app
+            .execute_automation_radio_command("tune_workspace_band_hz", "0")
+            .contains("must be > 0"));
+        assert!(app
+            .execute_automation_radio_command("tune_workspace_band_hz", "bad")
+            .contains("invalid frequency"));
+        assert!(app
+            .execute_automation_radio_command("set_filter", "bad")
+            .contains("no filter control"));
+        assert!(app
+            .execute_automation_radio_command("set_ptt", "1")
+            .contains("not allowed"));
+        assert!(app
+            .execute_automation_radio_command("unknown", "1")
+            .contains("unsupported command"));
+        assert!(app
+            .execute_automation_radio_command("cycle_mode", "")
+            .contains("mode cycle"));
+    }
+
+    #[test]
+    fn external_automation_send_validates_transport_and_bounds_outbox() {
+        let mut app = headless_app();
+        app.automation_external_transports.clear();
+        assert!(app
+            .execute_automation_external_send("", "target", "message")
+            .contains("required"));
+        assert!(app
+            .execute_automation_external_send("irc:station", "target", "message")
+            .contains("not configured"));
+        app.automation_external_transports.insert("irc".to_string());
+        for index in 0..40 {
+            let result = app.execute_automation_external_send(
+                "irc:station",
+                "target",
+                &format!("message-{index}"),
+            );
+            assert!(result.contains("Queued external send"));
+        }
+        assert_eq!(app.automation_external_outbox.len(), 32);
     }
 }

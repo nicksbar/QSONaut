@@ -255,6 +255,23 @@ impl QsonautGuiApp {
 mod tests {
     use super::*;
 
+    fn headless_app() -> QsonautGuiApp {
+        let icon = eframe::icon_data::from_png_bytes(crate::QSONAUT_ICON_PNG).expect("test icon");
+        QsonautGuiApp::new_with_context(
+            AppConfig::default(),
+            false,
+            false,
+            &egui::Context::default(),
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        )
+    }
+
     #[test]
     fn diagnostic_log_redacts_tokens_and_configured_devices() {
         let mut config = AppConfig::default();
@@ -270,5 +287,47 @@ mod tests {
         assert!(!redacted.contains("Private microphone"));
         assert!(redacted.contains("[REDACTED SERVER TOKEN]"));
         assert!(redacted.contains("[REDACTED DEVICE]"));
+    }
+
+    #[test]
+    fn diagnostic_redaction_handles_optional_devices_and_empty_secrets() {
+        let mut config = AppConfig::default();
+        config.server.device_token = "  ".to_string();
+        config.audio.output_device = Some("Private speakers".to_string());
+        config.audio.monitor_output_device = Some("Monitor output".to_string());
+        let mut raw = "empty= token= speakers=Private speakers monitor=Monitor output".to_string();
+        redact_log_value(&mut raw, "  ", "[REDACTED]");
+        let redacted = redacted_diagnostic_log(raw, &config);
+        assert!(!redacted.contains("Private speakers"));
+        assert!(!redacted.contains("Monitor output"));
+        assert!(redacted.contains("empty= token="));
+    }
+
+    #[test]
+    fn server_operations_guard_disabled_and_incomplete_configurations() {
+        let mut app = headless_app();
+        app.config.server.enabled = true;
+        app.config.server.url.clear();
+        app.config.server.device_token.clear();
+        app.reconnect_server();
+        assert_eq!(
+            app.profile_io_status,
+            "Server needs both an endpoint and device token before connecting"
+        );
+        assert!(app.server_client.is_none());
+
+        let record = QsoRecord::new("W1AW", "FT8", "20m", 14_074_000, 1, 2);
+        app.publish_qso_to_server(&record);
+        assert!(app.server_client.is_none());
+
+        app.publish_server_presence(&GuiState::default());
+        assert!(app.server_client.is_none());
+
+        app.config.server.enabled = false;
+        app.publish_diagnostic_snapshot();
+        assert_eq!(
+            app.profile_io_status,
+            "Enable manual diagnostic snapshots before sending"
+        );
     }
 }

@@ -4,7 +4,7 @@
 
 ```mermaid
 graph TB
-    subgraph QSONaut_Client["QSONaut Client v0.2.3"]
+    subgraph QSONaut_Client["QSONaut Client v0.3.15"]
         direction TB
         A[apps/qsonaut<br/>Main CLI]
         A --> B[crates/qsonaut-gui<br/>eframe 0.33 + wgpu]
@@ -31,9 +31,9 @@ graph TB
     end
     
     subgraph External["External Services"]
-        Q[mfsk-core 0.10.0 unreleased<br/>DSP/Decoding]
-        U[cw-dit v0.1.0<br/>Morse/CW DSP]
-        R[rigwright v0.1.10<br/>Radio HAL and drivers]
+        Q[qsonaut-third-party<br/>Pinned modem adapters]
+        U[qsonaut-modems<br/>Consumer-neutral contracts]
+        R[rigwright v0.1.21<br/>Radio HAL and drivers]
         S[PSK Reporter<br/>UDP]
         T[Discord/IRC<br/>Automation]
     end
@@ -98,9 +98,9 @@ graph LR
     psk[qsonaut-pskreporter]
     server-client[qsonaut-server-client]
     accelerate[qsonaut-accelerate]
-    mfsk[mfsk-core]
-    cwdit[cw-dit<br/>cwdit-dsp + cwdit-morse]
-    rigwright[rigwright<br/>v0.1.10]
+    third-party[qsonaut-third-party]
+    modems[qsonaut-modems]
+    rigwright[rigwright<br/>v0.1.21]
     
     qsonaut -->|path| gui
     qsonaut -->|path| core
@@ -112,8 +112,8 @@ graph LR
     qsonaut -->|path| accelerate
     qsonaut -->|git| rigwright
     
-    gui -->|git| mfsk
-    gui -->|path| cwdit
+    gui -->|git| third-party
+    gui -->|git| modems
     gui -->|path| audio
     gui -->|path| acceleration
     gui -->|path| automation
@@ -182,10 +182,11 @@ graph TB
 
 | Component | Version | Notes |
 |-----------|---------|-------|
-| QSONaut Client | 0.2.3 | Main feature branch |
+| QSONaut Client | 0.3.15 | Release branch |
 | QSONaut Server | 0.1.0 | Independent release |
-| mfsk-core | 0.10.0 (unreleased) | Git dependency; pinned upstream commit |
-| rigwright | 0.1.10 | crates.io |
+| qsonaut-third-party | pinned revision | GPL/third-party modem adapters |
+| qsonaut-modems | pinned revision | Consumer-neutral modem contracts |
+| rigwright | 0.1.21 pinned Git revision | Radio HAL and native drivers |
 | eframe | 0.33 | GUI framework |
 | tokio | 1.0 | Async runtime |
 | sqlx | 0.8.6 | Server DB |
@@ -194,18 +195,17 @@ graph TB
 
 ## Recent Changes Summary
 
-### QSONaut v0.2.3 (2026-08-14)
+### QSONaut v0.3.15 (2026-08-31)
 - ✅ Server integration (v0.1.0)
 - ✅ Multi-radio selection
 - ✅ CI-V scope controls
 - ✅ Automation events
 - ✅ Persistent UI state
 
-### mfsk-core 0.10.0 (unreleased upstream)
-- ✅ FT8 WSJT-X parity
-- ✅ WSPR full integration
-- ✅ Q65 precision fixes
-- ✅ Better test coverage
+### Extracted modem components
+- ✅ QSONaut owns GUI orchestration and TX safety
+- ✅ qsonaut-third-party owns pinned modem adapter integration
+- ✅ qsonaut-modems owns consumer-neutral audio and decoder contracts
 
 ### QSONaut Server v0.1.0
 - ✅ Authenticated WebSocket
