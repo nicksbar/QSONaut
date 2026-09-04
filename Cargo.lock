@@ -3383,7 +3383,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "anyhow",
  "clap",
@@ -3402,14 +3402,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-accelerate"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "qsonaut-audio"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "anyhow",
  "cpal",
@@ -3418,7 +3418,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-automation"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -3427,7 +3427,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-core"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "anyhow",
  "dotenvy",
@@ -3438,7 +3438,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-gui"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3476,7 +3476,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-hostbridge-client"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -3493,7 +3493,7 @@ dependencies = [
 [[package]]
 name = "qsonaut-hostbridge-protocol"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?rev=7c42e5afdd382c21fb290e08342c48b0f935555d#7c42e5afdd382c21fb290e08342c48b0f935555d"
+source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?rev=54774aecedd605e02258845c083afbd86bc77ba8#54774aecedd605e02258845c083afbd86bc77ba8"
 dependencies = [
  "rigwright",
  "serde",
@@ -3503,7 +3503,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-log"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -3524,14 +3524,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-pskreporter"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "qsonaut-server-client"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -3974,8 +3974,8 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rigwright"
-version = "0.1.21"
-source = "git+https://github.com/nicksbar/rigwright.git?rev=6a480c8d3de3dd914ce9ac9ac995acb5d999a5fa#6a480c8d3de3dd914ce9ac9ac995acb5d999a5fa"
+version = "0.1.22"
+source = "git+https://github.com/nicksbar/rigwright.git?rev=268967f65d714fe4efa029f25e199b048af4ea5a#268967f65d714fe4efa029f25e199b048af4ea5a"
 dependencies = [
  "anyhow",
  "async-trait",

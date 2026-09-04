@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.16] - 2026-09-04
+
+### Fixed
+- Delegate native startup probing to Rigwright so model-specific CAT
+  behavior, including the FT-991A's rejected `VS;` query, remains inside the
+  driver boundary.
+
 ## [0.3.15] - 2026-09-03
 
 ### Added

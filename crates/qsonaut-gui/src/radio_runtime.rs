@@ -139,14 +139,13 @@ pub(super) fn spawn_radio_init_with_hostbridge(
                     .enable_all()
                     .build()
                 {
-                    Ok(runtime) => match runtime.block_on(radio.get_frequency_hz()) {
-                        Ok(frequency_hz) => {
+                    Ok(runtime) => match runtime.block_on(radio.probe()) {
+                        Ok(()) => {
                             info!(
                                 model = %model,
                                 port = %if port.is_empty() { "auto" } else { &port },
-                                frequency_hz,
                                 elapsed = ?start.elapsed(),
-                                "Radio CI-V startup probe succeeded"
+                                "Radio startup probe succeeded"
                             );
                             Some(radio.into())
                         }
