@@ -13,3 +13,9 @@ crates/qsonaut-gui/src/rendering/safety.rs
 crates/qsonaut-gui/src/rendering/waterfall_controls.rs
 crates/qsonaut-gui/src/reporting/pota.rs
 crates/qsonaut-gui/src/runtime/update.rs
+crates/qsonaut-gui/src/modes/mod.rs
+crates/qsonaut-gui/src/panels/mod.rs
+crates/qsonaut-gui/src/rendering/mod.rs
+crates/qsonaut-gui/src/reporting/mod.rs
+crates/qsonaut-gui/src/runtime/mod.rs
+crates/qsonaut-hostbridge-client/examples/hostbridge_smoke.rs
