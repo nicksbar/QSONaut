@@ -89,44 +89,43 @@ impl QsonautGuiApp {
         ctx: &egui::Context,
         snapshot: &GuiState,
     ) {
-        let (rows, source_revision, source_bins, render_bins) = if self.radio_scope_view
-            == RadioScopeView::Narrow
-        {
-            if self.radio_scope_lock_if_to_filter {
-                self.radio_scope_span_code = scope_span_for_filter(&snapshot.mode, snapshot.filter);
-            }
-            if !self.civ_spectrum_on {
-                return;
-            }
+        let (rows, source_revision, source_bins, render_bins) =
+            if self.radio_scope_view == RadioScopeView::Narrow {
+                if self.radio_scope_lock_if_to_filter {
+                    self.radio_scope_span_code = scope_span_for_filter(&snapshot.mode, None);
+                }
+                if !self.civ_spectrum_on {
+                    return;
+                }
 
-            let source_bins = snapshot
-                .radio_waterfall_rows
-                .back()
-                .map(|row| row.len())
-                .unwrap_or(RADIO_WF_WIDTH)
-                .clamp(64, MAX_RADIO_WF_BINS);
-            let render_bins = source_bins;
-            (
-                &snapshot.radio_waterfall_rows,
-                snapshot.radio_waterfall_revision,
-                source_bins,
-                render_bins,
-            )
-        } else {
-            let source_bins = snapshot
-                .radio_waterfall_rows
-                .back()
-                .map(|row| row.len())
-                .unwrap_or(RADIO_WF_WIDTH)
-                .clamp(64, MAX_RADIO_WF_BINS);
-            let render_bins = source_bins;
-            (
-                &snapshot.radio_waterfall_rows,
-                snapshot.radio_waterfall_revision,
-                source_bins,
-                render_bins,
-            )
-        };
+                let source_bins = snapshot
+                    .radio_waterfall_rows
+                    .back()
+                    .map(|row| row.len())
+                    .unwrap_or(RADIO_WF_WIDTH)
+                    .clamp(64, MAX_RADIO_WF_BINS);
+                let render_bins = source_bins;
+                (
+                    &snapshot.radio_waterfall_rows,
+                    snapshot.radio_waterfall_revision,
+                    source_bins,
+                    render_bins,
+                )
+            } else {
+                let source_bins = snapshot
+                    .radio_waterfall_rows
+                    .back()
+                    .map(|row| row.len())
+                    .unwrap_or(RADIO_WF_WIDTH)
+                    .clamp(64, MAX_RADIO_WF_BINS);
+                let render_bins = source_bins;
+                (
+                    &snapshot.radio_waterfall_rows,
+                    snapshot.radio_waterfall_revision,
+                    source_bins,
+                    render_bins,
+                )
+            };
 
         let sideband_projection = if self.radio_scope_view == RadioScopeView::Narrow {
             scope_projection_for_mode(&snapshot.mode)
@@ -518,7 +517,7 @@ impl QsonautGuiApp {
         ctx: &egui::Context,
         snapshot: &GuiState,
     ) {
-        let filter_bw_hz = filter_bandwidth_hz(&snapshot.mode, snapshot.filter);
+        let filter_bw_hz = 3_000;
         let is_cw = self.workspace_mode == WorkspaceMode::Cw;
         let is_sstv = self.workspace_mode == WorkspaceMode::Sstv;
         let bw_hz = filter_bw_hz;

@@ -1178,8 +1178,18 @@ pub(crate) fn spawn_radio_worker(
                             }
                             info!("SWR sweep disabled antenna tuner");
                         }
-                        if let Err(error) = rt.block_on(radio.set_mode(Mode::Rtty)) {
-                            error!(error = %error, "SWR sweep could not select RTTY carrier mode");
+                        let Some(sweep_setup) = radio.swr_sweep_setup() else {
+                            let mut s = state.lock().expect("ui state lock poisoned");
+                            s.swr_sweep_active = false;
+                            s.swr_sweep_status = "Unsupported by radio driver".to_string();
+                            s.last_error = Some(
+                                "SWR sweep setup is not documented by this radio driver"
+                                    .to_string(),
+                            );
+                            continue;
+                        };
+                        if let Err(error) = rt.block_on(radio.set_mode(sweep_setup.carrier_mode)) {
+                            error!(error = %error, mode = ?sweep_setup.carrier_mode, "SWR sweep could not select carrier mode");
                             if original_tuner.is_some_and(|status| status.enabled) {
                                 let _ = rt.block_on(
                                     radio.set_control(ControlId::Tuner, ControlValue::Bool(true)),
@@ -1189,17 +1199,13 @@ pub(crate) fn spawn_radio_worker(
                             s.swr_sweep_active = false;
                             s.swr_sweep_status = "Carrier mode setup failed".to_string();
                             s.last_error =
-                                Some(format!("SWR sweep could not select RTTY mode: {error}"));
+                                Some(format!("SWR sweep could not select carrier mode: {error}"));
                             continue;
                         }
-                        // The IC-7300 manual's plot procedure calls for
-                        // approximately 30 W so the transmit SWR detector is
-                        // active and has enough signal to report a value.
-                        const SWR_TEST_POWER_PERCENT: u8 = 30;
-                        let test_power = ((u16::from(SWR_TEST_POWER_PERCENT) * 255) / 100) as u8;
-                        if let Err(error) = rt.block_on(
-                            radio.set_control(ControlId::RfPower, ControlValue::U8(test_power)),
-                        ) {
+                        if let Err(error) = rt.block_on(radio.set_control(
+                            ControlId::RfPower,
+                            ControlValue::U8(sweep_setup.rf_power),
+                        )) {
                             error!(error = %error, "SWR sweep could not set low test power");
                             if let Some(mode) = original_mode {
                                 let _ = rt.block_on(radio.set_mode(mode));
@@ -1217,8 +1223,8 @@ pub(crate) fn spawn_radio_worker(
                             continue;
                         }
                         info!(
-                            mode = "RTTY",
-                            test_power_percent = SWR_TEST_POWER_PERCENT,
+                            mode = ?sweep_setup.carrier_mode,
+                            test_power = sweep_setup.rf_power,
                             "SWR sweep configured carrier pipeline"
                         );
                         let mut frequency = start_hz;
@@ -2789,6 +2795,13 @@ mod level_poll_tests {
             self.meters.contains_key(&id)
         }
 
+        fn swr_sweep_setup(&self) -> Option<qsonaut_radio::SwrSweepSetup> {
+            Some(qsonaut_radio::SwrSweepSetup {
+                carrier_mode: Mode::Rtty,
+                rf_power: 77,
+            })
+        }
+
         fn capabilities(&self) -> RadioCapabilities {
             RadioCapabilities::default()
         }
@@ -4334,7 +4347,7 @@ mod level_poll_tests {
         assert_eq!(state.mode, "USB");
         assert!(!state.ptt_on);
         assert!(!state.swr_sweep_active);
-        assert_eq!(state.swr_sweep_status, "Low-power setup failed");
+        assert_eq!(state.swr_sweep_status, "Unsupported by radio driver");
     }
 
     #[test]

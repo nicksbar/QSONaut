@@ -1452,7 +1452,7 @@ impl QsonautGuiApp {
                 self.persist_profile("Auto-saved");
             }
             if self.radio_scope_lock_if_to_filter {
-                self.radio_scope_span_code = scope_span_for_filter(&snapshot.mode, snapshot.filter);
+                self.radio_scope_span_code = scope_span_for_filter(&snapshot.mode, None);
                 ui.small(format!(
                     "Automatic span: {}",
                     scope_span_label(self.radio_scope_span_code)

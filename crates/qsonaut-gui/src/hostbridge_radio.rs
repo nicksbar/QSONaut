@@ -239,6 +239,34 @@ impl RadioHandle {
             Self::Test(radio) => radio.supports_control_write(id),
         }
     }
+    pub(crate) fn filter_bandwidth_hz(&self, mode: Mode, filter: u8) -> Option<u32> {
+        match self {
+            Self::Local(radio) => radio.filter_bandwidth_hz(mode, filter),
+            Self::Remote(radio) => radio.filter_bandwidth_hz(mode, filter),
+            #[cfg(test)]
+            Self::Test(radio) => radio.filter_bandwidth_hz(mode, filter),
+        }
+    }
+    pub(crate) fn swr_sweep_setup(&self) -> Option<qsonaut_radio::SwrSweepSetup> {
+        match self {
+            Self::Local(radio) => radio.swr_sweep_setup(),
+            Self::Remote(radio) => radio.swr_sweep_setup(),
+            #[cfg(test)]
+            Self::Test(radio) => radio.swr_sweep_setup(),
+        }
+    }
+    pub(crate) fn meter_presentation(
+        &self,
+        id: MeterId,
+        normalized: u8,
+    ) -> Option<qsonaut_radio::MeterPresentation> {
+        match self {
+            Self::Local(radio) => radio.meter_presentation(id, normalized),
+            Self::Remote(radio) => radio.meter_presentation(id, normalized),
+            #[cfg(test)]
+            Self::Test(radio) => radio.meter_presentation(id, normalized),
+        }
+    }
     pub(crate) fn link_health(&self) -> LinkHealth {
         match self {
             Self::Local(radio) => radio.link_health(),
@@ -390,6 +418,19 @@ impl Radio for RadioHandle {
     }
     fn capabilities(&self) -> RadioCapabilities {
         self.capabilities()
+    }
+    fn filter_bandwidth_hz(&self, mode: Mode, filter: u8) -> Option<u32> {
+        self.filter_bandwidth_hz(mode, filter)
+    }
+    fn swr_sweep_setup(&self) -> Option<qsonaut_radio::SwrSweepSetup> {
+        self.swr_sweep_setup()
+    }
+    fn meter_presentation(
+        &self,
+        id: MeterId,
+        normalized: u8,
+    ) -> Option<qsonaut_radio::MeterPresentation> {
+        self.meter_presentation(id, normalized)
     }
 }
 

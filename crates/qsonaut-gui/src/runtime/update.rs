@@ -904,7 +904,7 @@ impl QsonautGuiApp {
                             ui.separator();
                             ui.label(format!(
                                 "SWR: {}",
-                                format_swr_display(&self.config.radio.model, snapshot.swr)
+                                format_swr_display(None, snapshot.swr)
                             ));
                             ui.colored_label(
                                 Color32::YELLOW,
@@ -956,19 +956,7 @@ impl QsonautGuiApp {
                                 egui::pos2(chart_left, chart_top),
                                 egui::pos2(chart_right, chart_bottom),
                             );
-                            let icom_swr_chart = native_radio_profile(
-                                "native",
-                                &self.config.radio.model,
-                            )
-                            .and_then(|profile| {
-                                profile.calibrated_meter_value(MeterId::Swr, 0)
-                            })
-                            .is_some();
-                            let chart_axes = if icom_swr_chart {
-                                [(1.0_f32, "1.0:1"), (1.5, "1.5:1"), (2.0, "2.0:1"), (2.5, "2.5:1"), (3.0, "3.0:1")]
-                            } else {
-                                [(0.0_f32, "0%"), (25.0, "25%"), (50.0, "50%"), (75.0, "75%"), (100.0, "100%")]
-                            };
+                            let chart_axes = [(0.0_f32, "0%"), (25.0, "25%"), (50.0, "50%"), (75.0, "75%"), (100.0, "100%")];
                             let chart_min = chart_axes[0].0;
                             let chart_max = chart_axes[4].0;
                             for (value, label) in chart_axes {
@@ -991,7 +979,7 @@ impl QsonautGuiApp {
                                 let max_hz = points.last().map(|point| point.0).unwrap_or(1).max(points.first().map(|point| point.0).unwrap_or(0) + 1) as f32;
                                 let polyline: Vec<_> = points.iter().map(|(hz, raw)| {
                                     let x = chart_left + ((*hz as f32 - min_hz) / (max_hz - min_hz)) * chart_rect.width();
-                                    let value = swr_chart_value(&self.config.radio.model, *raw)
+                                    let value = swr_chart_value(None, *raw)
                                         .clamp(chart_min, chart_max);
                                     let y = chart_bottom
                                         - ((value - chart_min) / (chart_max - chart_min)) * chart_rect.height();

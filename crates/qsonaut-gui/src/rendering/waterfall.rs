@@ -1,39 +1,5 @@
 use super::super::*;
 
-pub(crate) fn filter_bandwidth_hz(mode: &str, filter: Option<u8>) -> u32 {
-    let f = filter.unwrap_or(1);
-    let m = mode.to_ascii_uppercase();
-    if m.contains("CW") {
-        match f {
-            1 => 500,
-            2 => 250,
-            3 => 100,
-            _ => 500,
-        }
-    } else if m.contains("FM") {
-        match f {
-            1 => 15_000,
-            2 => 10_000,
-            3 => 7_000,
-            _ => 15_000,
-        }
-    } else if m.contains("RTTY") {
-        match f {
-            1 => 500,
-            2 => 350,
-            3 => 250,
-            _ => 500,
-        }
-    } else {
-        match f {
-            1 => 3_000,
-            2 => 2_400,
-            3 => 1_800,
-            _ => 3_000,
-        }
-    }
-}
-
 /// Approximate occupied signal width used by the audio reticle. These values
 /// cover the protocol tone span rather than the 3 kHz receiver filter width.
 pub(crate) fn native_channel_width_hz(
@@ -152,8 +118,10 @@ pub(crate) fn scope_span_hz(span_code: u8) -> u64 {
     }
 }
 
-pub(crate) fn scope_span_for_filter(mode: &str, filter: Option<u8>) -> u8 {
-    let filter_width_hz = filter_bandwidth_hz(mode, filter);
+pub(crate) fn scope_span_for_filter(mode: &str, filter_width_hz: Option<u32>) -> u8 {
+    // A driver may not document filter geometry. The neutral fallback keeps
+    // the scope usable without pretending to know a model's filter table.
+    let filter_width_hz = filter_width_hz.unwrap_or(3_000);
     let required_half_span_hz = match scope_projection_for_mode(mode) {
         ScopeProjection::Full => filter_width_hz.div_ceil(2),
         ScopeProjection::LowerSideband | ScopeProjection::UpperSideband => filter_width_hz,

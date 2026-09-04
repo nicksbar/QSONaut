@@ -1,7 +1,7 @@
 use eframe::egui;
 use eframe::egui::Color32;
 
-use qsonaut_radio::{models::find_model, MeterId};
+use qsonaut_radio::models::find_model;
 
 /// Paint the AI tab icon with egui primitives so it does not depend on an
 /// emoji or a platform font containing a particular Unicode glyph.
@@ -191,36 +191,43 @@ pub(super) fn radio_supports_band(
     }
 }
 
-pub(super) fn format_swr_display(model: &str, normalized: Option<u8>) -> String {
+pub(super) fn format_swr_display(
+    presentation: Option<qsonaut_radio::MeterPresentation>,
+    normalized: Option<u8>,
+) -> String {
     let Some(level) = normalized else {
         return "unavailable".to_string();
     };
     let meter_percent = (f32::from(level) * 100.0 / 255.0).round();
-    if let Some(profile) = find_model(model) {
-        // The IC-7300 manual documents these CI-V meter anchors. Interpolate
-        // only between known points; do not invent a ratio above the documented
-        // 3.0:1 anchor.
-        if profile
-            .calibrated_meter_value(MeterId::Swr, level)
-            .is_some()
+    if let Some(presentation) = presentation {
+        if presentation
+            .upper_bound
+            .is_some_and(|bound| presentation.value >= bound && level > 120)
         {
-            let ratio = profile
-                .calibrated_meter_value(MeterId::Swr, level)
-                .unwrap_or(3.0);
-            if level > 120 {
-                return format!(">3.00:1 ({meter_percent:.0}% meter)");
-            }
-            return format!("{ratio:.2}:1 ({meter_percent:.0}% meter)");
+            return format!(
+                ">{:.2}{} ({}% meter)",
+                presentation.upper_bound.unwrap_or(presentation.value),
+                presentation.unit,
+                meter_percent as u8
+            );
         }
+        return format!(
+            "{:.precision$}{} ({}% meter)",
+            presentation.value,
+            presentation.unit,
+            meter_percent as u8,
+            precision = usize::from(presentation.precision)
+        );
     }
     format!("SWR meter {meter_percent:.0}%")
 }
 
-pub(super) fn swr_chart_value(model: &str, normalized: u8) -> f32 {
-    if let Some(profile) = find_model(model) {
-        if let Some(value) = profile.calibrated_meter_value(MeterId::Swr, normalized) {
-            return value;
-        }
+pub(super) fn swr_chart_value(
+    presentation: Option<qsonaut_radio::MeterPresentation>,
+    normalized: u8,
+) -> f32 {
+    if let Some(presentation) = presentation {
+        return presentation.value;
     }
     f32::from(normalized) * 100.0 / 255.0
 }
@@ -245,12 +252,9 @@ mod tests {
 
     #[test]
     fn swr_display_uses_model_calibration_and_safe_generic_fallbacks() {
-        assert_eq!(format_swr_display("IC-7300", None), "unavailable");
-        assert_eq!(format_swr_display("unknown", Some(128)), "SWR meter 50%");
-        assert!(format_swr_display("IC-7300", Some(80)).ends_with("meter)"));
-        assert!(format_swr_display("IC-7300", Some(121)).starts_with(">3.00:1"));
-        assert_eq!(swr_chart_value("unknown", 128), 128.0 * 100.0 / 255.0);
-        assert!(swr_chart_value("IC-7300", 80) > 1.0);
+        assert_eq!(format_swr_display(None, None), "unavailable");
+        assert_eq!(format_swr_display(None, Some(128)), "SWR meter 50%");
+        assert_eq!(swr_chart_value(None, 128), 128.0 * 100.0 / 255.0);
     }
 
     #[test]

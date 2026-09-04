@@ -219,12 +219,11 @@ use radio_runtime::{
 };
 use rendering::{
     band_edges_for_frequency, draw_primary_meter, draw_voltage_graph, effective_visual_profile,
-    filter_bandwidth_hz, meter_color, meter_color_for_context, meter_label, meter_percent,
-    meter_reading, meter_reading_for_model, meter_tooltip, meter_value, mode_meter_order,
-    native_channel_width_hz, record_voltage_sample, scope_projection_for_mode,
-    scope_span_for_filter, scope_span_hz, scope_span_label, sideband_scope_edges, status_color,
-    theme_accent, theme_muted, theme_success, theme_warning, METER_LABEL_WIDTH,
-    VOLTAGE_HISTORY_CAPACITY,
+    meter_color, meter_color_for_context, meter_label, meter_percent, meter_reading,
+    meter_reading_for_model, meter_tooltip, meter_value, mode_meter_order, native_channel_width_hz,
+    record_voltage_sample, scope_projection_for_mode, scope_span_for_filter, scope_span_hz,
+    scope_span_label, sideband_scope_edges, status_color, theme_accent, theme_muted, theme_success,
+    theme_warning, METER_LABEL_WIDTH, VOLTAGE_HISTORY_CAPACITY,
 };
 use reporting::{
     enrich_qso_from_hamdb, qso_adif_path, qso_log_path, qso_timestamp, spawn_hamdb_lookup,
@@ -2302,11 +2301,20 @@ mod tests {
         assert_eq!(meter_reading(MeterId::Power, Some(128)), "50%");
         assert_eq!(meter_reading(MeterId::Voltage, Some(128)), "REL 128/255");
         assert_eq!(
-            meter_reading_for_model(MeterId::Voltage, Some(145), "IC-7300"),
+            meter_reading_for_model(
+                MeterId::Voltage,
+                Some(145),
+                Some(qsonaut_radio::MeterPresentation {
+                    value: 13.5,
+                    unit: "V",
+                    precision: 1,
+                    upper_bound: Some(16.0),
+                })
+            ),
             "13.5 V"
         );
         assert_eq!(
-            meter_reading_for_model(MeterId::Voltage, Some(145), "FTDX10"),
+            meter_reading_for_model(MeterId::Voltage, Some(145), None),
             "REL 145/255"
         );
     }
@@ -2375,31 +2383,54 @@ mod tests {
 
     #[test]
     fn swr_display_uses_documented_ic7300_ratio_anchors() {
-        assert_eq!(format_swr_display("IC-7300", Some(0)), "1.00:1 (0% meter)");
+        let presentation = |value| {
+            Some(qsonaut_radio::MeterPresentation {
+                value,
+                unit: ":1",
+                precision: 2,
+                upper_bound: Some(3.0),
+            })
+        };
         assert_eq!(
-            format_swr_display("IC-7300", Some(48)),
+            format_swr_display(presentation(1.0), Some(0)),
+            "1.00:1 (0% meter)"
+        );
+        assert_eq!(
+            format_swr_display(presentation(1.5), Some(48)),
             "1.50:1 (19% meter)"
         );
         assert_eq!(
-            format_swr_display("IC-7300", Some(80)),
+            format_swr_display(presentation(2.0), Some(80)),
             "2.00:1 (31% meter)"
         );
         assert_eq!(
-            format_swr_display("IC-7300", Some(120)),
+            format_swr_display(presentation(3.0), Some(120)),
             "3.00:1 (47% meter)"
         );
         assert_eq!(
-            format_swr_display("IC-7300", Some(121)),
+            format_swr_display(presentation(3.0), Some(121)),
             ">3.00:1 (47% meter)"
         );
-        assert_eq!(format_swr_display("IC-7300", None), "unavailable");
+        assert_eq!(format_swr_display(None, None), "unavailable");
     }
 
     #[test]
     fn swr_display_does_not_claim_unverified_vendor_ratios() {
-        assert_eq!(format_swr_display("FTDX10", Some(128)), "SWR meter 50%");
-        assert!((swr_chart_value("FTDX10", 128) - 50.196).abs() < 0.01);
-        assert!((swr_chart_value("IC-7300", 80) - 2.0).abs() < f32::EPSILON);
+        assert_eq!(format_swr_display(None, Some(128)), "SWR meter 50%");
+        assert!((swr_chart_value(None, 128) - 50.196).abs() < 0.01);
+        assert!(
+            (swr_chart_value(
+                Some(qsonaut_radio::MeterPresentation {
+                    value: 2.0,
+                    unit: ":1",
+                    precision: 2,
+                    upper_bound: Some(3.0)
+                }),
+                80
+            ) - 2.0)
+                .abs()
+                < f32::EPSILON
+        );
     }
 
     fn decode_pcm_samples(bytes: &[u8]) -> Vec<i16> {
@@ -2664,27 +2695,20 @@ mod tests {
 
     #[test]
     fn filter_locked_scope_covers_the_useful_sideband() {
-        assert_eq!(scope_span_for_filter("USB-D", Some(1)), 1);
+        assert_eq!(scope_span_for_filter("USB-D", Some(3_000)), 1);
         assert_eq!(
-            scope_span_hz(scope_span_for_filter("USB-D", Some(1))),
+            scope_span_hz(scope_span_for_filter("USB-D", Some(3_000))),
             5_000
         );
-        assert_eq!(scope_span_for_filter("FM", Some(1)), 2);
+        assert_eq!(scope_span_for_filter("FM", Some(15_000)), 2);
         assert_eq!(scope_span_label(0), "±2.5 kHz");
     }
 
     #[test]
     fn display_policy_covers_filter_modes_and_scope_span_limits() {
-        assert_eq!(filter_bandwidth_hz("CW", Some(2)), 250);
-        assert_eq!(filter_bandwidth_hz("FM", Some(3)), 7_000);
-        assert_eq!(filter_bandwidth_hz("RTTY", Some(2)), 350);
-        assert_eq!(filter_bandwidth_hz("USB", Some(3)), 1_800);
-        assert_eq!(filter_bandwidth_hz("USB", None), 3_000);
-        assert_eq!(filter_bandwidth_hz("USB", Some(9)), 3_000);
-
-        assert_eq!(scope_span_for_filter("CW", Some(1)), 0);
-        assert_eq!(scope_span_for_filter("FM", Some(1)), 2);
-        assert_eq!(scope_span_for_filter("FM", Some(9)), 2);
+        assert_eq!(scope_span_for_filter("CW", Some(250)), 0);
+        assert_eq!(scope_span_for_filter("FM", Some(15_000)), 2);
+        assert_eq!(scope_span_for_filter("FM", None), 0);
         assert_eq!(scope_span_label(7), "±500 kHz");
         assert_eq!(scope_span_label(99), "±500 kHz");
         assert_eq!(scope_span_hz(6), 250_000);

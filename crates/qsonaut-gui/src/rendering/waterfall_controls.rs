@@ -162,8 +162,7 @@ impl QsonautGuiApp {
                         .changed();
                     ui.checkbox(&mut self.radio_scope_lock_if_to_filter, "Match span to FIL");
                     if self.radio_scope_lock_if_to_filter {
-                        self.radio_scope_span_code =
-                            scope_span_for_filter(&snapshot.mode, snapshot.filter);
+                        self.radio_scope_span_code = scope_span_for_filter(&snapshot.mode, None);
                         ui.label(format!(
                             "Automatic span: {}",
                             scope_span_label(self.radio_scope_span_code)
