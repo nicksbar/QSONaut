@@ -875,7 +875,7 @@ fn pcm_s16le_to_mono(payload: &[u8], channels: u8) -> Vec<f32> {
         .chunks_exact(2 * channels)
         .map(|frame| {
             let sum: i32 = frame
-                .chunks_exact(2)
+                .chunks(2)
                 .map(|sample| i16::from_le_bytes([sample[0], sample[1]]) as i32)
                 .sum();
             sum as f32 / (channels as f32 * i16::MAX as f32)
