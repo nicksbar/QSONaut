@@ -112,6 +112,7 @@ struct RadioScopeStreamConfig {
     sweep_code: u8,
     hold: bool,
     reference_tenths_db: i16,
+    advanced: ScopeAdvancedSettings,
 }
 
 fn wire_scope_config(
@@ -144,7 +145,19 @@ fn wire_scope_config(
         sweep_speed: Some(config.sweep_code),
         center_mode,
         vbw_wide: Some(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
-        ..Default::default()
+        center_type: config.advanced.center_type.map(Into::into),
+        tx_display: config.advanced.tx_display,
+        max_hold: config.advanced.max_hold.map(Into::into),
+        marker_position: config.advanced.marker_position.map(Into::into),
+        averaging: config.advanced.averaging,
+        waveform_type: config.advanced.waveform_type.map(Into::into),
+        waterfall_display: config.advanced.waterfall_display,
+        waterfall_size: config.advanced.waterfall_size,
+        waterfall_peak_level: config.advanced.waterfall_peak_level,
+        marker_auto_hide: config.advanced.marker_auto_hide,
+        waveform_color_current: config.advanced.waveform_color_current.map(Into::into),
+        waveform_color_line: config.advanced.waveform_color_line.map(Into::into),
+        waveform_color_max_hold: config.advanced.waveform_color_max_hold.map(Into::into),
     }
 }
 
@@ -298,6 +311,7 @@ pub(crate) fn spawn_radio_worker(
                                 vbw_wide,
                                 hold,
                                 reference_tenths_db,
+                                advanced,
                                 settings_dirty,
                             ) = {
                                 let s = stream_state.lock().expect("ui state lock poisoned");
@@ -313,6 +327,7 @@ pub(crate) fn spawn_radio_worker(
                                     s.radio_scope_vbw_wide,
                                     s.radio_scope_hold,
                                     s.radio_scope_reference_tenths_db,
+                                    s.radio_scope_advanced,
                                     s.radio_scope_settings_dirty,
                                 )
                             };
@@ -334,6 +349,7 @@ pub(crate) fn spawn_radio_worker(
                                 sweep_code,
                                 hold,
                                 reference_tenths_db,
+                                advanced,
                             };
                             (
                                 desired,
@@ -461,6 +477,7 @@ pub(crate) fn spawn_radio_worker(
                     ptt_on,
                     scope_hold,
                     scope_reference_tenths_db,
+                    scope_advanced,
                     scope_settings_dirty,
                 ) = {
                     let s = stream_state.lock().expect("ui state lock poisoned");
@@ -480,6 +497,7 @@ pub(crate) fn spawn_radio_worker(
                         s.ptt_on,
                         s.radio_scope_hold,
                         s.radio_scope_reference_tenths_db,
+                        s.radio_scope_advanced,
                         s.radio_scope_settings_dirty,
                     )
                 };
@@ -525,6 +543,7 @@ pub(crate) fn spawn_radio_worker(
                         sweep_code,
                         hold: scope_hold,
                         reference_tenths_db: scope_reference_tenths_db,
+                        advanced: scope_advanced,
                     };
                     // The first observed configuration is a baseline, not a
                     // command. Startup must not restore QSONaut defaults onto
@@ -1625,15 +1644,21 @@ fn poll_radio_core_state(
     } else {
         None
     };
-    let (af, rf, pwr) = if poll_levels {
-        (
-            read_u8_control(rt, radio, ControlId::AfGain),
-            read_u8_control(rt, radio, ControlId::RfGain),
-            read_u8_control(rt, radio, ControlId::RfPower),
-        )
-    } else {
-        (None, None, None)
-    };
+    let (af, tuning_step, antenna, mic_gain, monitor_level, speech_processor_level, rf, pwr) =
+        if poll_levels {
+            (
+                read_u8_control(rt, radio, ControlId::AfGain),
+                read_u8_control(rt, radio, ControlId::TuningStep),
+                read_u8_control(rt, radio, ControlId::Antenna),
+                read_u8_control(rt, radio, ControlId::MicGain),
+                read_u8_control(rt, radio, ControlId::MonitorLevel),
+                read_u8_control(rt, radio, ControlId::SpeechProcessorLevel),
+                read_u8_control(rt, radio, ControlId::RfGain),
+                read_u8_control(rt, radio, ControlId::RfPower),
+            )
+        } else {
+            (None, None, None, None, None, None, None, None)
+        };
     let (
         squelch,
         preamp,
@@ -1645,6 +1670,8 @@ fn poll_radio_core_state(
         notch_auto,
         notch_manual,
         agc,
+        speech_processor,
+        lock,
         tuner_status,
     ) = if poll_levels {
         (
@@ -1658,6 +1685,8 @@ fn poll_radio_core_state(
             read_bool_control(rt, radio, ControlId::Notch),
             read_bool_control(rt, radio, ControlId::ManualNotch),
             read_u8_control(rt, radio, ControlId::Agc),
+            read_bool_control(rt, radio, ControlId::SpeechProcessor),
+            read_bool_control(rt, radio, ControlId::Lock),
             radio
                 .supports_control_read(ControlId::Tuner)
                 .then(|| rt.block_on(radio.get_tuner_status()).ok().flatten())
@@ -1665,7 +1694,7 @@ fn poll_radio_core_state(
         )
     } else {
         (
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None,
         )
     };
     // Some Icom profiles do not consistently include the active FIL number in
@@ -1698,6 +1727,21 @@ fn poll_radio_core_state(
     }
     if let Some(v) = af {
         s.af_gain = Some(v);
+    }
+    if let Some(v) = tuning_step {
+        s.tuning_step = Some(v);
+    }
+    if let Some(v) = antenna {
+        s.antenna = Some(v);
+    }
+    if let Some(v) = mic_gain {
+        s.mic_gain = Some(v);
+    }
+    if let Some(v) = monitor_level {
+        s.monitor_level = Some(v);
+    }
+    if let Some(v) = speech_processor_level {
+        s.speech_processor_level = Some(v);
     }
     if let Some(v) = rf {
         s.rf_gain = Some(v);
@@ -1736,6 +1780,12 @@ fn poll_radio_core_state(
     }
     if let Some(v) = agc {
         s.agc = Some(v);
+    }
+    if let Some(v) = speech_processor {
+        s.speech_processor = Some(v);
+    }
+    if let Some(v) = lock {
+        s.lock = Some(v);
     }
     if tuner_status.is_some() {
         s.tuner_status = tuner_status;
@@ -1952,6 +2002,26 @@ fn poll_radio_level_state(
             read_u8_control(rt, radio, ControlId::AfGain),
         ),
         (
+            ControlId::TuningStep,
+            read_u8_control(rt, radio, ControlId::TuningStep),
+        ),
+        (
+            ControlId::Antenna,
+            read_u8_control(rt, radio, ControlId::Antenna),
+        ),
+        (
+            ControlId::MicGain,
+            read_u8_control(rt, radio, ControlId::MicGain),
+        ),
+        (
+            ControlId::MonitorLevel,
+            read_u8_control(rt, radio, ControlId::MonitorLevel),
+        ),
+        (
+            ControlId::SpeechProcessorLevel,
+            read_u8_control(rt, radio, ControlId::SpeechProcessorLevel),
+        ),
+        (
             ControlId::RfGain,
             read_u8_control(rt, radio, ControlId::RfGain),
         ),
@@ -1979,6 +2049,8 @@ fn poll_radio_level_state(
     ];
     let noise_blank = read_bool_control(rt, radio, ControlId::NoiseBlanker);
     let noise_reduction = read_bool_control(rt, radio, ControlId::NoiseReduction);
+    let speech_processor = read_bool_control(rt, radio, ControlId::SpeechProcessor);
+    let lock = read_bool_control(rt, radio, ControlId::Lock);
     let ip_plus = read_bool_control(rt, radio, ControlId::IpPlus);
     let notch_auto = read_bool_control(rt, radio, ControlId::Notch);
     let notch_manual = read_bool_control(rt, radio, ControlId::ManualNotch);
@@ -2001,6 +2073,11 @@ fn poll_radio_level_state(
         if let Some(value) = value {
             match id {
                 ControlId::AfGain => s.af_gain = Some(value),
+                ControlId::TuningStep => s.tuning_step = Some(value),
+                ControlId::Antenna => s.antenna = Some(value),
+                ControlId::MicGain => s.mic_gain = Some(value),
+                ControlId::MonitorLevel => s.monitor_level = Some(value),
+                ControlId::SpeechProcessorLevel => s.speech_processor_level = Some(value),
                 ControlId::RfGain => s.rf_gain = Some(value),
                 ControlId::Squelch => s.squelch = Some(value),
                 ControlId::RfPower if s.rf_power_write_pending == Some(value) => {
@@ -2042,6 +2119,12 @@ fn poll_radio_level_state(
     if let Some(value) = noise_reduction {
         s.noise_reduction = Some(value);
     }
+    if let Some(value) = speech_processor {
+        s.speech_processor = Some(value);
+    }
+    if let Some(value) = lock {
+        s.lock = Some(value);
+    }
     if let Some(value) = ip_plus {
         s.ip_plus = Some(value);
     }
@@ -2069,7 +2152,7 @@ fn poll_remote_level_state(
     // Reserve two non-signal slots in each eight-cycle window while leaving
     // the remaining odd cycles available for the rotating control/meter
     // reads. The previous four-cycle pattern returned on every odd cycle,
-    // making the 20-slot rotation unreachable.
+    // making the full rotating control schedule unreachable.
     if cycle % 8 == 1 {
         if let Ok(Some(status)) = rt.block_on(radio.get_tuner_status()) {
             state.lock().expect("ui state lock poisoned").tuner_status = Some(status);
@@ -2095,7 +2178,7 @@ fn poll_remote_level_state(
     // Count only actual rotating-read opportunities. Deriving this from the
     // global poll tick would skip slots whenever the priority tuner/filter
     // reads occupy a tick.
-    let slot = REMOTE_LEVEL_CONTROL_INDEX.fetch_add(1, Ordering::Relaxed) % 20;
+    let slot = REMOTE_LEVEL_CONTROL_INDEX.fetch_add(1, Ordering::Relaxed) % 27;
     match slot {
         0 => update_remote_u8(rt, radio, state, ControlId::AfGain, |s, v| {
             s.af_gain = Some(v)
@@ -2152,6 +2235,25 @@ fn poll_remote_level_state(
             s.voltage_meter = Some(v);
             record_voltage_sample(&mut s.voltage_history, v);
         }),
+        20 => update_remote_u8(rt, radio, state, ControlId::TuningStep, |s, v| {
+            s.tuning_step = Some(v)
+        }),
+        21 => update_remote_u8(rt, radio, state, ControlId::Antenna, |s, v| {
+            s.antenna = Some(v)
+        }),
+        22 => update_remote_u8(rt, radio, state, ControlId::MicGain, |s, v| {
+            s.mic_gain = Some(v)
+        }),
+        23 => update_remote_u8(rt, radio, state, ControlId::MonitorLevel, |s, v| {
+            s.monitor_level = Some(v)
+        }),
+        24 => update_remote_bool(rt, radio, state, ControlId::SpeechProcessor, |s, v| {
+            s.speech_processor = Some(v)
+        }),
+        25 => update_remote_u8(rt, radio, state, ControlId::SpeechProcessorLevel, |s, v| {
+            s.speech_processor_level = Some(v)
+        }),
+        26 => update_remote_bool(rt, radio, state, ControlId::Lock, |s, v| s.lock = Some(v)),
         _ => unreachable!(),
     }
 }
@@ -2259,7 +2361,19 @@ fn configure_radio_scope(
             sweep_speed: Some(config.sweep_code),
             center_mode,
             vbw_wide: Some(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
-            ..qsonaut_radio::ScopeConfiguration::default()
+            center_type: config.advanced.center_type,
+            tx_display: config.advanced.tx_display,
+            max_hold: config.advanced.max_hold,
+            marker_position: config.advanced.marker_position,
+            averaging: config.advanced.averaging,
+            waveform_type: config.advanced.waveform_type,
+            waterfall_display: config.advanced.waterfall_display,
+            waterfall_size: config.advanced.waterfall_size,
+            waterfall_peak_level: config.advanced.waterfall_peak_level,
+            marker_auto_hide: config.advanced.marker_auto_hide,
+            waveform_color_current: config.advanced.waveform_color_current,
+            waveform_color_line: config.advanced.waveform_color_line,
+            waveform_color_max_hold: config.advanced.waveform_color_max_hold,
         }),
     )?;
     Ok(())
@@ -2456,6 +2570,7 @@ mod tests {
             sweep_code: 1,
             hold: false,
             reference_tenths_db: 0,
+            advanced: ScopeAdvancedSettings::default(),
         };
 
         assert!(!scope_config_changed(None, config));
@@ -2464,6 +2579,16 @@ mod tests {
             Some(config),
             RadioScopeStreamConfig {
                 sweep_code: 2,
+                ..config
+            }
+        ));
+        assert!(scope_config_changed(
+            Some(config),
+            RadioScopeStreamConfig {
+                advanced: ScopeAdvancedSettings {
+                    tx_display: Some(true),
+                    ..ScopeAdvancedSettings::default()
+                },
                 ..config
             }
         ));
@@ -2479,6 +2604,7 @@ mod tests {
             sweep_code: 1,
             hold: false,
             reference_tenths_db: 0,
+            advanced: ScopeAdvancedSettings::default(),
         };
 
         assert_eq!(
@@ -3371,6 +3497,7 @@ mod level_poll_tests {
             sweep_code: 1,
             hold: false,
             reference_tenths_db: 0,
+            advanced: ScopeAdvancedSettings::default(),
         };
 
         let narrow = configure_radio_scope(&rt, &radio, &base, None, None);
@@ -3412,6 +3539,7 @@ mod level_poll_tests {
             sweep_code: 2,
             hold: false,
             reference_tenths_db: 0,
+            advanced: ScopeAdvancedSettings::default(),
         };
         assert!(configure_radio_scope(&rt, &narrow_radio, &narrow, None, None).is_ok());
 
@@ -3738,6 +3866,7 @@ mod level_poll_tests {
             sweep_code: 1,
             hold: true,
             reference_tenths_db: -30,
+            advanced: ScopeAdvancedSettings::default(),
         };
         let wire = wire_scope_config(&narrow, metadata);
         assert_eq!(wire.center_mode, Some(false));
@@ -3878,6 +4007,7 @@ mod level_poll_tests {
             sweep_code: 1,
             hold: false,
             reference_tenths_db: -20,
+            advanced: ScopeAdvancedSettings::default(),
         };
         assert!(!scope_config_changed(None, base));
         assert!(scope_config_changed(

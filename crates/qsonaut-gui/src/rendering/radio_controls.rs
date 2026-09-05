@@ -98,4 +98,236 @@ impl QsonautGuiApp {
                 });
             });
     }
+
+    pub(crate) fn draw_extended_radio_controls(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        let radio_ready = snapshot.radio_power_on == Some(true)
+            && !snapshot.radio_power_command_pending
+            && !snapshot.radio_power_settling;
+        let supports = |id| snapshot.supported_controls.contains(&id);
+
+        {
+            let hardware_step = supports(ControlId::TuningStep);
+            let values = self
+                .driver_metadata
+                .control_values
+                .get(&ControlId::TuningStep)
+                .copied()
+                .map(<[u8]>::to_vec)
+                .unwrap_or_else(|| (0..=5).collect());
+            let response = ui.menu_button(RichText::new("STEP").monospace(), |ui| {
+                ui.label(RichText::new("TUNING STEP").strong());
+                if !hardware_step {
+                    ui.label(RichText::new("Application tuning increment").small());
+                }
+                ui.separator();
+                for value in values {
+                    if ui
+                        .selectable_label(
+                            snapshot.tuning_step == Some(value),
+                            tuning_step_label(value),
+                        )
+                        .clicked()
+                    {
+                        if hardware_step {
+                            self.send_command(GuiCommand::SetControl(
+                                ControlId::TuningStep,
+                                ControlValue::U8(value),
+                            ));
+                        } else {
+                            self.state
+                                .lock()
+                                .expect("ui state lock poisoned")
+                                .tuning_step = Some(value);
+                        }
+                        ui.close();
+                    }
+                }
+            });
+            response.response.on_hover_text(if hardware_step {
+                "Select the radio tuning step"
+            } else {
+                "Select the application tuning increment"
+            });
+        }
+
+        if supports(ControlId::Antenna) {
+            let values = self
+                .driver_metadata
+                .control_values
+                .get(&ControlId::Antenna)
+                .copied()
+                .map(<[u8]>::to_vec)
+                .unwrap_or_else(|| {
+                    let maximum = self
+                        .driver_metadata
+                        .control_maxes
+                        .get(&ControlId::Antenna)
+                        .copied()
+                        .unwrap_or(2);
+                    (1..=maximum).collect()
+                });
+            let response = ui.menu_button(RichText::new("ANT").monospace(), |ui| {
+                ui.label(RichText::new("ANTENNA").strong());
+                ui.separator();
+                for value in values {
+                    if ui
+                        .selectable_label(snapshot.antenna == Some(value), format!("ANT {value}"))
+                        .clicked()
+                    {
+                        self.send_command(GuiCommand::SetControl(
+                            ControlId::Antenna,
+                            ControlValue::U8(value),
+                        ));
+                        ui.close();
+                    }
+                }
+            });
+            response
+                .response
+                .on_hover_text("Select the active antenna connector");
+        }
+
+        self.draw_normalized_control_menu(
+            ui,
+            snapshot,
+            radio_ready,
+            ControlId::MicGain,
+            "MIC",
+            snapshot.mic_gain,
+            "Transmit microphone gain",
+        );
+        self.draw_normalized_control_menu(
+            ui,
+            snapshot,
+            radio_ready,
+            ControlId::MonitorLevel,
+            "MON",
+            snapshot.monitor_level,
+            "Transmit audio monitor level",
+        );
+        self.draw_speech_processor_control(ui, snapshot, radio_ready);
+
+        if supports(ControlId::Lock) {
+            let locked = snapshot.lock == Some(true);
+            let response = ui
+                .add_enabled(
+                    radio_ready,
+                    egui::Button::new(if locked { "LOCKED" } else { "LOCK" }),
+                )
+                .on_hover_text(if locked {
+                    "Unlock the radio controls"
+                } else {
+                    "Lock the radio controls"
+                });
+            if response.clicked() {
+                self.send_command(GuiCommand::SetControl(
+                    ControlId::Lock,
+                    ControlValue::Bool(!locked),
+                ));
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_normalized_control_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        snapshot: &GuiState,
+        radio_ready: bool,
+        id: ControlId,
+        label: &str,
+        value: Option<u8>,
+        tooltip: &str,
+    ) {
+        if !snapshot.supported_controls.contains(&id) {
+            return;
+        }
+        let response = ui.menu_button(RichText::new(label).monospace(), |ui| {
+            let mut percent = value
+                .map(|raw| f32::from(raw) * 100.0 / 255.0)
+                .unwrap_or_default();
+            let slider = ui.add_enabled(
+                radio_ready,
+                egui::Slider::new(&mut percent, 0.0..=100.0)
+                    .vertical()
+                    .show_value(false),
+            );
+            ui.label(format!("{percent:.0}%"));
+            if slider.changed() && slider.drag_stopped() {
+                let normalized = (percent.clamp(0.0, 100.0) * 255.0 / 100.0).round() as u8;
+                self.send_command(GuiCommand::SetControl(id, ControlValue::U8(normalized)));
+            }
+        });
+        response.response.on_hover_text(tooltip);
+    }
+
+    fn draw_speech_processor_control(
+        &mut self,
+        ui: &mut egui::Ui,
+        snapshot: &GuiState,
+        radio_ready: bool,
+    ) {
+        let supports_processor = snapshot
+            .supported_controls
+            .contains(&ControlId::SpeechProcessor);
+        let supports_level = snapshot
+            .supported_controls
+            .contains(&ControlId::SpeechProcessorLevel);
+        if !supports_processor && !supports_level {
+            return;
+        }
+        let response = ui.menu_button(
+            RichText::new(if snapshot.speech_processor == Some(true) {
+                "PROC ON"
+            } else {
+                "PROC"
+            })
+            .monospace(),
+            |ui| {
+                if supports_processor {
+                    let mut enabled = snapshot.speech_processor == Some(true);
+                    if ui
+                        .add_enabled(
+                            radio_ready,
+                            egui::Checkbox::new(&mut enabled, "Speech processor"),
+                        )
+                        .changed()
+                    {
+                        self.send_command(GuiCommand::SetControl(
+                            ControlId::SpeechProcessor,
+                            ControlValue::Bool(enabled),
+                        ));
+                    }
+                }
+                if supports_level {
+                    let mut percent = snapshot
+                        .speech_processor_level
+                        .map(|raw| f32::from(raw) * 100.0 / 255.0)
+                        .unwrap_or_default();
+                    let slider = ui.add_enabled(
+                        radio_ready,
+                        egui::Slider::new(&mut percent, 0.0..=100.0).text("Level"),
+                    );
+                    if slider.changed() && slider.drag_stopped() {
+                        let normalized = (percent.clamp(0.0, 100.0) * 255.0 / 100.0).round() as u8;
+                        self.send_command(GuiCommand::SetControl(
+                            ControlId::SpeechProcessorLevel,
+                            ControlValue::U8(normalized),
+                        ));
+                    }
+                }
+            },
+        );
+        response
+            .response
+            .on_hover_text("Enable speech processing and adjust its level");
+    }
+}
+
+fn tuning_step_label(value: u8) -> String {
+    const STEPS_HZ: [u32; 6] = [1, 5, 10, 50, 100, 1000];
+    STEPS_HZ
+        .get(usize::from(value))
+        .map(|step| format!("{step} Hz"))
+        .unwrap_or_else(|| format!("Step {value}"))
 }

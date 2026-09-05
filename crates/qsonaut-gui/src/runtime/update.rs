@@ -340,6 +340,7 @@ impl QsonautGuiApp {
             s.radio_scope_hold = self.radio_scope_hold;
             s.radio_scope_reference_tenths_db = self.radio_scope_reference_tenths_db;
             s.radio_scope_view = self.radio_scope_view;
+            s.radio_scope_advanced = self.radio_scope_advanced;
             (std::mem::take(&mut s.ft8_pending), s.ft8_last_decode_period)
         };
         let completed_decode_period =
@@ -796,6 +797,7 @@ impl QsonautGuiApp {
                     );
                     filter_menu.response.on_hover_text("Select the radio IF filter");
                     self.draw_banner_radio_controls(ui, &snapshot);
+                    self.draw_extended_radio_controls(ui, &snapshot);
                     ui.horizontal(|ui| {
                     let radio_ready = snapshot.radio_power_on == Some(true)
                         && !snapshot.radio_power_command_pending;
@@ -1119,7 +1121,7 @@ impl QsonautGuiApp {
                             },
                         )
                         .response
-                        .on_hover_text("Set the Yaesu noise-reduction level");
+                        .on_hover_text("Set the radio noise-reduction level");
                     }
                     if supports_control(ControlId::IpPlus) {
                         let color = match snapshot.ip_plus {
@@ -1218,34 +1220,6 @@ impl QsonautGuiApp {
                         })
                         .response
                         .on_hover_text("Select the automatic gain-control level");
-                    }
-                    if !snapshot.supported_meters.is_empty() {
-                        ui.menu_button(RichText::new("MTR").color(Color32::LIGHT_BLUE), |ui| {
-                            ui.label("Normalized meter levels");
-                            for (label, id, value) in [
-                                ("SIG", MeterId::Signal, snapshot.signal_meter),
-                                ("PWR", MeterId::Power, snapshot.power_meter),
-                                ("SWR", MeterId::Swr, snapshot.swr),
-                                ("ALC", MeterId::Alc, snapshot.alc_meter),
-                                ("COMP", MeterId::Compression, snapshot.compression_meter),
-                                ("I", MeterId::Current, snapshot.current_meter),
-                                ("V", MeterId::Voltage, snapshot.voltage_meter),
-                                ("TEMP", MeterId::Temperature, snapshot.temperature_meter),
-                            ] {
-                                if snapshot.supported_meters.contains(&id) {
-                                    ui.horizontal(|ui| {
-                                        ui.label(label);
-                                        let fraction = value.map_or(0.0, |raw| f32::from(raw) / 255.0);
-                                        ui.add(
-                                            egui::ProgressBar::new(fraction)
-                                                .desired_width(120.0),
-                                        );
-                                    });
-                                }
-                            }
-                        })
-                        .response
-                        .on_hover_text("Normalized vendor meter levels; physical units and SWR ratios remain vendor-specific");
                     }
                     if supports_control(ControlId::Preamp) {
                         let color = match snapshot.preamp {

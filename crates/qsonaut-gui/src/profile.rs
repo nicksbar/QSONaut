@@ -316,6 +316,8 @@ pub(super) struct GlobalSettings {
     pub(super) gui_scale: f32,
     #[serde(default)]
     pub(super) compute_preference: ComputePreference,
+    #[serde(default)]
+    pub(super) font_family: Option<String>,
 }
 
 fn global_settings_path() -> PathBuf {
@@ -347,6 +349,7 @@ pub(super) fn load_global_settings() -> GlobalSettings {
             llm_model_notes: String::new(),
             gui_scale: default_gui_scale(),
             compute_preference: ComputePreference::default(),
+            font_family: None,
         });
     let _ = save_global_settings(&settings);
     settings

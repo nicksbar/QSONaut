@@ -837,6 +837,28 @@ impl QsonautGuiApp {
             self.persist_profile("Auto-saved");
         }
         ui.add_space(8.0);
+        ui.label(RichText::new("Font").strong());
+        ui.label(
+            RichText::new("Uses the selected system font first, while retaining egui fallbacks for missing glyphs.")
+                .small()
+                .color(Color32::GRAY),
+        );
+        let previous_font_family = self.font_family.clone();
+        egui::ComboBox::from_id_salt("font_family")
+            .selected_text(self.font_family.as_deref().unwrap_or("System default"))
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut self.font_family, None, "System default");
+                for family in &self.available_font_families {
+                    ui.selectable_value(&mut self.font_family, Some(family.clone()), family);
+                }
+            });
+        if self.font_family != previous_font_family {
+            apply_font_family(ui.ctx(), self.font_family.as_deref());
+            self.profile_dirty = true;
+            self.persist_profile("Font preference saved to");
+        }
+        ui.add_space(8.0);
         ui.label(RichText::new("Graphics").strong());
         ui.label(
             RichText::new(

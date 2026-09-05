@@ -4,6 +4,7 @@ mod automation_integration;
 mod band_plan;
 mod contest;
 mod decode_model;
+mod font;
 mod graphics;
 mod hostbridge_radio;
 mod local_ai;
@@ -57,6 +58,7 @@ use qsonaut_radio::{
     enumerate_serial_port_descriptors,
     models::{find_model, Manufacturer, Protocol, POPULAR_RADIOS},
     BaseMode, ControlId, ControlValue, IcomCiVRadio, MeterId, Mode, OperatingMode, Radio,
+    ScopeCenterType, ScopeColor, ScopeMarkerPosition, ScopeMaxHold, ScopeWaveformType,
     SerialPortDescriptor, TunerStatus,
 };
 use qsonaut_server_client::{
@@ -184,6 +186,7 @@ use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
     DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, OperatorCallHit, PendingFt8Decode, PotaSpot,
 };
+use font::{apply_font_family, available_font_families};
 pub use graphics::{
     GraphicsAdapterInfo, GraphicsPowerPreference, GraphicsPreferences, GRAPHICS_ADAPTER_ENV,
     GRAPHICS_POWER_ENV,
@@ -631,6 +634,13 @@ struct GuiState {
     data_mode: Option<bool>,
     filter: Option<u8>,
     af_gain: Option<u8>,
+    tuning_step: Option<u8>,
+    antenna: Option<u8>,
+    mic_gain: Option<u8>,
+    monitor_level: Option<u8>,
+    speech_processor: Option<bool>,
+    speech_processor_level: Option<u8>,
+    lock: Option<bool>,
     rf_gain: Option<u8>,
     rf_power: Option<u8>,
     rf_power_write_pending: Option<u8>,
@@ -682,6 +692,7 @@ struct GuiState {
     radio_scope_reference_tenths_db: i16,
     radio_scope_view: RadioScopeView,
     radio_scope_settings_dirty: bool,
+    radio_scope_advanced: ScopeAdvancedSettings,
     audio_spectrum_status: String,
     audio_device_sample_rate_hz: Option<u32>,
     audio_device_channels: Option<u16>,
@@ -755,6 +766,23 @@ struct DriverMetadata {
     filter_bandwidths: HashMap<(String, u8), u32>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ScopeAdvancedSettings {
+    center_type: Option<ScopeCenterType>,
+    tx_display: Option<bool>,
+    max_hold: Option<ScopeMaxHold>,
+    marker_position: Option<ScopeMarkerPosition>,
+    averaging: Option<u8>,
+    waveform_type: Option<ScopeWaveformType>,
+    waterfall_display: Option<bool>,
+    waterfall_size: Option<u8>,
+    waterfall_peak_level: Option<u8>,
+    marker_auto_hide: Option<bool>,
+    waveform_color_current: Option<ScopeColor>,
+    waveform_color_line: Option<ScopeColor>,
+    waveform_color_max_hold: Option<ScopeColor>,
+}
+
 impl DriverMetadata {
     fn filter_bandwidth_hz(&self, mode: &str, filter: u8) -> Option<u32> {
         let mode = mode.trim().to_ascii_uppercase();
@@ -784,6 +812,13 @@ impl Default for GuiState {
             data_mode: None,
             filter: None,
             af_gain: None,
+            tuning_step: None,
+            antenna: None,
+            mic_gain: None,
+            monitor_level: None,
+            speech_processor: None,
+            speech_processor_level: None,
+            lock: None,
             rf_gain: None,
             rf_power: None,
             rf_power_write_pending: None,
@@ -835,6 +870,7 @@ impl Default for GuiState {
             radio_scope_reference_tenths_db: 0,
             radio_scope_view: RadioScopeView::Narrow,
             radio_scope_settings_dirty: false,
+            radio_scope_advanced: ScopeAdvancedSettings::default(),
             audio_spectrum_status: "INIT".to_string(),
             audio_device_sample_rate_hz: None,
             audio_device_channels: None,
@@ -1352,6 +1388,7 @@ struct QsonautGuiApp {
     radio_scope_hold: bool,
     radio_scope_reference_tenths_db: i16,
     radio_scope_view: RadioScopeView,
+    radio_scope_advanced: ScopeAdvancedSettings,
     radio_scope_lock_if_to_filter: bool,
     waterfall_theme: WaterfallTheme,
     radio_waterfall_theme: WaterfallTheme,
@@ -1379,6 +1416,8 @@ struct QsonautGuiApp {
     available_graphics_adapters: Vec<GraphicsAdapterInfo>,
     graphics_restart_request: Arc<Mutex<Option<GraphicsPreferences>>>,
     compute_preference: ComputePreference,
+    font_family: Option<String>,
+    available_font_families: Vec<String>,
     acceleration_report: AccelerationReport,
     acceleration_probe: Option<mpsc::Receiver<AccelerationReport>>,
     psk_reporter_enabled: bool,

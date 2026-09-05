@@ -15,7 +15,7 @@ not silently replace it.
 Examples:
 
 - station identity and context: callsign, grid, QTH, station notes, and LLM/image notes
-- UI scale and compute-backend preference
+- UI scale, compute-backend preference, and selected system font family
 - session-only graphics power and GPU preference
 - application logging and other desktop presentation policy
 
@@ -58,7 +58,7 @@ Radio-definition creation, editing, deletion, and mode assignment belong in
 | Data | Runtime owner | Persistence |
 | --- | --- | --- |
 | Station identity and station context | Application session | `settings.toml` |
-| UI scale and compute preference | Application session | `settings.toml` |
+| UI scale, compute preference, and selected system font family | Application session | `settings.toml` |
 | Graphics power and GPU preference | Application session | Not persisted; applied by a GUI process restart |
 | Radio connection, radio hardware, connected antenna, and audio devices | Radio tab | `profile.toml` or `profiles/<name>.toml` |
 | Digital timing and contest state | Radio tab | Selected operator-profile file |

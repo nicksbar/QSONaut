@@ -372,6 +372,8 @@ impl QsonautGuiApp {
         });
 
         let global_settings = load_global_settings();
+        apply_font_family(ctx, global_settings.font_family.as_deref());
+        let available_font_families = available_font_families();
         let station_callsign = global_settings.callsign.clone();
         let station_grid = global_settings.grid.clone();
 
@@ -418,6 +420,7 @@ impl QsonautGuiApp {
         let mut recording_stream = true;
         let gui_scale = global_settings.gui_scale;
         let compute_preference = global_settings.compute_preference;
+        let font_family = global_settings.font_family.clone();
         let mut psk_reporter_enabled = false;
         let mut pota_enabled = true;
         let mut psk_batch_interval_secs = default_psk_batch_interval_secs();
@@ -1013,6 +1016,7 @@ impl QsonautGuiApp {
             radio_scope_hold: false,
             radio_scope_reference_tenths_db: 0,
             radio_scope_view,
+            radio_scope_advanced: ScopeAdvancedSettings::default(),
             radio_scope_lock_if_to_filter: true,
             waterfall_theme,
             radio_waterfall_theme,
@@ -1040,6 +1044,8 @@ impl QsonautGuiApp {
             available_graphics_adapters,
             graphics_restart_request,
             compute_preference,
+            font_family,
+            available_font_families,
             acceleration_report,
             acceleration_probe,
             psk_reporter_enabled,
