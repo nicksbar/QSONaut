@@ -119,7 +119,7 @@ fn wire_scope_config(
 ) -> qsonaut_hostbridge_protocol::ScopeConfiguration {
     let (center_mode, span_hz, fixed_edges_hz, fixed_edge_number) = match config.view {
         RadioScopeView::Narrow => match config.edges {
-            Some(edges) => (Some(true), None, Some(edges), Some(4)),
+            Some(edges) => (Some(true), None, Some(edges), None),
             None => (
                 Some(false),
                 Some(scope_span_hz(config.span_code)),
@@ -138,6 +138,7 @@ fn wire_scope_config(
         sweep_speed: Some(config.sweep_code),
         center_mode,
         vbw_wide: Some(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
+        ..Default::default()
     }
 }
 
@@ -318,8 +319,8 @@ pub(crate) fn spawn_radio_worker(
                                 view,
                                 span_code,
                                 vbw_wide,
-                                // The remote IC-7300 USB scope path is
-                                // centered by span. Do not replay QSONaut's
+                                // The remote native USB scope path is centered
+                                // by span. Do not replay QSONaut's
                                 // local mode-aware fixed-edge projection;
                                 // that emits 27 1E and can move the radio's
                                 // scope away from the live dial frequency.
@@ -497,6 +498,7 @@ pub(crate) fn spawn_radio_worker(
                         workspace_mode,
                         frequency_hz,
                         span_code,
+                        stream_radio.scope_metadata(),
                         &mode,
                     );
                     let sweep_code = {
@@ -596,7 +598,7 @@ pub(crate) fn spawn_radio_worker(
                             latest_scope_bins = Some(bins);
                             display_rows += 1;
                             last_display_row = Instant::now();
-                            s.radio_waterfall_status = "READY · 475 bins".to_string();
+                            s.radio_waterfall_status = format!("READY · {bin_count} bins");
                             s.last_error = None;
                             drop(s);
                             info!(
@@ -672,10 +674,9 @@ pub(crate) fn spawn_radio_worker(
                     poll_scheduled_icom_meter(&rt, &stream_radio, &stream_state, meter);
                 }
 
-                // A complete IC-7300 sweep consists of 11 CI-V division
-                // frames. Keep that native measurement honest while scrolling
-                // the display at the selected host cadence by repeating the
-                // latest complete sweep between radio updates.
+                // Keep the driver's complete native measurement honest while
+                // scrolling the display at the selected host cadence by
+                // repeating the latest complete sweep between radio updates.
                 let display_interval_ms = {
                     let tuning = stream_display_tuning.lock().expect("tuning lock poisoned");
                     effective_visual_profile(&tuning, &mode, true).0
@@ -960,7 +961,8 @@ pub(crate) fn spawn_radio_worker(
                             workspace_mode,
                             Some(frequency_hz),
                         );
-                        let filter = preset.filter.clamp(1, 3);
+                        let filter =
+                            supported_control_value(&radio, ControlId::Filter, preset.filter);
                         let frequency_result = rt.block_on(radio.set_frequency_hz(frequency_hz));
                         let (nr_id, nr_value, nb_id, nb_value) =
                             workspace_audio_controls_clear_noise();
@@ -1023,7 +1025,7 @@ pub(crate) fn spawn_radio_worker(
                     GuiCommand::SetFilter(n) => {
                         let workspace_mode =
                             state.lock().expect("ui state lock poisoned").workspace_mode;
-                        let target_filter = n.clamp(1, 3);
+                        let target_filter = supported_control_value(&radio, ControlId::Filter, n);
                         info!(filter = target_filter, workspace = %workspace_mode.label(), "Radio filter change requested");
                         let result =
                             if radio.supports_control_write(ControlId::Filter) {
@@ -1592,9 +1594,9 @@ fn poll_radio_core_state(
         }
         return;
     }
-    // IC-7300 mode status can report a misleading data byte through the
-    // generic 0x04 response. Query the model-specific DataMode control for the
-    // flag used by the UI label.
+    // Some Icom profiles can report a stale data byte through the generic
+    // status response. Query the profile's dedicated DataMode control when
+    // available for the flag used by the UI label.
     let data_mode = if poll_levels {
         radio
             .supports_control_read(ControlId::DataMode)
@@ -1654,8 +1656,8 @@ fn poll_radio_core_state(
             None, None, None, None, None, None, None, None, None, None, None,
         )
     };
-    // The IC-7300's regular mode response does not consistently include the
-    // active FIL number, so filter state needs its own fast query.
+    // Some Icom profiles do not consistently include the active FIL number in
+    // their regular mode response, so filter state needs its own fast query.
     let filt = poll_levels
         .then(|| read_u8_control(rt, radio, ControlId::Filter))
         .flatten();
@@ -1892,8 +1894,8 @@ fn apply_icom_mode_details(
     details: OperatingMode,
     data_mode_override: Option<bool>,
 ) {
-    // Keep the base mode independent from the data flag. On the IC-7300 the
-    // ordinary 0x04 response can carry a stale or misleading data byte;
+    // Keep the base mode independent from the data flag. Some Icom profiles'
+    // ordinary status response can carry a stale or misleading data byte;
     // DataMode is read back separately when the profile supports it. If that
     // dedicated read is temporarily unavailable, retain the last confirmed
     // value instead of treating the failed read as a real false response.
@@ -2205,11 +2207,24 @@ fn configure_radio_scope(
     hold_update: Option<bool>,
     reference_tenths_db_update: Option<i16>,
 ) -> Result<()> {
+    let metadata = radio
+        .scope_metadata()
+        .context("native scope metadata is unavailable")?;
     let (span_hz, fixed_edges_hz, fixed_edge_number, center_mode) = match config.view {
         RadioScopeView::Narrow => match config.edges {
-            Some(edges) => (None, Some(edges), Some(4), Some(true)),
+            Some(edges) => (
+                None,
+                Some(edges),
+                metadata.fixed_edge_numbers.last().copied(),
+                Some(true),
+            ),
             None => (
-                Some(scope_span_hz(config.span_code)),
+                Some(
+                    *metadata
+                        .span_options_hz
+                        .get(usize::from(config.span_code))
+                        .context("scope span is not supported by this driver")?,
+                ),
                 None,
                 None,
                 Some(false),
@@ -2218,7 +2233,7 @@ fn configure_radio_scope(
         RadioScopeView::Overview => (
             None,
             Some(config.edges.context("active band edges unavailable")?),
-            Some(1),
+            metadata.fixed_edge_numbers.first().copied(),
             Some(true),
         ),
     };
@@ -2232,9 +2247,24 @@ fn configure_radio_scope(
             sweep_speed: Some(config.sweep_code),
             center_mode,
             vbw_wide: Some(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
+            ..qsonaut_radio::ScopeConfiguration::default()
         }),
     )?;
     Ok(())
+}
+
+fn supported_control_value(radio: &RadioHandle, id: ControlId, requested: u8) -> u8 {
+    if let Some(values) = radio.supported_control_values(id) {
+        return values
+            .iter()
+            .copied()
+            .min_by_key(|value| value.abs_diff(requested))
+            .unwrap_or(requested);
+    }
+    radio
+        .control_max(id)
+        .map(|max| requested.min(max))
+        .unwrap_or(requested)
 }
 
 fn scope_vbw_wide_for_view(_view: RadioScopeView, user_vbw_wide: bool) -> bool {
@@ -2246,6 +2276,7 @@ fn scope_edges_for_view(
     workspace_mode: WorkspaceMode,
     frequency_hz: Option<u64>,
     span_code: u8,
+    scope_metadata: Option<qsonaut_radio::ScopeMetadata>,
     mode: &str,
 ) -> Option<(u64, u64)> {
     match (scope_view, workspace_mode) {
@@ -2259,7 +2290,7 @@ fn scope_edges_for_view(
         (RadioScopeView::Narrow, _) => frequency_hz.and_then(|hz| {
             sideband_scope_edges(
                 hz,
-                scope_span_hz(span_code),
+                scope_span_hz_for(scope_metadata, span_code),
                 scope_projection_for_mode(mode),
             )
         }),
@@ -2369,6 +2400,7 @@ mod tests {
                 WorkspaceMode::Voice,
                 Some(14_074_000),
                 3,
+                None,
                 "USB"
             ),
             None
@@ -2378,18 +2410,25 @@ mod tests {
             WorkspaceMode::Ft8,
             Some(14_074_000),
             3,
+            None,
             "USB"
         )
         .is_some());
-        assert!(
-            scope_edges_for_view(RadioScopeView::Overview, WorkspaceMode::Ft8, None, 3, "USB")
-                .is_none()
-        );
+        assert!(scope_edges_for_view(
+            RadioScopeView::Overview,
+            WorkspaceMode::Ft8,
+            None,
+            3,
+            None,
+            "USB",
+        )
+        .is_none());
         assert!(scope_edges_for_view(
             RadioScopeView::Narrow,
             WorkspaceMode::Ft8,
             Some(14_074_000),
             3,
+            None,
             "USB"
         )
         .is_some());

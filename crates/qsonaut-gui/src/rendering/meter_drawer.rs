@@ -78,7 +78,7 @@ impl QsonautGuiApp {
                                 }
                                 let value = meter_value(snapshot, id);
                                 ui.horizontal(|ui| {
-                                    let reading = meter_reading_for_model(id, value, None);
+                                    let reading = meter_reading_for_presentation(id, value, None);
                                     let label_height =
                                         if id == MeterId::Voltage { 28.0 } else { 18.0 };
                                     let label_color = if id == MeterId::Current && snapshot.ptt_on {

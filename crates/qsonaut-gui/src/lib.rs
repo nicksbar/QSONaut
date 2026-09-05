@@ -217,13 +217,16 @@ use radio_runtime::{
     join_handle_for_shutdown, radio_config_from_operator_profile, request_radio_session_stop,
     spawn_radio_init_with_hostbridge, stop_radio_session,
 };
+#[cfg(test)]
+use rendering::scope_span_for_filter;
 use rendering::{
     band_edges_for_frequency, draw_primary_meter, draw_voltage_graph, effective_visual_profile,
     meter_color, meter_color_for_context, meter_label, meter_percent, meter_reading,
-    meter_reading_for_model, meter_tooltip, meter_value, mode_meter_order, native_channel_width_hz,
-    record_voltage_sample, scope_projection_for_mode, scope_span_for_filter, scope_span_hz,
-    scope_span_label, sideband_scope_edges, status_color, theme_accent, theme_muted, theme_success,
-    theme_warning, METER_LABEL_WIDTH, VOLTAGE_HISTORY_CAPACITY,
+    meter_reading_for_presentation, meter_tooltip, meter_value, mode_meter_order,
+    native_channel_width_hz, record_voltage_sample, scope_projection_for_mode,
+    scope_span_for_filter_with_options, scope_span_hz, scope_span_hz_for, scope_span_label_for,
+    sideband_scope_edges, status_color, theme_accent, theme_muted, theme_success, theme_warning,
+    METER_LABEL_WIDTH, VOLTAGE_HISTORY_CAPACITY,
 };
 use reporting::{
     enrich_qso_from_hamdb, qso_adif_path, qso_log_path, qso_timestamp, spawn_hamdb_lookup,
@@ -241,7 +244,6 @@ use tx_audio::{
     Ft8TxChatEntry, Ft8TxEvent, Ft8TxJob,
 };
 use ui_format::{format_signal_report, ft8_period_progress, qso_stage_label, utc_hhmmss_millis};
-pub(crate) use ui_widgets::radio_control_max;
 use ui_widgets::{
     draw_ai_icon, draw_radio_about_icon, draw_speaker_icon, format_swr_display,
     native_radio_profile, radio_baud_rates, radio_supports_band, styled_selection_button,
@@ -745,6 +747,34 @@ struct GuiState {
     last_update: Option<Instant>,
 }
 
+#[derive(Clone, Default)]
+struct DriverMetadata {
+    scope: Option<qsonaut_radio::ScopeMetadata>,
+    control_maxes: HashMap<ControlId, u8>,
+    control_values: HashMap<ControlId, &'static [u8]>,
+    filter_bandwidths: HashMap<(String, u8), u32>,
+}
+
+impl DriverMetadata {
+    fn filter_bandwidth_hz(&self, mode: &str, filter: u8) -> Option<u32> {
+        let mode = mode.trim().to_ascii_uppercase();
+        let candidates = [
+            mode.clone(),
+            mode.strip_suffix("-D").unwrap_or(&mode).to_string(),
+            match mode.as_str() {
+                "USB-D" => "USB".to_string(),
+                "LSB-D" => "LSB".to_string(),
+                "CW-R" => "CW".to_string(),
+                "RTTY-R" => "RTTY".to_string(),
+                _ => mode,
+            },
+        ];
+        candidates
+            .into_iter()
+            .find_map(|mode| self.filter_bandwidths.get(&(mode, filter)).copied())
+    }
+}
+
 impl Default for GuiState {
     fn default() -> Self {
         Self {
@@ -1088,6 +1118,7 @@ struct QsonautGuiApp {
     external_ingress_channel: String,
     external_ingress_message: String,
     state: Arc<Mutex<GuiState>>,
+    driver_metadata: DriverMetadata,
     command_tx: Option<mpsc::Sender<GuiCommand>>,
     radio_worker_stop: Arc<AtomicBool>,
     swr_sweep_abort: Arc<AtomicBool>,
@@ -2301,7 +2332,7 @@ mod tests {
         assert_eq!(meter_reading(MeterId::Power, Some(128)), "50%");
         assert_eq!(meter_reading(MeterId::Voltage, Some(128)), "REL 128/255");
         assert_eq!(
-            meter_reading_for_model(
+            meter_reading_for_presentation(
                 MeterId::Voltage,
                 Some(145),
                 Some(qsonaut_radio::MeterPresentation {
@@ -2314,7 +2345,7 @@ mod tests {
             "13.5 V"
         );
         assert_eq!(
-            meter_reading_for_model(MeterId::Voltage, Some(145), None),
+            meter_reading_for_presentation(MeterId::Voltage, Some(145), None),
             "REL 145/255"
         );
     }
@@ -2327,20 +2358,6 @@ mod tests {
         );
         assert!(native_radio_profile("rigctld", "IC-7300").is_none());
         assert!(native_radio_profile("null", "IC-7300").is_none());
-    }
-
-    #[test]
-    fn unprofiled_radio_controls_use_safe_generic_limits() {
-        assert_eq!(
-            super::radio_control_max("mcHF", ControlId::NoiseReductionLevel, 15),
-            15
-        );
-        assert_eq!(super::radio_control_max("mcHF", ControlId::Agc, 4), 4);
-        assert_eq!(
-            super::radio_control_max("FTDX10", ControlId::NoiseReductionLevel, 15),
-            15
-        );
-        assert_eq!(super::radio_control_max("FTDX10", ControlId::Agc, 4), 4);
     }
 
     #[test]
@@ -2701,7 +2718,7 @@ mod tests {
             5_000
         );
         assert_eq!(scope_span_for_filter("FM", Some(15_000)), 2);
-        assert_eq!(scope_span_label(0), "±2.5 kHz");
+        assert_eq!(scope_span_label_for(None, 0), "±2.5 kHz");
     }
 
     #[test]
@@ -2709,8 +2726,8 @@ mod tests {
         assert_eq!(scope_span_for_filter("CW", Some(250)), 0);
         assert_eq!(scope_span_for_filter("FM", Some(15_000)), 2);
         assert_eq!(scope_span_for_filter("FM", None), 0);
-        assert_eq!(scope_span_label(7), "±500 kHz");
-        assert_eq!(scope_span_label(99), "±500 kHz");
+        assert_eq!(scope_span_label_for(None, 7), "±500 kHz");
+        assert_eq!(scope_span_label_for(None, 99), "±500 kHz");
         assert_eq!(scope_span_hz(6), 250_000);
         assert_eq!(scope_span_hz(99), 500_000);
     }

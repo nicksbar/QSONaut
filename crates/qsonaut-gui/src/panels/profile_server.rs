@@ -1299,13 +1299,15 @@ impl QsonautGuiApp {
     ) {
         ui.heading("Waterfall");
         ui.separator();
-        let supports_radio_scope =
-            native_radio_profile(&self.config.radio.backend, &self.config.radio.model)
-                .is_some_and(|profile| profile.capabilities.spectrum);
+        let scope_metadata = self.driver_metadata.scope;
+        let supports_radio_scope = scope_metadata.is_some();
         if supports_radio_scope {
             let radio_scope_detail = match self.radio_scope_view {
                 RadioScopeView::Narrow => {
-                    format!("NARROW · {}", scope_span_label(self.radio_scope_span_code))
+                    format!(
+                        "NARROW · {}",
+                        scope_span_label_for(scope_metadata, self.radio_scope_span_code)
+                    )
                 }
                 RadioScopeView::Overview => "ACTIVE BAND".to_string(),
             };
@@ -1452,26 +1454,32 @@ impl QsonautGuiApp {
                 self.persist_profile("Auto-saved");
             }
             if self.radio_scope_lock_if_to_filter {
-                self.radio_scope_span_code = scope_span_for_filter(&snapshot.mode, None);
+                self.radio_scope_span_code = scope_span_for_filter_with_options(
+                    &snapshot.mode,
+                    self.driver_metadata
+                        .filter_bandwidth_hz(&snapshot.mode, snapshot.filter.unwrap_or_default()),
+                    scope_metadata
+                        .map(|metadata| metadata.span_options_hz)
+                        .unwrap_or(&[]),
+                );
                 ui.small(format!(
                     "Automatic span: {}",
-                    scope_span_label(self.radio_scope_span_code)
+                    scope_span_label_for(scope_metadata, self.radio_scope_span_code)
                 ));
             } else {
                 let mut span_changed = false;
                 egui::ComboBox::from_id_salt("radio_scope_span_settings")
-                    .selected_text(scope_span_label(self.radio_scope_span_code))
+                    .selected_text(scope_span_label_for(
+                        scope_metadata,
+                        self.radio_scope_span_code,
+                    ))
                     .show_ui(ui, |ui| {
-                        for (code, label) in [
-                            (0_u8, "±2.5 kHz"),
-                            (1_u8, "±5 kHz"),
-                            (2_u8, "±10 kHz"),
-                            (3_u8, "±25 kHz"),
-                            (4_u8, "±50 kHz"),
-                            (5_u8, "±100 kHz"),
-                            (6_u8, "±250 kHz"),
-                            (7_u8, "±500 kHz"),
-                        ] {
+                        let spans = scope_metadata
+                            .map(|metadata| metadata.span_options_hz)
+                            .unwrap_or(&[]);
+                        for (code, span_hz) in spans.iter().copied().enumerate() {
+                            let code = code as u8;
+                            let label = format!("±{} kHz", span_hz / 1_000);
                             span_changed |= ui
                                 .selectable_value(&mut self.radio_scope_span_code, code, label)
                                 .changed();

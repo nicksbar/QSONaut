@@ -63,9 +63,8 @@ impl QsonautGuiApp {
                 }
             });
 
-        let radio_scope_available = self.config.radio.enabled
-            && native_radio_profile(&self.config.radio.backend, &self.config.radio.model)
-                .is_some_and(|profile| profile.capabilities.spectrum);
+        let radio_scope_available =
+            self.config.radio.enabled && self.driver_metadata.scope.is_some();
         if radio_scope_available {
             let radio_button = ui
                 .button(
@@ -162,23 +161,34 @@ impl QsonautGuiApp {
                         .changed();
                     ui.checkbox(&mut self.radio_scope_lock_if_to_filter, "Match span to FIL");
                     if self.radio_scope_lock_if_to_filter {
-                        self.radio_scope_span_code = scope_span_for_filter(&snapshot.mode, None);
+                        self.radio_scope_span_code = scope_span_for_filter_with_options(
+                            &snapshot.mode,
+                            self.driver_metadata.filter_bandwidth_hz(
+                                &snapshot.mode,
+                                snapshot.filter.unwrap_or_default(),
+                            ),
+                            self.driver_metadata
+                                .scope
+                                .map(|metadata| metadata.span_options_hz)
+                                .unwrap_or(&[]),
+                        );
                         ui.label(format!(
                             "Automatic span: {}",
-                            scope_span_label(self.radio_scope_span_code)
+                            scope_span_label_for(
+                                self.driver_metadata.scope,
+                                self.radio_scope_span_code
+                            )
                         ));
                     } else {
                         ui.horizontal_wrapped(|ui| {
-                            for (code, label) in [
-                                (0_u8, "±2.5 kHz"),
-                                (1, "±5 kHz"),
-                                (2, "±10 kHz"),
-                                (3, "±25 kHz"),
-                                (4, "±50 kHz"),
-                                (5, "±100 kHz"),
-                                (6, "±250 kHz"),
-                                (7, "±500 kHz"),
-                            ] {
+                            let spans = self
+                                .driver_metadata
+                                .scope
+                                .map(|metadata| metadata.span_options_hz)
+                                .unwrap_or(&[]);
+                            for (code, span_hz) in spans.iter().copied().enumerate() {
+                                let code = code as u8;
+                                let label = format!("±{} kHz", span_hz / 1_000);
                                 if ui
                                     .selectable_label(self.radio_scope_span_code == code, label)
                                     .clicked()

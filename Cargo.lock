@@ -2440,7 +2440,7 @@ dependencies = [
 [[package]]
 name = "mfsk-core"
 version = "0.10.1"
-source = "git+https://github.com/jl1nie/mfsk-core.git?rev=acc94e42a6b2132b6ff44349b7e058f0d756e966#acc94e42a6b2132b6ff44349b7e058f0d756e966"
+source = "git+https://github.com/jl1nie/mfsk-core.git?rev=4f2f678eda44f13f88c8e43a3f71adb892e3b84b#4f2f678eda44f13f88c8e43a3f71adb892e3b84b"
 dependencies = [
  "crc",
  "num-complex",
@@ -3492,8 +3492,8 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-hostbridge-protocol"
-version = "0.1.0"
-source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?rev=d9e678fde3d9a9ce7993b3f7840bbc1465384906#d9e678fde3d9a9ce7993b3f7840bbc1465384906"
+version = "0.1.1"
+source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?tag=v0.1.1#3114ae706a383197fd750d957805a9d3dc1cc102"
 dependencies = [
  "rigwright",
  "serde",
@@ -3548,7 +3548,7 @@ dependencies = [
 [[package]]
 name = "qsonaut-third-party"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=261061fedbc4daaff766c088a8f9cfcdbfa319e2#261061fedbc4daaff766c088a8f9cfcdbfa319e2"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=e3c00f8e9cacc17322e356d639bd772f3c67a0b0#e3c00f8e9cacc17322e356d639bd772f3c67a0b0"
 dependencies = [
  "cwdit-dsp",
  "cwdit-morse",
@@ -3975,7 +3975,8 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 [[package]]
 name = "rigwright"
 version = "0.1.22"
-source = "git+https://github.com/nicksbar/rigwright.git?rev=8b62b766bc4308b686ad3bc6cd62cf1b22761e91#8b62b766bc4308b686ad3bc6cd62cf1b22761e91"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9b75c55f24d6c67ab2c160dcf51828691cc9d92f8149daee0b8b17c0d3cf72d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4701,7 +4702,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",

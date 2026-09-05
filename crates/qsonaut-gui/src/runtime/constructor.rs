@@ -782,6 +782,7 @@ impl QsonautGuiApp {
             external_ingress_channel: "#qsonaut".to_string(),
             external_ingress_message: "!rig".to_string(),
             state,
+            driver_metadata: DriverMetadata::default(),
             command_tx,
             radio_worker_stop,
             swr_sweep_abort,

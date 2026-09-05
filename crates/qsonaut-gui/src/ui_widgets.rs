@@ -158,16 +158,6 @@ pub(super) fn native_radio_profile(
     .flatten()
 }
 
-pub(super) fn radio_control_max(
-    model: &str,
-    control: qsonaut_radio::ControlId,
-    fallback: u8,
-) -> u8 {
-    native_radio_profile("native", model)
-        .and_then(|profile| profile.control_max(control))
-        .unwrap_or(fallback)
-}
-
 pub(super) fn radio_baud_rates(model: &str) -> &'static [u32] {
     let Some(profile) = find_model(model) else {
         return &[];
@@ -247,7 +237,7 @@ mod tests {
         assert!(radio_baud_rates("FT-710").contains(&115_200));
         assert_eq!(radio_baud_rates("FT-857D"), &[4_800, 9_600, 38_400]);
         assert!(!radio_baud_rates("TS-2000").contains(&115_200));
-        assert!(radio_baud_rates("IC-7300").contains(&115_200));
+        assert_eq!(radio_baud_rates("IC-7300"), &[4_800, 9_600, 19_200]);
     }
 
     #[test]

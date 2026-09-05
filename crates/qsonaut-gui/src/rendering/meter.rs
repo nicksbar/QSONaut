@@ -248,7 +248,7 @@ pub(crate) fn meter_reading(id: MeterId, value: Option<u8>) -> String {
     }
 }
 
-pub(crate) fn meter_reading_for_model(
+pub(crate) fn meter_reading_for_presentation(
     id: MeterId,
     value: Option<u8>,
     presentation: Option<qsonaut_radio::MeterPresentation>,
@@ -275,7 +275,7 @@ pub(crate) fn meter_tooltip(id: MeterId) -> &'static str {
         MeterId::Compression => "Transmit speech/data compression level",
         MeterId::Current => "PA drain/current meter level",
         MeterId::Voltage => {
-            "PA voltage level; IC-7300 is shown in volts, other radios are relative"
+            "PA voltage level; physical units are shown only when documented by the driver"
         }
         MeterId::Temperature => "PA temperature meter; exact units depend on the driver",
     }

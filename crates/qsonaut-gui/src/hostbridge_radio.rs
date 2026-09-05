@@ -4,6 +4,7 @@ use qsonaut_hostbridge_protocol::{
     control_id_key, HostHello, RadioCapabilitiesInfo, RadioState, ServerMessage, WireControlValue,
     WireMode,
 };
+use qsonaut_radio::models::find_model;
 #[cfg(test)]
 use qsonaut_radio::ControlValue;
 use qsonaut_radio::{
@@ -247,6 +248,34 @@ impl RadioHandle {
             Self::Test(radio) => radio.filter_bandwidth_hz(mode, filter),
         }
     }
+    pub(crate) fn scope_metadata(&self) -> Option<qsonaut_radio::ScopeMetadata> {
+        match self {
+            Self::Local(radio) => radio.scope_metadata(),
+            Self::Remote(_) => None,
+            #[cfg(test)]
+            Self::Test(radio) => radio.scope_metadata(),
+        }
+    }
+    pub(crate) fn control_max(&self, id: ControlId) -> Option<u8> {
+        match self {
+            Self::Local(radio) => radio.control_max(id),
+            Self::Remote(radio) => radio
+                .model_profile()
+                .and_then(|profile| profile.control_max(id)),
+            #[cfg(test)]
+            Self::Test(radio) => radio.control_max(id),
+        }
+    }
+    pub(crate) fn supported_control_values(&self, id: ControlId) -> Option<&'static [u8]> {
+        match self {
+            Self::Local(radio) => radio.supported_control_values(id),
+            Self::Remote(radio) => radio
+                .model_profile()
+                .and_then(|profile| profile.supported_control_values(id)),
+            #[cfg(test)]
+            Self::Test(radio) => radio.supported_control_values(id),
+        }
+    }
     pub(crate) fn swr_sweep_setup(&self) -> Option<qsonaut_radio::SwrSweepSetup> {
         match self {
             Self::Local(radio) => radio.swr_sweep_setup(),
@@ -435,6 +464,10 @@ impl Radio for RadioHandle {
 }
 
 impl HostBridgeRadio {
+    fn model_profile(&self) -> Option<qsonaut_radio::models::RadioModelProfile> {
+        find_model(self.model.as_deref()?).copied()
+    }
+
     pub(crate) async fn connect(config: HostBridgeConfig) -> Result<Self> {
         let requested_device_id = config.radio_device_id.clone();
         let requested_audio_source_id = config.audio_source_id.clone();
