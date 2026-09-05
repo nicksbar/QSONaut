@@ -184,7 +184,8 @@ use band_plan::{
 };
 use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
-    DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, OperatorCallHit, PendingFt8Decode, PotaSpot,
+    DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, Ft8SyncState, OperatorCallHit, PendingFt8Decode,
+    PotaSpot,
 };
 use font::{apply_font_family, available_font_families};
 pub use graphics::{
@@ -288,7 +289,6 @@ const FT8_SLOT_SAMPLES: usize = 12_000 * 15;
 // unintentionally raised the early gate to ~2.92 and discarded weak signals.
 const FT8_FAST_SYNC_MIN: f32 = 1.3;
 const FT8_FAST_MAX_CAND: usize = 96;
-const FT8_ADAPTIVE_OFFSET_LIMIT_S: f32 = 2.5;
 const FT4_SLOT_SECONDS: f64 = 7.5;
 const FT4_SLOT_SAMPLES: usize = 12_000 * 15 / 2;
 // FT4 occupies 103 x 48 ms after its nominal +0.5 s start.
@@ -707,7 +707,14 @@ struct GuiState {
     audio_level_dbfs: Option<f32>,
     audio_clip_percent: f32,
     ft8_decode_status: String,
-    ft8_clock_offset_s: Option<f32>,
+    ft8_slot_phase_s: Option<f32>,
+    ft8_sync_state: Ft8SyncState,
+    ft8_sync_confidence: Option<f32>,
+    ft8_last_acquisition_period: Option<u64>,
+    ft8_acquisition_candidates: usize,
+    ft8_auto_sync: bool,
+    ft8_reacquire_generation: u64,
+    ft8_acquisition_generation: u64,
     ft4_clock_offset_s: Option<f32>,
     workspace_mode: WorkspaceMode,
     ft8_deep_decode: bool,
@@ -885,7 +892,14 @@ impl Default for GuiState {
             audio_level_dbfs: None,
             audio_clip_percent: 0.0,
             ft8_decode_status: "STARTING".to_string(),
-            ft8_clock_offset_s: None,
+            ft8_slot_phase_s: None,
+            ft8_sync_state: Ft8SyncState::default(),
+            ft8_sync_confidence: None,
+            ft8_last_acquisition_period: None,
+            ft8_acquisition_candidates: 0,
+            ft8_auto_sync: true,
+            ft8_reacquire_generation: 0,
+            ft8_acquisition_generation: u64::MAX,
             ft4_clock_offset_s: None,
             workspace_mode: WorkspaceMode::Ft8,
             ft8_deep_decode: false,
@@ -1307,6 +1321,7 @@ struct QsonautGuiApp {
     ft4_max_attempts: u8,
     ft8_hold_tx_freq: bool,
     ft8_deep_decode: bool,
+    ft8_diagnostics_open: bool,
     ft4_deep_decode: bool,
     ft4_autoseq: bool,
     ft4_auto_reply_policy: AutoReplyPolicy,

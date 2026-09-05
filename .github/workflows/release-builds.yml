@@ -70,7 +70,7 @@ jobs:
         with:
           path: QSONaut
 
-      # Rigwright v0.1.21 and shared components are resolved from immutable Git revisions.
+      # Rigwright and shared components are resolved from immutable Git revisions.
 
       - name: Install Linux native libraries
         if: matrix.os == 'linux'

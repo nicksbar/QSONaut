@@ -55,7 +55,6 @@ impl QsonautGuiApp {
                 snapshot.mode
             ));
             ui.separator();
-            ui.label(RichText::new(&snapshot.digital_decode_status).monospace());
         });
         ui.separator();
         ui.label(RichText::new("Beacon settings").strong());

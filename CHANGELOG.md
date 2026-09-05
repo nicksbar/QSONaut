@@ -7,7 +7,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [0.3.17] - 2026-09-05
 
+### Changed
+- Updated the application and GUI to Rigwright `0.1.24`, including the
+  FT-991A-safe CAT capability handling, and refreshed the pinned
+  `qsonaut-third-party` revision containing the merged FT8 slot-phase
+  acquisition work.
+
+### Fixed
+- Avoided the FT-991A `VS;` VFO-selector query, which the radio rejects.
+
 ### Added
+- Added automatic FT8 slot-phase acquisition with validated lock/re-acquire
+  behavior, quiet-input failure handling, and compact decoder diagnostics.
 - Added validated hexadecimal fields for the radio and controller CI-V
   addresses in native Icom device settings.
 - Added deterministic regression fixtures for digital-signal variation,

@@ -460,11 +460,109 @@ impl QsonautGuiApp {
                 self.persist_profile("Auto-saved");
             }
             ui.separator();
-            ui.label(
-                RichText::new(&snapshot.ft8_decode_status)
-                    .small()
-                    .color(Color32::GRAY),
-            );
+            ui.horizontal(|ui| {
+                let mut auto_sync = snapshot.ft8_auto_sync;
+                if ui
+                    .checkbox(&mut auto_sync, "Automatic sync")
+                    .on_hover_text(
+                        "Acquire and validate the FT8 slot phase from the rolling audio history.",
+                    )
+                    .changed()
+                {
+                    let mut shared = self.state.lock().expect("ui state lock poisoned");
+                    shared.ft8_auto_sync = auto_sync;
+                    if auto_sync {
+                        shared.ft8_sync_state = Ft8SyncState::Unlocked;
+                        shared.ft8_reacquire_generation =
+                            shared.ft8_reacquire_generation.wrapping_add(1);
+                    }
+                }
+                if ui
+                    .button("Re-acquire")
+                    .on_hover_text(
+                        "Discard the current FT8 slot lock and search the next 25-second audio history.",
+                    )
+                    .clicked()
+                {
+                    let mut shared = self.state.lock().expect("ui state lock poisoned");
+                    shared.ft8_sync_state = Ft8SyncState::Searching;
+                    shared.ft8_reacquire_generation =
+                        shared.ft8_reacquire_generation.wrapping_add(1);
+                    shared.ft8_decode_status = "FT8 synchronization requested".to_string();
+                }
+                let (label, color) = match snapshot.ft8_sync_state {
+                    Ft8SyncState::Unlocked => ("UNLOCKED", theme_warning(ui)),
+                    Ft8SyncState::Searching => ("SEARCHING", Color32::YELLOW),
+                    Ft8SyncState::Locked => ("LOCKED", Color32::LIGHT_GREEN),
+                };
+                ui.label(RichText::new(format!("Slot {label}")).small().color(color))
+                    .on_hover_text(match snapshot.ft8_sync_state {
+                        Ft8SyncState::Unlocked => {
+                            "No validated slot phase is available. Automatic sync will search when enough audio is buffered."
+                        }
+                        Ft8SyncState::Searching => {
+                            "The decoder is ranking candidate phases and validating them with real FT8 decodes."
+                        }
+                        Ft8SyncState::Locked => {
+                            "A slot phase was validated by a real FT8 decode and is used for subsequent slots."
+                        }
+                    });
+                if let Some(confidence) = snapshot.ft8_sync_confidence {
+                    ui.label(
+                        RichText::new(format!("confidence {confidence:.2}"))
+                            .small()
+                            .color(Color32::GRAY),
+                    );
+                }
+            });
+            let diagnostics = ui
+                .small_button("Diagnostics")
+                .on_hover_text("Show decoder and slot-acquisition diagnostics.");
+            if diagnostics.clicked() {
+                self.ft8_diagnostics_open = !self.ft8_diagnostics_open;
+            }
+            if self.ft8_diagnostics_open {
+                let position = diagnostics.rect.left_bottom() + egui::vec2(0.0, 4.0);
+                egui::Area::new(egui::Id::new("ft8_diagnostics_overlay"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(position)
+                    .show(ui.ctx(), |ui| {
+                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                            if let Some(telemetry) = snapshot.ft8_compute_telemetry.as_ref() {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(format!(
+                                        "{} · {:?} · {} samples",
+                                        telemetry.mode, telemetry.backend, telemetry.samples
+                                    ));
+                                    ui.separator();
+                                    ui.label(format!("{} decoded", telemetry.decoded));
+                                    ui.separator();
+                                    ui.label(format!(
+                                        "{} ms / {:.0}% budget",
+                                        telemetry.total.as_millis(),
+                                        telemetry.realtime_percent()
+                                    ));
+                                    ui.separator();
+                                    ui.label(if snapshot.ft8_deep_decode {
+                                        "deep decode"
+                                    } else {
+                                        "fast decode"
+                                    });
+                                });
+                                ui.label(format!(
+                                    "Candidates searched: {} · acquisition period: {}",
+                                    snapshot.ft8_acquisition_candidates,
+                                    snapshot.ft8_last_acquisition_period.map_or_else(
+                                        || "none".to_string(),
+                                        |period| period.to_string()
+                                    )
+                                ));
+                            } else {
+                                ui.label("No decoder pass has completed yet.");
+                            }
+                        });
+                    });
+            }
             if let Some(level) = snapshot.audio_level_dbfs {
                 let color = if snapshot.audio_clip_percent > 0.1 || level < -45.0 {
                     theme_warning(ui)
@@ -478,18 +576,6 @@ impl QsonautGuiApp {
                     ))
                     .small()
                     .color(color),
-                );
-            }
-            if let Some(offset) = snapshot.ft8_clock_offset_s {
-                let color = if offset.abs() > 1.0 {
-                    theme_warning(ui)
-                } else {
-                    Color32::LIGHT_GREEN
-                };
-                ui.label(
-                    RichText::new(format!("Clock dT {offset:+.2}s"))
-                        .small()
-                        .color(color),
                 );
             }
         });
