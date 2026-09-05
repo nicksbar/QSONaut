@@ -7,7 +7,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [0.3.16] - 2026-09-04
 
+### Added
+- Added system-font selection in Settings with Linux Fontconfig discovery and
+  profile-aware persistence.
+- Added driver-aware native waterfall controls, including scope geometry,
+  display options, waveform settings, and supported waveform colors through
+  both native CI-V and HostBridge paths.
+- Added radio toolbar controls for application or hardware tuning step,
+  antenna selection, microphone gain, monitor level, speech processing, and
+  radio lock when advertised by the active driver.
+
 ### Changed
+- Reworked the radio toolbar to keep tuning and driver controls visible while
+  removing the duplicate normalized-meter popup; detailed meter information
+  remains available from the S-meter control.
+- Made noise-reduction level wording vendor-neutral and made tuning increments
+  follow the selected step rather than a fixed 1 kHz delta.
 - Updated the application and GUI to the released Rigwright `0.1.22`,
   HostBridge `0.1.1`, and latest shared third-party adapter revisions, with a
   regenerated locked dependency graph containing one unified Rigwright version.

@@ -1845,6 +1845,17 @@ fn control_vfo_value(value: &ControlValue) -> Option<u8> {
 fn project_control_write(state: &mut GuiState, id: ControlId, value: &ControlValue) {
     match (id, value) {
         (ControlId::AfGain, ControlValue::U8(value)) => state.af_gain = Some(*value),
+        (ControlId::TuningStep, ControlValue::U8(value)) => state.tuning_step = Some(*value),
+        (ControlId::Antenna, ControlValue::U8(value)) => state.antenna = Some(*value),
+        (ControlId::MicGain, ControlValue::U8(value)) => state.mic_gain = Some(*value),
+        (ControlId::MonitorLevel, ControlValue::U8(value)) => state.monitor_level = Some(*value),
+        (ControlId::SpeechProcessorLevel, ControlValue::U8(value)) => {
+            state.speech_processor_level = Some(*value)
+        }
+        (ControlId::SpeechProcessor, ControlValue::Bool(value)) => {
+            state.speech_processor = Some(*value)
+        }
+        (ControlId::Lock, ControlValue::Bool(value)) => state.lock = Some(*value),
         (ControlId::RfGain, ControlValue::U8(value)) => state.rf_gain = Some(*value),
         (ControlId::Squelch, ControlValue::U8(value)) => state.squelch = Some(*value),
         (ControlId::RfPower, ControlValue::U8(value)) => state.rf_power = Some(*value),
@@ -3892,6 +3903,11 @@ mod level_poll_tests {
         let mut state = GuiState::default();
         for (id, value) in [
             (ControlId::AfGain, ControlValue::U8(1)),
+            (ControlId::TuningStep, ControlValue::U8(2)),
+            (ControlId::Antenna, ControlValue::U8(3)),
+            (ControlId::MicGain, ControlValue::U8(4)),
+            (ControlId::MonitorLevel, ControlValue::U8(5)),
+            (ControlId::SpeechProcessorLevel, ControlValue::U8(6)),
             (ControlId::RfGain, ControlValue::U8(2)),
             (ControlId::Squelch, ControlValue::U8(3)),
             (ControlId::RfPower, ControlValue::U8(4)),
@@ -3907,10 +3923,19 @@ mod level_poll_tests {
             (ControlId::ManualNotch, ControlValue::Bool(true)),
             (ControlId::Tuner, ControlValue::Bool(true)),
             (ControlId::Vfo, ControlValue::Vfo(1)),
+            (ControlId::SpeechProcessor, ControlValue::Bool(true)),
+            (ControlId::Lock, ControlValue::Bool(true)),
         ] {
             project_control_write(&mut state, id, &value);
         }
         assert_eq!(state.af_gain, Some(1));
+        assert_eq!(state.tuning_step, Some(2));
+        assert_eq!(state.antenna, Some(3));
+        assert_eq!(state.mic_gain, Some(4));
+        assert_eq!(state.monitor_level, Some(5));
+        assert_eq!(state.speech_processor_level, Some(6));
+        assert_eq!(state.speech_processor, Some(true));
+        assert_eq!(state.lock, Some(true));
         assert_eq!(state.rf_gain, Some(2));
         assert_eq!(state.squelch, Some(3));
         assert_eq!(state.rf_power, Some(4));

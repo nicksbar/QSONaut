@@ -128,6 +128,9 @@ impl QsonautGuiApp {
                         )
                         .clicked()
                     {
+                        if hardware_step && !radio_ready {
+                            continue;
+                        }
                         if hardware_step {
                             self.send_command(GuiCommand::SetControl(
                                 ControlId::TuningStep,
@@ -174,6 +177,9 @@ impl QsonautGuiApp {
                         .selectable_label(snapshot.antenna == Some(value), format!("ANT {value}"))
                         .clicked()
                     {
+                        if !radio_ready {
+                            continue;
+                        }
                         self.send_command(GuiCommand::SetControl(
                             ControlId::Antenna,
                             ControlValue::U8(value),
