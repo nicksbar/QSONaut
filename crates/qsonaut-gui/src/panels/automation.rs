@@ -230,3 +230,46 @@ impl QsonautGuiApp {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capability_labels_cover_the_automation_contract() {
+        let labels = [
+            (Capability::UiNotification, "UI notifications"),
+            (Capability::ExternalSend, "External send"),
+            (Capability::ServerRead, "Server read"),
+            (Capability::ServerPublish, "Server publish"),
+            (Capability::SetCompose, "Set compose text"),
+            (Capability::RadioControl, "Radio controls"),
+            (Capability::Transmit, "Transmit"),
+        ];
+
+        for (capability, expected) in labels {
+            assert_eq!(capability_label(capability), expected);
+        }
+    }
+
+    #[test]
+    fn event_labels_cover_the_automation_contract() {
+        let labels = [
+            (EventKind::Decode, "decode"),
+            (EventKind::CallsignHit, "callsign_hit"),
+            (EventKind::QsoLogged, "qso_logged"),
+            (EventKind::RadioState, "radio_state"),
+            (EventKind::ContestState, "contest_state"),
+            (EventKind::OperatorProfile, "operator_profile"),
+            (EventKind::Command, "command"),
+            (EventKind::ExternalMessage, "external_message"),
+            (EventKind::ServerMessage, "server_message"),
+            (EventKind::Timer, "timer"),
+            (EventKind::ControlRead, "control_read"),
+        ];
+
+        for (event, expected) in labels {
+            assert_eq!(event_label(event), expected);
+        }
+    }
+}
