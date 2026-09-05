@@ -3603,6 +3603,69 @@ mod tests {
     }
 
     #[test]
+    fn ft4_fixture_tolerates_deterministic_low_noise() {
+        let (pcm, offset_s) = build_native_digital_tx_pcm(
+            WorkspaceMode::Ft4,
+            "CQ W1AW AA00",
+            1_500,
+            modes::fst4::Submode::default(),
+            20,
+            600,
+        )
+        .expect("FT4 synthesis");
+        let mut slot = vec![0.0_f32; (7.5 * 12_000.0) as usize];
+        let start = (offset_s * 12_000.0).round() as usize;
+        for (dst, sample) in slot[start..].iter_mut().zip(pcm) {
+            *dst = sample as f32 / i16::MAX as f32 * 0.04;
+        }
+        add_deterministic_noise(&mut slot, 0.0005);
+
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        run_native_digital_decode(
+            WorkspaceMode::Ft4,
+            modes::fst4::Submode::default(),
+            slot,
+            10,
+            "00:01:15.000".to_string(),
+            1_500,
+            false,
+            state.clone(),
+        );
+        assert!(state
+            .lock()
+            .expect("state")
+            .digital_decodes
+            .iter()
+            .any(|entry| entry.message == "CQ W1AW AA00"));
+    }
+
+    #[test]
+    fn steady_carrier_fixture_does_not_create_a_digital_decode() {
+        let samples = (0..FT8_SLOT_SAMPLES)
+            .map(|index| {
+                (2.0 * std::f32::consts::PI * 1_500.0 * index as f32 / 12_000.0).sin() * 0.08
+            })
+            .collect::<Vec<_>>();
+        let audio = qsonaut_modems::AudioBlock::new(12_000, samples).expect("carrier audio");
+        let outcome = qsonaut_third_party::wsjt::decode_ft8(
+            &audio,
+            &qsonaut_third_party::wsjt::WsjtDecodeConfig {
+                frequency_min_hz: 100.0,
+                frequency_max_hz: 3_000.0,
+                sync_min: FT8_FAST_SYNC_MIN,
+                max_candidates: FT8_FAST_MAX_CAND,
+                ..qsonaut_third_party::wsjt::WsjtDecodeConfig::default()
+            },
+        )
+        .expect("carrier audio and mode are valid");
+        assert!(
+            outcome.events.is_empty(),
+            "carrier decoded unexpectedly: {:?}",
+            outcome.events
+        );
+    }
+
+    #[test]
     fn jt9_workspace_adapter_decodes_generated_audio() {
         let (pcm, offset_s) = build_native_digital_tx_pcm(
             WorkspaceMode::Jt9,
