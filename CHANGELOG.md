@@ -7,6 +7,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [0.3.16] - 2026-09-04
 
+### Changed
+- Updated the application and GUI to the released Rigwright `0.1.22`,
+  HostBridge `0.1.1`, and latest shared third-party adapter revisions, with a
+  regenerated locked dependency graph containing one unified Rigwright version.
+- Routed native CAT startup checks, scope configuration, mode changes, and
+  control operations through the Rigwright radio HAL instead of duplicating
+  model-specific behavior in QSONaut.
+- Consumed driver-owned control ranges, discrete filter values, filter
+  bandwidths, scope spans, and scope edge-bank metadata in the GUI and radio
+  worker; HostBridge sessions reuse the selected Rigwright model metadata when
+  the remote capability response does not include a detail.
+
 ### Fixed
 - Delegate native startup probing to Rigwright so model-specific CAT
   behavior, including the FT-991A's rejected `VS;` query, remains inside the
