@@ -1129,6 +1129,17 @@ pub(crate) fn spawn_radio_worker(
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
+                    GuiCommand::ReadControl(id, ack_tx) => {
+                        let result = if radio.supports_control_read(id) {
+                            rt.block_on(radio.get_control(id))
+                                .map_err(|error| error.to_string())
+                        } else {
+                            Err(format!(
+                                "control {id:?} is not readable by the loaded radio profile"
+                            ))
+                        };
+                        let _ = ack_tx.send(result);
+                    }
                     GuiCommand::StartTuner => {
                         info!("Radio antenna tuner start requested");
                         match rt.block_on(radio.start_tuner()) {

@@ -40,6 +40,15 @@ Actions are split into explicit capabilities:
 - `radio_control`: request tuning or another non-PTT radio operation.
 - `transmit`: request an actual RF transmission.
 
+Radio controls are exposed through the generic HAL automation surface rather
+than vendor-specific commands. Scripts can use `read_control`,
+`write_control`, and `control_sequence` with stable control names such as
+`rf_power`, `tuner`, `filter`, or `noise_reduction`. The GUI resolves those
+names against Rigwright's selected profile, so unsupported or incorrectly
+typed values are rejected by the same capability checks as operator controls.
+Sequence waits are bounded to 60 seconds and run through the radio command
+queue; scripts cannot bypass the worker or directly access a serial device.
+
 A capability must appear in the component manifest and in the operator's grant set. Missing either check denies the action. `transmit` should remain off by default and eventually require an additional live armed-state check in the GUI executor.
 
 ## Rule files
@@ -84,6 +93,8 @@ QSONaut Server channel receive and publish are live over the configured WebSocke
 Still pending:
 
 6. live external adapter polling and transport wiring (Discord/IRC runtime connectors).
+7. publish control-read results as automation events/variables so a later rule
+       can branch on `${control.power}` or another named result.
 
 Safety-gated execution is now wired for approved `radio_command` and `request_transmit` actions:
 

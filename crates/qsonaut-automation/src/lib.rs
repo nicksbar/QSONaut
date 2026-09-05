@@ -69,6 +69,30 @@ pub enum Capability {
     Transmit,
 }
 
+/// Values accepted by the protocol-neutral control automation surface.
+///
+/// The automation crate deliberately does not depend on Rigwright. The GUI
+/// adapter resolves `control` names against the selected HAL profile and
+/// rejects values the driver cannot represent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum ControlValue {
+    Bool(bool),
+    U8(u8),
+    I32(i32),
+    U64(u64),
+    Text(String),
+    RawHex(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlStep {
+    pub control: String,
+    pub value: ControlValue,
+    #[serde(default)]
+    pub wait_ms: u64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct CapabilitySet(pub BTreeSet<Capability>);
@@ -173,6 +197,22 @@ pub enum Action {
         command: String,
         value: String,
     },
+    /// Read one HAL control. The adapter publishes the result as an
+    /// automation event using `result_key` for later script references.
+    ReadControl {
+        control: String,
+        result_key: String,
+    },
+    /// Write one HAL control using the selected driver's native conversion.
+    WriteControl {
+        control: String,
+        value: ControlValue,
+    },
+    /// Execute a bounded sequence of generic HAL control writes.
+    ControlSequence {
+        name: String,
+        steps: Vec<ControlStep>,
+    },
     RequestTransmit {
         mode: String,
         message: String,
@@ -188,6 +228,9 @@ impl Action {
             Self::ServerSendMessage { .. } => Capability::ServerPublish,
             Self::SetCompose { .. } => Capability::SetCompose,
             Self::RadioCommand { .. } => Capability::RadioControl,
+            Self::ReadControl { .. } | Self::WriteControl { .. } | Self::ControlSequence { .. } => {
+                Capability::RadioControl
+            }
             Self::RequestTransmit { .. } => Capability::Transmit,
         }
     }
@@ -264,10 +307,30 @@ pub enum ActionTemplate {
         command: String,
         value: String,
     },
+    ReadControl {
+        control: String,
+        result_key: String,
+    },
+    WriteControl {
+        control: String,
+        value: ControlValue,
+    },
+    ControlSequence {
+        name: String,
+        steps: Vec<ControlStepTemplate>,
+    },
     RequestTransmit {
         mode: String,
         message: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlStepTemplate {
+    pub control: String,
+    pub value: ControlValue,
+    #[serde(default)]
+    pub wait_ms: u64,
 }
 
 impl ActionTemplate {
@@ -305,11 +368,44 @@ impl ActionTemplate {
                 command: render(command),
                 value: render(value),
             },
+            Self::ReadControl {
+                control,
+                result_key,
+            } => Action::ReadControl {
+                control: render(control),
+                result_key: render(result_key),
+            },
+            Self::WriteControl { control, value } => Action::WriteControl {
+                control: render(control),
+                value: render_control_value(value, event),
+            },
+            Self::ControlSequence { name, steps } => Action::ControlSequence {
+                name: render(name),
+                steps: steps
+                    .iter()
+                    .map(|step| ControlStep {
+                        control: render(&step.control),
+                        value: render_control_value(&step.value, event),
+                        wait_ms: step.wait_ms.min(60_000),
+                    })
+                    .collect(),
+            },
             Self::RequestTransmit { mode, message } => Action::RequestTransmit {
                 mode: render(mode),
                 message: render(message),
             },
         }
+    }
+}
+
+fn render_control_value(value: &ControlValue, event: &AutomationEvent) -> ControlValue {
+    match value {
+        ControlValue::Bool(value) => ControlValue::Bool(*value),
+        ControlValue::U8(value) => ControlValue::U8(*value),
+        ControlValue::I32(value) => ControlValue::I32(*value),
+        ControlValue::U64(value) => ControlValue::U64(*value),
+        ControlValue::Text(value) => ControlValue::Text(render_template(value, event)),
+        ControlValue::RawHex(value) => ControlValue::RawHex(render_template(value, event)),
     }
 }
 
@@ -535,7 +631,7 @@ mod tests {
         let source = include_str!("../../../automation.example.toml");
         let config = RuleComponentConfig::from_toml(source).unwrap();
         assert_eq!(config.sources.len(), 2);
-        assert_eq!(config.rules.len(), 7);
+        assert_eq!(config.rules.len(), 8);
         assert!(config
             .component
             .subscriptions
@@ -567,5 +663,56 @@ mod tests {
             CapabilitySet::new([Capability::ServerPublish]),
         );
         assert_eq!(host.dispatch(&event).approved.len(), 1);
+    }
+
+    #[test]
+    fn renders_generic_control_writes_and_bounds_sequence_waits() {
+        let mut component = component_with(
+            ActionTemplate::ControlSequence {
+                name: "low-power-${band}".to_string(),
+                steps: vec![ControlStepTemplate {
+                    control: "rf_power".to_string(),
+                    value: ControlValue::U8(32),
+                    wait_ms: 90_000,
+                }],
+            },
+            CapabilitySet::new([Capability::RadioControl]),
+        );
+        let event = AutomationEvent::new(EventKind::CallsignHit, "test")
+            .field("band", "20m")
+            .tag("directed_to_me");
+        assert_eq!(
+            component.on_event(&event).unwrap(),
+            vec![Action::ControlSequence {
+                name: "low-power-20m".to_string(),
+                steps: vec![ControlStep {
+                    control: "rf_power".to_string(),
+                    value: ControlValue::U8(32),
+                    wait_ms: 60_000,
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn parses_control_actions_from_toml_without_vendor_names() {
+        let config = RuleComponentConfig::from_toml(
+            r#"
+[component]
+id = "control.guard"
+name = "Control guard"
+subscriptions = ["radio_state"]
+requests = ["radio_control"]
+
+[[rules]]
+on = "radio_state"
+actions = [
+  { action = "read_control", control = "rf_power", result_key = "power" },
+  { action = "write_control", control = "tuner", value = { type = "bool", value = false } },
+]
+"#,
+        )
+        .expect("control script should parse");
+        assert_eq!(config.rules[0].actions.len(), 2);
     }
 }

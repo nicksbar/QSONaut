@@ -3,8 +3,8 @@ id = "shack.spark"
 name = "Shack Spark"
 version = "0.1.0"
 description = "A playful callsign notifier and chat bridge starter."
-subscriptions = ["callsign_hit", "contest_state", "qso_logged", "external_message", "server_message"]
-requests = ["ui_notification", "external_send", "server_read", "server_publish"]
+subscriptions = ["callsign_hit", "contest_state", "qso_logged", "external_message", "server_message", "radio_state"]
+requests = ["ui_notification", "external_send", "server_read", "server_publish", "radio_control"]
 
 [[sources]]
 type = "discord"
@@ -114,3 +114,24 @@ action = "notify"
 title = "✅ Logged ${call}"
 body = "${mode} · ${band} · ${frequency_hz} Hz"
 accent = "green"
+
+[[rules]]
+on = "radio_state"
+
+[[rules.when]]
+match = "field_equals"
+field = "source"
+value = "operator_profile"
+
+[[rules.actions]]
+action = "control_sequence"
+name = "safe-tuner-receive"
+
+[[rules.actions.steps]]
+control = "tuner"
+value = { type = "bool", value = false }
+
+[[rules.actions.steps]]
+control = "rf_power"
+value = { type = "u8", value = 32 }
+wait_ms = 250

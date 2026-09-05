@@ -951,6 +951,10 @@ enum GuiCommand {
     },
     SetFilter(u8),
     SetControl(ControlId, ControlValue),
+    ReadControl(
+        ControlId,
+        mpsc::Sender<std::result::Result<Option<ControlValue>, String>>,
+    ),
     SetPtt(bool),
     SetPttWithAck(bool, mpsc::Sender<std::result::Result<(), String>>),
     SetPower(bool),
