@@ -301,6 +301,7 @@ enum SignalPanelTab {
     Achievements,
     Station,
     Contest,
+    Automation,
     Reporting,
     Settings,
     Ai,

@@ -950,7 +950,11 @@ impl QsonautGuiApp {
         format!("Queued HAL control write for {control}")
     }
 
-    fn execute_automation_control_read(&mut self, control: &str, result_key: &str) -> String {
+    pub(super) fn execute_automation_control_read(
+        &mut self,
+        control: &str,
+        result_key: &str,
+    ) -> String {
         let Some(control_id) = automation_control_id(control) else {
             return format!("Rejected control read: unknown HAL control '{control}'");
         };
@@ -1067,6 +1071,46 @@ impl QsonautGuiApp {
         }
     }
 }
+
+pub(super) const AUTOMATION_CONTROL_CATALOG: &[(&str, &str, &str)] = &[
+    ("af_gain", "Audio gain", "u8"),
+    ("rf_gain", "RF gain", "u8"),
+    ("squelch", "Squelch", "u8"),
+    ("rf_power", "RF power", "u8"),
+    ("preamp", "Preamp", "bool"),
+    ("attenuator", "Attenuator", "bool"),
+    ("noise_blanker", "Noise blanker", "bool"),
+    ("noise_reduction", "Noise reduction", "bool"),
+    ("noise_reduction_level", "Noise reduction level", "u8"),
+    ("ip_plus", "IP+", "bool"),
+    ("notch", "Notch", "bool"),
+    ("manual_notch", "Manual notch", "bool"),
+    ("manual_notch_position", "Manual notch position", "i32"),
+    ("data_mode", "Data mode", "bool"),
+    ("filter", "Filter", "u8"),
+    ("tuning_step", "Tuning step", "u64"),
+    ("agc", "AGC", "u8"),
+    ("rit", "RIT", "i32"),
+    ("xit", "XIT", "i32"),
+    ("split", "Split", "bool"),
+    ("tuner", "Tuner", "bool"),
+    ("raw_civ", "Raw CI-V", "raw_hex"),
+    ("vfo", "VFO", "vfo"),
+    ("main_sub", "Main/Sub", "u8"),
+    ("external_preamp", "External preamp", "u8"),
+    ("antenna", "Antenna", "u8"),
+    ("mic_gain", "Mic gain", "u8"),
+    ("monitor_level", "Monitor level", "u8"),
+    ("speech_processor", "Speech processor", "bool"),
+    ("speech_processor_level", "Speech processor level", "u8"),
+    ("if_shift", "IF shift", "i32"),
+    ("vox", "VOX", "bool"),
+    ("vox_gain", "VOX gain", "u8"),
+    ("vox_delay", "VOX delay", "u8"),
+    ("break_in", "Break-in", "bool"),
+    ("lock", "Panel lock", "bool"),
+    ("noise_blanker_level", "Noise blanker level", "u8"),
+];
 
 fn automation_control_id(name: &str) -> Option<ControlId> {
     match name.trim().to_ascii_lowercase().as_str() {
@@ -1357,6 +1401,16 @@ mod tests {
         assert!(app
             .execute_automation_radio_command("cycle_mode", "")
             .contains("mode cycle"));
+    }
+
+    #[test]
+    fn automation_control_catalog_contains_only_resolvable_controls() {
+        for &(name, _, _) in AUTOMATION_CONTROL_CATALOG {
+            assert!(
+                automation_control_id(name).is_some(),
+                "catalog control {name} has no HAL resolver"
+            );
+        }
     }
 
     #[test]

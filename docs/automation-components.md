@@ -81,6 +81,11 @@ The GUI now owns an `AutomationHost` and dispatches normalized events for:
 4. operator profile transitions (`operator_profile`);
 5. material radio state transitions (`radio_state`).
 
+The **Automation** tab beside **Contest** is the visual starting point for
+using this system. It shows the loaded component's subscriptions and grants,
+explains the event-to-action flow, lists the stable HAL control names, and
+offers read probes for inspecting controls without writing to the radio.
+
 Current runtime grants are intentionally conservative:
 
 - `ui_notification` is granted to the sample component by default;

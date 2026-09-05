@@ -507,6 +507,15 @@ pub struct DeniedAction {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentOverview {
+    pub id: String,
+    pub name: String,
+    pub subscriptions: Vec<EventKind>,
+    pub requested: Vec<Capability>,
+    pub granted: Vec<Capability>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DispatchReport {
     pub approved: Vec<ApprovedAction>,
@@ -522,6 +531,27 @@ pub struct AutomationHost {
 }
 
 impl AutomationHost {
+    pub fn component_overview(&self) -> Vec<ComponentOverview> {
+        self.components
+            .iter()
+            .map(|component| {
+                let manifest = component.manifest();
+                let granted = self
+                    .grants
+                    .get(&manifest.id)
+                    .map(|set| set.0.iter().copied().collect())
+                    .unwrap_or_default();
+                ComponentOverview {
+                    id: manifest.id.clone(),
+                    name: manifest.name.clone(),
+                    subscriptions: manifest.subscriptions.iter().copied().collect(),
+                    requested: manifest.requests.0.iter().copied().collect(),
+                    granted,
+                }
+            })
+            .collect()
+    }
+
     pub fn set_variable(&mut self, name: impl Into<String>, value: impl Into<String>) {
         let name = name.into();
         if !name.trim().is_empty() {
@@ -796,5 +826,34 @@ actions = [
             }
         );
         assert_eq!(host.variable("saved_power"), Some("42"));
+    }
+
+    #[test]
+    fn exposes_component_overview_with_requested_and_granted_capabilities() {
+        let mut host = AutomationHost::default();
+        host.register(component_with(
+            ActionTemplate::Notify {
+                title: "title".to_string(),
+                body: "body".to_string(),
+                accent: None,
+            },
+            CapabilitySet::new([Capability::UiNotification]),
+        ))
+        .unwrap();
+
+        let overview = host.component_overview();
+        assert_eq!(overview.len(), 1);
+        assert_eq!(overview[0].id, "spark.callout");
+        assert_eq!(overview[0].requested, vec![Capability::UiNotification]);
+        assert!(overview[0].granted.is_empty());
+
+        host.set_grants(
+            "spark.callout",
+            CapabilitySet::new([Capability::UiNotification]),
+        );
+        assert_eq!(
+            host.component_overview()[0].granted,
+            vec![Capability::UiNotification]
+        );
     }
 }
