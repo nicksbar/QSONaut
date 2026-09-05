@@ -3865,6 +3865,51 @@ mod level_poll_tests {
     }
 
     #[test]
+    fn unavailable_radio_rejects_queued_ptt_without_touching_driver() {
+        let state = Arc::new(Mutex::new(GuiState {
+            radio_power_on: Some(false),
+            ..GuiState::default()
+        }));
+        let stop = Arc::new(AtomicBool::new(false));
+        let sweep_abort = Arc::new(AtomicBool::new(false));
+        let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
+        let repaint = Arc::new(OnceLock::new());
+        let ptt_allowed = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker(
+            RadioHandle::Test(Arc::new(ErrorRadio)),
+            state.clone(),
+            stop,
+            sweep_abort,
+            display_tuning,
+            rx,
+            repaint,
+            ptt_allowed,
+        );
+
+        let (ack_tx, ack_rx) = mpsc::channel();
+        tx.send(GuiCommand::SetPttWithAck(true, ack_tx))
+            .expect("queue PTT command");
+        assert_eq!(
+            ack_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("PTT rejection acknowledgement")
+                .expect_err("PTT must be rejected while radio is unavailable"),
+            "radio is powered off"
+        );
+
+        tx.send(GuiCommand::Quit).expect("quit unavailable worker");
+        handle.join().expect("unavailable worker join");
+
+        let state = state.lock().expect("state lock");
+        assert!(!state.ptt_on);
+        assert_eq!(
+            state.last_error.as_deref(),
+            Some("radio command skipped: radio is unavailable")
+        );
+    }
+
+    #[test]
     fn hostbridge_scope_projection_preserves_each_view_contract() {
         let metadata =
             qsonaut_radio::icom::profile::profile_for_model(qsonaut_radio::IcomCivModel::Ic7300)
