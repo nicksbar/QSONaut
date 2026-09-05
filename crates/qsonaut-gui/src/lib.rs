@@ -3926,6 +3926,20 @@ mod tests {
             .is_none()
         );
         assert!(normalize_app_event_for_automation(AppEvent::ShutdownRequested).is_none());
+        let mut fields = BTreeMap::new();
+        fields.insert("control".to_string(), "rf_power".to_string());
+        fields.insert("result_key".to_string(), "saved_power".to_string());
+        fields.insert("value".to_string(), "42".to_string());
+        let result = normalize_app_event_for_automation(AppEvent::AutomationResult {
+            source: "test".to_string(),
+            fields,
+        })
+        .expect("control read result");
+        assert_eq!(result.kind, EventKind::ControlRead);
+        assert_eq!(
+            result.fields.get("result_key").map(String::as_str),
+            Some("saved_power")
+        );
         assert!(
             normalize_app_event_for_automation(AppEvent::DeviceDiscovered {
                 subsystem: "radio".to_string(),

@@ -21,6 +21,7 @@ pub enum EventKind {
     ExternalMessage,
     ServerMessage,
     Timer,
+    ControlRead,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -334,8 +335,12 @@ pub struct ControlStepTemplate {
 }
 
 impl ActionTemplate {
-    fn render(&self, event: &AutomationEvent) -> Action {
-        let render = |value: &str| render_template(value, event);
+    fn render_with_variables(
+        &self,
+        event: &AutomationEvent,
+        variables: &BTreeMap<String, String>,
+    ) -> Action {
+        let render = |value: &str| render_template(value, event, variables);
         match self {
             Self::Notify {
                 title,
@@ -377,7 +382,7 @@ impl ActionTemplate {
             },
             Self::WriteControl { control, value } => Action::WriteControl {
                 control: render(control),
-                value: render_control_value(value, event),
+                value: render_control_value(value, event, variables),
             },
             Self::ControlSequence { name, steps } => Action::ControlSequence {
                 name: render(name),
@@ -385,7 +390,7 @@ impl ActionTemplate {
                     .iter()
                     .map(|step| ControlStep {
                         control: render(&step.control),
-                        value: render_control_value(&step.value, event),
+                        value: render_control_value(&step.value, event, variables),
                         wait_ms: step.wait_ms.min(60_000),
                     })
                     .collect(),
@@ -398,23 +403,36 @@ impl ActionTemplate {
     }
 }
 
-fn render_control_value(value: &ControlValue, event: &AutomationEvent) -> ControlValue {
+fn render_control_value(
+    value: &ControlValue,
+    event: &AutomationEvent,
+    variables: &BTreeMap<String, String>,
+) -> ControlValue {
     match value {
         ControlValue::Bool(value) => ControlValue::Bool(*value),
         ControlValue::U8(value) => ControlValue::U8(*value),
         ControlValue::I32(value) => ControlValue::I32(*value),
         ControlValue::U64(value) => ControlValue::U64(*value),
-        ControlValue::Text(value) => ControlValue::Text(render_template(value, event)),
-        ControlValue::RawHex(value) => ControlValue::RawHex(render_template(value, event)),
+        ControlValue::Text(value) => ControlValue::Text(render_template(value, event, variables)),
+        ControlValue::RawHex(value) => {
+            ControlValue::RawHex(render_template(value, event, variables))
+        }
     }
 }
 
-fn render_template(template: &str, event: &AutomationEvent) -> String {
+fn render_template(
+    template: &str,
+    event: &AutomationEvent,
+    variables: &BTreeMap<String, String>,
+) -> String {
     let mut rendered = template
         .replace("${source}", &event.source)
         .replace("${timestamp_ms}", &event.timestamp_ms.to_string());
     for (field, value) in &event.fields {
         rendered = rendered.replace(&format!("${{{field}}}"), value);
+    }
+    for (name, value) in variables {
+        rendered = rendered.replace(&format!("${{{name}}}"), value);
     }
     rendered
 }
@@ -422,6 +440,15 @@ fn render_template(template: &str, event: &AutomationEvent) -> String {
 pub trait Component: Send {
     fn manifest(&self) -> &ComponentManifest;
     fn on_event(&mut self, event: &AutomationEvent) -> Result<Vec<Action>, ComponentError>;
+
+    fn on_event_with_variables(
+        &mut self,
+        event: &AutomationEvent,
+        variables: &BTreeMap<String, String>,
+    ) -> Result<Vec<Action>, ComponentError> {
+        let _ = variables;
+        self.on_event(event)
+    }
 }
 
 pub struct RuleComponent {
@@ -440,6 +467,14 @@ impl Component for RuleComponent {
     }
 
     fn on_event(&mut self, event: &AutomationEvent) -> Result<Vec<Action>, ComponentError> {
+        self.on_event_with_variables(event, &BTreeMap::new())
+    }
+
+    fn on_event_with_variables(
+        &mut self,
+        event: &AutomationEvent,
+        variables: &BTreeMap<String, String>,
+    ) -> Result<Vec<Action>, ComponentError> {
         if !self.config.component.subscriptions.contains(&event.kind) {
             return Ok(Vec::new());
         }
@@ -449,7 +484,11 @@ impl Component for RuleComponent {
             .iter()
             .filter(|rule| rule.on == event.kind)
             .filter(|rule| rule.when.iter().all(|predicate| predicate.matches(event)))
-            .flat_map(|rule| rule.actions.iter().map(|action| action.render(event)))
+            .flat_map(|rule| {
+                rule.actions
+                    .iter()
+                    .map(|action| action.render_with_variables(event, variables))
+            })
             .collect())
     }
 }
@@ -479,6 +518,20 @@ pub struct DispatchReport {
 pub struct AutomationHost {
     components: Vec<Box<dyn Component>>,
     grants: HashMap<String, CapabilitySet>,
+    variables: BTreeMap<String, String>,
+}
+
+impl AutomationHost {
+    pub fn set_variable(&mut self, name: impl Into<String>, value: impl Into<String>) {
+        let name = name.into();
+        if !name.trim().is_empty() {
+            self.variables.insert(name, value.into());
+        }
+    }
+
+    pub fn variable(&self, name: &str) -> Option<&str> {
+        self.variables.get(name).map(String::as_str)
+    }
 }
 
 impl AutomationHost {
@@ -508,7 +561,7 @@ impl AutomationHost {
         let mut report = DispatchReport::default();
         for component in &mut self.components {
             let manifest = component.manifest().clone();
-            let actions = match component.on_event(event) {
+            let actions = match component.on_event_with_variables(event, &self.variables) {
                 Ok(actions) => actions,
                 Err(error) => {
                     report.errors.push(format!("{}: {error}", manifest.id));
@@ -631,7 +684,7 @@ mod tests {
         let source = include_str!("../../../automation.example.toml");
         let config = RuleComponentConfig::from_toml(source).unwrap();
         assert_eq!(config.sources.len(), 2);
-        assert_eq!(config.rules.len(), 8);
+        assert_eq!(config.rules.len(), 9);
         assert!(config
             .component
             .subscriptions
@@ -714,5 +767,34 @@ actions = [
         )
         .expect("control script should parse");
         assert_eq!(config.rules[0].actions.len(), 2);
+    }
+
+    #[test]
+    fn renders_persistent_variables_into_later_actions() {
+        let component = component_with(
+            ActionTemplate::WriteControl {
+                control: "rf_power".to_string(),
+                value: ControlValue::Text("${saved_power}".to_string()),
+            },
+            CapabilitySet::new([Capability::RadioControl]),
+        );
+        let event = AutomationEvent::new(EventKind::CallsignHit, "test").tag("directed_to_me");
+        let mut host = AutomationHost::default();
+        host.register(component).unwrap();
+        host.set_grants(
+            "spark.callout",
+            CapabilitySet::new([Capability::RadioControl]),
+        );
+        host.set_variable("saved_power", "42");
+
+        let report = host.dispatch(&event);
+        assert_eq!(
+            report.approved[0].action,
+            Action::WriteControl {
+                control: "rf_power".to_string(),
+                value: ControlValue::Text("42".to_string()),
+            }
+        );
+        assert_eq!(host.variable("saved_power"), Some("42"));
     }
 }

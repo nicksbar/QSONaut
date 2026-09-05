@@ -3,7 +3,7 @@ id = "shack.spark"
 name = "Shack Spark"
 version = "0.1.0"
 description = "A playful callsign notifier and chat bridge starter."
-subscriptions = ["callsign_hit", "contest_state", "qso_logged", "external_message", "server_message", "radio_state"]
+subscriptions = ["callsign_hit", "contest_state", "qso_logged", "external_message", "server_message", "radio_state", "control_read"]
 requests = ["ui_notification", "external_send", "server_read", "server_publish", "radio_control"]
 
 [[sources]]
@@ -135,3 +135,22 @@ value = { type = "bool", value = false }
 control = "rf_power"
 value = { type = "u8", value = 32 }
 wait_ms = 250
+
+[[rules.actions]]
+action = "read_control"
+control = "rf_power"
+result_key = "saved_power"
+
+[[rules]]
+on = "control_read"
+
+[[rules.when]]
+match = "field_equals"
+field = "result_key"
+value = "saved_power"
+
+[[rules.actions]]
+action = "notify"
+title = "📻 Read ${control}"
+body = "${result_key} = ${value}"
+accent = "cyan"

@@ -103,6 +103,13 @@ pub(crate) fn normalize_app_event_for_automation(event: AppEvent) -> Option<Auto
             }
             Some(event)
         }
+        AppEvent::AutomationResult { source, fields } => {
+            let mut event = AutomationEvent::new(EventKind::ControlRead, source);
+            for (key, value) in fields {
+                event = event.field(key, value);
+            }
+            Some(event)
+        }
         _ => None,
     }
 }

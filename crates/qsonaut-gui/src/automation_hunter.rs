@@ -965,7 +965,20 @@ impl QsonautGuiApp {
             return "Rejected control read: radio worker is unavailable".to_string();
         }
         match ack_rx.recv_timeout(std::time::Duration::from_millis(500)) {
-            Ok(Ok(Some(value))) => format!("Read {control} into {result_key}: {value:?}"),
+            Ok(Ok(Some(value))) => {
+                let value = automation_radio_value_text(&value);
+                self.automation_host.set_variable(result_key, &value);
+                let mut fields = BTreeMap::new();
+                fields.insert("control".to_string(), control.trim().to_string());
+                fields.insert("result_key".to_string(), result_key.trim().to_string());
+                fields.insert("value".to_string(), value.clone());
+                fields.insert("ok".to_string(), "true".to_string());
+                self.app_events.publish(AppEvent::AutomationResult {
+                    source: "gui.radio.control_read".to_string(),
+                    fields,
+                });
+                format!("Read {control} into {result_key}: {value}")
+            }
             Ok(Ok(None)) => format!("Read {control} into {result_key}: unavailable"),
             Ok(Err(error)) => format!("Control read rejected: {error}"),
             Err(_) => "Control read timed out: radio worker did not respond".to_string(),
@@ -1129,6 +1142,24 @@ fn automation_control_value(
                 .ok()?;
             Some(qsonaut_radio::ControlValue::Raw(bytes))
         }
+    }
+}
+
+fn automation_radio_value_text(value: &qsonaut_radio::ControlValue) -> String {
+    match value {
+        qsonaut_radio::ControlValue::Bool(value) => value.to_string(),
+        qsonaut_radio::ControlValue::U8(value)
+        | qsonaut_radio::ControlValue::Vfo(value)
+        | qsonaut_radio::ControlValue::Receiver(value) => value.to_string(),
+        qsonaut_radio::ControlValue::I32(value) => value.to_string(),
+        qsonaut_radio::ControlValue::U64(value) => value.to_string(),
+        qsonaut_radio::ControlValue::Mode(value) => format!("{value:?}"),
+        qsonaut_radio::ControlValue::Text(value) => value.clone(),
+        qsonaut_radio::ControlValue::Raw(value) => value
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<Vec<_>>()
+            .join(""),
     }
 }
 
