@@ -334,6 +334,7 @@ impl QsonautGuiApp {
             llm_model_notes: self.llm_model_notes.trim().to_string(),
             gui_scale: self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX),
             compute_preference: self.compute_preference,
+            font_family: self.font_family.clone(),
         }
     }
 

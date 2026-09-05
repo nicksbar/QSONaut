@@ -5,6 +5,40 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.16] - 2026-09-04
+
+### Added
+- Added system-font selection in Settings with Linux Fontconfig discovery and
+  profile-aware persistence.
+- Added driver-aware native waterfall controls, including scope geometry,
+  display options, waveform settings, and supported waveform colors through
+  both native CI-V and HostBridge paths.
+- Added radio toolbar controls for application or hardware tuning step,
+  antenna selection, microphone gain, monitor level, speech processing, and
+  radio lock when advertised by the active driver.
+
+### Changed
+- Reworked the radio toolbar to keep tuning and driver controls visible while
+  removing the duplicate normalized-meter popup; detailed meter information
+  remains available from the S-meter control.
+- Made noise-reduction level wording vendor-neutral and made tuning increments
+  follow the selected step rather than a fixed 1 kHz delta.
+- Updated the application and GUI to the released Rigwright `0.1.22`,
+  HostBridge `0.1.1`, and latest shared third-party adapter revisions, with a
+  regenerated locked dependency graph containing one unified Rigwright version.
+- Routed native CAT startup checks, scope configuration, mode changes, and
+  control operations through the Rigwright radio HAL instead of duplicating
+  model-specific behavior in QSONaut.
+- Consumed driver-owned control ranges, discrete filter values, filter
+  bandwidths, scope spans, and scope edge-bank metadata in the GUI and radio
+  worker; HostBridge sessions reuse the selected Rigwright model metadata when
+  the remote capability response does not include a detail.
+
+### Fixed
+- Delegate native startup probing to Rigwright so model-specific CAT
+  behavior, including the FT-991A's rejected `VS;` query, remains inside the
+  driver boundary.
+
 ## [0.3.15] - 2026-09-03
 
 ### Added

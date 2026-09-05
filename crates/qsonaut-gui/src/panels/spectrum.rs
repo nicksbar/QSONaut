@@ -93,7 +93,15 @@ impl QsonautGuiApp {
             == RadioScopeView::Narrow
         {
             if self.radio_scope_lock_if_to_filter {
-                self.radio_scope_span_code = scope_span_for_filter(&snapshot.mode, snapshot.filter);
+                self.radio_scope_span_code = scope_span_for_filter_with_options(
+                    &snapshot.mode,
+                    self.driver_metadata
+                        .filter_bandwidth_hz(&snapshot.mode, snapshot.filter.unwrap_or_default()),
+                    self.driver_metadata
+                        .scope
+                        .map(|metadata| metadata.span_options_hz)
+                        .unwrap_or(&[]),
+                );
             }
             if !self.civ_spectrum_on {
                 return;
@@ -188,7 +196,8 @@ impl QsonautGuiApp {
                 .on_hover_text("Click a signal to tune the radio VFO to that point");
             let dial_fraction = match self.radio_scope_view {
                 RadioScopeView::Narrow => snapshot.frequency_hz.map(|frequency| {
-                    let half_span = scope_span_hz(self.radio_scope_span_code);
+                    let half_span =
+                        scope_span_hz_for(self.driver_metadata.scope, self.radio_scope_span_code);
                     let (low, high) = match sideband_projection {
                         ScopeProjection::Full => (
                             frequency.saturating_sub(half_span),
@@ -239,7 +248,10 @@ impl QsonautGuiApp {
                         ((pos.x - response.rect.left()) / response.rect.width()).clamp(0.0, 1.0);
                     let target = match self.radio_scope_view {
                         RadioScopeView::Narrow => snapshot.frequency_hz.map(|frequency| {
-                            let half_span = scope_span_hz(self.radio_scope_span_code);
+                            let half_span = scope_span_hz_for(
+                                self.driver_metadata.scope,
+                                self.radio_scope_span_code,
+                            );
                             let (low, high) = match sideband_projection {
                                 ScopeProjection::Full => (
                                     frequency.saturating_sub(half_span),
@@ -275,7 +287,8 @@ impl QsonautGuiApp {
             }
             let frequency_labels = match self.radio_scope_view {
                 RadioScopeView::Narrow => snapshot.frequency_hz.map(|frequency| {
-                    let half_span = scope_span_hz(self.radio_scope_span_code);
+                    let half_span =
+                        scope_span_hz_for(self.driver_metadata.scope, self.radio_scope_span_code);
                     let (low, high) = match sideband_projection {
                         ScopeProjection::Full => (
                             frequency.saturating_sub(half_span),
@@ -374,7 +387,7 @@ impl QsonautGuiApp {
                 .on_hover_text("Click a signal to tune the radio VFO to that point");
             let dial_fraction = match self.radio_scope_view {
                 RadioScopeView::Narrow => snapshot.frequency_hz.map(|frequency| {
-                    let half_span = scope_span_hz(self.radio_scope_span_code);
+                    let half_span = scope_span_hz_for(self.driver_metadata.scope, self.radio_scope_span_code);
                     let (low, high) = match sideband_projection {
                         ScopeProjection::Full => (
                             frequency.saturating_sub(half_span),
@@ -426,7 +439,7 @@ impl QsonautGuiApp {
                         ((pos.x - response.rect.left()) / response.rect.width()).clamp(0.0, 1.0);
                     let target = match self.radio_scope_view {
                         RadioScopeView::Narrow => snapshot.frequency_hz.map(|frequency| {
-                            let half_span = scope_span_hz(self.radio_scope_span_code);
+                            let half_span = scope_span_hz_for(self.driver_metadata.scope, self.radio_scope_span_code);
                             let (low, high) = match sideband_projection {
                                 ScopeProjection::Full => (
                                     frequency.saturating_sub(half_span),
@@ -462,7 +475,7 @@ impl QsonautGuiApp {
             }
             let frequency_labels = match self.radio_scope_view {
                 RadioScopeView::Narrow => snapshot.frequency_hz.map(|frequency| {
-                    let half_span = scope_span_hz(self.radio_scope_span_code);
+                    let half_span = scope_span_hz_for(self.driver_metadata.scope, self.radio_scope_span_code);
                     let (low, high) = match sideband_projection {
                         ScopeProjection::Full => (
                             frequency.saturating_sub(half_span),
@@ -518,7 +531,7 @@ impl QsonautGuiApp {
         ctx: &egui::Context,
         snapshot: &GuiState,
     ) {
-        let filter_bw_hz = filter_bandwidth_hz(&snapshot.mode, snapshot.filter);
+        let filter_bw_hz = 3_000;
         let is_cw = self.workspace_mode == WorkspaceMode::Cw;
         let is_sstv = self.workspace_mode == WorkspaceMode::Sstv;
         let bw_hz = filter_bw_hz;

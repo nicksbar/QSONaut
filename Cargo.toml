@@ -41,7 +41,7 @@ opt-level = 0
 opt-level = 0
 
 [workspace.package]
-version = "0.3.15"
+version = "0.3.16"
 edition = "2021"
 license = "MIT"
 authors = ["QSONaut Contributors"]
@@ -62,6 +62,7 @@ tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11", "persistence"] }
+font-kit = { version = "0.14.3", default-features = false, features = ["source", "source-fontconfig-dlopen"] }
 # Keep rendering on wgpu with Vulkan, GLES, and Metal available as appropriate
 # for the host. DX12 is intentionally omitted for now: wgpu 27's DX12 allocator
 # requires Windows bindings that conflict with cpal 0.15's Windows bindings.

@@ -10,7 +10,6 @@ impl QsonautGuiApp {
         let primary_value = meter_value(snapshot, primary_id);
         let primary_label = if snapshot.ptt_on { "POWER" } else { "" };
         let primary_reading = meter_reading(primary_id, primary_value);
-        let radio_model = self.config.radio.model.as_str();
         let (primary_rect, primary_response) =
             ui.allocate_exact_size(egui::vec2(280.0, 24.0), egui::Sense::click());
         draw_primary_meter(
@@ -79,7 +78,7 @@ impl QsonautGuiApp {
                                 }
                                 let value = meter_value(snapshot, id);
                                 ui.horizontal(|ui| {
-                                    let reading = meter_reading_for_model(id, value, radio_model);
+                                    let reading = meter_reading_for_presentation(id, value, None);
                                     let label_height =
                                         if id == MeterId::Voltage { 28.0 } else { 18.0 };
                                     let label_color = if id == MeterId::Current && snapshot.ptt_on {

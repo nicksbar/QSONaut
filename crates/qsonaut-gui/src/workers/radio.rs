@@ -112,17 +112,24 @@ struct RadioScopeStreamConfig {
     sweep_code: u8,
     hold: bool,
     reference_tenths_db: i16,
+    advanced: ScopeAdvancedSettings,
 }
 
 fn wire_scope_config(
     config: &RadioScopeStreamConfig,
+    metadata: Option<qsonaut_radio::ScopeMetadata>,
 ) -> qsonaut_hostbridge_protocol::ScopeConfiguration {
     let (center_mode, span_hz, fixed_edges_hz, fixed_edge_number) = match config.view {
         RadioScopeView::Narrow => match config.edges {
-            Some(edges) => (Some(true), None, Some(edges), Some(4)),
+            Some(edges) => (Some(true), None, Some(edges), None),
             None => (
                 Some(false),
-                Some(scope_span_hz(config.span_code)),
+                metadata.and_then(|metadata| {
+                    metadata
+                        .span_options_hz
+                        .get(usize::from(config.span_code))
+                        .copied()
+                }),
                 None,
                 None,
             ),
@@ -138,6 +145,19 @@ fn wire_scope_config(
         sweep_speed: Some(config.sweep_code),
         center_mode,
         vbw_wide: Some(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
+        center_type: config.advanced.center_type.map(Into::into),
+        tx_display: config.advanced.tx_display,
+        max_hold: config.advanced.max_hold.map(Into::into),
+        marker_position: config.advanced.marker_position.map(Into::into),
+        averaging: config.advanced.averaging,
+        waveform_type: config.advanced.waveform_type.map(Into::into),
+        waterfall_display: config.advanced.waterfall_display,
+        waterfall_size: config.advanced.waterfall_size,
+        waterfall_peak_level: config.advanced.waterfall_peak_level,
+        marker_auto_hide: config.advanced.marker_auto_hide,
+        waveform_color_current: config.advanced.waveform_color_current.map(Into::into),
+        waveform_color_line: config.advanced.waveform_color_line.map(Into::into),
+        waveform_color_max_hold: config.advanced.waveform_color_max_hold.map(Into::into),
     }
 }
 
@@ -291,6 +311,7 @@ pub(crate) fn spawn_radio_worker(
                                 vbw_wide,
                                 hold,
                                 reference_tenths_db,
+                                advanced,
                                 settings_dirty,
                             ) = {
                                 let s = stream_state.lock().expect("ui state lock poisoned");
@@ -306,6 +327,7 @@ pub(crate) fn spawn_radio_worker(
                                     s.radio_scope_vbw_wide,
                                     s.radio_scope_hold,
                                     s.radio_scope_reference_tenths_db,
+                                    s.radio_scope_advanced,
                                     s.radio_scope_settings_dirty,
                                 )
                             };
@@ -318,8 +340,8 @@ pub(crate) fn spawn_radio_worker(
                                 view,
                                 span_code,
                                 vbw_wide,
-                                // The remote IC-7300 USB scope path is
-                                // centered by span. Do not replay QSONaut's
+                                // The remote native USB scope path is centered
+                                // by span. Do not replay QSONaut's
                                 // local mode-aware fixed-edge projection;
                                 // that emits 27 1E and can move the radio's
                                 // scope away from the live dial frequency.
@@ -327,6 +349,7 @@ pub(crate) fn spawn_radio_worker(
                                 sweep_code,
                                 hold,
                                 reference_tenths_db,
+                                advanced,
                             };
                             (
                                 desired,
@@ -372,9 +395,15 @@ pub(crate) fn spawn_radio_worker(
                         // startup audio/control traffic responsive and avoids
                         // moving the scope away from the live dial.
                         if settings_dirty {
-                            if let Err(error) =
-                                client.configure_scope(None, wire_scope_config(&scope_config))
-                            {
+                            if let Err(error) = client.configure_scope(
+                                None,
+                                wire_scope_config(
+                                    &scope_config,
+                                    stream_radio
+                                        .as_ref()
+                                        .and_then(|radio| radio.scope_metadata()),
+                                ),
+                            ) {
                                 warn!(%error, "failed to send remote scope configuration");
                             } else {
                                 last_remote_config = Some(scope_config);
@@ -448,6 +477,7 @@ pub(crate) fn spawn_radio_worker(
                     ptt_on,
                     scope_hold,
                     scope_reference_tenths_db,
+                    scope_advanced,
                     scope_settings_dirty,
                 ) = {
                     let s = stream_state.lock().expect("ui state lock poisoned");
@@ -467,6 +497,7 @@ pub(crate) fn spawn_radio_worker(
                         s.ptt_on,
                         s.radio_scope_hold,
                         s.radio_scope_reference_tenths_db,
+                        s.radio_scope_advanced,
                         s.radio_scope_settings_dirty,
                     )
                 };
@@ -497,6 +528,7 @@ pub(crate) fn spawn_radio_worker(
                         workspace_mode,
                         frequency_hz,
                         span_code,
+                        stream_radio.scope_metadata(),
                         &mode,
                     );
                     let sweep_code = {
@@ -511,6 +543,7 @@ pub(crate) fn spawn_radio_worker(
                         sweep_code,
                         hold: scope_hold,
                         reference_tenths_db: scope_reference_tenths_db,
+                        advanced: scope_advanced,
                     };
                     // The first observed configuration is a baseline, not a
                     // command. Startup must not restore QSONaut defaults onto
@@ -596,7 +629,7 @@ pub(crate) fn spawn_radio_worker(
                             latest_scope_bins = Some(bins);
                             display_rows += 1;
                             last_display_row = Instant::now();
-                            s.radio_waterfall_status = "READY · 475 bins".to_string();
+                            s.radio_waterfall_status = format!("READY · {bin_count} bins");
                             s.last_error = None;
                             drop(s);
                             info!(
@@ -672,10 +705,9 @@ pub(crate) fn spawn_radio_worker(
                     poll_scheduled_icom_meter(&rt, &stream_radio, &stream_state, meter);
                 }
 
-                // A complete IC-7300 sweep consists of 11 CI-V division
-                // frames. Keep that native measurement honest while scrolling
-                // the display at the selected host cadence by repeating the
-                // latest complete sweep between radio updates.
+                // Keep the driver's complete native measurement honest while
+                // scrolling the display at the selected host cadence by
+                // repeating the latest complete sweep between radio updates.
                 let display_interval_ms = {
                     let tuning = stream_display_tuning.lock().expect("tuning lock poisoned");
                     effective_visual_profile(&tuning, &mode, true).0
@@ -960,7 +992,8 @@ pub(crate) fn spawn_radio_worker(
                             workspace_mode,
                             Some(frequency_hz),
                         );
-                        let filter = preset.filter.clamp(1, 3);
+                        let filter =
+                            supported_control_value(&radio, ControlId::Filter, preset.filter);
                         let frequency_result = rt.block_on(radio.set_frequency_hz(frequency_hz));
                         let (nr_id, nr_value, nb_id, nb_value) =
                             workspace_audio_controls_clear_noise();
@@ -968,119 +1001,65 @@ pub(crate) fn spawn_radio_worker(
                             .into_iter()
                             .filter(|(id, _)| radio.supports_control_write(*id))
                             .try_for_each(|(id, value)| rt.block_on(radio.set_control(id, value)));
-                        if let Some(icom) = radio.as_icom() {
-                            let mode_result = rt.block_on(icom.set_operating_mode_details(
-                                preset.base_mode,
-                                preset.data_mode,
-                                filter,
-                            ));
-                            let data_mode_result =
-                                if workspace_mode == WorkspaceMode::Voice {
-                                    rt.block_on(radio.set_control(
-                                        ControlId::DataMode,
-                                        ControlValue::Bool(false),
-                                    ))
-                                } else {
-                                    Ok(())
-                                };
-                            if let Err(error) = frequency_result
-                                .and(mode_result)
-                                .and(data_mode_result)
-                                .and(noise_result)
-                            {
-                                error!(
-                                    workspace = %workspace_mode.label(),
-                                    frequency_hz,
-                                    error = %error,
-                                    "Radio workspace preset failed"
-                                );
-                                state.lock().expect("ui state lock poisoned").last_error =
-                                    Some(error.to_string());
-                            } else {
-                                let mut s = state.lock().expect("ui state lock poisoned");
-                                s.mode = icom_base_mode_label(preset.base_mode).to_string();
-                                s.data_mode = Some(preset.data_mode);
-                                s.frequency_hz = Some(frequency_hz);
-                                s.radio_power_on = Some(true);
-                                s.last_error = None;
-                                info!(workspace = %workspace_mode.label(), frequency_hz, mode = ?preset.base_mode, data_mode = preset.data_mode, filter, "Radio workspace preset accepted");
-                            }
+                        let mode = if preset.data_mode {
+                            Mode::Data
                         } else {
-                            let mode = if preset.data_mode {
-                                Mode::Data
-                            } else {
-                                match preset.base_mode {
-                                    BaseMode::Lsb => Mode::Lsb,
-                                    BaseMode::Cw | BaseMode::CwR => Mode::Cw,
-                                    BaseMode::Fm => Mode::Fm,
-                                    _ => Mode::Usb,
-                                }
-                            };
-                            let mode_result = rt.block_on(Radio::set_mode(&radio, mode));
-                            match frequency_result.and(mode_result) {
-                                Ok(()) => {
-                                    // Reflect a successful write immediately. The follow-up
-                                    // CAT read is useful confirmation, but a compatible radio
-                                    // may briefly return an incomplete status frame after a
-                                    // mode change.
-                                    let mut s = state.lock().expect("ui state lock poisoned");
-                                    s.frequency_hz = Some(frequency_hz);
-                                    s.mode = match mode {
-                                        Mode::Usb => "USB",
-                                        Mode::Lsb => "LSB",
-                                        Mode::Cw => "CW",
-                                        // HostBridge represents digital USB as
-                                        // Mode::Data; present it consistently
-                                        // with native IC-7300 operation.
-                                        Mode::Data => "USB",
-                                        Mode::Am => "AM",
-                                        Mode::Fm => "FM",
-                                        Mode::Wfm => "WFM",
-                                        Mode::Rtty => "RTTY",
-                                        Mode::CwReverse => "CW-R",
-                                        Mode::RttyReverse => "RTTY-R",
-                                    }
-                                    .to_string();
-                                    s.data_mode = Some(mode == Mode::Data);
-                                    s.radio_power_on = Some(true);
-                                    s.last_error = None;
-                                    info!(workspace = %workspace_mode.label(), frequency_hz, mode = ?preset.base_mode, data_mode = preset.data_mode, "Radio workspace preset accepted");
-                                }
-                                Err(error) => {
-                                    error!(
-                                        workspace = %workspace_mode.label(),
-                                        frequency_hz,
-                                        error = %error,
-                                        "Radio workspace preset failed"
-                                    );
-                                    state.lock().expect("ui state lock poisoned").last_error =
-                                        Some(error.to_string());
-                                }
+                            match preset.base_mode {
+                                BaseMode::Lsb => Mode::Lsb,
+                                BaseMode::Cw | BaseMode::CwR => Mode::Cw,
+                                BaseMode::Fm => Mode::Fm,
+                                _ => Mode::Usb,
                             }
+                        };
+                        let mode_result = rt.block_on(Radio::set_mode(&radio, mode));
+                        let data_mode_result = if radio.supports_control_write(ControlId::DataMode)
+                        {
+                            rt.block_on(radio.set_control(
+                                ControlId::DataMode,
+                                ControlValue::Bool(preset.data_mode),
+                            ))
+                        } else {
+                            Ok(())
+                        };
+                        let filter_result = if radio.supports_control_write(ControlId::Filter) {
+                            rt.block_on(
+                                radio.set_control(ControlId::Filter, ControlValue::U8(filter)),
+                            )
+                        } else {
+                            Ok(())
+                        };
+                        if let Err(error) = frequency_result
+                            .and(mode_result)
+                            .and(data_mode_result)
+                            .and(filter_result)
+                            .and(noise_result)
+                        {
+                            error!(
+                                workspace = %workspace_mode.label(),
+                                frequency_hz,
+                                error = %error,
+                                "Radio workspace preset failed"
+                            );
+                            state.lock().expect("ui state lock poisoned").last_error =
+                                Some(error.to_string());
+                        } else {
+                            let mut s = state.lock().expect("ui state lock poisoned");
+                            s.mode = icom_base_mode_label(preset.base_mode).to_string();
+                            s.data_mode = Some(preset.data_mode);
+                            s.frequency_hz = Some(frequency_hz);
+                            s.radio_power_on = Some(true);
+                            s.last_error = None;
+                            info!(workspace = %workspace_mode.label(), frequency_hz, mode = ?preset.base_mode, data_mode = preset.data_mode, filter, "Radio workspace preset accepted");
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::SetFilter(n) => {
                         let workspace_mode =
                             state.lock().expect("ui state lock poisoned").workspace_mode;
-                        let frequency_hz =
-                            state.lock().expect("ui state lock poisoned").frequency_hz;
-                        let preset =
-                            workspace_radio_preset_for_frequency(workspace_mode, frequency_hz);
-                        let target_filter = n.clamp(1, 3);
+                        let target_filter = supported_control_value(&radio, ControlId::Filter, n);
                         info!(filter = target_filter, workspace = %workspace_mode.label(), "Radio filter change requested");
                         let result =
-                            if let Some(icom) = radio.as_icom() {
-                                rt.block_on(icom.set_operating_mode_details(
-                                    preset.base_mode,
-                                    preset.data_mode,
-                                    target_filter,
-                                ))
-                            } else if radio.supports_control_write(ControlId::Filter) {
-                                // HostBridge exposes the typed control surface, not
-                                // the local Icom object. Route filter changes through
-                                // that surface so remote IC-7300 sessions do not
-                                // report the control as unavailable.
+                            if radio.supports_control_write(ControlId::Filter) {
                                 rt.block_on(radio.set_control(
                                     ControlId::Filter,
                                     ControlValue::U8(target_filter),
@@ -1232,8 +1211,18 @@ pub(crate) fn spawn_radio_worker(
                             }
                             info!("SWR sweep disabled antenna tuner");
                         }
-                        if let Err(error) = rt.block_on(radio.set_mode(Mode::Rtty)) {
-                            error!(error = %error, "SWR sweep could not select RTTY carrier mode");
+                        let Some(sweep_setup) = radio.swr_sweep_setup() else {
+                            let mut s = state.lock().expect("ui state lock poisoned");
+                            s.swr_sweep_active = false;
+                            s.swr_sweep_status = "Unsupported by radio driver".to_string();
+                            s.last_error = Some(
+                                "SWR sweep setup is not documented by this radio driver"
+                                    .to_string(),
+                            );
+                            continue;
+                        };
+                        if let Err(error) = rt.block_on(radio.set_mode(sweep_setup.carrier_mode)) {
+                            error!(error = %error, mode = ?sweep_setup.carrier_mode, "SWR sweep could not select carrier mode");
                             if original_tuner.is_some_and(|status| status.enabled) {
                                 let _ = rt.block_on(
                                     radio.set_control(ControlId::Tuner, ControlValue::Bool(true)),
@@ -1243,17 +1232,13 @@ pub(crate) fn spawn_radio_worker(
                             s.swr_sweep_active = false;
                             s.swr_sweep_status = "Carrier mode setup failed".to_string();
                             s.last_error =
-                                Some(format!("SWR sweep could not select RTTY mode: {error}"));
+                                Some(format!("SWR sweep could not select carrier mode: {error}"));
                             continue;
                         }
-                        // The IC-7300 manual's plot procedure calls for
-                        // approximately 30 W so the transmit SWR detector is
-                        // active and has enough signal to report a value.
-                        const SWR_TEST_POWER_PERCENT: u8 = 30;
-                        let test_power = ((u16::from(SWR_TEST_POWER_PERCENT) * 255) / 100) as u8;
-                        if let Err(error) = rt.block_on(
-                            radio.set_control(ControlId::RfPower, ControlValue::U8(test_power)),
-                        ) {
+                        if let Err(error) = rt.block_on(radio.set_control(
+                            ControlId::RfPower,
+                            ControlValue::U8(sweep_setup.rf_power),
+                        )) {
                             error!(error = %error, "SWR sweep could not set low test power");
                             if let Some(mode) = original_mode {
                                 let _ = rt.block_on(radio.set_mode(mode));
@@ -1271,8 +1256,8 @@ pub(crate) fn spawn_radio_worker(
                             continue;
                         }
                         info!(
-                            mode = "RTTY",
-                            test_power_percent = SWR_TEST_POWER_PERCENT,
+                            mode = ?sweep_setup.carrier_mode,
+                            test_power = sweep_setup.rf_power,
                             "SWR sweep configured carrier pipeline"
                         );
                         let mut frequency = start_hz;
@@ -1640,9 +1625,9 @@ fn poll_radio_core_state(
         }
         return;
     }
-    // IC-7300 mode status can report a misleading data byte through the
-    // generic 0x04 response. Query the model-specific DataMode control for the
-    // flag used by the UI label.
+    // Some Icom profiles can report a stale data byte through the generic
+    // status response. Query the profile's dedicated DataMode control when
+    // available for the flag used by the UI label.
     let data_mode = if poll_levels {
         radio
             .supports_control_read(ControlId::DataMode)
@@ -1659,15 +1644,21 @@ fn poll_radio_core_state(
     } else {
         None
     };
-    let (af, rf, pwr) = if poll_levels {
-        (
-            read_u8_control(rt, radio, ControlId::AfGain),
-            read_u8_control(rt, radio, ControlId::RfGain),
-            read_u8_control(rt, radio, ControlId::RfPower),
-        )
-    } else {
-        (None, None, None)
-    };
+    let (af, tuning_step, antenna, mic_gain, monitor_level, speech_processor_level, rf, pwr) =
+        if poll_levels {
+            (
+                read_u8_control(rt, radio, ControlId::AfGain),
+                read_u8_control(rt, radio, ControlId::TuningStep),
+                read_u8_control(rt, radio, ControlId::Antenna),
+                read_u8_control(rt, radio, ControlId::MicGain),
+                read_u8_control(rt, radio, ControlId::MonitorLevel),
+                read_u8_control(rt, radio, ControlId::SpeechProcessorLevel),
+                read_u8_control(rt, radio, ControlId::RfGain),
+                read_u8_control(rt, radio, ControlId::RfPower),
+            )
+        } else {
+            (None, None, None, None, None, None, None, None)
+        };
     let (
         squelch,
         preamp,
@@ -1679,6 +1670,8 @@ fn poll_radio_core_state(
         notch_auto,
         notch_manual,
         agc,
+        speech_processor,
+        lock,
         tuner_status,
     ) = if poll_levels {
         (
@@ -1692,6 +1685,8 @@ fn poll_radio_core_state(
             read_bool_control(rt, radio, ControlId::Notch),
             read_bool_control(rt, radio, ControlId::ManualNotch),
             read_u8_control(rt, radio, ControlId::Agc),
+            read_bool_control(rt, radio, ControlId::SpeechProcessor),
+            read_bool_control(rt, radio, ControlId::Lock),
             radio
                 .supports_control_read(ControlId::Tuner)
                 .then(|| rt.block_on(radio.get_tuner_status()).ok().flatten())
@@ -1699,11 +1694,11 @@ fn poll_radio_core_state(
         )
     } else {
         (
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None,
         )
     };
-    // The IC-7300's regular mode response does not consistently include the
-    // active FIL number, so filter state needs its own fast query.
+    // Some Icom profiles do not consistently include the active FIL number in
+    // their regular mode response, so filter state needs its own fast query.
     let filt = poll_levels
         .then(|| read_u8_control(rt, radio, ControlId::Filter))
         .flatten();
@@ -1732,6 +1727,21 @@ fn poll_radio_core_state(
     }
     if let Some(v) = af {
         s.af_gain = Some(v);
+    }
+    if let Some(v) = tuning_step {
+        s.tuning_step = Some(v);
+    }
+    if let Some(v) = antenna {
+        s.antenna = Some(v);
+    }
+    if let Some(v) = mic_gain {
+        s.mic_gain = Some(v);
+    }
+    if let Some(v) = monitor_level {
+        s.monitor_level = Some(v);
+    }
+    if let Some(v) = speech_processor_level {
+        s.speech_processor_level = Some(v);
     }
     if let Some(v) = rf {
         s.rf_gain = Some(v);
@@ -1770,6 +1780,12 @@ fn poll_radio_core_state(
     }
     if let Some(v) = agc {
         s.agc = Some(v);
+    }
+    if let Some(v) = speech_processor {
+        s.speech_processor = Some(v);
+    }
+    if let Some(v) = lock {
+        s.lock = Some(v);
     }
     if tuner_status.is_some() {
         s.tuner_status = tuner_status;
@@ -1829,6 +1845,17 @@ fn control_vfo_value(value: &ControlValue) -> Option<u8> {
 fn project_control_write(state: &mut GuiState, id: ControlId, value: &ControlValue) {
     match (id, value) {
         (ControlId::AfGain, ControlValue::U8(value)) => state.af_gain = Some(*value),
+        (ControlId::TuningStep, ControlValue::U8(value)) => state.tuning_step = Some(*value),
+        (ControlId::Antenna, ControlValue::U8(value)) => state.antenna = Some(*value),
+        (ControlId::MicGain, ControlValue::U8(value)) => state.mic_gain = Some(*value),
+        (ControlId::MonitorLevel, ControlValue::U8(value)) => state.monitor_level = Some(*value),
+        (ControlId::SpeechProcessorLevel, ControlValue::U8(value)) => {
+            state.speech_processor_level = Some(*value)
+        }
+        (ControlId::SpeechProcessor, ControlValue::Bool(value)) => {
+            state.speech_processor = Some(*value)
+        }
+        (ControlId::Lock, ControlValue::Bool(value)) => state.lock = Some(*value),
         (ControlId::RfGain, ControlValue::U8(value)) => state.rf_gain = Some(*value),
         (ControlId::Squelch, ControlValue::U8(value)) => state.squelch = Some(*value),
         (ControlId::RfPower, ControlValue::U8(value)) => state.rf_power = Some(*value),
@@ -1940,8 +1967,8 @@ fn apply_icom_mode_details(
     details: OperatingMode,
     data_mode_override: Option<bool>,
 ) {
-    // Keep the base mode independent from the data flag. On the IC-7300 the
-    // ordinary 0x04 response can carry a stale or misleading data byte;
+    // Keep the base mode independent from the data flag. Some Icom profiles'
+    // ordinary status response can carry a stale or misleading data byte;
     // DataMode is read back separately when the profile supports it. If that
     // dedicated read is temporarily unavailable, retain the last confirmed
     // value instead of treating the failed read as a real false response.
@@ -1986,6 +2013,26 @@ fn poll_radio_level_state(
             read_u8_control(rt, radio, ControlId::AfGain),
         ),
         (
+            ControlId::TuningStep,
+            read_u8_control(rt, radio, ControlId::TuningStep),
+        ),
+        (
+            ControlId::Antenna,
+            read_u8_control(rt, radio, ControlId::Antenna),
+        ),
+        (
+            ControlId::MicGain,
+            read_u8_control(rt, radio, ControlId::MicGain),
+        ),
+        (
+            ControlId::MonitorLevel,
+            read_u8_control(rt, radio, ControlId::MonitorLevel),
+        ),
+        (
+            ControlId::SpeechProcessorLevel,
+            read_u8_control(rt, radio, ControlId::SpeechProcessorLevel),
+        ),
+        (
             ControlId::RfGain,
             read_u8_control(rt, radio, ControlId::RfGain),
         ),
@@ -2013,6 +2060,8 @@ fn poll_radio_level_state(
     ];
     let noise_blank = read_bool_control(rt, radio, ControlId::NoiseBlanker);
     let noise_reduction = read_bool_control(rt, radio, ControlId::NoiseReduction);
+    let speech_processor = read_bool_control(rt, radio, ControlId::SpeechProcessor);
+    let lock = read_bool_control(rt, radio, ControlId::Lock);
     let ip_plus = read_bool_control(rt, radio, ControlId::IpPlus);
     let notch_auto = read_bool_control(rt, radio, ControlId::Notch);
     let notch_manual = read_bool_control(rt, radio, ControlId::ManualNotch);
@@ -2035,6 +2084,11 @@ fn poll_radio_level_state(
         if let Some(value) = value {
             match id {
                 ControlId::AfGain => s.af_gain = Some(value),
+                ControlId::TuningStep => s.tuning_step = Some(value),
+                ControlId::Antenna => s.antenna = Some(value),
+                ControlId::MicGain => s.mic_gain = Some(value),
+                ControlId::MonitorLevel => s.monitor_level = Some(value),
+                ControlId::SpeechProcessorLevel => s.speech_processor_level = Some(value),
                 ControlId::RfGain => s.rf_gain = Some(value),
                 ControlId::Squelch => s.squelch = Some(value),
                 ControlId::RfPower if s.rf_power_write_pending == Some(value) => {
@@ -2076,6 +2130,12 @@ fn poll_radio_level_state(
     if let Some(value) = noise_reduction {
         s.noise_reduction = Some(value);
     }
+    if let Some(value) = speech_processor {
+        s.speech_processor = Some(value);
+    }
+    if let Some(value) = lock {
+        s.lock = Some(value);
+    }
     if let Some(value) = ip_plus {
         s.ip_plus = Some(value);
     }
@@ -2103,7 +2163,7 @@ fn poll_remote_level_state(
     // Reserve two non-signal slots in each eight-cycle window while leaving
     // the remaining odd cycles available for the rotating control/meter
     // reads. The previous four-cycle pattern returned on every odd cycle,
-    // making the 20-slot rotation unreachable.
+    // making the full rotating control schedule unreachable.
     if cycle % 8 == 1 {
         if let Ok(Some(status)) = rt.block_on(radio.get_tuner_status()) {
             state.lock().expect("ui state lock poisoned").tuner_status = Some(status);
@@ -2129,7 +2189,7 @@ fn poll_remote_level_state(
     // Count only actual rotating-read opportunities. Deriving this from the
     // global poll tick would skip slots whenever the priority tuner/filter
     // reads occupy a tick.
-    let slot = REMOTE_LEVEL_CONTROL_INDEX.fetch_add(1, Ordering::Relaxed) % 20;
+    let slot = REMOTE_LEVEL_CONTROL_INDEX.fetch_add(1, Ordering::Relaxed) % 27;
     match slot {
         0 => update_remote_u8(rt, radio, state, ControlId::AfGain, |s, v| {
             s.af_gain = Some(v)
@@ -2186,6 +2246,25 @@ fn poll_remote_level_state(
             s.voltage_meter = Some(v);
             record_voltage_sample(&mut s.voltage_history, v);
         }),
+        20 => update_remote_u8(rt, radio, state, ControlId::TuningStep, |s, v| {
+            s.tuning_step = Some(v)
+        }),
+        21 => update_remote_u8(rt, radio, state, ControlId::Antenna, |s, v| {
+            s.antenna = Some(v)
+        }),
+        22 => update_remote_u8(rt, radio, state, ControlId::MicGain, |s, v| {
+            s.mic_gain = Some(v)
+        }),
+        23 => update_remote_u8(rt, radio, state, ControlId::MonitorLevel, |s, v| {
+            s.monitor_level = Some(v)
+        }),
+        24 => update_remote_bool(rt, radio, state, ControlId::SpeechProcessor, |s, v| {
+            s.speech_processor = Some(v)
+        }),
+        25 => update_remote_u8(rt, radio, state, ControlId::SpeechProcessorLevel, |s, v| {
+            s.speech_processor_level = Some(v)
+        }),
+        26 => update_remote_bool(rt, radio, state, ControlId::Lock, |s, v| s.lock = Some(v)),
         _ => unreachable!(),
     }
 }
@@ -2253,42 +2332,76 @@ fn configure_radio_scope(
     hold_update: Option<bool>,
     reference_tenths_db_update: Option<i16>,
 ) -> Result<()> {
-    if let Some(reference_tenths_db) = reference_tenths_db_update {
-        rt.block_on(radio.set_scope_reference_level_tenths_db(reference_tenths_db))?;
-    }
-    match config.view {
-        RadioScopeView::Narrow => {
-            if let Some((low_hz, high_hz)) = config.edges {
-                // Edge 4 is reserved for QSONaut's mode-aware passband window,
-                // leaving the operator's first three radio edge memories alone.
-                rt.block_on(radio.set_scope_fixed_edge_frequencies(4, low_hz, high_hz))?;
-                rt.block_on(radio.set_scope_fixed_edge_number(4))?;
-                rt.block_on(radio.set_scope_center_fixed_mode(true))?;
-            } else {
-                rt.block_on(radio.set_scope_center_fixed_mode(false))?;
-                rt.block_on(radio.set_scope_span_hz(scope_span_hz(config.span_code)))?;
-            }
-            rt.block_on(
-                radio.set_scope_vbw_wide(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
-            )?;
-        }
-        RadioScopeView::Overview => {
-            let (low_hz, high_hz) = config.edges.context("active band edges unavailable")?;
-            rt.block_on(radio.set_scope_fixed_edge_frequencies(1, low_hz, high_hz))?;
-            rt.block_on(radio.set_scope_fixed_edge_number(1))?;
-            rt.block_on(radio.set_scope_center_fixed_mode(true))?;
-            rt.block_on(
-                radio.set_scope_vbw_wide(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
-            )?;
-        }
-    }
-    if let Some(hold) = hold_update {
-        rt.block_on(radio.set_scope_hold(hold))?;
-    }
-    // Geometry and mode changes can restore the radio's stored sweep setting,
-    // so make the requested speed the final configuration command.
-    rt.block_on(radio.set_scope_sweep_speed(config.sweep_code))?;
+    let metadata = radio
+        .scope_metadata()
+        .context("native scope metadata is unavailable")?;
+    let (span_hz, fixed_edges_hz, fixed_edge_number, center_mode) = match config.view {
+        RadioScopeView::Narrow => match config.edges {
+            Some(edges) => (
+                None,
+                Some(edges),
+                metadata.fixed_edge_numbers.last().copied(),
+                Some(true),
+            ),
+            None => (
+                Some(
+                    *metadata
+                        .span_options_hz
+                        .get(usize::from(config.span_code))
+                        .context("scope span is not supported by this driver")?,
+                ),
+                None,
+                None,
+                Some(false),
+            ),
+        },
+        RadioScopeView::Overview => (
+            None,
+            Some(config.edges.context("active band edges unavailable")?),
+            metadata.fixed_edge_numbers.first().copied(),
+            Some(true),
+        ),
+    };
+    rt.block_on(
+        radio.set_scope_configuration(qsonaut_radio::ScopeConfiguration {
+            span_hz,
+            fixed_edges_hz,
+            fixed_edge_number,
+            hold: hold_update,
+            reference_level_tenths_db: reference_tenths_db_update,
+            sweep_speed: Some(config.sweep_code),
+            center_mode,
+            vbw_wide: Some(scope_vbw_wide_for_view(config.view, config.vbw_wide)),
+            center_type: config.advanced.center_type,
+            tx_display: config.advanced.tx_display,
+            max_hold: config.advanced.max_hold,
+            marker_position: config.advanced.marker_position,
+            averaging: config.advanced.averaging,
+            waveform_type: config.advanced.waveform_type,
+            waterfall_display: config.advanced.waterfall_display,
+            waterfall_size: config.advanced.waterfall_size,
+            waterfall_peak_level: config.advanced.waterfall_peak_level,
+            marker_auto_hide: config.advanced.marker_auto_hide,
+            waveform_color_current: config.advanced.waveform_color_current,
+            waveform_color_line: config.advanced.waveform_color_line,
+            waveform_color_max_hold: config.advanced.waveform_color_max_hold,
+        }),
+    )?;
     Ok(())
+}
+
+fn supported_control_value(radio: &RadioHandle, id: ControlId, requested: u8) -> u8 {
+    if let Some(values) = radio.supported_control_values(id) {
+        return values
+            .iter()
+            .copied()
+            .min_by_key(|value| value.abs_diff(requested))
+            .unwrap_or(requested);
+    }
+    radio
+        .control_max(id)
+        .map(|max| requested.min(max))
+        .unwrap_or(requested)
 }
 
 fn scope_vbw_wide_for_view(_view: RadioScopeView, user_vbw_wide: bool) -> bool {
@@ -2300,6 +2413,7 @@ fn scope_edges_for_view(
     workspace_mode: WorkspaceMode,
     frequency_hz: Option<u64>,
     span_code: u8,
+    scope_metadata: Option<qsonaut_radio::ScopeMetadata>,
     mode: &str,
 ) -> Option<(u64, u64)> {
     match (scope_view, workspace_mode) {
@@ -2313,7 +2427,7 @@ fn scope_edges_for_view(
         (RadioScopeView::Narrow, _) => frequency_hz.and_then(|hz| {
             sideband_scope_edges(
                 hz,
-                scope_span_hz(span_code),
+                scope_span_hz_for(scope_metadata, span_code),
                 scope_projection_for_mode(mode),
             )
         }),
@@ -2423,6 +2537,7 @@ mod tests {
                 WorkspaceMode::Voice,
                 Some(14_074_000),
                 3,
+                None,
                 "USB"
             ),
             None
@@ -2432,18 +2547,25 @@ mod tests {
             WorkspaceMode::Ft8,
             Some(14_074_000),
             3,
+            None,
             "USB"
         )
         .is_some());
-        assert!(
-            scope_edges_for_view(RadioScopeView::Overview, WorkspaceMode::Ft8, None, 3, "USB")
-                .is_none()
-        );
+        assert!(scope_edges_for_view(
+            RadioScopeView::Overview,
+            WorkspaceMode::Ft8,
+            None,
+            3,
+            None,
+            "USB",
+        )
+        .is_none());
         assert!(scope_edges_for_view(
             RadioScopeView::Narrow,
             WorkspaceMode::Ft8,
             Some(14_074_000),
             3,
+            None,
             "USB"
         )
         .is_some());
@@ -2459,6 +2581,7 @@ mod tests {
             sweep_code: 1,
             hold: false,
             reference_tenths_db: 0,
+            advanced: ScopeAdvancedSettings::default(),
         };
 
         assert!(!scope_config_changed(None, config));
@@ -2467,6 +2590,16 @@ mod tests {
             Some(config),
             RadioScopeStreamConfig {
                 sweep_code: 2,
+                ..config
+            }
+        ));
+        assert!(scope_config_changed(
+            Some(config),
+            RadioScopeStreamConfig {
+                advanced: ScopeAdvancedSettings {
+                    tx_display: Some(true),
+                    ..ScopeAdvancedSettings::default()
+                },
                 ..config
             }
         ));
@@ -2482,6 +2615,7 @@ mod tests {
             sweep_code: 1,
             hold: false,
             reference_tenths_db: 0,
+            advanced: ScopeAdvancedSettings::default(),
         };
 
         assert_eq!(
@@ -2847,6 +2981,13 @@ mod level_poll_tests {
 
         fn supports_meter(&self, id: MeterId) -> bool {
             self.meters.contains_key(&id)
+        }
+
+        fn swr_sweep_setup(&self) -> Option<qsonaut_radio::SwrSweepSetup> {
+            Some(qsonaut_radio::SwrSweepSetup {
+                carrier_mode: Mode::Rtty,
+                rf_power: 77,
+            })
         }
 
         fn capabilities(&self) -> RadioCapabilities {
@@ -3367,6 +3508,7 @@ mod level_poll_tests {
             sweep_code: 1,
             hold: false,
             reference_tenths_db: 0,
+            advanced: ScopeAdvancedSettings::default(),
         };
 
         let narrow = configure_radio_scope(&rt, &radio, &base, None, None);
@@ -3383,7 +3525,12 @@ mod level_poll_tests {
         };
         let error = configure_radio_scope(&rt, &radio, &overview, None, None)
             .expect_err("overview requires band edges");
-        assert!(error.to_string().contains("active band edges unavailable"));
+        assert!(
+            error.to_string().contains("active band edges unavailable")
+                || error
+                    .to_string()
+                    .contains("native scope metadata is unavailable")
+        );
     }
 
     #[test]
@@ -3403,6 +3550,7 @@ mod level_poll_tests {
             sweep_code: 2,
             hold: false,
             reference_tenths_db: 0,
+            advanced: ScopeAdvancedSettings::default(),
         };
         assert!(configure_radio_scope(&rt, &narrow_radio, &narrow, None, None).is_ok());
 
@@ -3718,6 +3866,9 @@ mod level_poll_tests {
 
     #[test]
     fn hostbridge_scope_projection_preserves_each_view_contract() {
+        let metadata =
+            qsonaut_radio::icom::profile::profile_for_model(qsonaut_radio::IcomCivModel::Ic7300)
+                .scope_metadata();
         let narrow = RadioScopeStreamConfig {
             view: RadioScopeView::Narrow,
             span_code: 2,
@@ -3726,10 +3877,11 @@ mod level_poll_tests {
             sweep_code: 1,
             hold: true,
             reference_tenths_db: -30,
+            advanced: ScopeAdvancedSettings::default(),
         };
-        let wire = wire_scope_config(&narrow);
+        let wire = wire_scope_config(&narrow, metadata);
         assert_eq!(wire.center_mode, Some(false));
-        assert_eq!(wire.span_hz, Some(scope_span_hz(2)));
+        assert_eq!(wire.span_hz, Some(metadata.unwrap().span_options_hz[2]));
         assert_eq!(wire.fixed_edges_hz, None);
         assert_eq!(wire.hold, Some(true));
         assert_eq!(wire.reference_level_tenths_db, Some(-30));
@@ -3739,7 +3891,7 @@ mod level_poll_tests {
             edges: Some((7_000_000, 7_300_000)),
             ..narrow
         };
-        let wire = wire_scope_config(&overview);
+        let wire = wire_scope_config(&overview, metadata);
         assert_eq!(wire.center_mode, Some(true));
         assert_eq!(wire.span_hz, None);
         assert_eq!(wire.fixed_edges_hz, overview.edges);
@@ -3751,6 +3903,11 @@ mod level_poll_tests {
         let mut state = GuiState::default();
         for (id, value) in [
             (ControlId::AfGain, ControlValue::U8(1)),
+            (ControlId::TuningStep, ControlValue::U8(2)),
+            (ControlId::Antenna, ControlValue::U8(3)),
+            (ControlId::MicGain, ControlValue::U8(4)),
+            (ControlId::MonitorLevel, ControlValue::U8(5)),
+            (ControlId::SpeechProcessorLevel, ControlValue::U8(6)),
             (ControlId::RfGain, ControlValue::U8(2)),
             (ControlId::Squelch, ControlValue::U8(3)),
             (ControlId::RfPower, ControlValue::U8(4)),
@@ -3766,10 +3923,19 @@ mod level_poll_tests {
             (ControlId::ManualNotch, ControlValue::Bool(true)),
             (ControlId::Tuner, ControlValue::Bool(true)),
             (ControlId::Vfo, ControlValue::Vfo(1)),
+            (ControlId::SpeechProcessor, ControlValue::Bool(true)),
+            (ControlId::Lock, ControlValue::Bool(true)),
         ] {
             project_control_write(&mut state, id, &value);
         }
         assert_eq!(state.af_gain, Some(1));
+        assert_eq!(state.tuning_step, Some(2));
+        assert_eq!(state.antenna, Some(3));
+        assert_eq!(state.mic_gain, Some(4));
+        assert_eq!(state.monitor_level, Some(5));
+        assert_eq!(state.speech_processor_level, Some(6));
+        assert_eq!(state.speech_processor, Some(true));
+        assert_eq!(state.lock, Some(true));
         assert_eq!(state.rf_gain, Some(2));
         assert_eq!(state.squelch, Some(3));
         assert_eq!(state.rf_power, Some(4));
@@ -3866,6 +4032,7 @@ mod level_poll_tests {
             sweep_code: 1,
             hold: false,
             reference_tenths_db: -20,
+            advanced: ScopeAdvancedSettings::default(),
         };
         assert!(!scope_config_changed(None, base));
         assert!(scope_config_changed(
@@ -4394,7 +4561,7 @@ mod level_poll_tests {
         assert_eq!(state.mode, "USB");
         assert!(!state.ptt_on);
         assert!(!state.swr_sweep_active);
-        assert_eq!(state.swr_sweep_status, "Low-power setup failed");
+        assert_eq!(state.swr_sweep_status, "Unsupported by radio driver");
     }
 
     #[test]

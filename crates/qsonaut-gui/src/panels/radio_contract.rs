@@ -43,50 +43,24 @@ impl QsonautGuiApp {
         baud_rate: u32,
         radio: ConfiguredRadio,
     ) -> Result<String, String> {
-        match radio {
-            ConfiguredRadio::Yaesu(yaesu) => match yaesu.verify_model() {
-                Ok(()) => Ok(format!(
-                    "CAT OK: {} answered and matched the selected profile at {} baud.",
-                    model, baud_rate
-                )),
-                Err(error) => Err(format!(
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| format!("CAT test runtime failed: {error}"))?;
+        runtime.block_on(radio.probe()).map_or_else(
+            |error| {
+                Err(format!(
                     "CAT probe failed for {} at {} baud: {error}",
                     model, baud_rate
-                )),
+                ))
             },
-            ConfiguredRadio::Kenwood(kenwood) => match kenwood.verify_model() {
-                Ok(()) => Ok(format!(
+            |_| {
+                Ok(format!(
                     "CAT OK: {} answered and matched the selected profile at {} baud.",
                     model, baud_rate
-                )),
-                Err(error) => Err(format!(
-                    "CAT probe failed for {} at {} baud: {error}",
-                    model, baud_rate
-                )),
+                ))
             },
-            ConfiguredRadio::Icom(icom) => {
-                match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(runtime) => match runtime.block_on(Radio::get_frequency_hz(&icom)) {
-                        Ok(frequency_hz) => Ok(format!(
-                            "CAT OK: {} answered at {} baud (frequency {} Hz).",
-                            model, baud_rate, frequency_hz
-                        )),
-                        Err(error) => Err(format!(
-                            "CAT probe failed for {} at {} baud: {error}",
-                            model, baud_rate
-                        )),
-                    },
-                    Err(error) => Err(format!("CAT test runtime failed: {error}")),
-                }
-            }
-            _ => Err(format!(
-                "CAT testing is not implemented for the selected native profile '{}'.",
-                model
-            )),
-        }
+        )
     }
 }
 

@@ -1,20 +1,24 @@
 use super::super::*;
+use crate::ui_widgets::{operating_mode_button, OperatingModeIcon};
 
 // Visible roadmap entries only. These are deliberately not WorkspaceMode
 // variants until an implementation and a legally usable protocol boundary
 // exist.
-const FUTURE_TEXT_MODES: &[(&str, &str)] = &[(
-    "⌨ JS8Call",
+const FUTURE_TEXT_MODES: &[(&str, &str, OperatingModeIcon)] = &[(
+    "JS8Call",
     "Future text modem placeholder; protocol support is not enabled",
+    OperatingModeIcon::Text,
 )];
-const FUTURE_VOICE_MODES: &[(&str, &str)] = &[
+const FUTURE_VOICE_MODES: &[(&str, &str, OperatingModeIcon)] = &[
     (
-        "🎙 VaraAC",
+        "VaraAC",
         "Future voice modem placeholder; protocol support is not enabled",
+        OperatingModeIcon::VaraAc,
     ),
     (
-        "🎙 RADE",
+        "RADE",
         "Future voice modem placeholder; protocol support is not enabled",
+        OperatingModeIcon::Rade,
     ),
 ];
 
@@ -63,24 +67,32 @@ impl QsonautGuiApp {
 impl QsonautGuiApp {
     pub(crate) fn draw_banner_radio_controls(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         let supports_levels = snapshot.supported_controls.contains(&ControlId::AfGain);
+        let tuning_step_hz = match snapshot.tuning_step.unwrap_or(5) {
+            0 => 1,
+            1 => 5,
+            2 => 10,
+            3 => 50,
+            4 => 100,
+            _ => 1_000,
+        };
         ui.horizontal(|ui| {
             ui.scope(|ui| {
                 ui.spacing_mut().item_spacing.x = 7.0;
                 ui.spacing_mut().button_padding.x = 4.0;
                 ui.label(RichText::new("Radio").strong());
                 if ui
-                    .small_button("-1 kHz")
-                    .on_hover_text("Tune the radio down by 1 kHz")
+                    .small_button(format!("-{tuning_step_hz} Hz"))
+                    .on_hover_text(format!("Tune the radio down by {tuning_step_hz} Hz"))
                     .clicked()
                 {
-                    self.send_command(GuiCommand::TuneDelta(-1_000));
+                    self.send_command(GuiCommand::TuneDelta(-(tuning_step_hz as i64)));
                 }
                 if ui
-                    .small_button("+1 kHz")
-                    .on_hover_text("Tune the radio up by 1 kHz")
+                    .small_button(format!("+{tuning_step_hz} Hz"))
+                    .on_hover_text(format!("Tune the radio up by {tuning_step_hz} Hz"))
                     .clicked()
                 {
-                    self.send_command(GuiCommand::TuneDelta(1_000));
+                    self.send_command(GuiCommand::TuneDelta(tuning_step_hz as i64));
                 }
                 if ui
                     .add_enabled(supports_levels, egui::Button::new("AF-").small())
@@ -105,27 +117,27 @@ impl QsonautGuiApp {
     pub(crate) fn draw_banner_op_modes(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         ui.separator();
         ui.horizontal_wrapped(|ui| {
-            let mut draw_mode = |ui: &mut egui::Ui, icon: &str, mode: WorkspaceMode| {
-                let response = ui
-                    .add(
-                        egui::Button::selectable(
-                            self.workspace_mode == mode,
-                            RichText::new(format!("{icon} {}", mode.label())).size(12.0),
-                        )
-                        .small(),
+            let mut draw_mode =
+                |ui: &mut egui::Ui, icon: OperatingModeIcon, mode: WorkspaceMode| {
+                    let response = operating_mode_button(
+                        ui,
+                        self.workspace_mode == mode,
+                        mode.label(),
+                        icon,
+                        true,
                     )
                     .on_hover_text(format!("Switch workspace to {}", mode.label()));
-                if response.clicked() {
-                    self.workspace_mode = mode;
-                    self.profile_dirty = true;
-                    self.persist_profile("Mode saved to");
-                    if let Some(frequency_hz) =
-                        workspace_frequency_for_current_band(mode, snapshot.frequency_hz)
-                    {
-                        self.send_command(GuiCommand::ApplyWorkspace { mode, frequency_hz });
+                    if response.clicked() {
+                        self.workspace_mode = mode;
+                        self.profile_dirty = true;
+                        self.persist_profile("Mode saved to");
+                        if let Some(frequency_hz) =
+                            workspace_frequency_for_current_band(mode, snapshot.frequency_hz)
+                        {
+                            self.send_command(GuiCommand::ApplyWorkspace { mode, frequency_hz });
+                        }
                     }
-                }
-            };
+                };
             for mode in [
                 WorkspaceMode::Ft8,
                 WorkspaceMode::Ft4,
@@ -134,32 +146,51 @@ impl QsonautGuiApp {
                 WorkspaceMode::Jt65,
                 WorkspaceMode::Q65,
             ] {
-                draw_mode(ui, "⌨", mode);
+                draw_mode(ui, OperatingModeIcon::Digital, mode);
             }
-            draw_mode(ui, "📡", WorkspaceMode::Wspr);
-            draw_mode(ui, "⌨", WorkspaceMode::Cw);
-            draw_mode(ui, "🎙", WorkspaceMode::Voice);
-            draw_mode(ui, "🖼", WorkspaceMode::Sstv);
+            draw_mode(ui, OperatingModeIcon::Wspr, WorkspaceMode::Wspr);
+            draw_mode(ui, OperatingModeIcon::Cw, WorkspaceMode::Cw);
+            draw_mode(ui, OperatingModeIcon::Sstv, WorkspaceMode::Sstv);
+            let response = operating_mode_button(
+                ui,
+                self.workspace_mode == WorkspaceMode::Voice,
+                "Voice",
+                OperatingModeIcon::Voice,
+                true,
+            )
+            .on_hover_text("Switch workspace to Voice");
+            if response.clicked() {
+                self.workspace_mode = WorkspaceMode::Voice;
+                self.profile_dirty = true;
+                self.persist_profile("Mode saved to");
+                if let Some(frequency_hz) = workspace_frequency_for_current_band(
+                    WorkspaceMode::Voice,
+                    snapshot.frequency_hz,
+                ) {
+                    self.send_command(GuiCommand::ApplyWorkspace {
+                        mode: WorkspaceMode::Voice,
+                        frequency_hz,
+                    });
+                }
+            }
 
             let mode = WorkspaceMode::Msk144;
             let enabled = !mode.is_uhf();
-            let response = ui
-                .add_enabled(
-                    enabled,
-                    egui::Button::selectable(
-                        self.workspace_mode == mode,
-                        RichText::new(format!("📶 {}", mode.label())).size(12.0),
-                    )
-                    .small(),
+            let response = operating_mode_button(
+                ui,
+                self.workspace_mode == mode,
+                mode.label(),
+                OperatingModeIcon::Msk144,
+                enabled,
+            )
+            .on_hover_text(if enabled {
+                format!("Switch workspace to {}", mode.label())
+            } else {
+                format!(
+                    "{} is disabled without a configured UHF radio",
+                    mode.label()
                 )
-                .on_hover_text(if enabled {
-                    format!("Switch workspace to {}", mode.label())
-                } else {
-                    format!(
-                        "{} is disabled without a configured UHF radio",
-                        mode.label()
-                    )
-                });
+            });
             if response.clicked() && enabled {
                 self.workspace_mode = mode;
                 self.profile_dirty = true;
@@ -171,12 +202,13 @@ impl QsonautGuiApp {
                 }
             }
 
-            for (label, tooltip) in FUTURE_TEXT_MODES.iter().chain(FUTURE_VOICE_MODES.iter()) {
-                ui.add_enabled(
-                    false,
-                    egui::Button::selectable(false, RichText::new(*label).size(12.0)).small(),
-                )
-                .on_disabled_hover_text(*tooltip);
+            for (label, tooltip, icon) in FUTURE_TEXT_MODES.iter().copied() {
+                operating_mode_button(ui, false, label, icon, false)
+                    .on_disabled_hover_text(tooltip);
+            }
+            for (label, tooltip, icon) in FUTURE_VOICE_MODES.iter().copied() {
+                operating_mode_button(ui, false, label, icon, false)
+                    .on_disabled_hover_text(tooltip);
             }
         });
     }

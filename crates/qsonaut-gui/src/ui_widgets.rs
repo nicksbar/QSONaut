@@ -1,7 +1,7 @@
 use eframe::egui;
 use eframe::egui::Color32;
 
-use qsonaut_radio::{models::find_model, MeterId};
+use qsonaut_radio::models::find_model;
 
 /// Paint the AI tab icon with egui primitives so it does not depend on an
 /// emoji or a platform font containing a particular Unicode glyph.
@@ -119,6 +119,310 @@ pub(super) fn draw_speaker_icon(painter: &egui::Painter, rect: egui::Rect, color
     );
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum OperatingModeIcon {
+    Digital,
+    Wspr,
+    Cw,
+    Sstv,
+    Msk144,
+    Voice,
+    VaraAc,
+    Rade,
+    Text,
+}
+
+/// Paint voice-mode icons without depending on emoji coverage in the selected
+/// system font.
+pub(super) fn draw_operating_mode_icon(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    icon: OperatingModeIcon,
+    color: Color32,
+) {
+    let center = rect.center();
+    let stroke = egui::Stroke::new(1.4_f32, color);
+    match icon {
+        OperatingModeIcon::Digital => {
+            painter.circle_filled(egui::pos2(center.x - 5.0, center.y), 1.5, color);
+            painter.circle_filled(center, 1.5, color);
+            painter.circle_filled(egui::pos2(center.x + 5.0, center.y), 1.5, color);
+            painter.line_segment(
+                [
+                    egui::pos2(center.x - 7.0, center.y - 5.0),
+                    egui::pos2(center.x + 7.0, center.y - 5.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(center.x - 7.0, center.y + 5.0),
+                    egui::pos2(center.x + 7.0, center.y + 5.0),
+                ],
+                stroke,
+            );
+        }
+        OperatingModeIcon::Wspr => {
+            painter.line_segment(
+                [
+                    egui::pos2(center.x, center.y + 8.0),
+                    egui::pos2(center.x, center.y - 6.0),
+                ],
+                stroke,
+            );
+            painter.circle_stroke(egui::pos2(center.x, center.y - 5.0), 3.0, stroke);
+            painter.circle_stroke(egui::pos2(center.x, center.y - 5.0), 6.0, stroke);
+            painter.line_segment(
+                [
+                    egui::pos2(center.x - 5.0, center.y + 8.0),
+                    egui::pos2(center.x + 5.0, center.y + 8.0),
+                ],
+                stroke,
+            );
+        }
+        OperatingModeIcon::Cw => {
+            painter.circle_filled(egui::pos2(center.x - 6.0, center.y), 1.5, color);
+            painter.line_segment(
+                [
+                    egui::pos2(center.x - 2.0, center.y),
+                    egui::pos2(center.x + 7.0, center.y),
+                ],
+                stroke,
+            );
+            painter.circle_filled(egui::pos2(center.x - 4.0, center.y + 6.0), 1.5, color);
+            painter.line_segment(
+                [
+                    egui::pos2(center.x, center.y + 6.0),
+                    egui::pos2(center.x + 7.0, center.y + 6.0),
+                ],
+                stroke,
+            );
+        }
+        OperatingModeIcon::Sstv => {
+            let frame = egui::Rect::from_center_size(center, egui::vec2(15.0, 13.0));
+            painter.rect_stroke(frame, 1.5, stroke, egui::StrokeKind::Inside);
+            painter.circle_filled(
+                egui::pos2(frame.right() - 4.0, frame.top() + 4.0),
+                1.2,
+                color,
+            );
+            painter.line(
+                vec![
+                    egui::pos2(frame.left() + 2.0, frame.bottom() - 2.0),
+                    egui::pos2(center.x - 1.0, center.y),
+                    egui::pos2(center.x + 2.0, frame.bottom() - 3.0),
+                    egui::pos2(frame.right() - 2.0, frame.bottom() - 2.0),
+                ],
+                stroke,
+            );
+        }
+        OperatingModeIcon::Msk144 => {
+            for (index, height) in [4.0, 7.0, 10.0].into_iter().enumerate() {
+                let x = center.x - 6.0 + index as f32 * 6.0;
+                painter.line_segment(
+                    [
+                        egui::pos2(x, center.y + 5.0),
+                        egui::pos2(x, center.y + 5.0 - height),
+                    ],
+                    stroke,
+                );
+            }
+        }
+        OperatingModeIcon::Voice => {
+            let capsule = egui::Rect::from_center_size(
+                egui::pos2(center.x, center.y - 1.0),
+                egui::vec2(7.0, 11.0),
+            );
+            painter.rect_stroke(capsule, 3.5, stroke, egui::StrokeKind::Inside);
+            painter.circle_stroke(egui::pos2(center.x, center.y + 1.0), 6.0, stroke);
+            painter.line_segment(
+                [
+                    egui::pos2(center.x, center.y + 7.0),
+                    egui::pos2(center.x, center.y + 10.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(center.x - 4.0, center.y + 10.0),
+                    egui::pos2(center.x + 4.0, center.y + 10.0),
+                ],
+                stroke,
+            );
+        }
+        OperatingModeIcon::VaraAc => {
+            painter.line_segment(
+                [
+                    egui::pos2(rect.left() + 1.0, center.y),
+                    egui::pos2(center.x - 5.0, center.y),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(center.x - 5.0, center.y),
+                    egui::pos2(center.x - 2.0, center.y - 5.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(center.x - 2.0, center.y - 5.0),
+                    egui::pos2(center.x + 1.0, center.y + 5.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(center.x + 1.0, center.y + 5.0),
+                    egui::pos2(center.x + 4.0, center.y - 4.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(center.x + 4.0, center.y - 4.0),
+                    egui::pos2(rect.right() - 1.0, center.y - 4.0),
+                ],
+                stroke,
+            );
+            painter.circle_stroke(egui::pos2(rect.right() - 2.0, center.y + 4.0), 2.5, stroke);
+        }
+        OperatingModeIcon::Rade => {
+            let bubble = egui::Rect::from_center_size(
+                egui::pos2(center.x, center.y - 1.0),
+                egui::vec2(14.0, 10.0),
+            );
+            painter.rect_stroke(bubble, 2.0, stroke, egui::StrokeKind::Inside);
+            painter.line_segment(
+                [
+                    egui::pos2(center.x - 3.0, bubble.bottom()),
+                    egui::pos2(center.x - 5.0, bubble.bottom() + 4.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(center.x - 5.0, bubble.bottom() + 4.0),
+                    egui::pos2(center.x + 1.0, bubble.bottom()),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(center.x - 4.0, center.y - 1.0),
+                    egui::pos2(center.x + 4.0, center.y - 1.0),
+                ],
+                stroke,
+            );
+        }
+        OperatingModeIcon::Text => {
+            let keyboard = egui::Rect::from_center_size(center, egui::vec2(15.0, 11.0));
+            painter.rect_stroke(keyboard, 1.5, stroke, egui::StrokeKind::Inside);
+            for x in [-4.0_f32, 0.0, 4.0] {
+                painter.circle_filled(egui::pos2(center.x + x, center.y - 2.0), 1.0, color);
+            }
+            painter.line_segment(
+                [
+                    egui::pos2(center.x - 5.0, center.y + 3.0),
+                    egui::pos2(center.x + 5.0, center.y + 3.0),
+                ],
+                stroke,
+            );
+        }
+    }
+}
+
+pub(super) fn operating_mode_button(
+    ui: &mut egui::Ui,
+    selected: bool,
+    label: &str,
+    icon: OperatingModeIcon,
+    enabled: bool,
+) -> egui::Response {
+    let label_width = ui
+        .painter()
+        .layout_no_wrap(
+            label.to_owned(),
+            egui::TextStyle::Button.resolve(ui.style()),
+            Color32::WHITE,
+        )
+        .size()
+        .x;
+    let width = 31.0 + label_width + 8.0;
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(width.max(62.0), 24.0),
+        if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    let fill = if selected {
+        ui.visuals().selection.bg_fill
+    } else if response.hovered() {
+        ui.visuals().widgets.hovered.bg_fill
+    } else {
+        ui.visuals().widgets.inactive.bg_fill
+    };
+    let shadow_color = ui
+        .visuals()
+        .widgets
+        .noninteractive
+        .bg_stroke
+        .color
+        .gamma_multiply(0.8);
+    if !selected && enabled {
+        ui.painter()
+            .rect_filled(rect.translate(egui::vec2(0.0, 2.0)), 3.0, shadow_color);
+    }
+    ui.painter().rect_filled(
+        if selected {
+            rect.translate(egui::vec2(0.0, 1.0))
+        } else {
+            rect
+        },
+        3.0,
+        fill,
+    );
+    ui.painter().rect_stroke(
+        if selected {
+            rect.translate(egui::vec2(0.0, 1.0))
+        } else {
+            rect
+        },
+        3.0,
+        if selected {
+            ui.visuals().selection.stroke
+        } else {
+            ui.visuals().widgets.inactive.bg_stroke
+        },
+        egui::StrokeKind::Inside,
+    );
+    let color = if enabled {
+        ui.visuals().widgets.inactive.fg_stroke.color
+    } else {
+        ui.visuals().widgets.noninteractive.fg_stroke.color
+    };
+    draw_operating_mode_icon(
+        ui.painter(),
+        egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 13.0, rect.center().y),
+            egui::vec2(18.0, 18.0),
+        ),
+        icon,
+        color,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 25.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::TextStyle::Button.resolve(ui.style()),
+        color,
+    );
+    response
+}
+
 /// Paint a small radio/antenna mark for the About entry without relying on
 /// platform fonts or emoji glyph coverage.
 pub(super) fn draw_radio_about_icon(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
@@ -158,16 +462,6 @@ pub(super) fn native_radio_profile(
     .flatten()
 }
 
-pub(super) fn radio_control_max(
-    model: &str,
-    control: qsonaut_radio::ControlId,
-    fallback: u8,
-) -> u8 {
-    native_radio_profile("native", model)
-        .and_then(|profile| profile.control_max(control))
-        .unwrap_or(fallback)
-}
-
 pub(super) fn radio_baud_rates(model: &str) -> &'static [u32] {
     let Some(profile) = find_model(model) else {
         return &[];
@@ -191,36 +485,43 @@ pub(super) fn radio_supports_band(
     }
 }
 
-pub(super) fn format_swr_display(model: &str, normalized: Option<u8>) -> String {
+pub(super) fn format_swr_display(
+    presentation: Option<qsonaut_radio::MeterPresentation>,
+    normalized: Option<u8>,
+) -> String {
     let Some(level) = normalized else {
         return "unavailable".to_string();
     };
     let meter_percent = (f32::from(level) * 100.0 / 255.0).round();
-    if let Some(profile) = find_model(model) {
-        // The IC-7300 manual documents these CI-V meter anchors. Interpolate
-        // only between known points; do not invent a ratio above the documented
-        // 3.0:1 anchor.
-        if profile
-            .calibrated_meter_value(MeterId::Swr, level)
-            .is_some()
+    if let Some(presentation) = presentation {
+        if presentation
+            .upper_bound
+            .is_some_and(|bound| presentation.value >= bound && level > 120)
         {
-            let ratio = profile
-                .calibrated_meter_value(MeterId::Swr, level)
-                .unwrap_or(3.0);
-            if level > 120 {
-                return format!(">3.00:1 ({meter_percent:.0}% meter)");
-            }
-            return format!("{ratio:.2}:1 ({meter_percent:.0}% meter)");
+            return format!(
+                ">{:.2}{} ({}% meter)",
+                presentation.upper_bound.unwrap_or(presentation.value),
+                presentation.unit,
+                meter_percent as u8
+            );
         }
+        return format!(
+            "{:.precision$}{} ({}% meter)",
+            presentation.value,
+            presentation.unit,
+            meter_percent as u8,
+            precision = usize::from(presentation.precision)
+        );
     }
     format!("SWR meter {meter_percent:.0}%")
 }
 
-pub(super) fn swr_chart_value(model: &str, normalized: u8) -> f32 {
-    if let Some(profile) = find_model(model) {
-        if let Some(value) = profile.calibrated_meter_value(MeterId::Swr, normalized) {
-            return value;
-        }
+pub(super) fn swr_chart_value(
+    presentation: Option<qsonaut_radio::MeterPresentation>,
+    normalized: u8,
+) -> f32 {
+    if let Some(presentation) = presentation {
+        return presentation.value;
     }
     f32::from(normalized) * 100.0 / 255.0
 }
@@ -240,17 +541,14 @@ mod tests {
         assert!(radio_baud_rates("FT-710").contains(&115_200));
         assert_eq!(radio_baud_rates("FT-857D"), &[4_800, 9_600, 38_400]);
         assert!(!radio_baud_rates("TS-2000").contains(&115_200));
-        assert!(radio_baud_rates("IC-7300").contains(&115_200));
+        assert_eq!(radio_baud_rates("IC-7300"), &[4_800, 9_600, 19_200]);
     }
 
     #[test]
     fn swr_display_uses_model_calibration_and_safe_generic_fallbacks() {
-        assert_eq!(format_swr_display("IC-7300", None), "unavailable");
-        assert_eq!(format_swr_display("unknown", Some(128)), "SWR meter 50%");
-        assert!(format_swr_display("IC-7300", Some(80)).ends_with("meter)"));
-        assert!(format_swr_display("IC-7300", Some(121)).starts_with(">3.00:1"));
-        assert_eq!(swr_chart_value("unknown", 128), 128.0 * 100.0 / 255.0);
-        assert!(swr_chart_value("IC-7300", 80) > 1.0);
+        assert_eq!(format_swr_display(None, None), "unavailable");
+        assert_eq!(format_swr_display(None, Some(128)), "SWR meter 50%");
+        assert_eq!(swr_chart_value(None, 128), 128.0 * 100.0 / 255.0);
     }
 
     #[test]

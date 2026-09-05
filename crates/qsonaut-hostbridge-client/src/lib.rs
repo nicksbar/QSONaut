@@ -55,6 +55,7 @@ impl Default for HostBridgeConfig {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum HostBridgeEvent {
     Connected(HostHello),
     Server(ServerMessage),
@@ -333,8 +334,17 @@ async fn run(
     events: mpsc::UnboundedSender<HostBridgeEvent>,
 ) {
     let mut pending = VecDeque::new();
+    let mut last_radio_selection: Option<ClientMessage> = None;
     loop {
-        match connect(&config, &mut commands, &events, &mut pending).await {
+        match connect(
+            &config,
+            &mut commands,
+            &events,
+            &mut pending,
+            &mut last_radio_selection,
+        )
+        .await
+        {
             Ok(ConnectionEnd::Shutdown) => return,
             Ok(ConnectionEnd::Disconnected(reason)) => {
                 let _ = events.send(HostBridgeEvent::SafetyDisarmed {
@@ -381,6 +391,7 @@ async fn connect(
     commands: &mut mpsc::UnboundedReceiver<Command>,
     events: &mpsc::UnboundedSender<HostBridgeEvent>,
     pending: &mut VecDeque<Command>,
+    last_radio_selection: &mut Option<ClientMessage>,
 ) -> Result<ConnectionEnd> {
     let endpoint = normalize_endpoint(&config.endpoint)?;
     let (socket, _) =
@@ -408,11 +419,21 @@ async fn connect(
         None => anyhow::bail!("HostBridge closed before hello"),
     };
     let _ = events.send(HostBridgeEvent::Connected(hello));
+    if let Some(ClientMessage::SelectRadio { .. }) = last_radio_selection.as_ref() {
+        if let Some(selection) = last_radio_selection.as_ref() {
+            send_json(&mut writer, selection).await?;
+        }
+    }
     let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
     loop {
         if let Some(command) = pending.pop_front() {
             match command {
-                Command::Message(message) => send_json(&mut writer, &message).await?,
+                Command::Message(message) => {
+                    if matches!(message, ClientMessage::SelectRadio { .. }) {
+                        *last_radio_selection = Some(message.clone());
+                    }
+                    send_json(&mut writer, &message).await?
+                }
                 Command::Media(bytes) => writer.send(Message::Binary(bytes.into())).await?,
                 Command::Shutdown => {
                     let _ = send_json(
@@ -434,7 +455,12 @@ async fn connect(
                 send_json(&mut writer, &ClientMessage::Ping { nonce: 0 }).await?;
             }
             command = commands.recv() => match command {
-                Some(Command::Message(message)) => send_json(&mut writer, &message).await?,
+                Some(Command::Message(message)) => {
+                    if matches!(message, ClientMessage::SelectRadio { .. }) {
+                        *last_radio_selection = Some(message.clone());
+                    }
+                    send_json(&mut writer, &message).await?
+                }
                 Some(Command::Media(bytes)) => writer.send(Message::Binary(bytes.into())).await?,
                 Some(Command::Shutdown) | None => {
                     let _ = send_json(&mut writer, &ClientMessage::SetPtt { request_id: None, enabled: false }).await;

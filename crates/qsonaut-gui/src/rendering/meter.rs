@@ -248,13 +248,18 @@ pub(crate) fn meter_reading(id: MeterId, value: Option<u8>) -> String {
     }
 }
 
-pub(crate) fn meter_reading_for_model(id: MeterId, value: Option<u8>, model: &str) -> String {
-    if id == MeterId::Voltage {
-        if let (Some(profile), Some(raw)) = (native_radio_profile("native", model), value) {
-            if let Some(voltage) = profile.calibrated_meter_value(id, raw) {
-                return format!("{voltage:.1} V");
-            }
-        }
+pub(crate) fn meter_reading_for_presentation(
+    id: MeterId,
+    value: Option<u8>,
+    presentation: Option<qsonaut_radio::MeterPresentation>,
+) -> String {
+    if let (Some(presentation), Some(_raw)) = (presentation, value) {
+        return format!(
+            "{:.precision$} {}",
+            presentation.value,
+            presentation.unit,
+            precision = usize::from(presentation.precision)
+        );
     }
     meter_reading(id, value)
 }
@@ -270,7 +275,7 @@ pub(crate) fn meter_tooltip(id: MeterId) -> &'static str {
         MeterId::Compression => "Transmit speech/data compression level",
         MeterId::Current => "PA drain/current meter level",
         MeterId::Voltage => {
-            "PA voltage level; IC-7300 is shown in volts, other radios are relative"
+            "PA voltage level; physical units are shown only when documented by the driver"
         }
         MeterId::Temperature => "PA temperature meter; exact units depend on the driver",
     }

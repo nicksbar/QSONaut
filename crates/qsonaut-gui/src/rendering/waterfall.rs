@@ -1,39 +1,5 @@
 use super::super::*;
 
-pub(crate) fn filter_bandwidth_hz(mode: &str, filter: Option<u8>) -> u32 {
-    let f = filter.unwrap_or(1);
-    let m = mode.to_ascii_uppercase();
-    if m.contains("CW") {
-        match f {
-            1 => 500,
-            2 => 250,
-            3 => 100,
-            _ => 500,
-        }
-    } else if m.contains("FM") {
-        match f {
-            1 => 15_000,
-            2 => 10_000,
-            3 => 7_000,
-            _ => 15_000,
-        }
-    } else if m.contains("RTTY") {
-        match f {
-            1 => 500,
-            2 => 350,
-            3 => 250,
-            _ => 500,
-        }
-    } else {
-        match f {
-            1 => 3_000,
-            2 => 2_400,
-            3 => 1_800,
-            _ => 3_000,
-        }
-    }
-}
-
 /// Approximate occupied signal width used by the audio reticle. These values
 /// cover the protocol tone span rather than the 3 kHz receiver filter width.
 pub(crate) fn native_channel_width_hz(
@@ -126,16 +92,29 @@ pub(crate) fn sideband_scope_edges(
     }
 }
 
-pub(crate) fn scope_span_label(span_code: u8) -> &'static str {
-    match span_code.min(7) {
-        0 => "±2.5 kHz",
-        1 => "±5 kHz",
-        2 => "±10 kHz",
-        3 => "±25 kHz",
-        4 => "±50 kHz",
-        5 => "±100 kHz",
-        6 => "±250 kHz",
-        _ => "±500 kHz",
+pub(crate) fn scope_span_hz_for(
+    metadata: Option<qsonaut_radio::ScopeMetadata>,
+    span_code: u8,
+) -> u64 {
+    metadata
+        .and_then(|metadata| {
+            metadata
+                .span_options_hz
+                .get(usize::from(span_code))
+                .copied()
+        })
+        .unwrap_or_else(|| scope_span_hz(span_code))
+}
+
+pub(crate) fn scope_span_label_for(
+    metadata: Option<qsonaut_radio::ScopeMetadata>,
+    span_code: u8,
+) -> String {
+    let span_hz = scope_span_hz_for(metadata, span_code);
+    if span_hz.is_multiple_of(1_000) {
+        format!("±{} kHz", span_hz / 1_000)
+    } else {
+        format!("±{:.1} kHz", span_hz as f32 / 1_000.0)
     }
 }
 
@@ -152,8 +131,10 @@ pub(crate) fn scope_span_hz(span_code: u8) -> u64 {
     }
 }
 
-pub(crate) fn scope_span_for_filter(mode: &str, filter: Option<u8>) -> u8 {
-    let filter_width_hz = filter_bandwidth_hz(mode, filter);
+pub(crate) fn scope_span_for_filter(mode: &str, filter_width_hz: Option<u32>) -> u8 {
+    // A driver may not document filter geometry. The neutral fallback keeps
+    // the scope usable without pretending to know a model's filter table.
+    let filter_width_hz = filter_width_hz.unwrap_or(3_000);
     let required_half_span_hz = match scope_projection_for_mode(mode) {
         ScopeProjection::Full => filter_width_hz.div_ceil(2),
         ScopeProjection::LowerSideband | ScopeProjection::UpperSideband => filter_width_hz,
@@ -168,6 +149,25 @@ pub(crate) fn scope_span_for_filter(mode: &str, filter: Option<u8>) -> u8 {
         100_001..=250_000 => 6,
         _ => 7,
     }
+}
+
+pub(crate) fn scope_span_for_filter_with_options(
+    mode: &str,
+    filter_width_hz: Option<u32>,
+    span_options_hz: &[u64],
+) -> u8 {
+    if span_options_hz.is_empty() {
+        return scope_span_for_filter(mode, filter_width_hz);
+    }
+    let filter_width_hz = u64::from(filter_width_hz.unwrap_or(3_000));
+    let required_half_span_hz = match scope_projection_for_mode(mode) {
+        ScopeProjection::Full => filter_width_hz.div_ceil(2),
+        ScopeProjection::LowerSideband | ScopeProjection::UpperSideband => filter_width_hz,
+    };
+    span_options_hz
+        .iter()
+        .position(|span| *span >= required_half_span_hz)
+        .unwrap_or(span_options_hz.len().saturating_sub(1)) as u8
 }
 
 pub(crate) fn band_edges_for_frequency(

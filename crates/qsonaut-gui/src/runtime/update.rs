@@ -196,6 +196,43 @@ impl QsonautGuiApp {
                     Ok(Some(radio)) => {
                         // Radio initialization succeeded; start the worker
                         self.radio_init_attempted = true;
+                        self.driver_metadata.scope = radio.scope_metadata();
+                        self.driver_metadata.control_maxes = ControlId::ALL
+                            .iter()
+                            .copied()
+                            .filter_map(|id| radio.control_max(id).map(|max| (id, max)))
+                            .collect();
+                        self.driver_metadata.control_values = ControlId::ALL
+                            .iter()
+                            .copied()
+                            .filter_map(|id| {
+                                radio
+                                    .supported_control_values(id)
+                                    .map(|values| (id, values))
+                            })
+                            .collect();
+                        self.driver_metadata.filter_bandwidths.clear();
+                        for mode in [
+                            Mode::Lsb,
+                            Mode::Usb,
+                            Mode::Cw,
+                            Mode::Data,
+                            Mode::Am,
+                            Mode::Fm,
+                            Mode::Wfm,
+                            Mode::Rtty,
+                            Mode::CwReverse,
+                            Mode::RttyReverse,
+                        ] {
+                            let mode_name = format!("{mode:?}").to_ascii_uppercase();
+                            for filter in 0..=u8::MAX {
+                                if let Some(width) = radio.filter_bandwidth_hz(mode, filter) {
+                                    self.driver_metadata
+                                        .filter_bandwidths
+                                        .insert((mode_name.clone(), filter), width);
+                                }
+                            }
+                        }
                         if let Some(catalog) = radio.hostbridge_catalog() {
                             if self.config.radio.backend.eq_ignore_ascii_case("hostbridge") {
                                 self.profile_dirty |=
@@ -303,6 +340,7 @@ impl QsonautGuiApp {
             s.radio_scope_hold = self.radio_scope_hold;
             s.radio_scope_reference_tenths_db = self.radio_scope_reference_tenths_db;
             s.radio_scope_view = self.radio_scope_view;
+            s.radio_scope_advanced = self.radio_scope_advanced;
             (std::mem::take(&mut s.ft8_pending), s.ft8_last_decode_period)
         };
         let completed_decode_period =
@@ -759,6 +797,7 @@ impl QsonautGuiApp {
                     );
                     filter_menu.response.on_hover_text("Select the radio IF filter");
                     self.draw_banner_radio_controls(ui, &snapshot);
+                    self.draw_extended_radio_controls(ui, &snapshot);
                     ui.horizontal(|ui| {
                     let radio_ready = snapshot.radio_power_on == Some(true)
                         && !snapshot.radio_power_command_pending;
@@ -904,11 +943,11 @@ impl QsonautGuiApp {
                             ui.separator();
                             ui.label(format!(
                                 "SWR: {}",
-                                format_swr_display(&self.config.radio.model, snapshot.swr)
+                                format_swr_display(None, snapshot.swr)
                             ));
                             ui.colored_label(
                                 Color32::YELLOW,
-                                "SWR sweep: RTTY carrier at approximately 30 W; TX is restored afterward.",
+                                "SWR sweep uses the carrier mode and test power documented by the radio driver; TX is restored afterward.",
                             );
                             ui.horizontal(|ui| {
                                 ui.label("Start");
@@ -956,19 +995,7 @@ impl QsonautGuiApp {
                                 egui::pos2(chart_left, chart_top),
                                 egui::pos2(chart_right, chart_bottom),
                             );
-                            let icom_swr_chart = native_radio_profile(
-                                "native",
-                                &self.config.radio.model,
-                            )
-                            .and_then(|profile| {
-                                profile.calibrated_meter_value(MeterId::Swr, 0)
-                            })
-                            .is_some();
-                            let chart_axes = if icom_swr_chart {
-                                [(1.0_f32, "1.0:1"), (1.5, "1.5:1"), (2.0, "2.0:1"), (2.5, "2.5:1"), (3.0, "3.0:1")]
-                            } else {
-                                [(0.0_f32, "0%"), (25.0, "25%"), (50.0, "50%"), (75.0, "75%"), (100.0, "100%")]
-                            };
+                            let chart_axes = [(0.0_f32, "0%"), (25.0, "25%"), (50.0, "50%"), (75.0, "75%"), (100.0, "100%")];
                             let chart_min = chart_axes[0].0;
                             let chart_max = chart_axes[4].0;
                             for (value, label) in chart_axes {
@@ -991,7 +1018,7 @@ impl QsonautGuiApp {
                                 let max_hz = points.last().map(|point| point.0).unwrap_or(1).max(points.first().map(|point| point.0).unwrap_or(0) + 1) as f32;
                                 let polyline: Vec<_> = points.iter().map(|(hz, raw)| {
                                     let x = chart_left + ((*hz as f32 - min_hz) / (max_hz - min_hz)) * chart_rect.width();
-                                    let value = swr_chart_value(&self.config.radio.model, *raw)
+                                    let value = swr_chart_value(None, *raw)
                                         .clamp(chart_min, chart_max);
                                     let y = chart_bottom
                                         - ((value - chart_min) / (chart_max - chart_min)) * chart_rect.height();
@@ -1065,11 +1092,12 @@ impl QsonautGuiApp {
                         }
                     }
                     if supports_control(ControlId::NoiseReductionLevel) {
-                        let max_level = radio_control_max(
-                            &self.config.radio.model,
-                            ControlId::NoiseReductionLevel,
-                            15,
-                        );
+                        let max_level = self
+                            .driver_metadata
+                            .control_maxes
+                            .get(&ControlId::NoiseReductionLevel)
+                            .copied()
+                            .unwrap_or(15);
                         ui.menu_button(
                             RichText::new("NRL").color(if snapshot.noise_reduction_level.is_some() {
                                 Color32::LIGHT_BLUE
@@ -1093,7 +1121,7 @@ impl QsonautGuiApp {
                             },
                         )
                         .response
-                        .on_hover_text("Set the Yaesu noise-reduction level");
+                        .on_hover_text("Set the radio noise-reduction level");
                     }
                     if supports_control(ControlId::IpPlus) {
                         let color = match snapshot.ip_plus {
@@ -1165,7 +1193,12 @@ impl QsonautGuiApp {
                         .on_hover_text("Select off, auto notch, or manual notch");
                     }
                     if supports_control(ControlId::Agc) {
-                        let max_agc = radio_control_max(&self.config.radio.model, ControlId::Agc, 4);
+                        let max_agc = self
+                            .driver_metadata
+                            .control_maxes
+                            .get(&ControlId::Agc)
+                            .copied()
+                            .unwrap_or(4);
                         let color = if snapshot.agc.is_some() {
                             Color32::LIGHT_BLUE
                         } else {
@@ -1188,42 +1221,17 @@ impl QsonautGuiApp {
                         .response
                         .on_hover_text("Select the automatic gain-control level");
                     }
-                    if !snapshot.supported_meters.is_empty() {
-                        ui.menu_button(RichText::new("MTR").color(Color32::LIGHT_BLUE), |ui| {
-                            ui.label("Normalized meter levels");
-                            for (label, id, value) in [
-                                ("SIG", MeterId::Signal, snapshot.signal_meter),
-                                ("PWR", MeterId::Power, snapshot.power_meter),
-                                ("SWR", MeterId::Swr, snapshot.swr),
-                                ("ALC", MeterId::Alc, snapshot.alc_meter),
-                                ("COMP", MeterId::Compression, snapshot.compression_meter),
-                                ("I", MeterId::Current, snapshot.current_meter),
-                                ("V", MeterId::Voltage, snapshot.voltage_meter),
-                                ("TEMP", MeterId::Temperature, snapshot.temperature_meter),
-                            ] {
-                                if snapshot.supported_meters.contains(&id) {
-                                    ui.horizontal(|ui| {
-                                        ui.label(label);
-                                        let fraction = value.map_or(0.0, |raw| f32::from(raw) / 255.0);
-                                        ui.add(
-                                            egui::ProgressBar::new(fraction)
-                                                .desired_width(120.0),
-                                        );
-                                    });
-                                }
-                            }
-                        })
-                        .response
-                        .on_hover_text("Normalized vendor meter levels; physical units and SWR ratios remain vendor-specific");
-                    }
                     if supports_control(ControlId::Preamp) {
                         let color = match snapshot.preamp {
                             Some(value) if value > 0 => Color32::LIGHT_GREEN,
                             Some(_) => Color32::GRAY,
                             None => Color32::DARK_GRAY,
                         };
-                        let max_preamp = native_radio_profile("native", &self.config.radio.model)
-                            .and_then(|profile| profile.control_max(ControlId::Preamp))
+                        let max_preamp = self
+                            .driver_metadata
+                            .control_maxes
+                            .get(&ControlId::Preamp)
+                            .copied()
                             .unwrap_or(0);
                         ui.menu_button(RichText::new("PRE").color(color), |ui| {
                             for value in 0_u8..=max_preamp {
@@ -1246,14 +1254,12 @@ impl QsonautGuiApp {
                         .on_hover_text("Select the radio preamplifier level");
                     }
                     if supports_control(ControlId::Attenuator) {
-                        let attenuator_values = native_radio_profile(
-                            "native",
-                            &self.config.radio.model,
-                        )
-                        .and_then(|profile| {
-                            profile.supported_control_values(ControlId::Attenuator)
-                        })
-                        .unwrap_or(&[]);
+                        let attenuator_values = self
+                            .driver_metadata
+                            .control_values
+                            .get(&ControlId::Attenuator)
+                            .copied()
+                            .unwrap_or(&[]);
                         let color = match snapshot.attenuator {
                             Some(value) if value > 0 => Color32::from_rgb(255, 190, 105),
                             Some(_) => Color32::GRAY,
@@ -1412,9 +1418,7 @@ impl QsonautGuiApp {
                 });
             });
 
-        let supports_radio_scope =
-            native_radio_profile(&self.config.radio.backend, &self.config.radio.model)
-                .is_some_and(|profile| profile.capabilities.spectrum);
+        let supports_radio_scope = self.driver_metadata.scope.is_some();
         let radio_scope_visible = self.civ_spectrum_on
             && supports_radio_scope
             && !snapshot.radio_waterfall_status.starts_with("UNAVAILABLE");
