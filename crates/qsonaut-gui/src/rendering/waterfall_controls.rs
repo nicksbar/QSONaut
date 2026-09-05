@@ -14,7 +14,7 @@ fn draw_waterfall_icon(
     color: Color32,
 ) {
     let center = rect.center();
-    let stroke = egui::Stroke::new(1.4, color);
+    let stroke = egui::Stroke::new(1.4_f32, color);
     match icon {
         WaterfallIcon::Audio => {
             for (index, offset) in [-4.0_f32, 0.0, 4.0].into_iter().enumerate() {
