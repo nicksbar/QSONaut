@@ -793,6 +793,19 @@ deep_decode = false
     }
 
     #[test]
+    fn malformed_profile_fixture_is_rejected_without_partial_state() {
+        let malformed = r#"
+callsign = "N0CALL"
+[radio]
+backend = "native"
+baud_rate = "not-a-number"
+"#;
+
+        let result = toml::from_str::<OperatorProfile>(malformed);
+        assert!(result.is_err(), "malformed profile must not deserialize");
+    }
+
+    #[test]
     fn radio_profile_defaults_serialize_only_persistent_controls() {
         let profile = RadioProfile {
             name: "Portable FT8".to_string(),
