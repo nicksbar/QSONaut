@@ -74,7 +74,7 @@ readback or physical observation.
 | ID | Action | Expected evidence |
 | --- | --- | --- |
 | PWR | Power off/on, as above | Front panel follows both commands; status readback succeeds afterward. |
-| RF | Read RF power, write a conservative value such as 10 W, read back, restore the original value | `RfPower` control read/write succeeds and the radio display agrees. |
+| RF | Read RF power, write a conservative normalized value such as `10`, read back, restore the original value | `RfPower` control read/write succeeds and the radio display agrees. |
 | FREQ | Read frequency, set a known test frequency, verify, restore | CI-V readback equals the requested Hz and the radio display agrees. |
 | MODE | Read mode, set USB then CW or the agreed safe mode, verify, restore | Mode readback matches each write; no unrelated mode/data setting changes. |
 | PTT-ON | With the approved load and low RF power, request PTT on | Radio indicates transmit and the PTT readback/event becomes `ON`. |
@@ -100,9 +100,13 @@ It reads frequency, mode, PTT, supported controls, meters, repeater/RIT state,
 and writes reversible control values before restoring them. It intentionally
 skips memory writes and operator-impacting PTT/tuner/scope actions.
 
-Use QSONaut's CLI for bounded individual operations and readback:
+Use QSONaut's CLI for bounded individual operations and readback. The
+`--power` option exercises the same protocol-neutral operation used by the GUI
+power control, including the IC-7300 power-on preamble:
 
 ```text
+cargo run --manifest-path Cargo.toml -p qsonaut -- --radio-port /dev/ttyUSB0 --radio-baud 115200 --radio-civ-address 0x94 --controller-civ-address 0xE0 --power off
+cargo run --manifest-path Cargo.toml -p qsonaut -- --radio-port /dev/ttyUSB0 --radio-baud 115200 --radio-civ-address 0x94 --controller-civ-address 0xE0 --power on
 cargo run --manifest-path Cargo.toml -p qsonaut -- --radio-port /dev/ttyUSB0 --radio-baud 115200 --radio-civ-address 0x94 --controller-civ-address 0xE0 --set-control rf-power --control-value 10 --verify-after-set
 cargo run --manifest-path Cargo.toml -p qsonaut -- --radio-port /dev/ttyUSB0 --radio-baud 115200 --radio-civ-address 0x94 --controller-civ-address 0xE0 --set-frequency-hz 14074000 --set-mode usb --verify-after-set
 cargo run --manifest-path Cargo.toml -p qsonaut -- --radio-port /dev/ttyUSB0 --radio-baud 115200 --radio-civ-address 0x94 --controller-civ-address 0xE0 --enable-spectrum-stream --spectrum-timeout-ms 2500
@@ -116,6 +120,33 @@ positive command fails:
 cargo run --manifest-path Cargo.toml -p qsonaut -- --radio-port /dev/ttyUSB0 --radio-baud 115200 --radio-civ-address 0x94 --controller-civ-address 0xE0 --ptt on
 cargo run --manifest-path Cargo.toml -p qsonaut -- --radio-port /dev/ttyUSB0 --radio-baud 115200 --radio-civ-address 0x94 --controller-civ-address 0xE0 --ptt off
 ```
+
+## Recorded IC-7300 run
+
+Live acceptance was run on 2026-09-05 using `/dev/ttyUSB0`, the stable
+CP2102 by-id endpoint, 115200 baud, radio address `0x94`, and controller
+address `0xE0`.
+
+| ID | Result | Evidence |
+| --- | --- | --- |
+| PWR | PASS | `--power off` and `--power on` both completed; a subsequent status read returned `14,074,000 Hz / USB-D`. |
+| RF | PASS | `RfPower 10 -> read 10 -> restore 20`; final probe read `RfPower: 20`. |
+| FREQ | PASS | `14,074,000 -> 14,075,000 -> 14,074,000 Hz`, with matching readback. |
+| MODE | PASS | `USB -> DATA`, with matching readback; final state was USB-D/data. |
+| PTT-ON/OFF | PASS | Low-power PTT assertion at normalized RF power `1` succeeded; explicit release succeeded and final probe reported `PTT=false`. RF power was restored to `20`. |
+| PTT-SAFE | BLOCKED | The live CLI did not forcibly kill an active worker; deterministic GUI safety tests cover global disarm and transmit-path cleanup. |
+| SCOPE | PASS | Native spectrum stream returned a first frame within 5 seconds and disabled cleanly. |
+| LINK-DROP | PASS | Status while unplugged returned a bounded `failed to open serial port /dev/ttyUSB0` diagnostic without hanging. |
+| RECONNECT | PASS | The stable by-id endpoint and `/dev/ttyUSB0` returned; status readback recovered at `14,074,000 Hz / USB-D`. |
+| RECOVER | PASS | Unsupported CI-V request returned `FA`; the next valid status read succeeded. |
+
+Probe artifacts were written to `/tmp/ic7300-probe.json` and
+`/tmp/ic7300-final-probe.json` during this run. The reversible exercise probe
+reported 74 commands, 73 matched responses, and one timeout during an
+unsupported repeater read; the final probe reported 29 commands, 28 matched
+responses, and one timeout in the same area. No frame drops were reported.
+Copy these files and the QSONaut log to durable release evidence before the
+temporary directory is cleared.
 
 ## Making this portable to other models
 
@@ -133,11 +164,5 @@ transport/profile facts:
 - Add deterministic protocol tests for every discovered failure, but keep the
   physical result as separate acceptance evidence.
 
-## Current run status
-
-On 2026-09-05 this environment could not start the live matrix: no
-`/dev/ttyUSB*`, `/dev/ttyACM*`, or `/dev/serial/by-id/*` device was exposed to
-the Linux/WSL session. Only virtual `/dev/ttyS*` ports were present. Do not
-substitute one of those ports. Once USB passthrough exposes the IC-7300, rerun
-preflight and start at `PWR`; this status should then be replaced with the
-matrix report and retained JSON probe artifact.
+Retain the JSON probe reports and diagnostic log with the release validation
+record.

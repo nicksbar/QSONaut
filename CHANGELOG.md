@@ -13,6 +13,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added deterministic regression fixtures for digital-signal variation,
   carrier rejection, recovery and disconnect safety, malformed/contest/POTA/
   grid ADIF imports, and local-AI failure handling (#83).
+- Added a direct `--power on|off` CLI path and a repeatable IC-7300 hardware
+  acceptance matrix for live power, CI-V, waterfall, PTT, and USB recovery
+  validation (#41, #46).
 
 ### Fixed
 - Restored the complete IC-7300 USB/native baud-rate list, including 38,400,
