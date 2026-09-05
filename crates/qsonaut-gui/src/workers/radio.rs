@@ -116,13 +116,19 @@ struct RadioScopeStreamConfig {
 
 fn wire_scope_config(
     config: &RadioScopeStreamConfig,
+    metadata: Option<qsonaut_radio::ScopeMetadata>,
 ) -> qsonaut_hostbridge_protocol::ScopeConfiguration {
     let (center_mode, span_hz, fixed_edges_hz, fixed_edge_number) = match config.view {
         RadioScopeView::Narrow => match config.edges {
             Some(edges) => (Some(true), None, Some(edges), None),
             None => (
                 Some(false),
-                Some(scope_span_hz(config.span_code)),
+                metadata.and_then(|metadata| {
+                    metadata
+                        .span_options_hz
+                        .get(usize::from(config.span_code))
+                        .copied()
+                }),
                 None,
                 None,
             ),
@@ -373,9 +379,15 @@ pub(crate) fn spawn_radio_worker(
                         // startup audio/control traffic responsive and avoids
                         // moving the scope away from the live dial.
                         if settings_dirty {
-                            if let Err(error) =
-                                client.configure_scope(None, wire_scope_config(&scope_config))
-                            {
+                            if let Err(error) = client.configure_scope(
+                                None,
+                                wire_scope_config(
+                                    &scope_config,
+                                    stream_radio
+                                        .as_ref()
+                                        .and_then(|radio| radio.scope_metadata()),
+                                ),
+                            ) {
                                 warn!(%error, "failed to send remote scope configuration");
                             } else {
                                 last_remote_config = Some(scope_config);
@@ -3375,7 +3387,12 @@ mod level_poll_tests {
         };
         let error = configure_radio_scope(&rt, &radio, &overview, None, None)
             .expect_err("overview requires band edges");
-        assert!(error.to_string().contains("active band edges unavailable"));
+        assert!(
+            error.to_string().contains("active band edges unavailable")
+                || error
+                    .to_string()
+                    .contains("native scope metadata is unavailable")
+        );
     }
 
     #[test]
@@ -3710,6 +3727,9 @@ mod level_poll_tests {
 
     #[test]
     fn hostbridge_scope_projection_preserves_each_view_contract() {
+        let metadata =
+            qsonaut_radio::icom::profile::profile_for_model(qsonaut_radio::IcomCivModel::Ic7300)
+                .scope_metadata();
         let narrow = RadioScopeStreamConfig {
             view: RadioScopeView::Narrow,
             span_code: 2,
@@ -3719,9 +3739,9 @@ mod level_poll_tests {
             hold: true,
             reference_tenths_db: -30,
         };
-        let wire = wire_scope_config(&narrow);
+        let wire = wire_scope_config(&narrow, metadata);
         assert_eq!(wire.center_mode, Some(false));
-        assert_eq!(wire.span_hz, Some(scope_span_hz(2)));
+        assert_eq!(wire.span_hz, Some(metadata.unwrap().span_options_hz[2]));
         assert_eq!(wire.fixed_edges_hz, None);
         assert_eq!(wire.hold, Some(true));
         assert_eq!(wire.reference_level_tenths_db, Some(-30));
@@ -3731,7 +3751,7 @@ mod level_poll_tests {
             edges: Some((7_000_000, 7_300_000)),
             ..narrow
         };
-        let wire = wire_scope_config(&overview);
+        let wire = wire_scope_config(&overview, metadata);
         assert_eq!(wire.center_mode, Some(true));
         assert_eq!(wire.span_hz, None);
         assert_eq!(wire.fixed_edges_hz, overview.edges);

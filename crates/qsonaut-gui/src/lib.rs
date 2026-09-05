@@ -217,17 +217,17 @@ use radio_runtime::{
     join_handle_for_shutdown, radio_config_from_operator_profile, request_radio_session_stop,
     spawn_radio_init_with_hostbridge, stop_radio_session,
 };
-#[cfg(test)]
-use rendering::scope_span_for_filter;
 use rendering::{
     band_edges_for_frequency, draw_primary_meter, draw_voltage_graph, effective_visual_profile,
     meter_color, meter_color_for_context, meter_label, meter_percent, meter_reading,
     meter_reading_for_presentation, meter_tooltip, meter_value, mode_meter_order,
     native_channel_width_hz, record_voltage_sample, scope_projection_for_mode,
-    scope_span_for_filter_with_options, scope_span_hz, scope_span_hz_for, scope_span_label_for,
+    scope_span_for_filter_with_options, scope_span_hz_for, scope_span_label_for,
     sideband_scope_edges, status_color, theme_accent, theme_muted, theme_success, theme_warning,
     METER_LABEL_WIDTH, VOLTAGE_HISTORY_CAPACITY,
 };
+#[cfg(test)]
+use rendering::{scope_span_for_filter, scope_span_hz};
 use reporting::{
     enrich_qso_from_hamdb, qso_adif_path, qso_log_path, qso_timestamp, spawn_hamdb_lookup,
     start_psk_reporter, submit_psk_report,

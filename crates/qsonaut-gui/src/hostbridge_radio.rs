@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 use qsonaut_hostbridge_client::{HostBridgeClient, HostBridgeConfig, HostBridgeEvent};
 use qsonaut_hostbridge_protocol::{
-    control_id_key, HostHello, RadioCapabilitiesInfo, RadioState, ServerMessage, WireControlValue,
-    WireMode,
+    control_id_key, DriverMetadata as WireDriverMetadata, HostHello, RadioCapabilitiesInfo,
+    RadioState, ScopeMetadata as WireScopeMetadata, ServerMessage, WireControlValue, WireMode,
 };
 use qsonaut_radio::models::find_model;
 #[cfg(test)]
@@ -29,10 +29,7 @@ pub(crate) struct HostBridgeRadio {
     raw_responses: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     hello: HostHello,
     device_id: String,
-    driver: qsonaut_hostbridge_protocol::RadioDriver,
     model: Option<String>,
-    baud_rate: Option<u32>,
-    radio_address: Option<u8>,
     connected: Arc<Mutex<bool>>,
     media_queue: Arc<Mutex<VecDeque<Vec<f32>>>>,
     scope_queue: Arc<Mutex<VecDeque<Vec<u8>>>>,
@@ -96,10 +93,7 @@ pub(crate) fn test_remote_radio() -> (HostBridgeRadio, Arc<HostBridgeClient>) {
             capabilities: qsonaut_hostbridge_protocol::Capabilities::default(),
         },
         device_id: "test-radio".to_string(),
-        driver: qsonaut_hostbridge_protocol::RadioDriver::IcomCiv,
         model: Some("IC-7300".to_string()),
-        baud_rate: Some(115_200),
-        radio_address: Some(0x94),
         connected: Arc::new(Mutex::new(true)),
         media_queue: remote_media_queue(),
         scope_queue: Arc::new(Mutex::new(VecDeque::from([vec![1, 2, 3]]))),
@@ -123,6 +117,110 @@ pub(crate) fn remote_media_queue() -> Arc<Mutex<VecDeque<Vec<f32>>>> {
 
 fn new_scope_queue() -> Arc<Mutex<VecDeque<Vec<u8>>>> {
     Arc::new(Mutex::new(VecDeque::with_capacity(8)))
+}
+
+fn leaked_slice<T: 'static>(values: Vec<T>) -> &'static [T] {
+    Box::leak(values.into_boxed_slice())
+}
+
+fn scope_metadata_from_wire(value: &WireScopeMetadata) -> qsonaut_radio::ScopeMetadata {
+    qsonaut_radio::ScopeMetadata {
+        waveform_bins: value.waveform_bins,
+        waveform_divisions: value.waveform_divisions,
+        span_options_hz: leaked_slice(value.span_options_hz.clone()),
+        sweep_speed_values: leaked_slice(value.sweep_speed_values.clone()),
+        fixed_edge_numbers: leaked_slice(value.fixed_edge_numbers.clone()),
+        reference_level_range_tenths_db: value.reference_level_range_tenths_db,
+        supports_hold: value.supports_hold,
+        supports_vbw: value.supports_vbw,
+        center_type_options: leaked_slice(
+            value
+                .center_type_options
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
+        ),
+        tx_display_options: leaked_slice(value.tx_display_options.clone()),
+        max_hold_options: leaked_slice(
+            value
+                .max_hold_options
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
+        ),
+        marker_position_options: leaked_slice(
+            value
+                .marker_position_options
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
+        ),
+        averaging_options: leaked_slice(value.averaging_options.clone()),
+        waveform_type_options: leaked_slice(
+            value
+                .waveform_type_options
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
+        ),
+        waterfall_display_options: leaked_slice(value.waterfall_display_options.clone()),
+        waterfall_size_options: leaked_slice(value.waterfall_size_options.clone()),
+        waterfall_peak_level_options: leaked_slice(value.waterfall_peak_level_options.clone()),
+        marker_auto_hide_options: leaked_slice(value.marker_auto_hide_options.clone()),
+        edge_banks: leaked_slice(
+            value
+                .edge_banks
+                .iter()
+                .map(|bank| qsonaut_radio::ScopeEdgeBank {
+                    low_hz: bank.low_hz,
+                    high_hz: bank.high_hz,
+                    edge_numbers: leaked_slice(bank.edge_numbers.clone()),
+                })
+                .collect(),
+        ),
+        supports_waveform_colors: value.supports_waveform_colors,
+    }
+}
+
+fn negotiated_metadata(capabilities: &RadioCapabilitiesInfo) -> Option<&WireDriverMetadata> {
+    capabilities.driver_metadata.as_ref()
+}
+
+fn fallback_filter_bandwidth(
+    profile: qsonaut_radio::models::RadioModelProfile,
+    mode: Mode,
+    filter: u8,
+) -> Option<u32> {
+    match profile.protocol {
+        qsonaut_radio::models::Protocol::IcomCiV { .. } => {
+            qsonaut_radio::models::IcomCivModel::from_model_name(profile.model)
+                .map(qsonaut_radio::icom::profile::profile_for_model)
+                .and_then(|profile| profile.filter_bandwidth_hz(mode, filter))
+        }
+        qsonaut_radio::models::Protocol::YaesuCat => {
+            qsonaut_radio::models::YaesuCatModel::from_model_name(profile.model)
+                .map(qsonaut_radio::yaesu::profile::profile_for_model)
+                .and_then(|profile| profile.filter_bandwidth_hz(mode, filter))
+        }
+        _ => None,
+    }
+}
+
+fn fallback_scope_metadata(
+    profile: qsonaut_radio::models::RadioModelProfile,
+) -> Option<qsonaut_radio::ScopeMetadata> {
+    match profile.protocol {
+        qsonaut_radio::models::Protocol::IcomCiV { .. } => {
+            qsonaut_radio::models::IcomCivModel::from_model_name(profile.model).and_then(|model| {
+                qsonaut_radio::icom::profile::profile_for_model(model).scope_metadata()
+            })
+        }
+        _ => None,
+    }
 }
 
 pub(crate) enum RadioHandle {
@@ -243,7 +341,19 @@ impl RadioHandle {
     pub(crate) fn filter_bandwidth_hz(&self, mode: Mode, filter: u8) -> Option<u32> {
         match self {
             Self::Local(radio) => radio.filter_bandwidth_hz(mode, filter),
-            Self::Remote(radio) => radio.filter_bandwidth_hz(mode, filter),
+            Self::Remote(radio) => {
+                let capabilities = radio.capabilities_snapshot();
+                match negotiated_metadata(&capabilities) {
+                    Some(metadata) => metadata
+                        .filter_bandwidths
+                        .iter()
+                        .find(|entry| entry.mode == wire_mode(mode) && entry.filter == filter)
+                        .map(|entry| entry.bandwidth_hz),
+                    None => radio
+                        .model_profile()
+                        .and_then(|profile| fallback_filter_bandwidth(profile, mode, filter)),
+                }
+            }
             #[cfg(test)]
             Self::Test(radio) => radio.filter_bandwidth_hz(mode, filter),
         }
@@ -251,7 +361,13 @@ impl RadioHandle {
     pub(crate) fn scope_metadata(&self) -> Option<qsonaut_radio::ScopeMetadata> {
         match self {
             Self::Local(radio) => radio.scope_metadata(),
-            Self::Remote(_) => None,
+            Self::Remote(radio) => {
+                let capabilities = radio.capabilities_snapshot();
+                match negotiated_metadata(&capabilities) {
+                    Some(metadata) => metadata.scope.as_ref().map(scope_metadata_from_wire),
+                    None => radio.model_profile().and_then(fallback_scope_metadata),
+                }
+            }
             #[cfg(test)]
             Self::Test(radio) => radio.scope_metadata(),
         }
@@ -259,9 +375,19 @@ impl RadioHandle {
     pub(crate) fn control_max(&self, id: ControlId) -> Option<u8> {
         match self {
             Self::Local(radio) => radio.control_max(id),
-            Self::Remote(radio) => radio
-                .model_profile()
-                .and_then(|profile| profile.control_max(id)),
+            Self::Remote(radio) => {
+                let capabilities = radio.capabilities_snapshot();
+                match negotiated_metadata(&capabilities) {
+                    Some(metadata) => metadata
+                        .controls
+                        .iter()
+                        .find(|control| control.id == control_id_key(id))
+                        .and_then(|control| control.contiguous_maximum),
+                    None => radio
+                        .model_profile()
+                        .and_then(|profile| profile.control_max(id)),
+                }
+            }
             #[cfg(test)]
             Self::Test(radio) => radio.control_max(id),
         }
@@ -269,9 +395,20 @@ impl RadioHandle {
     pub(crate) fn supported_control_values(&self, id: ControlId) -> Option<&'static [u8]> {
         match self {
             Self::Local(radio) => radio.supported_control_values(id),
-            Self::Remote(radio) => radio
-                .model_profile()
-                .and_then(|profile| profile.supported_control_values(id)),
+            Self::Remote(radio) => {
+                let capabilities = radio.capabilities_snapshot();
+                match negotiated_metadata(&capabilities) {
+                    Some(metadata) => metadata
+                        .controls
+                        .iter()
+                        .find(|control| control.id == control_id_key(id))
+                        .filter(|control| !control.discrete_values.is_empty())
+                        .map(|control| leaked_slice(control.discrete_values.clone())),
+                    None => radio
+                        .model_profile()
+                        .and_then(|profile| profile.supported_control_values(id)),
+                }
+            }
             #[cfg(test)]
             Self::Test(radio) => radio.supported_control_values(id),
         }
@@ -634,10 +771,7 @@ impl HostBridgeRadio {
             raw_responses: Arc::new(Mutex::new(HashMap::new())),
             hello,
             device_id,
-            driver,
             model,
-            baud_rate,
-            radio_address,
             connected: Arc::new(Mutex::new(true)),
             media_queue: remote_media_queue(),
             scope_queue: new_scope_queue(),
@@ -778,16 +912,10 @@ impl HostBridgeRadio {
                     }
                 }
                 HostBridgeEvent::Connected(_) => {
-                    // A reconnect creates a new host session and releases the
-                    // old lease. Reacquire only the selected host radio; TX
-                    // state is intentionally never replayed.
-                    let _ = self.client.select_radio(
-                        self.device_id.clone(),
-                        self.driver,
-                        self.model.clone(),
-                        self.baud_rate,
-                        self.radio_address,
-                    );
+                    // The transport client replays the last radio selection
+                    // after authentication. TX state is intentionally never
+                    // replayed; the resulting capability message refreshes
+                    // the host-owned driver metadata.
                     if let Some((source_id, format)) = &self.audio_source {
                         let _ = self
                             .client

@@ -111,7 +111,7 @@ pub(crate) fn scope_span_label_for(
     span_code: u8,
 ) -> String {
     let span_hz = scope_span_hz_for(metadata, span_code);
-    if span_hz % 1_000 == 0 {
+    if span_hz.is_multiple_of(1_000) {
         format!("±{} kHz", span_hz / 1_000)
     } else {
         format!("±{:.1} kHz", span_hz as f32 / 1_000.0)
