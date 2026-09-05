@@ -13,6 +13,28 @@ members = [
 ]
 resolver = "2"
 
+# Use the sibling checkouts while developing the RigForge stack. These patches
+# keep the package manifests pointed at their published/git identities while
+# making ordinary `cargo test` and `cargo run` exercise local source.
+[patch.crates-io]
+rigwright = { path = "../rigwright" }
+
+[patch."https://github.com/nicksbar/QSONaut-HostBridge.git"]
+qsonaut-hostbridge-protocol = { path = "../QSONaut-HostBridge/crates/qsonaut-hostbridge-protocol" }
+
+[patch."https://github.com/nicksbar/qsonaut-modems.git"]
+qsonaut-modems = { path = "../qsonaut-modems/crates/qsonaut-modems" }
+
+[patch."https://github.com/nicksbar/qsonaut-third-party.git"]
+qsonaut-third-party = { path = "../qsonaut-third-party/crates/qsonaut-third-party" }
+
+[patch."https://github.com/jl1nie/mfsk-core.git"]
+mfsk-core = { path = "../mfsk-core/mfsk-core" }
+
+[patch."https://github.com/swilcox/cw-dit.git"]
+cwdit-dsp = { path = "../cw-dit/cwdit-dsp" }
+cwdit-morse = { path = "../cw-dit/cwdit-morse" }
+
 # Keep the GUI and application debuggable, but do not run the modem DSP in
 # unoptimized debug code. FST4/Q65 operate on large 12 kHz slot buffers and
 # their debug-build cost can make the GUI appear frozen while decoding.

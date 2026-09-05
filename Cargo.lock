@@ -899,7 +899,6 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 [[package]]
 name = "cwdit-dsp"
 version = "0.1.0"
-source = "git+https://github.com/swilcox/cw-dit.git?rev=153fc247ce6e4934c94e0cd2dcbf7887e368ec29#153fc247ce6e4934c94e0cd2dcbf7887e368ec29"
 dependencies = [
  "rustfft",
 ]
@@ -907,7 +906,6 @@ dependencies = [
 [[package]]
 name = "cwdit-morse"
 version = "0.1.0"
-source = "git+https://github.com/swilcox/cw-dit.git?rev=153fc247ce6e4934c94e0cd2dcbf7887e368ec29#153fc247ce6e4934c94e0cd2dcbf7887e368ec29"
 
 [[package]]
 name = "dasp_sample"
@@ -2521,7 +2519,6 @@ dependencies = [
 [[package]]
 name = "mfsk-core"
 version = "0.10.1"
-source = "git+https://github.com/jl1nie/mfsk-core.git?rev=4f2f678eda44f13f88c8e43a3f71adb892e3b84b#4f2f678eda44f13f88c8e43a3f71adb892e3b84b"
 dependencies = [
  "crc",
  "num-complex",
@@ -3594,7 +3591,6 @@ dependencies = [
 [[package]]
 name = "qsonaut-hostbridge-protocol"
 version = "0.1.2"
-source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?tag=v0.1.2#3a462814ab5d8b2d603eb4d99a612f6d96b0ef77"
 dependencies = [
  "rigwright",
  "serde",
@@ -3618,7 +3614,6 @@ dependencies = [
 [[package]]
 name = "qsonaut-modems"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=6cc26b8#6cc26b8bc2b60a897b303e1f793dc10388f0485c"
 dependencies = [
  "thiserror 2.0.20",
 ]
@@ -3649,7 +3644,6 @@ dependencies = [
 [[package]]
 name = "qsonaut-third-party"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=e3c00f8e9cacc17322e356d639bd772f3c67a0b0#e3c00f8e9cacc17322e356d639bd772f3c67a0b0"
 dependencies = [
  "cwdit-dsp",
  "cwdit-morse",
