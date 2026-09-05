@@ -75,6 +75,11 @@ and deliberate gaps.
 The [project roadmap](docs/project-roadmap.md) is the current v0.4.0 through
 v1 planning source across QSONaut and its sibling repositories.
 
+The [release acceptance checklist](docs/release-acceptance-checklist.md)
+combines startup, station workflow, recovery, TX safety, persistence, and
+release-gate checks. Physical radio evidence belongs in the
+[hardware acceptance matrix](docs/hardware-acceptance.md).
+
 For the settings split between application-wide station state, independent
 radio tabs, and shared radio-tuning definitions, see
 [Settings ownership](docs/settings-ownership.md).

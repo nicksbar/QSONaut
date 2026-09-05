@@ -40,7 +40,11 @@ Declare `1.0.0` only when all of the following are true:
 
 ## Release checklist
 
-1. Ensure CI is green on `main`.
+Before tagging, complete the [release acceptance checklist](release-acceptance-checklist.md)
+and retain its sanitized software and hardware evidence with the release
+record.
+
+1. Ensure CI is green on `main` and the release acceptance checklist is complete.
 2. Update `CHANGELOG.md`:
    - Move meaningful entries from `[Unreleased]` into a new section:
      - `## [X.Y.Z] - YYYY-MM-DD`
