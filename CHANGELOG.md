@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.17] - 2026-09-05
+
+### Added
+- Added validated hexadecimal fields for the radio and controller CI-V
+  addresses in native Icom device settings.
+
+### Fixed
+- Restored the complete IC-7300 USB/native baud-rate list, including 38,400,
+  57,600, and 115,200 baud.
+- Kept the Icom power button enabled for the documented write-only CI-V power
+  command.
+
 ## [0.3.16] - 2026-09-04
 
 ### Added

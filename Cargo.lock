@@ -3483,7 +3483,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "anyhow",
  "clap",
@@ -3502,14 +3502,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-accelerate"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "qsonaut-audio"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "anyhow",
  "cpal",
@@ -3518,7 +3518,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-automation"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -3527,7 +3527,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-core"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "anyhow",
  "dotenvy",
@@ -3538,7 +3538,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-gui"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3577,7 +3577,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-hostbridge-client"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -3604,7 +3604,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-log"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -3625,14 +3625,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-pskreporter"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "qsonaut-server-client"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -4075,9 +4075,7 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rigwright"
-version = "0.1.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9b75c55f24d6c67ab2c160dcf51828691cc9d92f8149daee0b8b17c0d3cf72d"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "async-trait",
