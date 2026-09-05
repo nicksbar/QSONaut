@@ -1,4 +1,5 @@
 mod app_log;
+mod automation;
 mod devices;
 mod log;
 mod pota;

@@ -1086,6 +1086,40 @@ mod tests {
     }
 
     #[test]
+    fn imports_contest_pota_grid_and_malformed_fields_without_losing_valid_records() {
+        let adif = concat!(
+            "<EOH>\n",
+            "<CALL:5>k1abc <QSO_DATE:10>2026-08-29 <TIME_ON:5>12:34 ",
+            "<TIME_OFF:6>123501 <MODE:3>ft8 <FREQ:9>14.074000 <GRIDSQUARE:4>fn42 ",
+            "<STATE:2>ma <SIG:4>POTA <SIG_INFO:7>US-0001 <RST_SENT:3>-10 ",
+            "<RST_RCVD:3>-08 <STX:2>12 <SRX:2>34 <STX_STRING:7>5NN 012 ",
+            "<SRX_STRING:7>5NN 034 <COMMENT:13>contest\nnotes <EOR>\n",
+            "<CALL:5>W1AW <QSO_DATE:8>20260829 <TIME_ON:6>123600 ",
+            "<MODE:3>FT8 <FREQ:8>not-valid <EOR>\n",
+            "<CALL:5>BAD <QSO_DATE:7>2026082 <TIME_ON:6>123700 <MODE:3>FT8 <EOR>\n",
+        );
+        let mut log = QsoLog::default();
+        let summary = log.import_adif_from_str(adif);
+
+        assert_eq!(summary.total_records, 3);
+        assert_eq!(summary.imported, 2);
+        assert_eq!(summary.invalid, 1);
+        let record = &log.contacts[0];
+        assert_eq!(record.callsign, "K1ABC");
+        assert_eq!(record.qso_date, "20260829");
+        assert_eq!(record.time_on, "123400");
+        assert_eq!(record.time_off, "123501");
+        assert_eq!(record.band, "20m");
+        assert_eq!(record.grid, "FN42");
+        assert_eq!(record.pota_reference, "US-0001");
+        assert_eq!(record.contest_serial_sent, Some(12));
+        assert_eq!(record.contest_exchange_received, "5NN 034");
+        assert_eq!(record.notes, "contest notes");
+        assert_eq!(log.contacts[1].band, "unknown");
+        assert_eq!(log.contacts[1].frequency_hz, 0);
+    }
+
+    #[test]
     fn normalizes_adif_date_time_and_frequency_values() {
         assert_eq!(
             normalize_adif_date("2026-08-29"),

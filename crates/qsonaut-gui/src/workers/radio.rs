@@ -1129,6 +1129,17 @@ pub(crate) fn spawn_radio_worker(
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
+                    GuiCommand::ReadControl(id, ack_tx) => {
+                        let result = if radio.supports_control_read(id) {
+                            rt.block_on(radio.get_control(id))
+                                .map_err(|error| error.to_string())
+                        } else {
+                            Err(format!(
+                                "control {id:?} is not readable by the loaded radio profile"
+                            ))
+                        };
+                        let _ = ack_tx.send(result);
+                    }
                     GuiCommand::StartTuner => {
                         info!("Radio antenna tuner start requested");
                         match rt.block_on(radio.start_tuner()) {
@@ -2887,6 +2898,10 @@ mod level_poll_tests {
 
     struct ErrorRadio;
 
+    struct CountingRadio {
+        ptt_calls: Arc<AtomicUsize>,
+    }
+
     struct ScriptedCiVTransport {
         reads: VecDeque<Vec<u8>>,
     }
@@ -3027,6 +3042,37 @@ mod level_poll_tests {
 
         fn capabilities(&self) -> RadioCapabilities {
             RadioCapabilities::default()
+        }
+    }
+
+    #[async_trait]
+    impl Radio for CountingRadio {
+        async fn get_frequency_hz(&self) -> Result<u64> {
+            Ok(7_074_000)
+        }
+
+        async fn set_frequency_hz(&self, _hz: u64) -> Result<()> {
+            Ok(())
+        }
+
+        async fn get_mode(&self) -> Result<Mode> {
+            Ok(Mode::Usb)
+        }
+
+        async fn set_mode(&self, _mode: Mode) -> Result<()> {
+            Ok(())
+        }
+
+        async fn set_ptt(&self, _enabled: bool) -> Result<()> {
+            self.ptt_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn capabilities(&self) -> RadioCapabilities {
+            RadioCapabilities {
+                can_set_ptt: true,
+                ..RadioCapabilities::default()
+            }
         }
     }
 
@@ -3862,6 +3908,65 @@ mod level_poll_tests {
         handle.join().expect("error fixture worker join");
 
         assert!(state.lock().expect("state lock").last_error.is_some());
+    }
+
+    #[test]
+    fn unavailable_radio_rejects_queued_ptt_without_touching_driver() {
+        let ptt_calls = Arc::new(AtomicUsize::new(0));
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let sweep_abort = Arc::new(AtomicBool::new(false));
+        let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
+        let repaint = Arc::new(OnceLock::new());
+        let ptt_allowed = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker(
+            RadioHandle::Test(Arc::new(CountingRadio {
+                ptt_calls: ptt_calls.clone(),
+            })),
+            state.clone(),
+            stop,
+            sweep_abort,
+            display_tuning,
+            rx,
+            repaint,
+            ptt_allowed,
+        );
+
+        for _ in 0..100 {
+            if state.lock().expect("state lock").radio_power_on == Some(true) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(
+            state.lock().expect("state lock").radio_power_on,
+            Some(true),
+            "counting radio should complete its initial poll"
+        );
+        state.lock().expect("state lock").radio_power_on = Some(false);
+
+        let (ack_tx, ack_rx) = mpsc::channel();
+        tx.send(GuiCommand::SetPttWithAck(true, ack_tx))
+            .expect("queue PTT command");
+        assert_eq!(
+            ack_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("PTT rejection acknowledgement")
+                .expect_err("PTT must be rejected while radio is unavailable"),
+            "radio is powered off"
+        );
+
+        tx.send(GuiCommand::Quit).expect("quit unavailable worker");
+        handle.join().expect("unavailable worker join");
+
+        let state = state.lock().expect("state lock");
+        assert!(!state.ptt_on);
+        assert_eq!(ptt_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            state.last_error.as_deref(),
+            Some("radio command skipped: radio is unavailable")
+        );
     }
 
     #[test]

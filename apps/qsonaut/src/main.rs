@@ -48,6 +48,18 @@ impl CliPtt {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliPower {
+    On,
+    Off,
+}
+
+impl CliPower {
+    fn as_enabled(self) -> bool {
+        matches!(self, CliPower::On)
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliControl {
     AfGain,
     RfGain,
@@ -130,6 +142,10 @@ struct Cli {
     /// Set PTT state using CI-V
     #[arg(long, value_enum)]
     ptt: Option<CliPtt>,
+
+    /// Set radio power state using CI-V
+    #[arg(long, value_enum)]
+    power: Option<CliPower>,
 
     /// Send a raw CI-V frame as hex (for example: "FE FE 94 E0 03 FD")
     #[arg(long)]
@@ -251,6 +267,7 @@ async fn async_main() -> Result<()> {
         || cli.set_frequency_hz.is_some()
         || cli.set_mode.is_some()
         || cli.ptt.is_some()
+        || cli.power.is_some()
         || cli.civ_raw.is_some()
         || cli.apply_profile.is_some()
         || cli.set_control.is_some()
@@ -313,6 +330,15 @@ async fn async_main() -> Result<()> {
                 .await
                 .with_context(|| format!("failed to set ptt={} on {port}", enabled))?;
             println!("Set ptt: {}", if enabled { "ON" } else { "OFF" });
+        }
+
+        if let Some(power) = cli.power {
+            let enabled = power.as_enabled();
+            radio
+                .set_power(enabled)
+                .await
+                .with_context(|| format!("failed to set power={} on {port}", enabled))?;
+            println!("Set power: {}", if enabled { "ON" } else { "OFF" });
         }
 
         if let Some(raw) = cli.civ_raw.as_deref() {

@@ -407,22 +407,6 @@ impl QsonautGuiApp {
                 self.persist_profile("Auto-saved");
             }
             ui.separator();
-            ui.label(
-                RichText::new(&snapshot.digital_decode_status)
-                    .small()
-                    .color(Color32::GRAY),
-            );
-            if let Some(offset) = snapshot.ft4_clock_offset_s {
-                ui.label(
-                    RichText::new(format!("Adaptive clock dT {offset:+.2}s"))
-                        .small()
-                        .color(if offset.abs() > 0.5 {
-                            theme_warning(ui)
-                        } else {
-                            Color32::LIGHT_GREEN
-                        }),
-                );
-            }
             if let Some(level) = snapshot.audio_level_dbfs {
                 ui.label(
                     RichText::new(format!(

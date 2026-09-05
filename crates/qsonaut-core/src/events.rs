@@ -48,6 +48,10 @@ pub enum AppEvent {
         source: String,
         detail: String,
     },
+    AutomationResult {
+        source: String,
+        fields: BTreeMap<String, String>,
+    },
     ShutdownRequested,
 }
 

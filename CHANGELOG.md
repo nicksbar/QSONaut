@@ -5,6 +5,35 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.17] - 2026-09-05
+
+### Changed
+- Updated the application and GUI to Rigwright `0.1.24`, including the
+  FT-991A-safe CAT capability handling, and refreshed the pinned
+  `qsonaut-third-party` revision containing the merged FT8 slot-phase
+  acquisition work.
+
+### Fixed
+- Avoided the FT-991A `VS;` VFO-selector query, which the radio rejects.
+
+### Added
+- Added automatic FT8 slot-phase acquisition with validated lock/re-acquire
+  behavior, quiet-input failure handling, and compact decoder diagnostics.
+- Added validated hexadecimal fields for the radio and controller CI-V
+  addresses in native Icom device settings.
+- Added deterministic regression fixtures for digital-signal variation,
+  carrier rejection, recovery and disconnect safety, malformed/contest/POTA/
+  grid ADIF imports, and local-AI failure handling (#83).
+- Added a direct `--power on|off` CLI path and a repeatable IC-7300 hardware
+  acceptance matrix for live power, CI-V, waterfall, PTT, and USB recovery
+  validation (#41, #46).
+
+### Fixed
+- Restored the complete IC-7300 USB/native baud-rate list, including 38,400,
+  57,600, and 115,200 baud.
+- Kept the Icom power button enabled for the documented write-only CI-V power
+  command.
+
 ## [0.3.16] - 2026-09-04
 
 ### Added

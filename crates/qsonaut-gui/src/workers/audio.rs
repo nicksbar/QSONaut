@@ -700,10 +700,10 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
             shared.sstv_status =
                 format!("UNAVAILABLE: SSTV requires 48 kHz input (configured {sample_rate_hz} Hz)");
         }
-        // 15-second accumulation buffer at 12 kHz (180 000 samples)
-        // Retain pre-boundary audio so adaptive timing can compensate for a
-        // clock that is behind UTC without discarding the start of a frame.
-        let mut ft8_buf: Vec<f32> = Vec::with_capacity(12_000 * 18);
+        // Retain the 25-second unaligned history required by FT8 cold
+        // acquisition, including enough audio before and after a slot.
+        let mut ft8_buf: Vec<f32> =
+            Vec::with_capacity(qsonaut_third_party::wsjt::FT8_SLOT_ACQUISITION_REQUIRED_SAMPLES);
         let mut ft8_slot_gate = Ft8SlotGate::default();
         let mut digital_buf: Vec<f32> = Vec::with_capacity(12_000 * 120);
         // Built lazily on the first CW chunk so the search window always
@@ -975,6 +975,14 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             last_sstv_vis = None;
                             sstv_receive_started = None;
                             sstv_progress_bucket = 0;
+                            {
+                                let mut shared = state.lock().expect("ui state lock poisoned");
+                                shared.ft8_sync_state = Ft8SyncState::Unlocked;
+                                shared.ft8_sync_confidence = None;
+                                shared.ft8_slot_phase_s = None;
+                                shared.ft8_reacquire_generation =
+                                    shared.ft8_reacquire_generation.wrapping_add(1);
+                            }
                             *dec = AudioNormalizer::new(sample_rate_hz)
                                 .expect("validated 48 kHz input");
                             let mut s = state.lock().expect("ui state lock poisoned");
@@ -1077,8 +1085,9 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                         }
                         if active_workspace_mode == WorkspaceMode::Ft8 {
                             ft8_buf.extend_from_slice(&ds);
-                            // Keep a full slot plus ±2.5 s timing headroom.
-                            let max_buf = 12_000 * 18;
+                            // Keep the full 25-second cold-acquisition history.
+                            let max_buf =
+                                qsonaut_third_party::wsjt::FT8_SLOT_ACQUISITION_REQUIRED_SAMPLES;
                             if ft8_buf.len() > max_buf {
                                 ft8_buf.drain(..ft8_buf.len() - max_buf);
                             }
@@ -1091,14 +1100,22 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             let current_period = (now_s / 15.0) as u64;
                             let slot_position_s = now_s % 15.0;
                             let captured_samples = (slot_position_s * 12_000.0).round() as usize;
-                            let alignment_s = state
-                                .lock()
-                                .expect("ui state lock poisoned")
-                                .ft8_clock_offset_s
-                                .unwrap_or(0.0)
-                                .clamp(-FT8_ADAPTIVE_OFFSET_LIMIT_S, FT8_ADAPTIVE_OFFSET_LIMIT_S);
-                            let adaptive_decode_s =
-                                (FT8_EARLY_DECODE_S + alignment_s.max(0.0) as f64).min(14.6);
+                            let (
+                                alignment_s,
+                                auto_sync,
+                                sync_state,
+                                reacquire_generation,
+                                acquisition_generation,
+                            ) = {
+                                let shared = state.lock().expect("ui state lock poisoned");
+                                (
+                                    shared.ft8_slot_phase_s.unwrap_or(0.0),
+                                    shared.ft8_auto_sync,
+                                    shared.ft8_sync_state,
+                                    shared.ft8_reacquire_generation,
+                                    shared.ft8_acquisition_generation,
+                                )
+                            };
                             let buffer_ready = captured_samples >= (12_000 * 12)
                                 && ft8_buf.len() >= captured_samples;
                             if (tx_active.load(Ordering::Acquire)
@@ -1113,7 +1130,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             } else if ft8_slot_gate.observe_at(
                                 current_period,
                                 slot_position_s,
-                                adaptive_decode_s,
+                                FT8_EARLY_DECODE_S,
                                 buffer_ready,
                             ) {
                                 let decoded_period = current_period;
@@ -1129,6 +1146,21 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         captured_samples,
                                         alignment_s,
                                     ),
+                                    acquisition_samples: if ((auto_sync
+                                        && sync_state != Ft8SyncState::Locked)
+                                        || reacquire_generation != acquisition_generation)
+                                        && ft8_buf.len()
+                                            >= qsonaut_third_party::wsjt::FT8_SLOT_ACQUISITION_REQUIRED_SAMPLES
+                                    {
+                                        {
+                                            let mut shared = state.lock().expect("ui state lock poisoned");
+                                            shared.ft8_sync_state = Ft8SyncState::Searching;
+                                            ft8_buf.clone()
+                                        }
+                                    } else {
+                                        Vec::new()
+                                    },
+                                    captured_samples,
                                     utc,
                                     period: decoded_period,
                                     deep_decode,

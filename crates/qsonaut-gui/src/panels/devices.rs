@@ -568,6 +568,30 @@ impl QsonautGuiApp {
                             });
                         ui.end_row();
                     }
+
+                    if qsonaut_radio::models::IcomCivModel::from_model_name(
+                        &self.config.radio.model,
+                    )
+                    .is_some()
+                    {
+                        ui.label("Radio CI-V address");
+                        ui.add(
+                            egui::DragValue::new(&mut self.config.radio.civ_address)
+                                .range(0_u8..=u8::MAX)
+                                .hexadecimal(2, false, true)
+                                .prefix("0x"),
+                        );
+                        ui.end_row();
+
+                        ui.label("Controller CI-V address");
+                        ui.add(
+                            egui::DragValue::new(&mut self.config.radio.controller_civ_address)
+                                .range(0_u8..=u8::MAX)
+                                .hexadecimal(2, false, true)
+                                .prefix("0x"),
+                        );
+                        ui.end_row();
+                    }
                 }
             });
 

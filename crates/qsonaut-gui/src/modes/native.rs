@@ -220,11 +220,6 @@ impl QsonautGuiApp {
                 .unwrap_or(0.0);
             let progress = (now_s % slot_seconds) / slot_seconds;
             ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(&snapshot.digital_decode_status)
-                        .monospace()
-                        .color(Color32::LIGHT_GREEN),
-                );
                 ui.add(
                     egui::ProgressBar::new(progress as f32)
                         .desired_width(180.0)

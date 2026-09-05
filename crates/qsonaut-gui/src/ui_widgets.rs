@@ -541,7 +541,10 @@ mod tests {
         assert!(radio_baud_rates("FT-710").contains(&115_200));
         assert_eq!(radio_baud_rates("FT-857D"), &[4_800, 9_600, 38_400]);
         assert!(!radio_baud_rates("TS-2000").contains(&115_200));
-        assert_eq!(radio_baud_rates("IC-7300"), &[4_800, 9_600, 19_200]);
+        assert_eq!(
+            radio_baud_rates("IC-7300"),
+            &[4_800, 9_600, 19_200, 38_400, 57_600, 115_200]
+        );
     }
 
     #[test]

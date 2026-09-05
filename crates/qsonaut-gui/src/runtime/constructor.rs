@@ -930,6 +930,7 @@ impl QsonautGuiApp {
             ft4_max_attempts,
             ft8_hold_tx_freq,
             ft8_deep_decode,
+            ft8_diagnostics_open: false,
             ft4_deep_decode,
             ft4_autoseq,
             ft4_auto_reply_policy,

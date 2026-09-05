@@ -489,6 +489,14 @@ impl Radio for RadioHandle {
             Self::Test(radio) => radio.set_mode(mode).await,
         }
     }
+    async fn set_power(&self, enabled: bool) -> Result<()> {
+        match self {
+            Self::Local(radio) => radio.set_power(enabled).await,
+            Self::Remote(radio) => radio.set_power(enabled).await,
+            #[cfg(test)]
+            Self::Test(radio) => radio.set_power(enabled).await,
+        }
+    }
     async fn set_ptt(&self, enabled: bool) -> Result<()> {
         match self {
             Self::Local(radio) => radio.set_ptt(enabled).await,

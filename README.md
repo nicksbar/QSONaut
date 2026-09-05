@@ -6,16 +6,16 @@
 
 [![CI](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml)
 [![Coverage gate](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml)
-[![Line coverage 59.01%](https://img.shields.io/badge/line%20coverage-59.01%25-yellow)](#coverage-area-snapshot)
-[![GUI core 54.16%](https://img.shields.io/badge/GUI%20core-54.16%25-yellow)](#coverage-area-snapshot)
-[![GUI workers 61.70%](https://img.shields.io/badge/GUI%20workers-61.70%25-yellow)](#coverage-area-snapshot)
-[![GUI modes 53.44%](https://img.shields.io/badge/GUI%20modes-53.44%25-yellow)](#coverage-area-snapshot)
-[![GUI panels 70.37%](https://img.shields.io/badge/GUI%20panels-70.37%25-yellow)](#coverage-area-snapshot)
+[![Line coverage 61.09%](https://img.shields.io/badge/line%20coverage-61.09%25-yellow)](#coverage-area-snapshot)
+[![GUI core 52.20%](https://img.shields.io/badge/GUI%20core-52.20%25-yellow)](#coverage-area-snapshot)
+[![GUI workers 61.09%](https://img.shields.io/badge/GUI%20workers-61.09%25-yellow)](#coverage-area-snapshot)
+[![GUI modes 59.35%](https://img.shields.io/badge/GUI%20modes-59.35%25-yellow)](#coverage-area-snapshot)
+[![GUI panels 64.76%](https://img.shields.io/badge/GUI%20panels-64.76%25-yellow)](#coverage-area-snapshot)
 [![Audio 36.28%](https://img.shields.io/badge/audio-36.28%25-yellow)](#coverage-area-snapshot)
 [![Core 87.21%](https://img.shields.io/badge/core-87.21%25-brightgreen)](#coverage-area-snapshot)
 [![Server client 84.25%](https://img.shields.io/badge/server%20client-84.25%25-brightgreen)](#coverage-area-snapshot)
-[![PSK Reporter 81.85%](https://img.shields.io/badge/PSK%20Reporter-81.85%25-brightgreen)](#coverage-area-snapshot)
-[![Logging 83.65%](https://img.shields.io/badge/logging-83.65%25-brightgreen)](#coverage-area-snapshot)
+[![PSK Reporter 82.74%](https://img.shields.io/badge/PSK%20Reporter-82.74%25-brightgreen)](#coverage-area-snapshot)
+[![Logging 85.36%](https://img.shields.io/badge/logging-85.36%25-brightgreen)](#coverage-area-snapshot)
 [![Release builds](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml/badge.svg)](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml)
 [![Latest release](https://img.shields.io/github/v/release/nicksbar/QSONaut?display_name=tag&sort=semver)](https://github.com/nicksbar/QSONaut/releases)
 
@@ -74,6 +74,11 @@ and deliberate gaps.
 
 The [project roadmap](docs/project-roadmap.md) is the current v0.4.0 through
 v1 planning source across QSONaut and its sibling repositories.
+
+The [release acceptance checklist](docs/release-acceptance-checklist.md)
+combines startup, station workflow, recovery, TX safety, persistence, and
+release-gate checks. Physical radio evidence belongs in the
+[hardware acceptance matrix](docs/hardware-acceptance.md).
 
 For the settings split between application-wide station state, independent
 radio tabs, and shared radio-tuning definitions, see
@@ -134,7 +139,7 @@ tool once, then generate the terminal baseline with:
 rustup component add llvm-tools-preview
 cargo install cargo-llvm-cov --locked
 cargo llvm-cov --locked --all-features --workspace \
-  --ignore-filename-regex 'crates/qsonaut-gui/src/panels/(devices|profile_server|radio_ui)\.rs|crates/qsonaut-gui/src/modes/(sstv|ft8|ft4|voice|cw|jt9|jt65|q65|wspr|fst4)\.rs' \
+  --ignore-filename-regex 'crates/qsonaut-gui/src/panels/(devices|profile_server|radio_ui)\.rs|crates/qsonaut-gui/src/modes/(sstv|ft8|ft4|voice|jt9|jt65|q65|wspr|fst4)\.rs' \
   --summary-only
 ```
 
@@ -152,10 +157,10 @@ truth for included areas.
 
 ### Coverage area snapshot
 
-The current release-candidate measurement was generated on 2026-09-03 with
+The current release-candidate measurement was generated on 2026-09-05 with
 the workspace tests available in the validation environment. The grouped
-executable-contract report is 62.18% (18,248 / 29,345 lines), above the CI
-gate of 60%. Rigwright integration is 80.47% (2,983 / 3,707 lines), above its
+executable-contract report is 61.09% (19,188 / 31,411 lines), above the CI
+gate of 60%. Rigwright integration is 85.25% (3,374 / 3,958 lines), above its
 80% target. Physical-radio behavior still requires the documented
 hardware validation runs.
 The high-coverage `qsonaut-sstv` crate is
@@ -166,20 +171,20 @@ remains the detailed, per-file source of truth.
 
 | Area | Covered / executable lines | Line coverage |
 | --- | ---: | ---: |
-| qsonaut-automation | 217 / 264 | 82.20% |
-| qsonaut-log | 788 / 942 | 83.65% |
-| qsonaut-accelerate | 281 / 318 | 88.36% |
-| qsonaut-pskreporter | 275 / 336 | 81.85% |
+| qsonaut-automation | 384 / 447 | 85.91% |
+| qsonaut-log | 822 / 963 | 85.36% |
+| qsonaut-accelerate | 299 / 318 | 94.03% |
+| qsonaut-pskreporter | 278 / 336 | 82.74% |
 | qsonaut-server-client | 733 / 870 | 84.25% |
 | qsonaut-audio | 316 / 871 | 36.28% |
 | qsonaut-core | 409 / 469 | 87.21% |
-| HostBridge client | 161 / 413 | 38.98% |
-| GUI core | 7,682 / 13,910 | 55.23% |
-| GUI workers | 1,648 / 2,671 | 61.70% |
-| GUI modes | 1,470 / 2,474 | 59.42% |
-| GUI panels | 1,090 / 1,549 | 70.37% |
-| Rigwright integration | 2,983 / 3,707 | 80.47% |
-| Application entry point | 195 / 551 | 35.39% |
+| HostBridge client | 155 / 434 | 35.71% |
+| GUI core | 7,928 / 15,187 | 52.20% |
+| GUI workers | 1,677 / 2,745 | 61.09% |
+| GUI modes | 1,466 / 2,470 | 59.35% |
+| GUI panels | 1,152 / 1,779 | 64.76% |
+| Rigwright integration | 3,374 / 3,958 | 85.25% |
+| Application entry point | 195 / 564 | 34.57% |
 
 The workspace gate requires 60% overall coverage, and the Rigwright integration
 target requires 80%; both are enforced by CI. Changes to these areas should add

@@ -1481,6 +1481,12 @@ impl QsonautGuiApp {
                                 Color32::from_rgb(255, 151, 72),
                             ),
                             (
+                                SignalPanelTab::Automation,
+                                "⚡",
+                                "AUTOMATION",
+                                Color32::from_rgb(126, 220, 180),
+                            ),
+                            (
                                 SignalPanelTab::Reporting,
                                 "📡",
                                 "REPORTING",
@@ -1569,6 +1575,7 @@ impl QsonautGuiApp {
                                 }
                                 SignalPanelTab::Station => self.draw_station_panel(ui),
                                 SignalPanelTab::Contest => self.draw_contest_panel(ui),
+                                SignalPanelTab::Automation => self.draw_automation_panel(ui),
                                 SignalPanelTab::Reporting => self.draw_reporting_panel(ui),
                                 SignalPanelTab::Settings => {
                                     self.draw_application_settings_panel(ui)

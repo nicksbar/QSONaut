@@ -719,6 +719,9 @@ impl QsonautGuiApp {
                             Action::ServerSync => "server_sync",
                             Action::ServerSendMessage { .. } => "server_send_message",
                             Action::RadioCommand { .. } => "radio_command",
+                            Action::ReadControl { .. } => "read_control",
+                            Action::WriteControl { .. } => "write_control",
+                            Action::ControlSequence { .. } => "control_sequence",
                             Action::RequestTransmit { .. } => "request_transmit",
                         };
                         info!(event = %event.source, action = action_name, "Automation action approved");
@@ -783,6 +786,21 @@ impl QsonautGuiApp {
                             Action::RadioCommand { command, value } => {
                                 self.automation_status =
                                     self.execute_automation_radio_command(command, value);
+                            }
+                            Action::ReadControl {
+                                control,
+                                result_key,
+                            } => {
+                                self.automation_status =
+                                    self.execute_automation_control_read(control, result_key);
+                            }
+                            Action::WriteControl { control, value } => {
+                                self.automation_status =
+                                    self.execute_automation_control_write(control, value);
+                            }
+                            Action::ControlSequence { name, steps } => {
+                                self.automation_status =
+                                    self.execute_automation_control_sequence(name, steps);
                             }
                             Action::RequestTransmit { mode, message } => {
                                 self.automation_status =
@@ -917,6 +935,100 @@ impl QsonautGuiApp {
         }
     }
 
+    fn execute_automation_control_write(
+        &mut self,
+        control: &str,
+        value: &qsonaut_automation::ControlValue,
+    ) -> String {
+        let Some(control_id) = automation_control_id(control) else {
+            return format!("Rejected control write: unknown HAL control '{control}'");
+        };
+        let Some(value) = automation_control_value(value) else {
+            return format!("Rejected control write: invalid value for '{control}'");
+        };
+        self.send_command(GuiCommand::SetControl(control_id, value));
+        format!("Queued HAL control write for {control}")
+    }
+
+    pub(super) fn execute_automation_control_read(
+        &mut self,
+        control: &str,
+        result_key: &str,
+    ) -> String {
+        let Some(control_id) = automation_control_id(control) else {
+            return format!("Rejected control read: unknown HAL control '{control}'");
+        };
+        let Some(tx) = &self.command_tx else {
+            return "Rejected control read: radio worker is unavailable".to_string();
+        };
+        let (ack_tx, ack_rx) = std::sync::mpsc::channel();
+        if tx
+            .send(GuiCommand::ReadControl(control_id, ack_tx))
+            .is_err()
+        {
+            return "Rejected control read: radio worker is unavailable".to_string();
+        }
+        match ack_rx.recv_timeout(std::time::Duration::from_millis(500)) {
+            Ok(Ok(Some(value))) => {
+                let value = automation_radio_value_text(&value);
+                self.automation_host.set_variable(result_key, &value);
+                let mut fields = BTreeMap::new();
+                fields.insert("control".to_string(), control.trim().to_string());
+                fields.insert("result_key".to_string(), result_key.trim().to_string());
+                fields.insert("value".to_string(), value.clone());
+                fields.insert("ok".to_string(), "true".to_string());
+                self.app_events.publish(AppEvent::AutomationResult {
+                    source: "gui.radio.control_read".to_string(),
+                    fields,
+                });
+                format!("Read {control} into {result_key}: {value}")
+            }
+            Ok(Ok(None)) => format!("Read {control} into {result_key}: unavailable"),
+            Ok(Err(error)) => format!("Control read rejected: {error}"),
+            Err(_) => "Control read timed out: radio worker did not respond".to_string(),
+        }
+    }
+
+    fn execute_automation_control_sequence(
+        &mut self,
+        name: &str,
+        steps: &[qsonaut_automation::ControlStep],
+    ) -> String {
+        if steps.is_empty() {
+            return format!("Rejected control sequence '{name}': no steps");
+        }
+        let Some(tx) = self.command_tx.clone() else {
+            return format!("Rejected control sequence '{name}': radio worker unavailable");
+        };
+        let mut converted = Vec::with_capacity(steps.len());
+        for step in steps {
+            let Some(control_id) = automation_control_id(&step.control) else {
+                return format!(
+                    "Control sequence '{name}' stopped: unknown HAL control '{}'",
+                    step.control
+                );
+            };
+            let Some(value) = automation_control_value(&step.value) else {
+                return format!(
+                    "Control sequence '{name}' stopped: invalid value for '{}'",
+                    step.control
+                );
+            };
+            converted.push((control_id, value, step.wait_ms.min(60_000)));
+        }
+        std::thread::spawn(move || {
+            for (control_id, value, wait_ms) in converted {
+                if tx.send(GuiCommand::SetControl(control_id, value)).is_err() {
+                    break;
+                }
+                if wait_ms > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(wait_ms));
+                }
+            }
+        });
+        format!("Queued control sequence '{name}' ({} steps)", steps.len())
+    }
+
     fn execute_automation_transmit_request(&mut self, mode: &str, message: &str) -> String {
         let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
         if !self.any_tx_armed(&snapshot) {
@@ -957,6 +1069,141 @@ impl QsonautGuiApp {
                 unsupported.label()
             ),
         }
+    }
+}
+
+pub(super) const AUTOMATION_CONTROL_CATALOG: &[(&str, &str, &str)] = &[
+    ("af_gain", "Audio gain", "u8"),
+    ("rf_gain", "RF gain", "u8"),
+    ("squelch", "Squelch", "u8"),
+    ("rf_power", "RF power", "u8"),
+    ("preamp", "Preamp", "bool"),
+    ("attenuator", "Attenuator", "bool"),
+    ("noise_blanker", "Noise blanker", "bool"),
+    ("noise_reduction", "Noise reduction", "bool"),
+    ("noise_reduction_level", "Noise reduction level", "u8"),
+    ("ip_plus", "IP+", "bool"),
+    ("notch", "Notch", "bool"),
+    ("manual_notch", "Manual notch", "bool"),
+    ("manual_notch_position", "Manual notch position", "i32"),
+    ("data_mode", "Data mode", "bool"),
+    ("filter", "Filter", "u8"),
+    ("tuning_step", "Tuning step", "u64"),
+    ("agc", "AGC", "u8"),
+    ("rit", "RIT", "i32"),
+    ("xit", "XIT", "i32"),
+    ("split", "Split", "bool"),
+    ("tuner", "Tuner", "bool"),
+    ("raw_civ", "Raw CI-V", "raw_hex"),
+    ("vfo", "VFO", "vfo"),
+    ("main_sub", "Main/Sub", "u8"),
+    ("external_preamp", "External preamp", "u8"),
+    ("antenna", "Antenna", "u8"),
+    ("mic_gain", "Mic gain", "u8"),
+    ("monitor_level", "Monitor level", "u8"),
+    ("speech_processor", "Speech processor", "bool"),
+    ("speech_processor_level", "Speech processor level", "u8"),
+    ("if_shift", "IF shift", "i32"),
+    ("vox", "VOX", "bool"),
+    ("vox_gain", "VOX gain", "u8"),
+    ("vox_delay", "VOX delay", "u8"),
+    ("break_in", "Break-in", "bool"),
+    ("lock", "Panel lock", "bool"),
+    ("noise_blanker_level", "Noise blanker level", "u8"),
+];
+
+fn automation_control_id(name: &str) -> Option<ControlId> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "af_gain" => Some(ControlId::AfGain),
+        "rf_gain" => Some(ControlId::RfGain),
+        "squelch" => Some(ControlId::Squelch),
+        "rf_power" => Some(ControlId::RfPower),
+        "preamp" => Some(ControlId::Preamp),
+        "attenuator" => Some(ControlId::Attenuator),
+        "noise_blanker" => Some(ControlId::NoiseBlanker),
+        "noise_reduction" => Some(ControlId::NoiseReduction),
+        "noise_reduction_level" => Some(ControlId::NoiseReductionLevel),
+        "ip_plus" => Some(ControlId::IpPlus),
+        "notch" => Some(ControlId::Notch),
+        "manual_notch" => Some(ControlId::ManualNotch),
+        "manual_notch_position" => Some(ControlId::ManualNotchPosition),
+        "data_mode" => Some(ControlId::DataMode),
+        "filter" => Some(ControlId::Filter),
+        "tuning_step" => Some(ControlId::TuningStep),
+        "agc" => Some(ControlId::Agc),
+        "rit" => Some(ControlId::Rit),
+        "xit" => Some(ControlId::Xit),
+        "split" => Some(ControlId::Split),
+        "tuner" => Some(ControlId::Tuner),
+        "raw_civ" => Some(ControlId::RawCiV),
+        "vfo" => Some(ControlId::Vfo),
+        "main_sub" => Some(ControlId::MainSub),
+        "external_preamp" => Some(ControlId::ExternalPreamp),
+        "antenna" => Some(ControlId::Antenna),
+        "mic_gain" => Some(ControlId::MicGain),
+        "monitor_level" => Some(ControlId::MonitorLevel),
+        "speech_processor" => Some(ControlId::SpeechProcessor),
+        "speech_processor_level" => Some(ControlId::SpeechProcessorLevel),
+        "if_shift" => Some(ControlId::IfShift),
+        "vox" => Some(ControlId::Vox),
+        "vox_gain" => Some(ControlId::VoxGain),
+        "vox_delay" => Some(ControlId::VoxDelay),
+        "break_in" => Some(ControlId::BreakIn),
+        "lock" => Some(ControlId::Lock),
+        "noise_blanker_level" => Some(ControlId::NoiseBlankerLevel),
+        _ => None,
+    }
+}
+
+fn automation_control_value(
+    value: &qsonaut_automation::ControlValue,
+) -> Option<qsonaut_radio::ControlValue> {
+    match value {
+        qsonaut_automation::ControlValue::Bool(value) => {
+            Some(qsonaut_radio::ControlValue::Bool(*value))
+        }
+        qsonaut_automation::ControlValue::U8(value) => {
+            Some(qsonaut_radio::ControlValue::U8(*value))
+        }
+        qsonaut_automation::ControlValue::I32(value) => {
+            Some(qsonaut_radio::ControlValue::I32(*value))
+        }
+        qsonaut_automation::ControlValue::U64(value) => {
+            Some(qsonaut_radio::ControlValue::U64(*value))
+        }
+        qsonaut_automation::ControlValue::Text(value) => {
+            Some(qsonaut_radio::ControlValue::Text(value.clone()))
+        }
+        qsonaut_automation::ControlValue::RawHex(value) => {
+            let compact = value.replace([' ', ':', '-'], "");
+            if compact.is_empty() || compact.len() % 2 != 0 {
+                return None;
+            }
+            let bytes = (0..compact.len())
+                .step_by(2)
+                .map(|index| u8::from_str_radix(&compact[index..index + 2], 16))
+                .collect::<Result<Vec<_>, _>>()
+                .ok()?;
+            Some(qsonaut_radio::ControlValue::Raw(bytes))
+        }
+    }
+}
+
+fn automation_radio_value_text(value: &qsonaut_radio::ControlValue) -> String {
+    match value {
+        qsonaut_radio::ControlValue::Bool(value) => value.to_string(),
+        qsonaut_radio::ControlValue::U8(value)
+        | qsonaut_radio::ControlValue::Vfo(value)
+        | qsonaut_radio::ControlValue::Receiver(value) => value.to_string(),
+        qsonaut_radio::ControlValue::I32(value) => value.to_string(),
+        qsonaut_radio::ControlValue::U64(value) => value.to_string(),
+        qsonaut_radio::ControlValue::Mode(value) => format!("{value:?}"),
+        qsonaut_radio::ControlValue::Text(value) => value.clone(),
+        qsonaut_radio::ControlValue::Raw(value) => value
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<Vec<_>>()
+            .join(""),
     }
 }
 
@@ -1154,6 +1401,16 @@ mod tests {
         assert!(app
             .execute_automation_radio_command("cycle_mode", "")
             .contains("mode cycle"));
+    }
+
+    #[test]
+    fn automation_control_catalog_contains_only_resolvable_controls() {
+        for &(name, _, _) in AUTOMATION_CONTROL_CATALOG {
+            assert!(
+                automation_control_id(name).is_some(),
+                "catalog control {name} has no HAL resolver"
+            );
+        }
     }
 
     #[test]

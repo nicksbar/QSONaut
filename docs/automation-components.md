@@ -40,6 +40,15 @@ Actions are split into explicit capabilities:
 - `radio_control`: request tuning or another non-PTT radio operation.
 - `transmit`: request an actual RF transmission.
 
+Radio controls are exposed through the generic HAL automation surface rather
+than vendor-specific commands. Scripts can use `read_control`,
+`write_control`, and `control_sequence` with stable control names such as
+`rf_power`, `tuner`, `filter`, or `noise_reduction`. The GUI resolves those
+names against Rigwright's selected profile, so unsupported or incorrectly
+typed values are rejected by the same capability checks as operator controls.
+Sequence waits are bounded to 60 seconds and run through the radio command
+queue; scripts cannot bypass the worker or directly access a serial device.
+
 A capability must appear in the component manifest and in the operator's grant set. Missing either check denies the action. `transmit` should remain off by default and eventually require an additional live armed-state check in the GUI executor.
 
 ## Rule files
@@ -54,7 +63,7 @@ A capability must appear in the component manifest and in the operator's grant s
 - reacting to live shared-channel messages;
 - Discord and IRC source declarations that reference environment variables rather than storing tokens.
 
-Templates use `${field}` placeholders. `${source}` and `${timestamp_ms}` are always available; other values come from the event fields.
+Templates use `${field}` placeholders. `${source}` and `${timestamp_ms}` are always available; other values come from the event fields. A successful `read_control` stores its result under `result_key`, emits a `control_read` event, and makes `${result_key}` available to actions triggered by later events as a persistent automation variable. Variables are string-valued and intentionally do not grant a script direct access to the radio or serial layer.
 
 ## Connector boundary
 
@@ -72,6 +81,11 @@ The GUI now owns an `AutomationHost` and dispatches normalized events for:
 4. operator profile transitions (`operator_profile`);
 5. material radio state transitions (`radio_state`).
 
+The **Automation** tab beside **Contest** is the visual starting point for
+using this system. It shows the loaded component's subscriptions and grants,
+explains the event-to-action flow, lists the stable HAL control names, and
+offers read probes for inspecting controls without writing to the radio.
+
 Current runtime grants are intentionally conservative:
 
 - `ui_notification` is granted to the sample component by default;
@@ -84,6 +98,8 @@ QSONaut Server channel receive and publish are live over the configured WebSocke
 Still pending:
 
 6. live external adapter polling and transport wiring (Discord/IRC runtime connectors).
+7. replace the initial thread-per-sequence executor with a cancellable scheduler
+       that can report sequence status and perform safe rollback/restore.
 
 Safety-gated execution is now wired for approved `radio_command` and `request_transmit` actions:
 

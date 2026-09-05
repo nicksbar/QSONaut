@@ -1,6 +1,9 @@
 use super::super::*;
 use qsonaut_modems::{extract_aligned_window, AudioBlock};
-use qsonaut_third_party::wsjt::{decode as decode_wsjt, Fst4Submode, WsjtDecodeConfig, WsjtMode};
+use qsonaut_third_party::wsjt::{
+    acquire_ft8_slot_phases, decode as decode_wsjt, Fst4Submode, WsjtDecodeConfig, WsjtMode,
+    FT8_SLOT_ACQUISITION_REQUIRED_SAMPLES,
+};
 
 const FT8_SLOT_MS: u128 = 15_000;
 const FT8_DEEP_RUNTIME_BUDGET_MS: u128 = 12_000;
@@ -253,23 +256,7 @@ pub(in super::super) fn run_native_digital_decode(
                 .map_or(measured, |previous| previous + 0.35 * (measured - previous)),
         );
     }
-    shared.digital_decode_status = if decoded.is_empty() {
-        format!("LIVE: no {} decodes in {elapsed_ms} ms", mode.label())
-    } else {
-        let timing = if mode == WorkspaceMode::Ft4 {
-            shared
-                .ft4_clock_offset_s
-                .map(|offset| format!(" | adaptive dT {offset:+.2}s"))
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-        format!(
-            "LIVE: {} {} decoded in {elapsed_ms} ms{timing}",
-            decoded.len(),
-            mode.label()
-        )
-    };
+    shared.digital_decode_status = format!("{} decode complete", mode.label());
     shared.digital_decodes.extend(decoded);
     while shared.digital_decodes.len() > 300 {
         shared.digital_decodes.pop_front();
@@ -280,12 +267,15 @@ pub(in super::super) fn run_native_digital_decode(
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        run_ft8_decode_worker, run_native_digital_decode, PendingFt8Decode, WorkspaceMode,
+        acquire_ft8_alignment, run_ft8_decode_worker, run_native_digital_decode, PendingFt8Decode,
+        WorkspaceMode,
     };
     use crate::modes::fst4::Submode;
     use crate::tx_audio::build_native_digital_tx_pcm;
     use crate::{FT4_EARLY_DECODE_S, FT4_SLOT_SAMPLES};
-    use qsonaut_third_party::wsjt::{decode as decode_wsjt, WsjtDecodeConfig, WsjtMode};
+    use qsonaut_third_party::wsjt::{
+        decode as decode_wsjt, WsjtDecodeConfig, WsjtMode, FT8_SLOT_ACQUISITION_REQUIRED_SAMPLES,
+    };
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -460,6 +450,8 @@ mod tests {
         run_ft8_decode_worker(
             PendingFt8Decode {
                 samples: vec![0.0; 12_000],
+                acquisition_samples: Vec::new(),
+                captured_samples: 12_000,
                 utc: "00:00:00.000".to_string(),
                 period: 7,
                 deep_decode: false,
@@ -472,8 +464,19 @@ mod tests {
         let state = state.lock().expect("state");
         assert!(state.ft8_compute_telemetry.is_some());
         assert_eq!(state.ft8_last_decode_period, Some(7));
-        assert!(state.ft8_decode_status.starts_with("LIVE: no decodes"));
+        assert_eq!(state.ft8_decode_status, "FT8 decode complete");
         assert!(state.ft8_pending.is_empty());
+    }
+
+    #[test]
+    fn quiet_ft8_acquisition_does_not_claim_a_lock() {
+        let (alignment, confidence, candidates) = acquire_ft8_alignment(
+            &vec![0.0; FT8_SLOT_ACQUISITION_REQUIRED_SAMPLES],
+            FT8_SLOT_ACQUISITION_REQUIRED_SAMPLES,
+        );
+        assert!(alignment.is_none());
+        assert!(confidence.is_none());
+        assert_eq!(candidates, 0);
     }
 }
 
@@ -483,6 +486,31 @@ pub(in super::super) fn run_ft8_decode_worker(
     deferred_decode: Arc<Mutex<Option<PendingFt8Decode>>>,
 ) {
     loop {
+        if !pending.acquisition_samples.is_empty() {
+            let period = pending.period;
+            let (alignment, confidence, candidates) =
+                acquire_ft8_alignment(&pending.acquisition_samples, pending.captured_samples);
+            let mut state_guard = state.lock().expect("ui state lock poisoned");
+            state_guard.ft8_acquisition_candidates = candidates;
+            state_guard.ft8_last_acquisition_period = Some(period);
+            if let Some((alignment, confidence)) = alignment.zip(confidence) {
+                pending.alignment_s = alignment;
+                pending.samples = prepare_early_ft8_slot(
+                    &pending.acquisition_samples,
+                    pending.captured_samples,
+                    alignment,
+                );
+                state_guard.ft8_slot_phase_s = Some(alignment);
+                state_guard.ft8_sync_confidence = Some(confidence);
+                state_guard.ft8_sync_state = Ft8SyncState::Locked;
+                state_guard.ft8_acquisition_generation = state_guard.ft8_reacquire_generation;
+            } else {
+                state_guard.ft8_sync_confidence = None;
+                state_guard.ft8_sync_state = Ft8SyncState::Unlocked;
+            }
+            drop(state_guard);
+            pending.acquisition_samples.clear();
+        }
         let elapsed_ms = run_ft8_decode(
             pending.samples,
             state.clone(),
@@ -515,6 +543,49 @@ pub(in super::super) fn run_ft8_decode_worker(
             break;
         }
     }
+}
+
+fn acquire_ft8_alignment(
+    samples: &[f32],
+    captured_samples: usize,
+) -> (Option<f32>, Option<f32>, usize) {
+    if samples.len() < FT8_SLOT_ACQUISITION_REQUIRED_SAMPLES {
+        return (None, None, 0);
+    }
+    let config = WsjtDecodeConfig {
+        frequency_min_hz: 100.0,
+        frequency_max_hz: 3_000.0,
+        sync_min: FT8_FAST_SYNC_MIN,
+        max_candidates: FT8_FAST_MAX_CAND,
+        ..WsjtDecodeConfig::default()
+    };
+    let audio = AudioBlock::new(12_000, samples.to_vec()).expect("normalized audio is valid");
+    let candidates = acquire_ft8_slot_phases(&audio, &config).unwrap_or_default();
+    let candidate_count = candidates.len();
+    for candidate in candidates.into_iter().take(8) {
+        let window = extract_aligned_window(
+            samples,
+            captured_samples,
+            FT8_SLOT_SAMPLES,
+            candidate.delta_time_seconds,
+            12_000,
+        );
+        let Ok(batch) = decode_wsjt(
+            &AudioBlock::new(12_000, window).expect("normalized audio is valid"),
+            WsjtMode::Ft8,
+            &config,
+        ) else {
+            continue;
+        };
+        if !batch.events.is_empty() {
+            return (
+                Some(candidate.delta_time_seconds),
+                Some(candidate.weight),
+                candidate_count,
+            );
+        }
+    }
+    (None, None, candidate_count)
 }
 
 /// Background FT8 decode — runs in its own thread, one per period.
@@ -621,23 +692,9 @@ fn run_ft8_decode(
     let mut s = state.lock().expect("ui state lock poisoned");
     s.ft8_compute_telemetry = Some(telemetry);
     s.ft8_last_decode_period = Some(period);
+    s.ft8_decode_status = "FT8 decode complete".to_string();
     if !results.is_empty() {
-        let mut offsets: Vec<f32> = results.iter().map(|result| result.dt_s).collect();
-        offsets.sort_by(f32::total_cmp);
-        let measured_offset = offsets[offsets.len() / 2]
-            .clamp(-FT8_ADAPTIVE_OFFSET_LIMIT_S, FT8_ADAPTIVE_OFFSET_LIMIT_S);
-        let adaptive_offset = s.ft8_clock_offset_s.map_or(measured_offset, |previous| {
-            previous + 0.35 * (measured_offset - previous)
-        });
-        s.ft8_clock_offset_s = Some(adaptive_offset);
-        s.ft8_decode_status = format!(
-            "LIVE: {} decoded in {} ms | adaptive dT {adaptive_offset:+.2}s",
-            results.len(),
-            elapsed_ms
-        );
         s.ft8_pending.extend(results);
-    } else {
-        s.ft8_decode_status = format!("LIVE: no decodes in {elapsed_ms} ms");
     }
 
     elapsed_ms

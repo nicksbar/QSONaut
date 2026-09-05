@@ -21,6 +21,7 @@ pub enum EventKind {
     ExternalMessage,
     ServerMessage,
     Timer,
+    ControlRead,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +68,30 @@ pub enum Capability {
     SetCompose,
     RadioControl,
     Transmit,
+}
+
+/// Values accepted by the protocol-neutral control automation surface.
+///
+/// The automation crate deliberately does not depend on Rigwright. The GUI
+/// adapter resolves `control` names against the selected HAL profile and
+/// rejects values the driver cannot represent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum ControlValue {
+    Bool(bool),
+    U8(u8),
+    I32(i32),
+    U64(u64),
+    Text(String),
+    RawHex(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlStep {
+    pub control: String,
+    pub value: ControlValue,
+    #[serde(default)]
+    pub wait_ms: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +198,22 @@ pub enum Action {
         command: String,
         value: String,
     },
+    /// Read one HAL control. The adapter publishes the result as an
+    /// automation event using `result_key` for later script references.
+    ReadControl {
+        control: String,
+        result_key: String,
+    },
+    /// Write one HAL control using the selected driver's native conversion.
+    WriteControl {
+        control: String,
+        value: ControlValue,
+    },
+    /// Execute a bounded sequence of generic HAL control writes.
+    ControlSequence {
+        name: String,
+        steps: Vec<ControlStep>,
+    },
     RequestTransmit {
         mode: String,
         message: String,
@@ -188,6 +229,9 @@ impl Action {
             Self::ServerSendMessage { .. } => Capability::ServerPublish,
             Self::SetCompose { .. } => Capability::SetCompose,
             Self::RadioCommand { .. } => Capability::RadioControl,
+            Self::ReadControl { .. } | Self::WriteControl { .. } | Self::ControlSequence { .. } => {
+                Capability::RadioControl
+            }
             Self::RequestTransmit { .. } => Capability::Transmit,
         }
     }
@@ -264,15 +308,39 @@ pub enum ActionTemplate {
         command: String,
         value: String,
     },
+    ReadControl {
+        control: String,
+        result_key: String,
+    },
+    WriteControl {
+        control: String,
+        value: ControlValue,
+    },
+    ControlSequence {
+        name: String,
+        steps: Vec<ControlStepTemplate>,
+    },
     RequestTransmit {
         mode: String,
         message: String,
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlStepTemplate {
+    pub control: String,
+    pub value: ControlValue,
+    #[serde(default)]
+    pub wait_ms: u64,
+}
+
 impl ActionTemplate {
-    fn render(&self, event: &AutomationEvent) -> Action {
-        let render = |value: &str| render_template(value, event);
+    fn render_with_variables(
+        &self,
+        event: &AutomationEvent,
+        variables: &BTreeMap<String, String>,
+    ) -> Action {
+        let render = |value: &str| render_template(value, event, variables);
         match self {
             Self::Notify {
                 title,
@@ -305,6 +373,28 @@ impl ActionTemplate {
                 command: render(command),
                 value: render(value),
             },
+            Self::ReadControl {
+                control,
+                result_key,
+            } => Action::ReadControl {
+                control: render(control),
+                result_key: render(result_key),
+            },
+            Self::WriteControl { control, value } => Action::WriteControl {
+                control: render(control),
+                value: render_control_value(value, event, variables),
+            },
+            Self::ControlSequence { name, steps } => Action::ControlSequence {
+                name: render(name),
+                steps: steps
+                    .iter()
+                    .map(|step| ControlStep {
+                        control: render(&step.control),
+                        value: render_control_value(&step.value, event, variables),
+                        wait_ms: step.wait_ms.min(60_000),
+                    })
+                    .collect(),
+            },
             Self::RequestTransmit { mode, message } => Action::RequestTransmit {
                 mode: render(mode),
                 message: render(message),
@@ -313,12 +403,36 @@ impl ActionTemplate {
     }
 }
 
-fn render_template(template: &str, event: &AutomationEvent) -> String {
+fn render_control_value(
+    value: &ControlValue,
+    event: &AutomationEvent,
+    variables: &BTreeMap<String, String>,
+) -> ControlValue {
+    match value {
+        ControlValue::Bool(value) => ControlValue::Bool(*value),
+        ControlValue::U8(value) => ControlValue::U8(*value),
+        ControlValue::I32(value) => ControlValue::I32(*value),
+        ControlValue::U64(value) => ControlValue::U64(*value),
+        ControlValue::Text(value) => ControlValue::Text(render_template(value, event, variables)),
+        ControlValue::RawHex(value) => {
+            ControlValue::RawHex(render_template(value, event, variables))
+        }
+    }
+}
+
+fn render_template(
+    template: &str,
+    event: &AutomationEvent,
+    variables: &BTreeMap<String, String>,
+) -> String {
     let mut rendered = template
         .replace("${source}", &event.source)
         .replace("${timestamp_ms}", &event.timestamp_ms.to_string());
     for (field, value) in &event.fields {
         rendered = rendered.replace(&format!("${{{field}}}"), value);
+    }
+    for (name, value) in variables {
+        rendered = rendered.replace(&format!("${{{name}}}"), value);
     }
     rendered
 }
@@ -326,6 +440,15 @@ fn render_template(template: &str, event: &AutomationEvent) -> String {
 pub trait Component: Send {
     fn manifest(&self) -> &ComponentManifest;
     fn on_event(&mut self, event: &AutomationEvent) -> Result<Vec<Action>, ComponentError>;
+
+    fn on_event_with_variables(
+        &mut self,
+        event: &AutomationEvent,
+        variables: &BTreeMap<String, String>,
+    ) -> Result<Vec<Action>, ComponentError> {
+        let _ = variables;
+        self.on_event(event)
+    }
 }
 
 pub struct RuleComponent {
@@ -344,6 +467,14 @@ impl Component for RuleComponent {
     }
 
     fn on_event(&mut self, event: &AutomationEvent) -> Result<Vec<Action>, ComponentError> {
+        self.on_event_with_variables(event, &BTreeMap::new())
+    }
+
+    fn on_event_with_variables(
+        &mut self,
+        event: &AutomationEvent,
+        variables: &BTreeMap<String, String>,
+    ) -> Result<Vec<Action>, ComponentError> {
         if !self.config.component.subscriptions.contains(&event.kind) {
             return Ok(Vec::new());
         }
@@ -353,7 +484,11 @@ impl Component for RuleComponent {
             .iter()
             .filter(|rule| rule.on == event.kind)
             .filter(|rule| rule.when.iter().all(|predicate| predicate.matches(event)))
-            .flat_map(|rule| rule.actions.iter().map(|action| action.render(event)))
+            .flat_map(|rule| {
+                rule.actions
+                    .iter()
+                    .map(|action| action.render_with_variables(event, variables))
+            })
             .collect())
     }
 }
@@ -372,6 +507,15 @@ pub struct DeniedAction {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentOverview {
+    pub id: String,
+    pub name: String,
+    pub subscriptions: Vec<EventKind>,
+    pub requested: Vec<Capability>,
+    pub granted: Vec<Capability>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DispatchReport {
     pub approved: Vec<ApprovedAction>,
@@ -383,6 +527,41 @@ pub struct DispatchReport {
 pub struct AutomationHost {
     components: Vec<Box<dyn Component>>,
     grants: HashMap<String, CapabilitySet>,
+    variables: BTreeMap<String, String>,
+}
+
+impl AutomationHost {
+    pub fn component_overview(&self) -> Vec<ComponentOverview> {
+        self.components
+            .iter()
+            .map(|component| {
+                let manifest = component.manifest();
+                let granted = self
+                    .grants
+                    .get(&manifest.id)
+                    .map(|set| set.0.iter().copied().collect())
+                    .unwrap_or_default();
+                ComponentOverview {
+                    id: manifest.id.clone(),
+                    name: manifest.name.clone(),
+                    subscriptions: manifest.subscriptions.iter().copied().collect(),
+                    requested: manifest.requests.0.iter().copied().collect(),
+                    granted,
+                }
+            })
+            .collect()
+    }
+
+    pub fn set_variable(&mut self, name: impl Into<String>, value: impl Into<String>) {
+        let name = name.into();
+        if !name.trim().is_empty() {
+            self.variables.insert(name, value.into());
+        }
+    }
+
+    pub fn variable(&self, name: &str) -> Option<&str> {
+        self.variables.get(name).map(String::as_str)
+    }
 }
 
 impl AutomationHost {
@@ -412,7 +591,7 @@ impl AutomationHost {
         let mut report = DispatchReport::default();
         for component in &mut self.components {
             let manifest = component.manifest().clone();
-            let actions = match component.on_event(event) {
+            let actions = match component.on_event_with_variables(event, &self.variables) {
                 Ok(actions) => actions,
                 Err(error) => {
                     report.errors.push(format!("{}: {error}", manifest.id));
@@ -535,7 +714,7 @@ mod tests {
         let source = include_str!("../../../automation.example.toml");
         let config = RuleComponentConfig::from_toml(source).unwrap();
         assert_eq!(config.sources.len(), 2);
-        assert_eq!(config.rules.len(), 7);
+        assert_eq!(config.rules.len(), 9);
         assert!(config
             .component
             .subscriptions
@@ -567,5 +746,114 @@ mod tests {
             CapabilitySet::new([Capability::ServerPublish]),
         );
         assert_eq!(host.dispatch(&event).approved.len(), 1);
+    }
+
+    #[test]
+    fn renders_generic_control_writes_and_bounds_sequence_waits() {
+        let mut component = component_with(
+            ActionTemplate::ControlSequence {
+                name: "low-power-${band}".to_string(),
+                steps: vec![ControlStepTemplate {
+                    control: "rf_power".to_string(),
+                    value: ControlValue::U8(32),
+                    wait_ms: 90_000,
+                }],
+            },
+            CapabilitySet::new([Capability::RadioControl]),
+        );
+        let event = AutomationEvent::new(EventKind::CallsignHit, "test")
+            .field("band", "20m")
+            .tag("directed_to_me");
+        assert_eq!(
+            component.on_event(&event).unwrap(),
+            vec![Action::ControlSequence {
+                name: "low-power-20m".to_string(),
+                steps: vec![ControlStep {
+                    control: "rf_power".to_string(),
+                    value: ControlValue::U8(32),
+                    wait_ms: 60_000,
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn parses_control_actions_from_toml_without_vendor_names() {
+        let config = RuleComponentConfig::from_toml(
+            r#"
+[component]
+id = "control.guard"
+name = "Control guard"
+subscriptions = ["radio_state"]
+requests = ["radio_control"]
+
+[[rules]]
+on = "radio_state"
+actions = [
+  { action = "read_control", control = "rf_power", result_key = "power" },
+  { action = "write_control", control = "tuner", value = { type = "bool", value = false } },
+]
+"#,
+        )
+        .expect("control script should parse");
+        assert_eq!(config.rules[0].actions.len(), 2);
+    }
+
+    #[test]
+    fn renders_persistent_variables_into_later_actions() {
+        let component = component_with(
+            ActionTemplate::WriteControl {
+                control: "rf_power".to_string(),
+                value: ControlValue::Text("${saved_power}".to_string()),
+            },
+            CapabilitySet::new([Capability::RadioControl]),
+        );
+        let event = AutomationEvent::new(EventKind::CallsignHit, "test").tag("directed_to_me");
+        let mut host = AutomationHost::default();
+        host.register(component).unwrap();
+        host.set_grants(
+            "spark.callout",
+            CapabilitySet::new([Capability::RadioControl]),
+        );
+        host.set_variable("saved_power", "42");
+
+        let report = host.dispatch(&event);
+        assert_eq!(
+            report.approved[0].action,
+            Action::WriteControl {
+                control: "rf_power".to_string(),
+                value: ControlValue::Text("42".to_string()),
+            }
+        );
+        assert_eq!(host.variable("saved_power"), Some("42"));
+    }
+
+    #[test]
+    fn exposes_component_overview_with_requested_and_granted_capabilities() {
+        let mut host = AutomationHost::default();
+        host.register(component_with(
+            ActionTemplate::Notify {
+                title: "title".to_string(),
+                body: "body".to_string(),
+                accent: None,
+            },
+            CapabilitySet::new([Capability::UiNotification]),
+        ))
+        .unwrap();
+
+        let overview = host.component_overview();
+        assert_eq!(overview.len(), 1);
+        assert_eq!(overview[0].id, "spark.callout");
+        assert_eq!(overview[0].requested, vec![Capability::UiNotification]);
+        assert!(overview[0].granted.is_empty());
+
+        host.set_grants(
+            "spark.callout",
+            CapabilitySet::new([Capability::UiNotification]),
+        );
+        assert_eq!(
+            host.component_overview()[0].granted,
+            vec![Capability::UiNotification]
+        );
     }
 }

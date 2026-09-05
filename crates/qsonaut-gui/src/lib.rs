@@ -184,7 +184,8 @@ use band_plan::{
 };
 use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
-    DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, OperatorCallHit, PendingFt8Decode, PotaSpot,
+    DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, Ft8SyncState, OperatorCallHit, PendingFt8Decode,
+    PotaSpot,
 };
 use font::{apply_font_family, available_font_families};
 pub use graphics::{
@@ -288,7 +289,6 @@ const FT8_SLOT_SAMPLES: usize = 12_000 * 15;
 // unintentionally raised the early gate to ~2.92 and discarded weak signals.
 const FT8_FAST_SYNC_MIN: f32 = 1.3;
 const FT8_FAST_MAX_CAND: usize = 96;
-const FT8_ADAPTIVE_OFFSET_LIMIT_S: f32 = 2.5;
 const FT4_SLOT_SECONDS: f64 = 7.5;
 const FT4_SLOT_SAMPLES: usize = 12_000 * 15 / 2;
 // FT4 occupies 103 x 48 ms after its nominal +0.5 s start.
@@ -301,6 +301,7 @@ enum SignalPanelTab {
     Achievements,
     Station,
     Contest,
+    Automation,
     Reporting,
     Settings,
     Ai,
@@ -706,7 +707,14 @@ struct GuiState {
     audio_level_dbfs: Option<f32>,
     audio_clip_percent: f32,
     ft8_decode_status: String,
-    ft8_clock_offset_s: Option<f32>,
+    ft8_slot_phase_s: Option<f32>,
+    ft8_sync_state: Ft8SyncState,
+    ft8_sync_confidence: Option<f32>,
+    ft8_last_acquisition_period: Option<u64>,
+    ft8_acquisition_candidates: usize,
+    ft8_auto_sync: bool,
+    ft8_reacquire_generation: u64,
+    ft8_acquisition_generation: u64,
     ft4_clock_offset_s: Option<f32>,
     workspace_mode: WorkspaceMode,
     ft8_deep_decode: bool,
@@ -884,7 +892,14 @@ impl Default for GuiState {
             audio_level_dbfs: None,
             audio_clip_percent: 0.0,
             ft8_decode_status: "STARTING".to_string(),
-            ft8_clock_offset_s: None,
+            ft8_slot_phase_s: None,
+            ft8_sync_state: Ft8SyncState::default(),
+            ft8_sync_confidence: None,
+            ft8_last_acquisition_period: None,
+            ft8_acquisition_candidates: 0,
+            ft8_auto_sync: true,
+            ft8_reacquire_generation: 0,
+            ft8_acquisition_generation: u64::MAX,
             ft4_clock_offset_s: None,
             workspace_mode: WorkspaceMode::Ft8,
             ft8_deep_decode: false,
@@ -951,6 +966,10 @@ enum GuiCommand {
     },
     SetFilter(u8),
     SetControl(ControlId, ControlValue),
+    ReadControl(
+        ControlId,
+        mpsc::Sender<std::result::Result<Option<ControlValue>, String>>,
+    ),
     SetPtt(bool),
     SetPttWithAck(bool, mpsc::Sender<std::result::Result<(), String>>),
     SetPower(bool),
@@ -1302,6 +1321,7 @@ struct QsonautGuiApp {
     ft4_max_attempts: u8,
     ft8_hold_tx_freq: bool,
     ft8_deep_decode: bool,
+    ft8_diagnostics_open: bool,
     ft4_deep_decode: bool,
     ft4_autoseq: bool,
     ft4_auto_reply_policy: AutoReplyPolicy,
@@ -3598,6 +3618,69 @@ mod tests {
     }
 
     #[test]
+    fn ft4_fixture_tolerates_deterministic_low_noise() {
+        let (pcm, offset_s) = build_native_digital_tx_pcm(
+            WorkspaceMode::Ft4,
+            "CQ W1AW AA00",
+            1_500,
+            modes::fst4::Submode::default(),
+            20,
+            600,
+        )
+        .expect("FT4 synthesis");
+        let mut slot = vec![0.0_f32; (7.5 * 12_000.0) as usize];
+        let start = (offset_s * 12_000.0).round() as usize;
+        for (dst, sample) in slot[start..].iter_mut().zip(pcm) {
+            *dst = sample as f32 / i16::MAX as f32 * 0.04;
+        }
+        add_deterministic_noise(&mut slot, 0.0005);
+
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        run_native_digital_decode(
+            WorkspaceMode::Ft4,
+            modes::fst4::Submode::default(),
+            slot,
+            10,
+            "00:01:15.000".to_string(),
+            1_500,
+            false,
+            state.clone(),
+        );
+        assert!(state
+            .lock()
+            .expect("state")
+            .digital_decodes
+            .iter()
+            .any(|entry| entry.message == "CQ W1AW AA00"));
+    }
+
+    #[test]
+    fn steady_carrier_fixture_does_not_create_a_digital_decode() {
+        let samples = (0..FT8_SLOT_SAMPLES)
+            .map(|index| {
+                (2.0 * std::f32::consts::PI * 1_500.0 * index as f32 / 12_000.0).sin() * 0.08
+            })
+            .collect::<Vec<_>>();
+        let audio = qsonaut_modems::AudioBlock::new(12_000, samples).expect("carrier audio");
+        let outcome = qsonaut_third_party::wsjt::decode_ft8(
+            &audio,
+            &qsonaut_third_party::wsjt::WsjtDecodeConfig {
+                frequency_min_hz: 100.0,
+                frequency_max_hz: 3_000.0,
+                sync_min: FT8_FAST_SYNC_MIN,
+                max_candidates: FT8_FAST_MAX_CAND,
+                ..qsonaut_third_party::wsjt::WsjtDecodeConfig::default()
+            },
+        )
+        .expect("carrier audio and mode are valid");
+        assert!(
+            outcome.events.is_empty(),
+            "carrier decoded unexpectedly: {:?}",
+            outcome.events
+        );
+    }
+
+    #[test]
     fn jt9_workspace_adapter_decodes_generated_audio() {
         let (pcm, offset_s) = build_native_digital_tx_pcm(
             WorkspaceMode::Jt9,
@@ -3922,6 +4005,20 @@ mod tests {
             .is_none()
         );
         assert!(normalize_app_event_for_automation(AppEvent::ShutdownRequested).is_none());
+        let mut fields = BTreeMap::new();
+        fields.insert("control".to_string(), "rf_power".to_string());
+        fields.insert("result_key".to_string(), "saved_power".to_string());
+        fields.insert("value".to_string(), "42".to_string());
+        let result = normalize_app_event_for_automation(AppEvent::AutomationResult {
+            source: "test".to_string(),
+            fields,
+        })
+        .expect("control read result");
+        assert_eq!(result.kind, EventKind::ControlRead);
+        assert_eq!(
+            result.fields.get("result_key").map(String::as_str),
+            Some("saved_power")
+        );
         assert!(
             normalize_app_event_for_automation(AppEvent::DeviceDiscovered {
                 subsystem: "radio".to_string(),

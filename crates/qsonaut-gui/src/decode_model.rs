@@ -13,6 +13,14 @@ pub(super) struct Ft8SlotGate {
     decoded_period: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum Ft8SyncState {
+    #[default]
+    Unlocked,
+    Searching,
+    Locked,
+}
+
 impl Ft8SlotGate {
     #[cfg(test)]
     pub(super) fn observe(
@@ -131,6 +139,8 @@ pub(super) struct DigitalDecodeEntry {
 #[derive(Debug)]
 pub(super) struct PendingFt8Decode {
     pub(super) samples: Vec<f32>,
+    pub(super) acquisition_samples: Vec<f32>,
+    pub(super) captured_samples: usize,
     pub(super) utc: String,
     pub(super) period: u64,
     pub(super) deep_decode: bool,
