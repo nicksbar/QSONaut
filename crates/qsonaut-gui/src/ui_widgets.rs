@@ -141,7 +141,7 @@ pub(super) fn draw_operating_mode_icon(
     color: Color32,
 ) {
     let center = rect.center();
-    let stroke = egui::Stroke::new(1.4, color);
+    let stroke = egui::Stroke::new(1.4_f32, color);
     match icon {
         OperatingModeIcon::Digital => {
             painter.circle_filled(egui::pos2(center.x - 5.0, center.y), 1.5, color);
