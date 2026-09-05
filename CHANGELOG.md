@@ -10,6 +10,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 - Added validated hexadecimal fields for the radio and controller CI-V
   addresses in native Icom device settings.
+- Added deterministic regression fixtures for digital-signal variation,
+  carrier rejection, recovery and disconnect safety, malformed/contest/POTA/
+  grid ADIF imports, and local-AI failure handling (#83).
 
 ### Fixed
 - Restored the complete IC-7300 USB/native baud-rate list, including 38,400,
