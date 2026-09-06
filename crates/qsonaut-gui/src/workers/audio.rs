@@ -204,6 +204,44 @@ struct NullAudioGenerator {
     next_deadline: Option<Instant>,
 }
 
+/// A deterministic, speech-shaped fixture for native RADE loopback tests.
+/// RADE transports PCM speech; it does not synthesize text or callsigns. This
+/// fixture gives the null modem a voiced conversation-like signal without a
+/// platform TTS dependency or a recorded voice asset.
+#[cfg(feature = "rade-speech")]
+fn synthesize_rade_callsign_fixture(first: &str, second: &str) -> Vec<f32> {
+    const SAMPLE_RATE: f32 = 16_000.0;
+    const LETTER_SAMPLES: usize = 1_920;
+    const GAP_SAMPLES: usize = 320;
+    let mut samples = Vec::new();
+
+    for (index, callsign) in [first, second, first, second].into_iter().enumerate() {
+        if index > 0 {
+            samples.extend(std::iter::repeat_n(0.0, GAP_SAMPLES));
+        }
+        for character in callsign
+            .chars()
+            .filter(|character| character.is_ascii_alphanumeric())
+        {
+            let seed = character.to_ascii_uppercase() as u32;
+            let fundamental = 150.0 + (seed % 11) as f32 * 13.0;
+            let formant = 420.0 + (seed % 7) as f32 * 95.0;
+            for sample_index in 0..LETTER_SAMPLES {
+                let position = sample_index as f32 / LETTER_SAMPLES as f32;
+                let envelope =
+                    (position * 18.0).min(1.0) * ((1.0 - position) * 14.0).min(1.0) * 0.22;
+                let time = sample_index as f32 / SAMPLE_RATE;
+                let voiced = (std::f32::consts::TAU * fundamental * time).sin()
+                    + 0.45 * (std::f32::consts::TAU * fundamental * 2.0 * time).sin()
+                    + 0.2 * (std::f32::consts::TAU * formant * time).sin();
+                samples.push((voiced * envelope).clamp(-0.8, 0.8));
+            }
+            samples.extend(std::iter::repeat_n(0.0, GAP_SAMPLES));
+        }
+    }
+    samples
+}
+
 #[cfg(feature = "rade-speech")]
 struct RadeSpeechReceiver {
     context: RadeContext,
@@ -294,13 +332,22 @@ impl NullAudioGenerator {
         };
         self.waveforms.clear();
 
+        let stations = null_sim_stations(mode);
+
         #[cfg(feature = "rade-c")]
         if mode == WorkspaceMode::Rade {
-            self.rebuild_rade_waveform(state);
+            #[cfg(feature = "rade-speech")]
+            {
+                let first = stations[0].callsign.as_deref().unwrap_or("N7UF");
+                let second = stations[1].callsign.as_deref().unwrap_or("W1AW");
+                let speech = synthesize_rade_callsign_fixture(first, second);
+                self.rebuild_rade_waveform(state, &speech);
+            }
+            #[cfg(not(feature = "rade-speech"))]
+            self.rebuild_rade_waveform(state, &[]);
             return;
         }
 
-        let stations = null_sim_stations(mode);
         let first = &stations[0];
         let second = &stations[1];
         let first_call = first.callsign.as_deref().unwrap_or("N7UF");
@@ -426,9 +473,9 @@ impl NullAudioGenerator {
     }
 
     #[cfg(feature = "rade-c")]
-    fn rebuild_rade_waveform(&mut self, state: &GuiState) {
+    fn rebuild_rade_waveform(&mut self, state: &GuiState, _speech: &[f32]) {
         #[cfg(feature = "rade-speech")]
-        self.rebuild_rade_speech_waveform(state);
+        self.rebuild_rade_speech_waveform(state, _speech);
 
         #[cfg(not(feature = "rade-speech"))]
         {
@@ -455,7 +502,7 @@ impl NullAudioGenerator {
     }
 
     #[cfg(feature = "rade-speech")]
-    fn rebuild_rade_speech_waveform(&mut self, state: &GuiState) {
+    fn rebuild_rade_speech_waveform(&mut self, state: &GuiState, speech: &[f32]) {
         let Ok(mut context) = RadeContext::open(state.rade_mode) else {
             tracing::warn!(mode = ?state.rade_mode, "native RADE speech waveform unavailable");
             return;
@@ -467,8 +514,16 @@ impl NullAudioGenerator {
         let target_samples = 12_000 * 12;
         let mut modem_waveform = Vec::with_capacity(target_samples / 2);
         let mut features = Vec::with_capacity(context.feature_count());
+        let mut speech_frame = 0;
         while modem_waveform.len() < target_samples * 2 / 3 {
-            let Ok(frame) = speech_encoder.encode_frame(&[0.0; 160]) else {
+            let mut pcm = [0.0; 160];
+            if !speech.is_empty() {
+                for (offset, sample) in pcm.iter_mut().enumerate() {
+                    *sample = speech[(speech_frame + offset) % speech.len()];
+                }
+                speech_frame = (speech_frame + pcm.len()) % speech.len();
+            }
+            let Ok(frame) = speech_encoder.encode_frame(&pcm) else {
                 tracing::warn!("native RADE speech feature extraction stopped");
                 break;
             };
