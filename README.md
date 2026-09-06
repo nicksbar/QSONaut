@@ -65,12 +65,18 @@ console. This is an honest capability snapshot, not a compatibility promise:
 | SWR and tuner | Normalized live SWR display plus an experimental stepped active-band sweep with configurable range/step/interval, low-power carrier pipeline, tuner safety, stop/disarm handling, charting, and application-log diagnostics. |
 | Station workflow | Contact log with ADIF import/export, operator profiles, QSO history, PSK Reporter (optional and off by default), and a live in-app application log with filtering, highlighting, copy, and bottom-follow. |
 | QSONaut Server | Optional WSS event/catalog sync, station presence, radio metadata, idempotent QSO publication, shared channels, and manual diagnostics. Each outbound data category is independently opt-in. |
-| Automation and compute | Permission-gated automation foundations and compute-backend detection exist; Discord/IRC connectors and GPU/NPU decoder kernels are not validated yet. |
+| Automation and achievements | Permission-gated event automation and a structured, read-only achievement catalog are available; Discord/IRC connectors and GPU/NPU decoder kernels are not validated yet. |
 
 See the detailed [QSONaut feature matrix](docs/feature-matrix.md) for the
 implementation-level status of radio controls, normalized meters, SWR/tuner
 workflows, digital modes, SSTV, station tools, server integration, automation,
 and deliberate gaps.
+
+The [achievement automation guide](docs/achievement-automation.md) documents
+the declarative catalog, structured event flow, achievement persistence,
+operator alerts, safety boundaries, and current limitations. The checked-in
+[`achievements.example.toml`](achievements.example.toml) shows the catalog
+schema and built-in achievement definitions.
 
 The [project roadmap](docs/project-roadmap.md) is the current v0.4.0 through
 v1 planning source across QSONaut and its sibling repositories.

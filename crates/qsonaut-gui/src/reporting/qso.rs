@@ -89,6 +89,17 @@ impl QsonautGuiApp {
                 call: last.callsign.clone(),
                 band: last.band.clone(),
                 frequency_hz: last.frequency_hz,
+                grid: last.grid.clone(),
+                state: last.state.clone(),
+                country: last
+                    .hamdb
+                    .as_ref()
+                    .map(|entry| entry.country.clone())
+                    .unwrap_or_default(),
+                time_on: last.time_on.clone(),
+                report_received: last.report_received.clone(),
+                operation_mode: last.operation_mode.clone(),
+                contest_exchange_received: last.contest_exchange_received.clone(),
             });
         }
         self.qso_selected = self.qso_log.contacts.last().map(|contact| contact.id);

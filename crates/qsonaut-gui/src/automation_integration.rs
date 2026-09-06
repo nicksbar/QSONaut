@@ -54,13 +54,52 @@ pub(crate) fn normalize_app_event_for_automation(event: AppEvent) -> Option<Auto
             call,
             band,
             frequency_hz,
-        } => Some(
-            AutomationEvent::new(EventKind::QsoLogged, "app.qso_log")
+            grid,
+            state,
+            country,
+            time_on,
+            report_received,
+            operation_mode,
+            contest_exchange_received,
+        } => {
+            let mut event = AutomationEvent::new(EventKind::QsoLogged, "app.qso_log")
                 .field("mode", mode)
                 .field("call", call)
                 .field("band", band)
-                .field("frequency_hz", frequency_hz.to_string()),
-        ),
+                .field("frequency_hz", frequency_hz.to_string())
+                .field("grid", grid)
+                .field("state", state)
+                .field("country", country.clone())
+                .field("time_on", time_on.clone())
+                .field("report_received", report_received.clone())
+                .field("operation_mode", operation_mode)
+                .field(
+                    "contest_exchange_received",
+                    contest_exchange_received.clone(),
+                );
+            if let Some(hour) = time_on.get(..2).and_then(|hour| hour.parse::<u8>().ok()) {
+                if hour < 7 {
+                    event = event.tag("early_bird");
+                }
+                if hour >= 23 {
+                    event = event.tag("night_owl");
+                }
+            }
+            if !contest_exchange_received.trim().is_empty() {
+                event = event.tag("contest_operator");
+            }
+            if report_received
+                .trim()
+                .parse::<f64>()
+                .is_ok_and(|snr| snr < -20.0)
+            {
+                event = event.tag("signal_survivor");
+            }
+            if !country.trim().is_empty() && !country.eq_ignore_ascii_case("US") {
+                event = event.tag("dx");
+            }
+            Some(event)
+        }
         AppEvent::ExternalMessageReceived {
             source,
             author,

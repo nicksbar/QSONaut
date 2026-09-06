@@ -9,18 +9,11 @@ const FUTURE_TEXT_MODES: &[(&str, &str, OperatingModeIcon)] = &[(
     "Future text modem placeholder; protocol support is not enabled",
     OperatingModeIcon::Text,
 )];
-const FUTURE_VOICE_MODES: &[(&str, &str, OperatingModeIcon)] = &[
-    (
-        "VaraAC",
-        "Future voice modem placeholder; protocol support is not enabled",
-        OperatingModeIcon::VaraAc,
-    ),
-    (
-        "RADE",
-        "Future voice modem placeholder; protocol support is not enabled",
-        OperatingModeIcon::Rade,
-    ),
-];
+const FUTURE_VOICE_MODES: &[(&str, &str, OperatingModeIcon)] = &[(
+    "RADE",
+    "Future voice modem placeholder; protocol support is not enabled",
+    OperatingModeIcon::Rade,
+)];
 
 impl QsonautGuiApp {
     pub(crate) fn draw_header_branding(&mut self, ui: &mut egui::Ui) {

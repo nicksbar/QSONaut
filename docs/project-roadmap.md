@@ -8,6 +8,23 @@ modem extraction. The older [core hardening plan](core-hardening-plan.md) is
 kept as historical design context; its unchecked items are not automatically
 current backlog items.
 
+### v0.3.18 — achievement automation and operator progress
+
+The release branch adds a structured, read-only achievement layer on top of
+the existing automation event boundary. The implementation and catalog are
+documented in [achievement automation](achievement-automation.md).
+
+- [x] Define a shared event-count and unique-field achievement evaluator.
+- [x] Move the default achievement definitions into a checked-in TOML catalog.
+- [x] Add structured QSO metadata and semantic tags for DX, time, contest,
+  weak-signal, mode, state, grid, and duplicate-defense progress.
+- [x] Add Worked All States and per-mode FT8/FT4/CW milestones.
+- [x] Preserve existing profile unlock/acknowledgment compatibility.
+- [x] Add catalog parsing, evaluator, predicate, normalization, and routing
+  tests under the workspace validation gates.
+- [ ] Decide whether external catalog loading should become a user-facing,
+  migration-versioned feature after the 0.3.18 release.
+
 ## Product progression
 
 ### v0.4.0 — consolidation and dependable core workflows

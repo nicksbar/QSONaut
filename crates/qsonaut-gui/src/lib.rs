@@ -35,8 +35,8 @@ use qsonaut_accelerate::{
 };
 use qsonaut_audio::{play_pcm_blocking, AudioService, NULL_INPUT_DEVICE, NULL_OUTPUT_DEVICE};
 use qsonaut_automation::{
-    Action, AutomationEvent, AutomationHost, Capability, CapabilitySet, EventKind,
-    ExternalSourceConfig, RuleComponent, RuleComponentConfig,
+    AchievementDefinition, AchievementEvaluator, Action, AutomationEvent, AutomationHost,
+    Capability, CapabilitySet, EventKind, ExternalSourceConfig, RuleComponent, RuleComponentConfig,
 };
 use qsonaut_core::{
     AppConfig, AppEvent, AppEventBus, AudioConfig, ContestOperatingMode, ContestProfile,
@@ -1160,6 +1160,8 @@ struct QsonautGuiApp {
     hunter_dupe_blocks: u32,
     hunter_decode_bursts: u32,
     hunter_custom_rules: Vec<CustomAchievementRule>,
+    automation_achievement_evaluator: AchievementEvaluator,
+    automation_achievement_definitions: Vec<AchievementDefinition>,
     radio_profiles: Vec<RadioProfile>,
     mode_radio_profile: std::collections::BTreeMap<String, String>,
     radio_profile_name_input: String,
@@ -3952,6 +3954,13 @@ mod tests {
             call: "K1ABC".to_string(),
             band: "20m".to_string(),
             frequency_hz: 14_060_000,
+            grid: "FN42".to_string(),
+            state: "MA".to_string(),
+            country: "US".to_string(),
+            time_on: "120000".to_string(),
+            report_received: "-10".to_string(),
+            operation_mode: "General".to_string(),
+            contest_exchange_received: String::new(),
         })
         .expect("qso event");
         assert_eq!(qso.kind, EventKind::QsoLogged);
@@ -3959,6 +3968,26 @@ mod tests {
             qso.fields.get("frequency_hz").map(String::as_str),
             Some("14060000")
         );
+        assert!(qso.fields.contains_key("state"));
+        assert!(qso.fields.contains_key("report_received"));
+
+        let early_dx = normalize_app_event_for_automation(AppEvent::QsoLogged {
+            mode: "FT8".to_string(),
+            call: "JA1ABC".to_string(),
+            band: "20m".to_string(),
+            frequency_hz: 14_074_000,
+            grid: "PM95".to_string(),
+            state: String::new(),
+            country: "JP".to_string(),
+            time_on: "060000".to_string(),
+            report_received: "-23".to_string(),
+            operation_mode: "General".to_string(),
+            contest_exchange_received: String::new(),
+        })
+        .expect("tagged qso event");
+        assert!(early_dx.tags.contains("early_bird"));
+        assert!(early_dx.tags.contains("dx"));
+        assert!(early_dx.tags.contains("signal_survivor"));
 
         let mut fields = BTreeMap::new();
         fields.insert("frequency_hz".to_string(), "14074000".to_string());

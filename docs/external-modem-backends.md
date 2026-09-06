@@ -41,12 +41,13 @@ Candidate Rust backends observed:
 
 ### Future modem review
 
-The GUI keeps disabled roadmap tabs for VaraAC and DV RADE. They are not
-`WorkspaceMode` variants and have no runtime, audio, or decoder integration.
-Before implementation, verify that each project's protocol is documented,
-open source or otherwise legally usable, and suitable for a QSONaut-owned
-adapter. Do not add a dependency or reverse-engineer a closed protocol as a
-shortcut.
+The GUI keeps a disabled roadmap tab for DV RADE. It is not a
+`WorkspaceMode` variant and has no runtime, audio, or decoder integration.
+VarAC is intentionally not presented as a QSONaut roadmap target because its
+proprietary protocol does not meet the project's adoption preference. Before
+implementing any future backend, verify that its protocol is documented, open
+source or otherwise legally usable, and suitable for a QSONaut-owned adapter.
+Do not add a dependency or reverse-engineer a closed protocol as a shortcut.
 
 ## Selection criteria before adoption
 

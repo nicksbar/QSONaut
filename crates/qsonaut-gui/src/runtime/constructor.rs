@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::automation_hunter::load_automation_achievement_definitions;
 
 /// WASAPI and serial enumeration each take hundreds of milliseconds, which is
 /// long enough to delay the first paint and leave a ghost window on Windows.
@@ -772,6 +773,8 @@ impl QsonautGuiApp {
             hunter_dupe_blocks: 0,
             hunter_decode_bursts: 0,
             hunter_custom_rules,
+            automation_achievement_evaluator: AchievementEvaluator::default(),
+            automation_achievement_definitions: load_automation_achievement_definitions(),
             radio_profiles,
             mode_radio_profile,
             radio_profile_name_input: String::new(),

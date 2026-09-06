@@ -264,20 +264,141 @@ pub struct Rule {
 #[serde(tag = "match", rename_all = "snake_case")]
 pub enum Predicate {
     FieldEquals { field: String, value: String },
+    FieldNotEquals { field: String, value: String },
     FieldContains { field: String, value: String },
+    FieldLessThan { field: String, value: String },
+    FieldGreaterThan { field: String, value: String },
     HasTag { tag: String },
 }
 
 impl Predicate {
-    fn matches(&self, event: &AutomationEvent) -> bool {
+    pub fn matches(&self, event: &AutomationEvent) -> bool {
         match self {
             Self::FieldEquals { field, value } => event.fields.get(field) == Some(value),
+            Self::FieldNotEquals { field, value } => event
+                .fields
+                .get(field)
+                .is_some_and(|candidate| candidate != value),
             Self::FieldContains { field, value } => event
                 .fields
                 .get(field)
                 .is_some_and(|candidate| candidate.contains(value)),
+            Self::FieldLessThan { field, value } => event
+                .fields
+                .get(field)
+                .and_then(|candidate| candidate.parse::<f64>().ok())
+                .zip(value.parse::<f64>().ok())
+                .is_some_and(|(candidate, limit)| candidate < limit),
+            Self::FieldGreaterThan { field, value } => event
+                .fields
+                .get(field)
+                .and_then(|candidate| candidate.parse::<f64>().ok())
+                .zip(value.parse::<f64>().ok())
+                .is_some_and(|(candidate, limit)| candidate > limit),
             Self::HasTag { tag } => event.tags.contains(tag),
         }
+    }
+}
+
+/// The stateful part of an achievement is intentionally kept separate from
+/// the GUI. Definitions can therefore be driven by the same structured event
+/// stream as ordinary automation rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AchievementMetric {
+    EventCount,
+    UniqueField,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AchievementDefinition {
+    pub id: String,
+    pub title: String,
+    pub detail: String,
+    pub on: EventKind,
+    #[serde(default)]
+    pub when: Vec<Predicate>,
+    pub metric: AchievementMetric,
+    pub field: Option<String>,
+    pub target: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AchievementCatalog {
+    #[serde(default)]
+    pub achievements: Vec<AchievementDefinition>,
+}
+
+impl AchievementCatalog {
+    pub fn from_toml(source: &str) -> Result<Self, toml::de::Error> {
+        toml::from_str(source)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AchievementUpdate {
+    pub id: String,
+    pub title: String,
+    pub detail: String,
+    pub progress: u32,
+    pub target: u32,
+    pub unlocked: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct AchievementEvaluator {
+    counts: HashMap<String, u32>,
+    unique_values: HashMap<String, BTreeSet<String>>,
+    unlocked: BTreeSet<String>,
+}
+
+impl AchievementEvaluator {
+    pub fn observe(
+        &mut self,
+        definition: &AchievementDefinition,
+        event: &AutomationEvent,
+    ) -> Option<AchievementUpdate> {
+        if definition.target == 0
+            || definition.on != event.kind
+            || !definition
+                .when
+                .iter()
+                .all(|predicate| predicate.matches(event))
+        {
+            return None;
+        }
+
+        let progress = match definition.metric {
+            AchievementMetric::EventCount => {
+                let count = self.counts.entry(definition.id.clone()).or_default();
+                *count = count.saturating_add(1);
+                *count
+            }
+            AchievementMetric::UniqueField => {
+                let field = definition.field.as_deref()?;
+                let value = event.fields.get(field).map(String::as_str).map(str::trim)?;
+                if value.is_empty() {
+                    return None;
+                }
+                let values = self.unique_values.entry(definition.id.clone()).or_default();
+                values.insert(value.to_ascii_uppercase());
+                values.len() as u32
+            }
+        };
+        let progress = progress.min(definition.target);
+        let unlocked = progress >= definition.target && self.unlocked.insert(definition.id.clone());
+        Some(AchievementUpdate {
+            id: definition.id.clone(),
+            title: definition.title.clone(),
+            detail: definition.detail.clone(),
+            progress,
+            target: definition.target,
+            unlocked,
+        })
+    }
+
+    pub fn is_unlocked(&self, id: &str) -> bool {
+        self.unlocked.contains(id)
     }
 }
 
@@ -855,5 +976,81 @@ actions = [
             host.component_overview()[0].granted,
             vec![Capability::UiNotification]
         );
+    }
+
+    #[test]
+    fn achievement_evaluator_counts_matching_events_once_per_event() {
+        let definition = AchievementDefinition {
+            id: "qso-quarter".to_string(),
+            title: "QSO Quartermaster".to_string(),
+            detail: "Log contacts".to_string(),
+            on: EventKind::QsoLogged,
+            when: vec![Predicate::FieldEquals {
+                field: "mode".to_string(),
+                value: "FT8".to_string(),
+            }],
+            metric: AchievementMetric::EventCount,
+            field: None,
+            target: 2,
+        };
+        let mut evaluator = AchievementEvaluator::default();
+        let event = AutomationEvent::new(EventKind::QsoLogged, "test").field("mode", "FT8");
+        assert_eq!(evaluator.observe(&definition, &event).unwrap().progress, 1);
+        let update = evaluator.observe(&definition, &event).unwrap();
+        assert!(update.unlocked);
+        assert!(evaluator.is_unlocked("qso-quarter"));
+        assert!(evaluator
+            .observe(&definition, &event)
+            .is_some_and(|update| !update.unlocked));
+    }
+
+    #[test]
+    fn achievement_evaluator_tracks_unique_fields_and_ignores_blank_values() {
+        let definition = AchievementDefinition {
+            id: "mode-explorer".to_string(),
+            title: "Mode Explorer".to_string(),
+            detail: "Use two modes".to_string(),
+            on: EventKind::QsoLogged,
+            when: Vec::new(),
+            metric: AchievementMetric::UniqueField,
+            field: Some("mode".to_string()),
+            target: 2,
+        };
+        let mut evaluator = AchievementEvaluator::default();
+        let blank = AutomationEvent::new(EventKind::QsoLogged, "test").field("mode", " ");
+        assert!(evaluator.observe(&definition, &blank).is_none());
+        let ft8 = AutomationEvent::new(EventKind::QsoLogged, "test").field("mode", "ft8");
+        assert_eq!(evaluator.observe(&definition, &ft8).unwrap().progress, 1);
+        let ft4 = AutomationEvent::new(EventKind::QsoLogged, "test").field("mode", "FT4");
+        assert!(evaluator.observe(&definition, &ft4).unwrap().unlocked);
+    }
+
+    #[test]
+    fn parses_the_checked_in_achievement_catalog() {
+        let catalog =
+            AchievementCatalog::from_toml(include_str!("../../../achievements.example.toml"))
+                .expect("achievement catalog should parse");
+        assert!(catalog.achievements.len() >= 10);
+        assert!(catalog
+            .achievements
+            .iter()
+            .any(|achievement| achievement.id == "state-line"));
+    }
+
+    #[test]
+    fn numeric_and_negative_predicates_match_structured_fields() {
+        let event = AutomationEvent::new(EventKind::QsoLogged, "test")
+            .field("snr", "-23")
+            .field("country", "JP");
+        assert!(Predicate::FieldLessThan {
+            field: "snr".to_string(),
+            value: "-20".to_string(),
+        }
+        .matches(&event));
+        assert!(Predicate::FieldNotEquals {
+            field: "country".to_string(),
+            value: "US".to_string(),
+        }
+        .matches(&event));
     }
 }

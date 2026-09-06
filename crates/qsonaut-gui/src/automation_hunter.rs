@@ -28,10 +28,15 @@ pub(super) enum AchievementKind {
     AudioAlchemist,
     SignalSurvivor,
     QsoQuarter,
+    ModeCartographer,
+    StateLine,
+    Ft8Pathfinder,
+    Ft4Pathfinder,
+    CwOperator,
 }
 
 impl AchievementKind {
-    const ALL: [Self; 17] = [
+    const ALL: [Self; 22] = [
         Self::FirstDecode,
         Self::DirectedCall,
         Self::FirstQsoLogged,
@@ -49,6 +54,11 @@ impl AchievementKind {
         Self::AudioAlchemist,
         Self::SignalSurvivor,
         Self::QsoQuarter,
+        Self::ModeCartographer,
+        Self::StateLine,
+        Self::Ft8Pathfinder,
+        Self::Ft4Pathfinder,
+        Self::CwOperator,
     ];
 
     fn presentation(self) -> (&'static str, &'static str) {
@@ -70,6 +80,11 @@ impl AchievementKind {
             Self::AudioAlchemist => ("Audio Alchemist", "Decode 1000 signal bursts"),
             Self::SignalSurvivor => ("Signal Survivor", "Log a contact below -20 dB"),
             Self::QsoQuarter => ("QSO Quartermaster", "Log 25 contacts"),
+            Self::ModeCartographer => ("Mode Cartographer", "Log contacts in 3 different modes"),
+            Self::StateLine => ("Worked All States", "Work all 50 US states"),
+            Self::Ft8Pathfinder => ("FT8 Pathfinder", "Log 25 FT8 contacts"),
+            Self::Ft4Pathfinder => ("FT4 Pathfinder", "Log 25 FT4 contacts"),
+            Self::CwOperator => ("CW Operator", "Log 10 CW contacts"),
         }
     }
 }
@@ -177,10 +192,100 @@ fn achievement_progress(
         | AchievementKind::SignalSurvivor => (0, 1),
         AchievementKind::AudioAlchemist => (decode_bursts.min(1_000), 1_000),
         AchievementKind::QsoQuarter => (qso_count.min(25), 25),
+        AchievementKind::ModeCartographer => {
+            let modes = contacts
+                .iter()
+                .map(|contact| contact.mode.trim())
+                .filter(|mode| !mode.is_empty())
+                .collect::<HashSet<_>>()
+                .len() as u32;
+            (modes.min(3), 3)
+        }
+        AchievementKind::StateLine => {
+            let states = contacts
+                .iter()
+                .map(|contact| contact.state.trim())
+                .filter(|state| !state.is_empty())
+                .collect::<HashSet<_>>()
+                .len() as u32;
+            (states.min(50), 50)
+        }
+        AchievementKind::Ft8Pathfinder => (
+            (contacts
+                .iter()
+                .filter(|contact| contact.mode.eq_ignore_ascii_case("FT8"))
+                .count() as u32)
+                .min(25),
+            25,
+        ),
+        AchievementKind::Ft4Pathfinder => (
+            (contacts
+                .iter()
+                .filter(|contact| contact.mode.eq_ignore_ascii_case("FT4"))
+                .count() as u32)
+                .min(25),
+            25,
+        ),
+        AchievementKind::CwOperator => (
+            (contacts
+                .iter()
+                .filter(|contact| contact.mode.eq_ignore_ascii_case("CW"))
+                .count() as u32)
+                .min(10),
+            10,
+        ),
     }
 }
 
+pub(super) fn load_automation_achievement_definitions() -> Vec<AchievementDefinition> {
+    let source = include_str!("../../../achievements.example.toml");
+    qsonaut_automation::AchievementCatalog::from_toml(source)
+        .map(|catalog| catalog.achievements)
+        .unwrap_or_default()
+}
+
 impl QsonautGuiApp {
+    pub(super) fn observe_automation_achievements(&mut self, event: &AutomationEvent) {
+        let updates = self
+            .automation_achievement_definitions
+            .iter()
+            .filter_map(|definition| {
+                self.automation_achievement_evaluator
+                    .observe(definition, event)
+            })
+            .filter(|update| update.unlocked)
+            .collect::<Vec<_>>();
+        for update in updates {
+            let kind = match update.id.as_str() {
+                "first-decode" => Some(AchievementKind::FirstDecode),
+                "directed-call" => Some(AchievementKind::DirectedCall),
+                "first-qso" => Some(AchievementKind::FirstQsoLogged),
+                "ten-qsos" => Some(AchievementKind::TenQsosLogged),
+                "fifty-qsos" => Some(AchievementKind::FiftyQsosLogged),
+                "century-hunter" => Some(AchievementKind::CenturyHunter),
+                "band-collector" => Some(AchievementKind::BandCollector),
+                "grid-mapper" => Some(AchievementKind::GridMapper),
+                "mode-cartographer" => Some(AchievementKind::ModeCartographer),
+                "state-line" => Some(AchievementKind::StateLine),
+                "qso-quarter" => Some(AchievementKind::QsoQuarter),
+                "audio-alchemist" => Some(AchievementKind::AudioAlchemist),
+                "dupe-shield" => Some(AchievementKind::DupeShield),
+                "dx-chaser" => Some(AchievementKind::DXChaser),
+                "early-bird" => Some(AchievementKind::EarlyBird),
+                "night-owl" => Some(AchievementKind::NightOwl),
+                "contest-operator" => Some(AchievementKind::ContestOperator),
+                "signal-survivor" => Some(AchievementKind::SignalSurvivor),
+                "ft8-pathfinder" => Some(AchievementKind::Ft8Pathfinder),
+                "ft4-pathfinder" => Some(AchievementKind::Ft4Pathfinder),
+                "cw-operator" => Some(AchievementKind::CwOperator),
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                self.unlock_achievement(kind, update.title, update.detail);
+            }
+        }
+    }
+
     pub(super) fn push_hunter_alert(
         &mut self,
         title: impl Into<String>,
@@ -365,6 +470,10 @@ impl QsonautGuiApp {
     pub(super) fn track_decode_batch(&mut self, decode_count: usize) {
         if decode_count > 0 {
             self.hunter_decode_bursts = self.hunter_decode_bursts.saturating_add(1);
+            self.observe_automation_achievements(&AutomationEvent::new(
+                EventKind::Decode,
+                "app.decode_batch",
+            ));
             self.unlock_achievement(
                 AchievementKind::FirstDecode,
                 "Signal Hunter",
@@ -409,6 +518,31 @@ impl QsonautGuiApp {
                 ))
                 .monospace(),
             );
+        });
+
+        let mut mode_counts = BTreeMap::<String, usize>::new();
+        for contact in &self.qso_log.contacts {
+            let mode = contact.mode.trim().to_ascii_uppercase();
+            if !mode.is_empty() {
+                *mode_counts.entry(mode).or_default() += 1;
+            }
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new(format!(
+                    "Automation catalog: {} definitions",
+                    self.automation_achievement_definitions.len()
+                ))
+                .small()
+                .color(Color32::from_rgb(132, 228, 255)),
+            );
+            if !mode_counts.is_empty() {
+                ui.separator();
+                ui.label(RichText::new("Per-mode QSOs:").small().color(Color32::GRAY));
+                for (mode, count) in mode_counts {
+                    ui.label(RichText::new(format!("{mode} {count}")).small().monospace());
+                }
+            }
         });
 
         if let Some(alert) = self.hunter_feed.back() {
@@ -709,6 +843,7 @@ impl QsonautGuiApp {
                     let Some(event) = normalize_app_event_for_automation(app_event) else {
                         continue;
                     };
+                    self.observe_automation_achievements(&event);
                     let report = self.automation_host.dispatch(&event);
 
                     for approved in &report.approved {
@@ -1257,7 +1392,7 @@ mod tests {
 
     #[test]
     fn every_builtin_achievement_has_presentation_text() {
-        assert_eq!(AchievementKind::ALL.len(), 17);
+        assert_eq!(AchievementKind::ALL.len(), 22);
         for kind in AchievementKind::ALL {
             let (title, detail) = kind.presentation();
             assert!(!title.is_empty());
@@ -1328,6 +1463,10 @@ mod tests {
         assert_eq!(
             achievement_progress(AchievementKind::QsoQuarter, 80, 120, 20, 9, &contacts),
             (25, 25)
+        );
+        assert_eq!(
+            achievement_progress(AchievementKind::ModeCartographer, 80, 120, 20, 9, &contacts),
+            (3, 3)
         );
         for kind in [
             AchievementKind::DXChaser,
