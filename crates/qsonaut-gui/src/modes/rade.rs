@@ -83,15 +83,15 @@ impl QsonautGuiApp {
                     rade_lane(
                         ui,
                         "RECEIVE",
-                        "BOUNDARY READY",
-                        "Speech output is reserved at 16 kHz; the live audio adapter is the next seam.",
+                        "ADAPTER LIVE",
+                        "Native RX routes RADE features through the third-party speech decoder when enabled.",
                         theme_success(ui),
                     );
                     rade_lane(
                         ui,
                         "TRANSMIT",
                         "SAFE / NOT ARMED",
-                        "TX stays unavailable until speech feature extraction and scheduling are wired.",
+                        "TX stays unavailable until QSONaut adds speech capture and slot-aware scheduling.",
                         theme_warning(ui),
                     );
                 });
@@ -161,7 +161,7 @@ impl QsonautGuiApp {
                 });
                 ui.label(
                     RichText::new(
-                        "This is the boundary view: a selectable RADE workspace is ready for client integration, while native speech conversion remains deliberately visible instead of being guessed at.",
+                        "The adapter owns RADE V1/V2 and speech conversion; QSONaut owns capture, buffering, timing, and the conspicuous TX safety boundary.",
                     )
                     .small()
                     .color(theme_muted(ui)),

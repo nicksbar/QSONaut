@@ -47,15 +47,20 @@ capability metadata and labels V2 as upstream development; it does not hide
 V2 behind an experimental product path or create a second voice GUI.
 
 The current consumer boundary is intentionally visible in the RADE panel:
-the third-party adapter provides the V1/V2 modem/IQ surface, while speech
-feature extraction/synthesis and the live audio worker remain a follow-up
-integration seam. QSONaut therefore does not claim live RADE decode or TX yet.
+the third-party adapter provides the V1/V2 modem/IQ and speech feature
+surface, while QSONaut owns capture, buffering, resampling, status, and TX
+safety. With `rade-speech` enabled, the audio worker now routes captured audio
+through the RADE receiver and FARGAN speech decoder; synthesized speech is
+validated at the boundary but is not yet routed to an operator playback path.
+QSONaut does not claim live RADE TX yet.
 
 When the native backend is intentionally installed, the optional
-`qsonaut-gui/rade-c` feature makes the null-audio source generate deterministic
-8 kHz RADE V1/V2 encoder waveforms and resample them into QSONaut's simulated
-audio stream. This validates the encoder/audio boundary without enabling live
-microphone TX or requiring the default build to link the native library.
+`qsonaut-gui/rade-speech` feature makes the null-audio source run deterministic
+16 kHz speech frames through the third-party LPCNet/FARGAN bridge, aggregate
+them into RADE V1/V2 modem frames, and resample the resulting 8 kHz waveform
+into QSONaut's simulated audio stream. The lower-level `rade-c` feature remains
+available for feature-vector fixtures. Neither feature enables live microphone
+TX or requires the default build to link the native library.
 
 ### Future modem review
 

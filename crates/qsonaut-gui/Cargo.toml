@@ -8,6 +8,7 @@ authors.workspace = true
 [features]
 default = []
 rade-c = ["qsonaut-third-party/rade-c"]
+rade-speech = ["rade-c", "qsonaut-third-party/rade-speech"]
 
 [dependencies]
 ab_glyph = "0.2"
@@ -43,4 +44,4 @@ qsonaut-radio = { package = "rigwright", version = "0.1.24" }
 qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }
 qsonaut-server-client = { path = "../qsonaut-server-client" }
 qsonaut-modems = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "b33d7bd" }
-qsonaut-third-party = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "f6ec68a" }
+qsonaut-third-party = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "8b575a4" }
