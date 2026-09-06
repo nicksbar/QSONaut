@@ -49,9 +49,9 @@ V2 behind an experimental product path or create a second voice GUI.
 The current consumer boundary is intentionally visible in the RADE panel:
 the third-party adapter provides the V1/V2 modem/IQ and speech feature
 surface, while QSONaut owns capture, buffering, resampling, status, and TX
-safety. With `rade-speech` enabled, the audio worker now routes captured audio
-through the RADE receiver and FARGAN speech decoder; synthesized speech is
-validated at the boundary but is not yet routed to an operator playback path.
+safety. With `rade-speech` enabled, the audio worker routes captured audio
+through the RADE receiver and FARGAN speech decoder, suppresses raw modem
+monitoring, and sends synthesized 16 kHz speech to the existing audio monitor.
 QSONaut does not claim live RADE TX yet.
 
 When the native backend is intentionally installed, the optional

@@ -223,12 +223,13 @@ impl RadeSpeechReceiver {
         })
     }
 
-    fn push_audio(&mut self, samples: &[f32]) -> anyhow::Result<(usize, usize, String)> {
+    fn push_audio(&mut self, samples: &[f32]) -> anyhow::Result<(usize, usize, String, Vec<f32>)> {
         self.modem_samples.extend(self.resampler.process(samples));
         let input_count = self.context.rx_input_count()?;
         let mut modem_frames = 0;
         let mut speech_samples = 0;
         let mut status = String::from("SEARCHING");
+        let mut decoded_audio = Vec::new();
         while self.modem_samples.len() >= input_count {
             let frame: Vec<_> = self.modem_samples.drain(..input_count).collect();
             let iq = frame
@@ -241,13 +242,22 @@ impl RadeSpeechReceiver {
                 for feature_frame in features.chunks_exact(36) {
                     if let Some(audio) = self.speech_decoder.decode_frame(feature_frame)? {
                         speech_samples += audio.samples.len();
+                        decoded_audio.extend(audio.samples);
                     }
                 }
                 modem_frames += 1;
             }
         }
-        Ok((modem_frames, speech_samples, status))
+        Ok((modem_frames, speech_samples, status, decoded_audio))
     }
+}
+
+fn monitor_raw_audio_for_mode(mode: WorkspaceMode, can_decode: bool) -> bool {
+    #[cfg(feature = "rade-speech")]
+    if mode == WorkspaceMode::Rade {
+        return false;
+    }
+    mode != WorkspaceMode::Cw || !can_decode
 }
 
 impl Default for NullAudioGenerator {
@@ -952,7 +962,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                     }
                     let monitor_raw_audio = {
                         let shared = state.lock().expect("ui state lock poisoned");
-                        shared.workspace_mode != WorkspaceMode::Cw || !can_decode
+                        monitor_raw_audio_for_mode(shared.workspace_mode, can_decode)
                     };
                     let mut monitor_clock_status = String::new();
                     if let Some(monitor) = &monitor {
@@ -1196,7 +1206,15 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                         if active_workspace_mode == WorkspaceMode::Rade {
                             if let Some(receiver) = rade_speech_receiver.as_mut() {
                                 match receiver.push_audio(&ds) {
-                                    Ok((modem_frames, speech_samples, status)) => {
+                                    Ok((modem_frames, speech_samples, status, decoded_audio)) => {
+                                        if !decoded_audio.is_empty() {
+                                            if let Some(monitor) = &monitor {
+                                                monitor.push_f32_at_sample_rate(
+                                                    &decoded_audio,
+                                                    16_000,
+                                                );
+                                            }
+                                        }
                                         let mut shared =
                                             state.lock().expect("ui state lock poisoned");
                                         shared.digital_decode_status = if speech_samples > 0 {
@@ -2310,15 +2328,21 @@ mod tests {
         let mut receiver = RadeSpeechReceiver::open(state.rade_mode)
             .expect("native RADE speech receiver should open");
         let mut processed = 0;
+        let mut speech_samples = 0;
         for chunk in generator.waveforms[0].chunks(4096) {
-            processed += receiver
+            let (frames, samples, _, _) = receiver
                 .push_audio(chunk)
-                .expect("generated RADE speech audio should reach RX")
-                .0;
+                .expect("generated RADE speech audio should reach RX");
+            processed += frames;
+            speech_samples += samples;
         }
         assert!(
             processed > 0,
             "receiver should process at least one modem frame"
+        );
+        assert!(
+            speech_samples > 0,
+            "receiver should synthesize decoded speech"
         );
     }
 
