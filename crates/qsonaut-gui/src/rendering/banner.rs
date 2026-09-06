@@ -1,18 +1,10 @@
 use super::super::*;
 use crate::ui_widgets::{operating_mode_button, OperatingModeIcon};
 
-// Visible roadmap entries only. These are deliberately not WorkspaceMode
-// variants until an implementation and a legally usable protocol boundary
-// exist.
 const FUTURE_TEXT_MODES: &[(&str, &str, OperatingModeIcon)] = &[(
     "JS8Call",
     "Future text modem placeholder; protocol support is not enabled",
     OperatingModeIcon::Text,
-)];
-const FUTURE_VOICE_MODES: &[(&str, &str, OperatingModeIcon)] = &[(
-    "RADE",
-    "Future voice modem placeholder; protocol support is not enabled",
-    OperatingModeIcon::Rade,
 )];
 
 impl QsonautGuiApp {
@@ -167,6 +159,28 @@ impl QsonautGuiApp {
                 }
             }
 
+            let rade_response = operating_mode_button(
+                ui,
+                self.workspace_mode == WorkspaceMode::Rade,
+                "RADE",
+                OperatingModeIcon::Rade,
+                true,
+            )
+            .on_hover_text("Switch workspace to RADE digital voice");
+            if rade_response.clicked() {
+                self.workspace_mode = WorkspaceMode::Rade;
+                self.profile_dirty = true;
+                self.persist_profile("Mode saved to");
+                if let Some(frequency_hz) =
+                    workspace_frequency_for_current_band(WorkspaceMode::Rade, snapshot.frequency_hz)
+                {
+                    self.send_command(GuiCommand::ApplyWorkspace {
+                        mode: WorkspaceMode::Rade,
+                        frequency_hz,
+                    });
+                }
+            }
+
             let mode = WorkspaceMode::Msk144;
             let enabled = !mode.is_uhf();
             let response = operating_mode_button(
@@ -196,10 +210,6 @@ impl QsonautGuiApp {
             }
 
             for (label, tooltip, icon) in FUTURE_TEXT_MODES.iter().copied() {
-                operating_mode_button(ui, false, label, icon, false)
-                    .on_disabled_hover_text(tooltip);
-            }
-            for (label, tooltip, icon) in FUTURE_VOICE_MODES.iter().copied() {
                 operating_mode_button(ui, false, label, icon, false)
                     .on_disabled_hover_text(tooltip);
             }

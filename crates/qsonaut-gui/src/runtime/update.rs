@@ -319,6 +319,7 @@ impl QsonautGuiApp {
         let (new_decodes, latest_decode_period) = {
             let mut s = self.state.lock().expect("ui state lock poisoned");
             s.workspace_mode = self.workspace_mode;
+            s.rade_mode = self.rade_mode;
             s.fst4_submode = self.fst4_submode;
             s.q65_submode = self.q65_submode;
             s.cw_auto_target_timeout_s = self.cw_auto_target_timeout_s;

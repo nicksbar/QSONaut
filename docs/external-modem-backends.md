@@ -39,10 +39,26 @@ Candidate Rust backends observed:
 - `qsantos/ripmors`
   - Fast Morse encoder/decoder crate, useful for text-domain CW handling.
 
+### RADE voice adapter
+
+RADE V1 and V2 are now exposed as a first-class QSONaut `WorkspaceMode` and
+share the Voice mode's band vocabulary. The GUI uses the adapter's stable
+capability metadata and labels V2 as upstream development; it does not hide
+V2 behind an experimental product path or create a second voice GUI.
+
+The current consumer boundary is intentionally visible in the RADE panel:
+the third-party adapter provides the V1/V2 modem/IQ surface, while speech
+feature extraction/synthesis and the live audio worker remain a follow-up
+integration seam. QSONaut therefore does not claim live RADE decode or TX yet.
+
+When the native backend is intentionally installed, the optional
+`qsonaut-gui/rade-c` feature makes the null-audio source generate deterministic
+8 kHz RADE V1/V2 encoder waveforms and resample them into QSONaut's simulated
+audio stream. This validates the encoder/audio boundary without enabling live
+microphone TX or requiring the default build to link the native library.
+
 ### Future modem review
 
-The GUI keeps a disabled roadmap tab for DV RADE. It is not a
-`WorkspaceMode` variant and has no runtime, audio, or decoder integration.
 VarAC is intentionally not presented as a QSONaut roadmap target because its
 proprietary protocol does not meet the project's adoption preference. Before
 implementing any future backend, verify that its protocol is documented, open

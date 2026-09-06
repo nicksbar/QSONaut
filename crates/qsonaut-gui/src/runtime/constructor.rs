@@ -965,6 +965,7 @@ impl QsonautGuiApp {
             voice_lookup_requested: String::new(),
             voice_lookup_status: String::new(),
             voice_hamdb: None,
+            rade_mode: qsonaut_third_party::rade::RadeMode::V1,
             contest_enabled,
             contest_operating_mode,
             contest_split_policy,

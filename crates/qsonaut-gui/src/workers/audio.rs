@@ -10,6 +10,8 @@ use hound::{SampleFormat, WavSpec, WavWriter};
 use qsonaut_audio::{CANONICAL_CHANNELS, CANONICAL_SAMPLE_RATE_HZ};
 use qsonaut_modems::AudioNormalizer;
 use qsonaut_third_party::cw::CwDecode;
+#[cfg(feature = "rade-c")]
+use qsonaut_third_party::rade::native::RadeContext;
 use qsonaut_third_party::sstv as qsonaut_sstv;
 use serde_json::json;
 use std::fs::File;
@@ -189,6 +191,7 @@ fn null_sim_stations(mode: WorkspaceMode) -> Vec<QsonautPerson> {
 
 struct NullAudioGenerator {
     mode: Option<WorkspaceMode>,
+    rade_mode: qsonaut_third_party::rade::RadeMode,
     fst4_submode: crate::modes::fst4::Submode,
     q65_submode: qsonaut_third_party::wsjt::Q65Submode,
     waveforms: Vec<Vec<f32>>,
@@ -201,6 +204,7 @@ impl Default for NullAudioGenerator {
     fn default() -> Self {
         Self {
             mode: None,
+            rade_mode: qsonaut_third_party::rade::RadeMode::V1,
             fst4_submode: crate::modes::fst4::Submode::default(),
             q65_submode: qsonaut_third_party::wsjt::Q65Submode::A30,
             waveforms: Vec::new(),
@@ -214,6 +218,7 @@ impl Default for NullAudioGenerator {
 impl NullAudioGenerator {
     fn rebuild(&mut self, mode: WorkspaceMode, state: &GuiState) {
         self.mode = Some(mode);
+        self.rade_mode = state.rade_mode;
         self.fst4_submode = state.fst4_submode;
         self.q65_submode = state.q65_submode;
         self.period_s = mode
@@ -228,6 +233,12 @@ impl NullAudioGenerator {
             0.5
         };
         self.waveforms.clear();
+
+        #[cfg(feature = "rade-c")]
+        if mode == WorkspaceMode::Rade {
+            self.rebuild_rade_waveform(state);
+            return;
+        }
 
         let stations = null_sim_stations(mode);
         let first = &stations[0];
@@ -354,6 +365,29 @@ impl NullAudioGenerator {
         }
     }
 
+    #[cfg(feature = "rade-c")]
+    fn rebuild_rade_waveform(&mut self, state: &GuiState) {
+        let Ok(mut context) = RadeContext::open(state.rade_mode) else {
+            tracing::warn!(mode = ?state.rade_mode, "native RADE null waveform unavailable");
+            return;
+        };
+        let target_samples = 12_000 * 12;
+        let mut modem_waveform = Vec::with_capacity(target_samples / 2);
+        while modem_waveform.len() < target_samples * 2 / 3 {
+            match context.tx_silence_audio() {
+                Ok(audio) => modem_waveform.extend(audio.samples),
+                Err(error) => {
+                    tracing::warn!(%error, "native RADE null waveform generation stopped");
+                    break;
+                }
+            }
+        }
+        let waveform = resample_rade_8k_to_12k(&modem_waveform);
+        if !waveform.is_empty() {
+            self.waveforms.push(waveform);
+        }
+    }
+
     fn status(&self) -> String {
         let now_s = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -384,17 +418,19 @@ impl NullAudioGenerator {
         }
         let started = Instant::now();
         self.next_deadline = Some(started + chunk_duration);
-        let (workspace_mode, fst4_submode, q65_submode) = {
+        let (workspace_mode, fst4_submode, q65_submode, rade_mode) = {
             let shared = state.lock().expect("ui state lock poisoned");
             (
                 shared.workspace_mode,
                 shared.fst4_submode,
                 shared.q65_submode,
+                shared.rade_mode,
             )
         };
         if self.mode != Some(workspace_mode)
             || self.fst4_submode != fst4_submode
             || self.q65_submode != q65_submode
+            || self.rade_mode != rade_mode
         {
             // Rebuilds are infrequent; keep the full snapshot on this path only.
             // The normal audio path must not clone waterfall rows, decode history,
@@ -425,6 +461,23 @@ impl NullAudioGenerator {
             })
             .collect()
     }
+}
+
+#[cfg(feature = "rade-c")]
+fn resample_rade_8k_to_12k(input: &[f32]) -> Vec<f32> {
+    if input.is_empty() {
+        return Vec::new();
+    }
+    let output_len = input.len().saturating_mul(3) / 2;
+    (0..output_len)
+        .map(|index| {
+            let source = index as f32 * 2.0 / 3.0;
+            let left = source.floor() as usize;
+            let right = (left + 1).min(input.len() - 1);
+            let fraction = source - left as f32;
+            input[left] + (input[right] - input[left]) * fraction
+        })
+        .collect()
 }
 
 fn save_received_sstv_image(
@@ -2076,6 +2129,20 @@ mod tests {
                 "null source encoded an empty {mode:?} waveform"
             );
         }
+    }
+
+    #[cfg(feature = "rade-c")]
+    #[test]
+    fn native_rade_null_generator_uses_the_real_encoder() {
+        let state = GuiState {
+            workspace_mode: WorkspaceMode::Rade,
+            ..GuiState::default()
+        };
+        let mut generator = NullAudioGenerator::default();
+        generator.rebuild(WorkspaceMode::Rade, &state);
+        assert_eq!(generator.waveforms.len(), 1);
+        assert!(generator.waveforms[0].iter().any(|sample| *sample != 0.0));
+        assert!(generator.waveforms[0].len() >= 12_000 * 12);
     }
 
     #[test]
