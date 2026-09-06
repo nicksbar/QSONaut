@@ -29,4 +29,40 @@ fn main() {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn main() {}
+fn main() {
+    configure_rade_runtime_path();
+}
+
+#[cfg(target_os = "windows")]
+fn configure_rade_runtime_path() {}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn configure_rade_runtime_path() {
+    use std::path::PathBuf;
+
+    println!("cargo:rerun-if-env-changed=RADE_C_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=RADE_CACHE_ROOT");
+    let lib_dir = std::env::var_os("RADE_C_LIB_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let cache_root = std::env::var_os("RADE_CACHE_ROOT")
+                .map(PathBuf::from)
+                .or_else(|| {
+                    std::env::var_os("XDG_CACHE_HOME")
+                        .map(PathBuf::from)
+                        .map(|path| path.join("qsonaut-third-party"))
+                })
+                .or_else(|| {
+                    std::env::var_os("HOME")
+                        .map(PathBuf::from)
+                        .map(|path| path.join(".cache").join("qsonaut-third-party"))
+                })
+                .unwrap_or_else(|| PathBuf::from("target/native"));
+            cache_root
+                .join("rade_c")
+                .join("0d5c5f7c27e650e3ca8d9e0f7d4781f2e73ee2b0")
+                .join("build")
+                .join("src")
+        });
+    println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
+}
