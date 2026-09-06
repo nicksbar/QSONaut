@@ -54,13 +54,15 @@ through the RADE receiver and FARGAN speech decoder, suppresses raw modem
 monitoring, and sends synthesized 16 kHz speech to the existing audio monitor.
 QSONaut does not claim live RADE TX yet.
 
-When the native backend is intentionally installed, the optional
-`qsonaut-gui/rade-speech` feature makes the null-audio source run deterministic
-16 kHz speech frames through the third-party LPCNet/FARGAN bridge, aggregate
-them into RADE V1/V2 modem frames, and resample the resulting 8 kHz waveform
-into QSONaut's simulated audio stream. The lower-level `rade-c` feature remains
-available for feature-vector fixtures. Neither feature enables live microphone
-TX or requires the default build to link the native library.
+The desktop `qsonaut` application enables the `qsonaut-gui/rade-bundled`
+feature. Its third-party build script checks out and builds the pinned RADE
+native source in the shared cache automatically, so the normal application
+build does not require hand-written `RADE_C_*` environment variables. The
+null-audio source then runs deterministic 16 kHz speech frames through the
+third-party LPCNet/FARGAN bridge, aggregates them into RADE V1/V2 modem
+frames, and resamples the resulting 8 kHz waveform into QSONaut's simulated
+audio stream. Library consumers may still use the lower-level `rade-c` or
+`rade-speech` features when they provide their own native build.
 
 ### Future modem review
 
