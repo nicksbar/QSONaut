@@ -23,6 +23,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 - Routed achievement evaluation through normalized automation events rather
   than application-log text parsing.
+- Updated the application and GUI to released Rigwright `0.1.25`, including
+  the FT-991A `IF;`-based mode-read fix.
 - Added catalog and per-mode progress visibility to the Achievement Hunter
   panel while preserving existing profile unlock and acknowledgment state.
 - Removed the disabled VarAC header button and its proprietary-protocol
