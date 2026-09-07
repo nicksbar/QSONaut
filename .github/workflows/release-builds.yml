@@ -171,7 +171,7 @@ jobs:
         with:
           update: false
           install: >-
-            autoconf automake libtool make patch
+            autoconf automake libtool make patch git
 
       - name: Build RADE component
         if: matrix.os == 'linux'
