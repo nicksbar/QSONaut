@@ -248,6 +248,7 @@ use tx_audio::{
     DigitalTxChatEntry, DigitalTxEvent, DigitalTxJob, Ft8ChatDirection, Ft8ChatLine,
     Ft8TxChatEntry, Ft8TxEvent, Ft8TxJob,
 };
+use tx_audio::{run_rade_tx_job, RadeTxJob};
 use ui_format::{format_signal_report, ft8_period_progress, qso_stage_label, utc_hhmmss_millis};
 use ui_widgets::{
     draw_ai_icon, draw_radio_about_icon, draw_speaker_icon, format_swr_display,
@@ -275,7 +276,6 @@ const AUDIO_WF_HEIGHT: usize = 120;
 const AUDIO_MAX_FREQ_HZ: u32 = 4_000;
 // 8192 samples @ 48 kHz = 170 ms window, ~5.9 Hz/bin, ~683 useful bins for 0-4 kHz.
 const FFT_SIZE: usize = 8192;
-const AUDIO_MONITOR_PROFILE_VERSION: u32 = 12;
 const GUI_SCALE_BASE: f32 = 1.2;
 const GUI_SCALE_MAX: f32 = 2.0;
 const GUI_SCALE_MIN: f32 = 0.45;
@@ -318,7 +318,6 @@ enum ProfileDrawerTab {
     Radio,
     Tuning,
     DigitalTiming,
-    Monitoring,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2254,6 +2253,7 @@ mod tests {
         profile.profile_version = 2;
         profile.audio.enabled = false;
         profile.audio.input_device = Some("input".to_string());
+        profile.audio.voice_input_device = Some("voice-mic".to_string());
         profile.audio.output_device = Some("output".to_string());
         profile.audio.monitor_enabled = true;
         profile.audio.monitor_output_device = Some("monitor".to_string());
@@ -2271,21 +2271,26 @@ mod tests {
         );
         assert_eq!(legacy_audio.monitor_volume, config.audio.monitor_volume);
 
-        profile.profile_version = AUDIO_MONITOR_PROFILE_VERSION;
+        profile.profile_version = OPERATOR_PROFILE_VERSION;
         let current_audio = audio_config_from_operator_profile(&profile, &config.audio);
-        assert!(current_audio.monitor_enabled);
+        assert_eq!(current_audio.monitor_enabled, config.audio.monitor_enabled);
         assert_eq!(
-            current_audio.monitor_output_device.as_deref(),
-            Some("monitor")
+            current_audio.monitor_output_device,
+            config.audio.monitor_output_device
         );
-        assert_eq!(current_audio.monitor_volume, 2.0);
+        assert_eq!(current_audio.monitor_volume, config.audio.monitor_volume);
         assert_eq!(current_audio.sample_rate_hz, 44_100);
         assert_eq!(current_audio.channels, 2);
+        assert_eq!(
+            current_audio.voice_input_device,
+            config.audio.voice_input_device
+        );
 
         let serialized = toml::to_string(&profile).expect("serialize profile");
         assert!(serialized.contains("audio_input_device = \"input\""));
         assert!(serialized.contains("audio_output_device = \"output\""));
-        assert!(serialized.contains("audio_monitor_output_device = \"monitor\""));
+        assert!(!serialized.contains("audio_voice_input_device"));
+        assert!(!serialized.contains("audio_monitor_output_device"));
     }
 
     #[test]

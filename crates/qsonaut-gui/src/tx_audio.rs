@@ -1,4 +1,6 @@
 use super::*;
+use qsonaut_third_party::rade::native::RadeContext;
+use qsonaut_third_party::rade::speech::SpeechEncoder;
 use qsonaut_third_party::wsjt::{
     synthesize_fst4_standard, synthesize_ft4_standard, synthesize_ft8_standard,
     synthesize_jt65_standard, synthesize_jt9_standard, synthesize_q65_standard,
@@ -207,14 +209,23 @@ fn morse_pattern(character: char) -> Option<&'static str> {
 }
 
 fn play_ft8_tx_pcm(pcm: &[i16], abort: Arc<AtomicBool>, output_device: Option<&str>) -> Result<()> {
+    play_tx_pcm(pcm, FT8_TX_SAMPLE_RATE_HZ, abort, output_device)
+}
+
+fn play_tx_pcm(
+    pcm: &[i16],
+    sample_rate_hz: u32,
+    abort: Arc<AtomicBool>,
+    output_device: Option<&str>,
+) -> Result<()> {
     if output_device.is_some_and(|device| device.starts_with("hostbridge://")) {
         if abort.load(Ordering::Relaxed) {
             anyhow::bail!("TX aborted by operator");
         }
-        return super::hostbridge_radio::send_remote_pcm(pcm, FT8_TX_SAMPLE_RATE_HZ)
+        return super::hostbridge_radio::send_remote_pcm(pcm, sample_rate_hz)
             .context("HostBridge audio output failed");
     }
-    play_pcm_blocking(pcm, FT8_TX_SAMPLE_RATE_HZ, output_device, abort)
+    play_pcm_blocking(pcm, sample_rate_hz, output_device, abort)
         .context("native audio output failed")
 }
 
@@ -304,7 +315,16 @@ pub(super) fn run_ft8_tx_job(job: Ft8TxJob) {
             let abort = job.abort.clone();
             let state = job.state.clone();
             let repaint_ctx = job.repaint_ctx.clone();
-            thread::spawn(move || monitor_ft8_tx_waterfall(pcm, stop, abort, state, repaint_ctx))
+            thread::spawn(move || {
+                monitor_ft8_tx_waterfall(
+                    pcm,
+                    FT8_TX_SAMPLE_RATE_HZ,
+                    stop,
+                    abort,
+                    state,
+                    repaint_ctx,
+                )
+            })
         };
         let playback_result =
             play_ft8_tx_pcm(&job.pcm, job.abort.clone(), job.output_device.as_deref());
@@ -343,6 +363,7 @@ pub(super) fn run_ft8_tx_job(job: Ft8TxJob) {
 
 fn monitor_ft8_tx_waterfall(
     pcm: Arc<Vec<i16>>,
+    sample_rate_hz: u32,
     stop: Arc<AtomicBool>,
     abort: Arc<AtomicBool>,
     state: Arc<Mutex<GuiState>>,
@@ -354,7 +375,7 @@ fn monitor_ft8_tx_waterfall(
     let started = Instant::now();
 
     for start in (0..pcm.len()).step_by(FT8_TX_MONITOR_HOP_SAMPLES) {
-        let target = Duration::from_secs_f64(start as f64 / FT8_TX_SAMPLE_RATE_HZ as f64);
+        let target = Duration::from_secs_f64(start as f64 / sample_rate_hz as f64);
         while started.elapsed() < target {
             if stop.load(Ordering::Acquire) || abort.load(Ordering::Relaxed) {
                 return;
@@ -373,7 +394,7 @@ fn monitor_ft8_tx_waterfall(
             *sample = Complex::new(value * window, 0.0);
         }
         fft.process(&mut fft_buf);
-        let bins = fft_buffer_to_display_bins(&fft_buf, AUDIO_BINS, FT8_TX_SAMPLE_RATE_HZ);
+        let bins = fft_buffer_to_display_bins(&fft_buf, AUDIO_BINS, sample_rate_hz);
         let mut snapshot = state.lock().expect("ui state lock poisoned");
         if snapshot.audio_waterfall_rows.len() >= AUDIO_WF_HEIGHT {
             snapshot.audio_waterfall_rows.pop_front();
@@ -445,7 +466,16 @@ pub(super) fn run_digital_tx_job(job: DigitalTxJob) {
             let abort = job.abort.clone();
             let state = job.state.clone();
             let repaint_ctx = job.repaint_ctx.clone();
-            thread::spawn(move || monitor_ft8_tx_waterfall(pcm, stop, abort, state, repaint_ctx))
+            thread::spawn(move || {
+                monitor_ft8_tx_waterfall(
+                    pcm,
+                    FT8_TX_SAMPLE_RATE_HZ,
+                    stop,
+                    abort,
+                    state,
+                    repaint_ctx,
+                )
+            })
         };
         let playback_result =
             play_ft8_tx_pcm(&job.pcm, job.abort.clone(), job.output_device.as_deref());
@@ -470,6 +500,141 @@ pub(super) fn run_digital_tx_job(job: DigitalTxJob) {
         (Ok(()), Err(error)) => {
             let _ = job.event_tx.send(DigitalTxEvent::Failed(format!(
                 "audio completed but PTT release failed: {error}"
+            )));
+        }
+        (Err(error), Err(unkey_error)) => {
+            let _ = job.event_tx.send(DigitalTxEvent::Failed(format!(
+                "{error}; PTT release also failed: {unkey_error}"
+            )));
+        }
+    }
+}
+
+const RADE_TX_SPEECH_SAMPLE_RATE_HZ: u32 = 16_000;
+const RADE_TX_MODEM_SAMPLE_RATE_HZ: u32 = 8_000;
+const RADE_TX_CAPTURE_SECONDS: usize = 4;
+
+fn encode_rade_voice_pcm(
+    mode: qsonaut_third_party::rade::RadeMode,
+    speech: &[f32],
+) -> Result<Vec<i16>> {
+    let mut encoder = SpeechEncoder::open().context("RADE speech encoder unavailable")?;
+    let mut context = RadeContext::open(mode).context("RADE modem encoder unavailable")?;
+    let feature_count = context.feature_count();
+    let mut feature_buffer = Vec::with_capacity(feature_count);
+    let mut modem = Vec::new();
+    for frame in speech.chunks_exact(160) {
+        let features = encoder
+            .encode_frame(frame)
+            .context("RADE speech feature encoding failed")?;
+        feature_buffer.extend(features);
+        while feature_buffer.len() >= feature_count {
+            let batch = feature_buffer.drain(..feature_count).collect::<Vec<_>>();
+            let iq = context
+                .tx_features(&batch)
+                .context("RADE modem waveform encoding failed")?;
+            modem.extend(iq.into_iter().map(|sample| sample.real));
+        }
+    }
+    let end_of_over = context
+        .tx_end_of_over()
+        .context("RADE end-of-over encoding failed")?;
+    modem.extend(end_of_over.into_iter().map(|sample| sample.real));
+    if modem.is_empty() {
+        anyhow::bail!("RADE encoder produced no modem samples");
+    }
+    Ok(modem
+        .into_iter()
+        .map(|sample| (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16)
+        .collect())
+}
+
+pub(super) struct RadeTxJob {
+    pub(super) mode: qsonaut_third_party::rade::RadeMode,
+    pub(super) input_device: Option<String>,
+    pub(super) output_device: Option<String>,
+    pub(super) ptt_tail: Duration,
+    pub(super) abort: Arc<AtomicBool>,
+    pub(super) active: Arc<AtomicBool>,
+    pub(super) command_tx: mpsc::Sender<GuiCommand>,
+    pub(super) event_tx: mpsc::Sender<DigitalTxEvent>,
+    pub(super) state: Arc<Mutex<GuiState>>,
+    pub(super) repaint_ctx: Arc<OnceLock<egui::Context>>,
+}
+
+pub(super) fn run_rade_tx_job(job: RadeTxJob) {
+    let result = (|| -> Result<()> {
+        info!(mode = ?job.mode, "RADE TX microphone capture starting");
+        let service = AudioService::new(job.input_device.clone(), true);
+        let mut stream = service
+            .open_stream(RADE_TX_SPEECH_SAMPLE_RATE_HZ, 1)
+            .context("voice microphone could not be opened")?;
+        let speech = stream
+            .read_frames_f32_until_stopped(
+                RADE_TX_SPEECH_SAMPLE_RATE_HZ as usize * RADE_TX_CAPTURE_SECONDS,
+                &job.abort,
+            )?
+            .ok_or_else(|| anyhow!("RADE TX microphone capture cancelled"))?;
+        if speech.chunks_exact(160).len() < 5 {
+            anyhow::bail!("RADE TX microphone capture was too short");
+        }
+        info!(
+            mode = ?job.mode,
+            captured_samples = speech.len(),
+            "RADE TX microphone capture complete"
+        );
+        let pcm = encode_rade_voice_pcm(job.mode, &speech)?;
+        if job.abort.load(Ordering::Relaxed) {
+            anyhow::bail!("RADE TX aborted by operator");
+        }
+        request_ptt(&job.command_tx, true, Duration::from_secs(2))?;
+        let _ = job
+            .event_tx
+            .send(DigitalTxEvent::AudioStarted(WorkspaceMode::Rade, 0));
+        let monitor_stop = Arc::new(AtomicBool::new(false));
+        let monitor_handle = {
+            let pcm = Arc::new(pcm.clone());
+            let stop = monitor_stop.clone();
+            let abort = job.abort.clone();
+            let state = job.state.clone();
+            let repaint_ctx = job.repaint_ctx.clone();
+            thread::spawn(move || {
+                monitor_ft8_tx_waterfall(
+                    pcm,
+                    RADE_TX_MODEM_SAMPLE_RATE_HZ,
+                    stop,
+                    abort,
+                    state,
+                    repaint_ctx,
+                )
+            })
+        };
+        let playback = play_tx_pcm(
+            &pcm,
+            RADE_TX_MODEM_SAMPLE_RATE_HZ,
+            job.abort.clone(),
+            job.output_device.as_deref(),
+        );
+        monitor_stop.store(true, Ordering::Release);
+        let _ = monitor_handle.join();
+        playback?;
+        if !job.ptt_tail.is_zero() {
+            thread::sleep(job.ptt_tail);
+        }
+        Ok(())
+    })();
+    let unkey_result = request_ptt(&job.command_tx, false, Duration::from_secs(2));
+    job.active.store(false, Ordering::Release);
+    match (result, unkey_result) {
+        (Ok(()), Ok(())) => {
+            let _ = job.event_tx.send(DigitalTxEvent::Complete);
+        }
+        (Err(error), Ok(())) => {
+            let _ = job.event_tx.send(DigitalTxEvent::Failed(error.to_string()));
+        }
+        (Ok(()), Err(error)) => {
+            let _ = job.event_tx.send(DigitalTxEvent::Failed(format!(
+                "RADE TX completed but PTT release failed: {error}"
             )));
         }
         (Err(error), Err(unkey_error)) => {
@@ -538,6 +703,28 @@ mod tests {
         }
         assert_eq!(morse_pattern('?'), None);
         assert_eq!(morse_pattern(' '), None);
+    }
+
+    #[test]
+    fn rade_voice_tx_encoder_produces_audio_for_both_modes() {
+        let speech = (0..16_000)
+            .map(|index| {
+                let time = index as f32 / 16_000.0;
+                (std::f32::consts::TAU * 180.0 * time).sin() * 0.2
+            })
+            .collect::<Vec<_>>();
+        for mode in [
+            qsonaut_third_party::rade::RadeMode::V1,
+            qsonaut_third_party::rade::RadeMode::V2,
+        ] {
+            let modem = encode_rade_voice_pcm(mode, &speech)
+                .expect("RADE voice TX encoder should produce modem audio");
+            assert!(modem.len() > 1_000, "{mode:?} modem waveform is too short");
+            assert!(
+                modem.iter().any(|sample| *sample != 0),
+                "{mode:?} modem waveform is silent"
+            );
+        }
     }
 
     #[test]
@@ -873,6 +1060,7 @@ mod tests {
         let stopped_state = Arc::new(Mutex::new(GuiState::default()));
         monitor_ft8_tx_waterfall(
             Arc::new(vec![0; FT8_TX_MONITOR_FFT_SIZE]),
+            FT8_TX_SAMPLE_RATE_HZ,
             Arc::new(AtomicBool::new(true)),
             Arc::new(AtomicBool::new(false)),
             stopped_state.clone(),
@@ -887,6 +1075,7 @@ mod tests {
         let aborted_state = Arc::new(Mutex::new(GuiState::default()));
         monitor_ft8_tx_waterfall(
             Arc::new(vec![0; FT8_TX_MONITOR_FFT_SIZE]),
+            FT8_TX_SAMPLE_RATE_HZ,
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(true)),
             aborted_state.clone(),
@@ -905,6 +1094,7 @@ mod tests {
             .expect("repaint context not already initialized");
         monitor_ft8_tx_waterfall(
             Arc::new(vec![0; FT8_TX_MONITOR_FFT_SIZE]),
+            FT8_TX_SAMPLE_RATE_HZ,
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
             state.clone(),

@@ -286,6 +286,7 @@ fn update_profile_connection_settings(
     profile.radio.hostbridge_audio_source_id = radio.hostbridge_audio_source_id.clone();
     profile.radio.hostbridge_audio_output_id = radio.hostbridge_audio_output_id.clone();
     profile.audio.input_device = audio.input_device.clone();
+    profile.audio.voice_input_device = audio.voice_input_device.clone();
     profile.audio.enabled = audio.enabled;
     profile.audio.output_device = audio.output_device.clone();
     profile.audio.monitor_enabled = audio.monitor_enabled;

@@ -109,6 +109,7 @@ impl QsonautGuiApp {
             recording_stream: self.recording_stream,
             audio: profile::AudioProfileSettings {
                 input_device: self.config.audio.input_device.clone(),
+                voice_input_device: self.config.audio.voice_input_device.clone(),
                 enabled: self.config.audio.enabled,
                 output_device: self.config.audio.output_device.clone(),
                 monitor_enabled: self.config.audio.monitor_enabled,
@@ -254,6 +255,15 @@ impl QsonautGuiApp {
         profile: &OperatorProfile,
         status_prefix: &str,
     ) {
+        // Global settings must persist independently of a radio/audio worker
+        // reaching readiness. Profile-owned hardware settings still wait for
+        // their configured workers below.
+        if let Err(error) = ProfileManager::save_global_and_radio_library(
+            &self.current_global_settings(),
+            &self.radio_profiles,
+        ) {
+            warn!(%error, "Global or radio profile library save failed");
+        }
         if !self.profile_runtime_ready(profile_name) {
             warn!(
                 profile = %profile_name,
@@ -262,12 +272,6 @@ impl QsonautGuiApp {
             );
             self.profile_dirty = true;
             return;
-        }
-        if let Err(error) = ProfileManager::save_global_and_radio_library(
-            &self.current_global_settings(),
-            &self.radio_profiles,
-        ) {
-            warn!(%error, "Global or radio profile library save failed");
         }
         match ProfileManager::save_operator_profile_snapshot(profile_name, profile) {
             Ok(available_profiles) => {
@@ -335,6 +339,10 @@ impl QsonautGuiApp {
             gui_scale: self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX),
             compute_preference: self.compute_preference,
             font_family: self.font_family.clone(),
+            audio_voice_input_device: self.config.audio.voice_input_device.clone(),
+            audio_monitor_enabled: self.config.audio.monitor_enabled,
+            audio_monitor_output_device: self.config.audio.monitor_output_device.clone(),
+            audio_monitor_volume: self.config.audio.monitor_volume.clamp(0.0, 2.0),
         }
     }
 

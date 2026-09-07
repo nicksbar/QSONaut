@@ -1635,7 +1635,6 @@ impl QsonautGuiApp {
                         (ProfileDrawerTab::Radio, "RADIO"),
                         (ProfileDrawerTab::Tuning, "TUNING"),
                         (ProfileDrawerTab::DigitalTiming, "DIGITAL TIMING"),
-                        (ProfileDrawerTab::Monitoring, "MONITORING"),
                     ] {
                         if ui
                             .selectable_label(self.profile_drawer_tab == tab, label)
@@ -1654,7 +1653,6 @@ impl QsonautGuiApp {
                         ProfileDrawerTab::Radio => self.draw_radio_profile_settings(ui),
                         ProfileDrawerTab::Tuning => self.draw_radio_profile_assignments(ui),
                         ProfileDrawerTab::DigitalTiming => self.draw_digital_timing_settings(ui),
-                        ProfileDrawerTab::Monitoring => self.draw_monitoring_settings(ui),
                     });
             });
             if !drawer_open {

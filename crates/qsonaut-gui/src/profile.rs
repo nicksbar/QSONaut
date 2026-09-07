@@ -14,7 +14,7 @@ use super::{
 };
 
 pub(super) const OPERATOR_PROFILE_FILE: &str = "profile.toml";
-pub(super) const OPERATOR_PROFILE_VERSION: u32 = 17;
+pub(super) const OPERATOR_PROFILE_VERSION: u32 = 18;
 const GLOBAL_SETTINGS_FILE: &str = "settings.toml";
 const RADIO_PROFILE_LIBRARY_FILE: &str = "radio-profiles.toml";
 const LEGACY_OPERATOR_PROFILE_FILE: &str = ".rigforge_profile.toml";
@@ -30,17 +30,20 @@ const ACTIVE_PROFILE_FILE: &str = "active-profile";
 pub(super) struct AudioProfileSettings {
     #[serde(rename = "audio_input_device", default)]
     pub(super) input_device: Option<String>,
+    #[serde(rename = "audio_voice_input_device", default, skip_serializing)]
+    pub(super) voice_input_device: Option<String>,
     #[serde(rename = "audio_enabled", default = "default_audio_enabled")]
     pub(super) enabled: bool,
     #[serde(rename = "audio_output_device", default)]
     pub(super) output_device: Option<String>,
-    #[serde(rename = "audio_monitor_enabled", default)]
+    #[serde(rename = "audio_monitor_enabled", default, skip_serializing)]
     pub(super) monitor_enabled: bool,
-    #[serde(rename = "audio_monitor_output_device", default)]
+    #[serde(rename = "audio_monitor_output_device", default, skip_serializing)]
     pub(super) monitor_output_device: Option<String>,
     #[serde(
         rename = "audio_monitor_volume",
-        default = "default_audio_monitor_volume"
+        default = "default_audio_monitor_volume",
+        skip_serializing
     )]
     pub(super) monitor_volume: f32,
     #[serde(
@@ -56,6 +59,7 @@ impl Default for AudioProfileSettings {
     fn default() -> Self {
         Self {
             input_device: None,
+            voice_input_device: None,
             enabled: default_audio_enabled(),
             output_device: None,
             monitor_enabled: false,
@@ -318,6 +322,14 @@ pub(super) struct GlobalSettings {
     pub(super) compute_preference: ComputePreference,
     #[serde(default)]
     pub(super) font_family: Option<String>,
+    #[serde(default)]
+    pub(super) audio_voice_input_device: Option<String>,
+    #[serde(default)]
+    pub(super) audio_monitor_enabled: bool,
+    #[serde(default)]
+    pub(super) audio_monitor_output_device: Option<String>,
+    #[serde(default = "default_audio_monitor_volume")]
+    pub(super) audio_monitor_volume: f32,
 }
 
 fn global_settings_path() -> PathBuf {
@@ -327,7 +339,10 @@ fn global_settings_path() -> PathBuf {
 pub(super) fn load_global_settings() -> GlobalSettings {
     let path = global_settings_path();
     if let Ok(source) = fs::read_to_string(&path) {
-        if let Ok(settings) = toml::from_str(&source) {
+        if let Ok(mut settings) = toml::from_str(&source) {
+            if migrate_legacy_global_audio_settings(&mut settings, &source) {
+                let _ = save_global_settings(&settings);
+            }
             return settings;
         }
     }
@@ -350,9 +365,39 @@ pub(super) fn load_global_settings() -> GlobalSettings {
             gui_scale: default_gui_scale(),
             compute_preference: ComputePreference::default(),
             font_family: None,
+            audio_voice_input_device: None,
+            audio_monitor_enabled: false,
+            audio_monitor_output_device: None,
+            audio_monitor_volume: default_audio_monitor_volume(),
         });
+    let mut settings = settings;
+    migrate_legacy_global_audio_settings(&mut settings, "");
     let _ = save_global_settings(&settings);
     settings
+}
+
+fn migrate_legacy_global_audio_settings(settings: &mut GlobalSettings, source: &str) -> bool {
+    let Some(profile) = load_operator_profile_named(&active_operator_profile_name()) else {
+        return false;
+    };
+    let mut changed = false;
+    if !source.contains("audio_voice_input_device") {
+        settings.audio_voice_input_device = profile.audio.voice_input_device.clone();
+        changed = true;
+    }
+    if !source.contains("audio_monitor_enabled") {
+        settings.audio_monitor_enabled = profile.audio.monitor_enabled;
+        changed = true;
+    }
+    if !source.contains("audio_monitor_output_device") {
+        settings.audio_monitor_output_device = profile.audio.monitor_output_device.clone();
+        changed = true;
+    }
+    if !source.contains("audio_monitor_volume") {
+        settings.audio_monitor_volume = profile.audio.monitor_volume.clamp(0.0, 2.0);
+        changed = true;
+    }
+    changed
 }
 
 pub(super) fn save_global_settings(settings: &GlobalSettings) -> Result<()> {

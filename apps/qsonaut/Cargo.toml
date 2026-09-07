@@ -17,7 +17,7 @@ qsonaut-hostbridge-client = { path = "../../crates/qsonaut-hostbridge-client" }
 qsonaut-core = { path = "../../crates/qsonaut-core" }
 qsonaut-log = { path = "../../crates/qsonaut-log" }
 qsonaut-radio = { package = "rigwright", version = "0.1.25" }
-qsonaut-gui = { path = "../../crates/qsonaut-gui", features = ["rade-bundled"] }
+qsonaut-gui = { path = "../../crates/qsonaut-gui" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }

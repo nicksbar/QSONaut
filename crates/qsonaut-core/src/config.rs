@@ -25,6 +25,8 @@ pub struct AudioConfig {
     pub enabled: bool,
     pub input_device: Option<String>,
     #[serde(default)]
+    pub voice_input_device: Option<String>,
+    #[serde(default)]
     pub output_device: Option<String>,
     #[serde(default)]
     pub monitor_enabled: bool,
@@ -153,6 +155,7 @@ impl Default for AppConfig {
             audio: AudioConfig {
                 enabled: true,
                 input_device: None,
+                voice_input_device: None,
                 output_device: None,
                 monitor_enabled: false,
                 monitor_output_device: None,
@@ -274,6 +277,9 @@ impl AppConfig {
         }
         if let Ok(device) = std::env::var("QSONAUT_AUDIO_INPUT_DEVICE") {
             cfg.audio.input_device = nonempty(device);
+        }
+        if let Ok(device) = std::env::var("QSONAUT_AUDIO_VOICE_INPUT_DEVICE") {
+            cfg.audio.voice_input_device = nonempty(device);
         }
         if let Ok(device) = std::env::var("QSONAUT_AUDIO_OUTPUT_DEVICE") {
             cfg.audio.output_device = nonempty(device);
