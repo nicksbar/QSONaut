@@ -125,7 +125,13 @@ jobs:
             cp -a "$artifact_root"/. native/rade/
           fi
           test -f native/rade/build/src/librade.so || test -f native/rade/build/src/librade.dll
-          test -f native/rade/build/build_opus-prefix/src/build_opus/.libs/libopus.a
+          opus_archive="$(find native/rade -type f -name libopus.a -print -quit)"
+          test -n "$opus_archive"
+          opus_dir="$(realpath native/rade/build/build_opus-prefix/src/build_opus/.libs)"
+          mkdir -p "$opus_dir"
+          if [[ "$(realpath "$opus_archive")" != "$opus_dir/libopus.a" ]]; then
+            cp "$opus_archive" "$opus_dir/libopus.a"
+          fi
 
       - name: Build release binary
         working-directory: QSONaut
