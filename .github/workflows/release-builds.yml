@@ -129,19 +129,22 @@ jobs:
           rade_dir="$(realpath native/rade/build/src)"
           mkdir -p "$rade_dir"
           if [[ "$rade_library" == *.dll ]]; then
-            cp "$rade_library" "$rade_dir/librade.dll"
-          elif [[ "$(basename "$rade_library")" != "librade.so" ]]; then
-            cp "$rade_library" "$rade_dir/librade.so"
+            rade_destination="$rade_dir/librade.dll"
+          else
+            rade_destination="$rade_dir/librade.so"
+          fi
+          if [[ "$(realpath "$rade_library")" != "$(realpath -m "$rade_destination")" ]]; then
+            cp "$rade_library" "$rade_destination"
           fi
           rade_import="$(find native/rade -type f -name 'librade.dll.a' -print -quit)"
-          if [[ -n "$rade_import" ]]; then
+          if [[ -n "$rade_import" ]] && [[ "$(realpath "$rade_import")" != "$rade_dir/librade.dll.a" ]]; then
             cp "$rade_import" "$rade_dir/librade.dll.a"
           fi
           opus_archive="$(find native/rade -type f -name libopus.a -print -quit)"
           test -n "$opus_archive"
           opus_dir="$(realpath native/rade/build/build_opus-prefix/src/build_opus/.libs)"
           mkdir -p "$opus_dir"
-          if [[ "$(realpath "$opus_archive")" != "$opus_dir/libopus.a" ]]; then
+          if [[ "$(realpath "$opus_archive")" != "$(realpath -m "$opus_dir/libopus.a")" ]]; then
             cp "$opus_archive" "$opus_dir/libopus.a"
           fi
 
