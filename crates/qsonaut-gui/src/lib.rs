@@ -35,8 +35,8 @@ use qsonaut_accelerate::{
 };
 use qsonaut_audio::{play_pcm_blocking, AudioService, NULL_INPUT_DEVICE, NULL_OUTPUT_DEVICE};
 use qsonaut_automation::{
-    Action, AutomationEvent, AutomationHost, Capability, CapabilitySet, EventKind,
-    ExternalSourceConfig, RuleComponent, RuleComponentConfig,
+    AchievementDefinition, AchievementEvaluator, Action, AutomationEvent, AutomationHost,
+    Capability, CapabilitySet, EventKind, ExternalSourceConfig, RuleComponent, RuleComponentConfig,
 };
 use qsonaut_core::{
     AppConfig, AppEvent, AppEventBus, AudioConfig, ContestOperatingMode, ContestProfile,
@@ -65,6 +65,7 @@ use qsonaut_server_client::{
     log_idempotency_key, new_instance_id, ConnectionConfig as ServerConnectionConfig,
     ConnectionState as ServerConnectionState, Presence as ServerPresence, ServerClient,
 };
+use qsonaut_third_party::rade::RadeMode;
 use qsonaut_third_party::sstv as qsonaut_sstv;
 use qsonaut_third_party::wsjt::Q65Submode;
 use rustfft::{num_complex::Complex, FftPlanner};
@@ -111,11 +112,40 @@ fn qsonaut_people(raw: Option<&'static str>) -> Vec<QsonautPerson> {
 }
 
 pub(crate) fn qsonaut_demo_people() -> Vec<QsonautPerson> {
-    qsonaut_people(option_env!("QSONAUT_CONTRIBUTORS"))
+    let mut people = qsonaut_people(option_env!("QSONAUT_CONTRIBUTORS"))
         .into_iter()
         .chain(qsonaut_people(option_env!("QSONAUT_TESTERS")))
         .filter(|person| person.enabled)
-        .collect()
+        .collect::<Vec<_>>();
+
+    // Keep the null modem and demos useful in developer builds where release
+    // contributor/tester variables are not present. These are intentionally
+    // fictional QZ-prefixed identities and are shared by every mode rather
+    // than being hidden in one mode's audio worker.
+    const FALLBACKS: &[(&str, &str, &str)] = &[
+        ("QZ0NA", "CN87", "QSONaut Alpha"),
+        ("QZ1NB", "FN31", "QSONaut Bravo"),
+        ("QZ2NC", "DM13", "QSONaut Charlie"),
+        ("QZ3ND", "EM12", "QSONaut Delta"),
+        ("QZ4NE", "IO91", "QSONaut Echo"),
+        ("QZ5NF", "JN58", "QSONaut Foxtrot"),
+    ];
+    for (callsign, grid, name) in FALLBACKS {
+        if people
+            .iter()
+            .any(|person| person.callsign.as_deref() == Some(*callsign))
+        {
+            continue;
+        }
+        people.push(QsonautPerson {
+            name: Some((*name).to_string()),
+            callsign: Some((*callsign).to_string()),
+            grid: Some((*grid).to_string()),
+            power_dbm: Some(30),
+            ..QsonautPerson::default()
+        });
+    }
+    people
 }
 
 fn qsonaut_credit_text(raw: Option<&'static str>) -> String {
@@ -202,6 +232,7 @@ use modes::exchange::{
     ReplyCandidate, SLOT_SECONDS,
 };
 pub(crate) use modes::ft8_types::{Ft8SeqState, Ft8TxQueuePolicy, PendingManualFt8Reply};
+use modes::js8::Js8Controls;
 use modes::voice::VoiceContestField;
 use profile::{
     active_operator_profile_name, default_contest_fake_split_offset_hz, default_cw_tone_hz,
@@ -247,6 +278,7 @@ use tx_audio::{
     DigitalTxChatEntry, DigitalTxEvent, DigitalTxJob, Ft8ChatDirection, Ft8ChatLine,
     Ft8TxChatEntry, Ft8TxEvent, Ft8TxJob,
 };
+use tx_audio::{run_rade_tx_job, RadeTxJob};
 use ui_format::{format_signal_report, ft8_period_progress, qso_stage_label, utc_hhmmss_millis};
 use ui_widgets::{
     draw_ai_icon, draw_radio_about_icon, draw_speaker_icon, format_swr_display,
@@ -274,7 +306,6 @@ const AUDIO_WF_HEIGHT: usize = 120;
 const AUDIO_MAX_FREQ_HZ: u32 = 4_000;
 // 8192 samples @ 48 kHz = 170 ms window, ~5.9 Hz/bin, ~683 useful bins for 0-4 kHz.
 const FFT_SIZE: usize = 8192;
-const AUDIO_MONITOR_PROFILE_VERSION: u32 = 12;
 const GUI_SCALE_BASE: f32 = 1.2;
 const GUI_SCALE_MAX: f32 = 2.0;
 const GUI_SCALE_MIN: f32 = 0.45;
@@ -317,7 +348,6 @@ enum ProfileDrawerTab {
     Radio,
     Tuning,
     DigitalTiming,
-    Monitoring,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -404,9 +434,11 @@ fn parse_workspace_mode_token(mode: &str) -> Option<WorkspaceMode> {
         "JT9" => Some(WorkspaceMode::Jt9),
         "JT65" => Some(WorkspaceMode::Jt65),
         "Q65" => Some(WorkspaceMode::Q65),
+        "JS8" | "JS8CALL" => Some(WorkspaceMode::Js8),
         "MSK144" => Some(WorkspaceMode::Msk144),
         "CW" => Some(WorkspaceMode::Cw),
         "VOICE" | "SSB" | "PHONE" => Some(WorkspaceMode::Voice),
+        "RADE" | "RADE-V1" | "RADE-V2" => Some(WorkspaceMode::Rade),
         "SSTV" => Some(WorkspaceMode::Sstv),
         _ => None,
     }
@@ -436,6 +468,7 @@ fn workspace_mode_supports_native_tx(mode: WorkspaceMode) -> bool {
             | WorkspaceMode::Jt9
             | WorkspaceMode::Jt65
             | WorkspaceMode::Q65
+            | WorkspaceMode::Js8
             | WorkspaceMode::Cw
             | WorkspaceMode::Sstv
     )
@@ -717,6 +750,7 @@ struct GuiState {
     ft8_acquisition_generation: u64,
     ft4_clock_offset_s: Option<f32>,
     workspace_mode: WorkspaceMode,
+    rade_mode: RadeMode,
     ft8_deep_decode: bool,
     ft4_deep_decode: bool,
     ft8_pending: Vec<Ft8DecodeEntry>,
@@ -756,6 +790,7 @@ struct GuiState {
     ft4_last_decode_period: Option<u64>,
     digital_tx_period: Option<(WorkspaceMode, u64)>,
     selected_audio_hz: u32,
+    js8_controls: Js8Controls,
     fst4_submode: modes::fst4::Submode,
     q65_submode: Q65Submode,
     compute_backend: ActiveBackend,
@@ -902,6 +937,7 @@ impl Default for GuiState {
             ft8_acquisition_generation: u64::MAX,
             ft4_clock_offset_s: None,
             workspace_mode: WorkspaceMode::Ft8,
+            rade_mode: RadeMode::V1,
             ft8_deep_decode: false,
             ft4_deep_decode: false,
             ft8_pending: Vec::new(),
@@ -941,6 +977,7 @@ impl Default for GuiState {
             ft4_last_decode_period: None,
             digital_tx_period: None,
             selected_audio_hz: default_rx_tone_hz(),
+            js8_controls: Js8Controls::default(),
             fst4_submode: modes::fst4::Submode::default(),
             q65_submode: Q65Submode::A30,
             compute_backend: ActiveBackend::CpuSimd,
@@ -1160,6 +1197,8 @@ struct QsonautGuiApp {
     hunter_dupe_blocks: u32,
     hunter_decode_bursts: u32,
     hunter_custom_rules: Vec<CustomAchievementRule>,
+    automation_achievement_evaluator: AchievementEvaluator,
+    automation_achievement_definitions: Vec<AchievementDefinition>,
     radio_profiles: Vec<RadioProfile>,
     mode_radio_profile: std::collections::BTreeMap<String, String>,
     radio_profile_name_input: String,
@@ -1251,6 +1290,9 @@ struct QsonautGuiApp {
     activity: OperatingActivity,
     fst4_submode: modes::fst4::Submode,
     cw_auto_target_timeout_s: u8,
+    js8_controls: Js8Controls,
+    js8_target: Option<String>,
+    js8_tune_tx_with_rx: bool,
     q65_submode: Q65Submode,
     display_tuning: Arc<Mutex<DisplayTuning>>,
     repaint_ctx: Arc<OnceLock<egui::Context>>,
@@ -1353,6 +1395,7 @@ struct QsonautGuiApp {
     voice_lookup_requested: String,
     voice_lookup_status: String,
     voice_hamdb: Option<HamDbCacheEntry>,
+    rade_mode: RadeMode,
     contest_enabled: bool,
     contest_operating_mode: ContestOperatingMode,
     contest_split_policy: SplitPolicy,
@@ -2247,6 +2290,7 @@ mod tests {
         profile.profile_version = 2;
         profile.audio.enabled = false;
         profile.audio.input_device = Some("input".to_string());
+        profile.audio.voice_input_device = Some("voice-mic".to_string());
         profile.audio.output_device = Some("output".to_string());
         profile.audio.monitor_enabled = true;
         profile.audio.monitor_output_device = Some("monitor".to_string());
@@ -2264,21 +2308,26 @@ mod tests {
         );
         assert_eq!(legacy_audio.monitor_volume, config.audio.monitor_volume);
 
-        profile.profile_version = AUDIO_MONITOR_PROFILE_VERSION;
+        profile.profile_version = OPERATOR_PROFILE_VERSION;
         let current_audio = audio_config_from_operator_profile(&profile, &config.audio);
-        assert!(current_audio.monitor_enabled);
+        assert_eq!(current_audio.monitor_enabled, config.audio.monitor_enabled);
         assert_eq!(
-            current_audio.monitor_output_device.as_deref(),
-            Some("monitor")
+            current_audio.monitor_output_device,
+            config.audio.monitor_output_device
         );
-        assert_eq!(current_audio.monitor_volume, 2.0);
+        assert_eq!(current_audio.monitor_volume, config.audio.monitor_volume);
         assert_eq!(current_audio.sample_rate_hz, 44_100);
         assert_eq!(current_audio.channels, 2);
+        assert_eq!(
+            current_audio.voice_input_device,
+            config.audio.voice_input_device
+        );
 
         let serialized = toml::to_string(&profile).expect("serialize profile");
         assert!(serialized.contains("audio_input_device = \"input\""));
         assert!(serialized.contains("audio_output_device = \"output\""));
-        assert!(serialized.contains("audio_monitor_output_device = \"monitor\""));
+        assert!(!serialized.contains("audio_voice_input_device"));
+        assert!(!serialized.contains("audio_monitor_output_device"));
     }
 
     #[test]
@@ -3234,6 +3283,7 @@ mod tests {
             WorkspaceMode::Jt9,
             WorkspaceMode::Jt65,
             WorkspaceMode::Q65,
+            WorkspaceMode::Js8,
             WorkspaceMode::Cw,
             WorkspaceMode::Sstv,
         ] {
@@ -3952,6 +4002,13 @@ mod tests {
             call: "K1ABC".to_string(),
             band: "20m".to_string(),
             frequency_hz: 14_060_000,
+            grid: "FN42".to_string(),
+            state: "MA".to_string(),
+            country: "US".to_string(),
+            time_on: "120000".to_string(),
+            report_received: "-10".to_string(),
+            operation_mode: "General".to_string(),
+            contest_exchange_received: String::new(),
         })
         .expect("qso event");
         assert_eq!(qso.kind, EventKind::QsoLogged);
@@ -3959,6 +4016,26 @@ mod tests {
             qso.fields.get("frequency_hz").map(String::as_str),
             Some("14060000")
         );
+        assert!(qso.fields.contains_key("state"));
+        assert!(qso.fields.contains_key("report_received"));
+
+        let early_dx = normalize_app_event_for_automation(AppEvent::QsoLogged {
+            mode: "FT8".to_string(),
+            call: "JA1ABC".to_string(),
+            band: "20m".to_string(),
+            frequency_hz: 14_074_000,
+            grid: "PM95".to_string(),
+            state: String::new(),
+            country: "JP".to_string(),
+            time_on: "060000".to_string(),
+            report_received: "-23".to_string(),
+            operation_mode: "General".to_string(),
+            contest_exchange_received: String::new(),
+        })
+        .expect("tagged qso event");
+        assert!(early_dx.tags.contains("early_bird"));
+        assert!(early_dx.tags.contains("dx"));
+        assert!(early_dx.tags.contains("signal_survivor"));
 
         let mut fields = BTreeMap::new();
         fields.insert("frequency_hz".to_string(), "14074000".to_string());
@@ -4098,6 +4175,10 @@ mod tests {
         assert_eq!(parse_workspace_mode_token("FT8"), Some(WorkspaceMode::Ft8));
         assert_eq!(parse_workspace_mode_token("ft4"), Some(WorkspaceMode::Ft4));
         assert_eq!(
+            parse_workspace_mode_token("RADE"),
+            Some(WorkspaceMode::Rade)
+        );
+        assert_eq!(
             parse_workspace_mode_token("ssb"),
             Some(WorkspaceMode::Voice)
         );
@@ -4126,6 +4207,7 @@ mod tests {
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Cw));
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Sstv));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Voice));
+        assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Rade));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Ft8));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Wspr));
     }
@@ -4177,6 +4259,20 @@ mod tests {
     }
 
     #[test]
+    fn demo_people_include_the_shared_fictional_station_pool() {
+        let callsigns: HashSet<_> = qsonaut_demo_people()
+            .into_iter()
+            .filter_map(|person| person.callsign)
+            .collect();
+        for callsign in ["QZ0NA", "QZ1NB", "QZ2NC", "QZ3ND", "QZ4NE", "QZ5NF"] {
+            assert!(
+                callsigns.contains(callsign),
+                "missing demo station {callsign}"
+            );
+        }
+    }
+
+    #[test]
     fn workspace_mode_tokens_cover_aliases_and_whitespace() {
         for (token, expected) in [
             (" FST4 ", WorkspaceMode::Fst4),
@@ -4184,9 +4280,11 @@ mod tests {
             ("JT9", WorkspaceMode::Jt9),
             ("JT65", WorkspaceMode::Jt65),
             ("Q65", WorkspaceMode::Q65),
+            ("JS8Call", WorkspaceMode::Js8),
             ("MSK144", WorkspaceMode::Msk144),
             ("CW", WorkspaceMode::Cw),
             ("PHONE", WorkspaceMode::Voice),
+            ("rade-v2", WorkspaceMode::Rade),
         ] {
             assert_eq!(parse_workspace_mode_token(token), Some(expected));
         }
@@ -4222,6 +4320,7 @@ mod tests {
             WorkspaceMode::Jt9,
             WorkspaceMode::Jt65,
             WorkspaceMode::Q65,
+            WorkspaceMode::Js8,
             WorkspaceMode::Cw,
             WorkspaceMode::Sstv,
         ] {
@@ -4232,6 +4331,7 @@ mod tests {
             WorkspaceMode::Wspr,
             WorkspaceMode::Msk144,
             WorkspaceMode::Voice,
+            WorkspaceMode::Rade,
         ] {
             assert!(!workspace_mode_supports_native_tx(mode));
         }

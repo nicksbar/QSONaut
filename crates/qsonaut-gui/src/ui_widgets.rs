@@ -127,7 +127,6 @@ pub(super) enum OperatingModeIcon {
     Sstv,
     Msk144,
     Voice,
-    VaraAc,
     Rade,
     Text,
 }
@@ -249,44 +248,6 @@ pub(super) fn draw_operating_mode_icon(
                 ],
                 stroke,
             );
-        }
-        OperatingModeIcon::VaraAc => {
-            painter.line_segment(
-                [
-                    egui::pos2(rect.left() + 1.0, center.y),
-                    egui::pos2(center.x - 5.0, center.y),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    egui::pos2(center.x - 5.0, center.y),
-                    egui::pos2(center.x - 2.0, center.y - 5.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    egui::pos2(center.x - 2.0, center.y - 5.0),
-                    egui::pos2(center.x + 1.0, center.y + 5.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    egui::pos2(center.x + 1.0, center.y + 5.0),
-                    egui::pos2(center.x + 4.0, center.y - 4.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    egui::pos2(center.x + 4.0, center.y - 4.0),
-                    egui::pos2(rect.right() - 1.0, center.y - 4.0),
-                ],
-                stroke,
-            );
-            painter.circle_stroke(egui::pos2(rect.right() - 2.0, center.y + 4.0), 2.5, stroke);
         }
         OperatingModeIcon::Rade => {
             let bubble = egui::Rect::from_center_size(

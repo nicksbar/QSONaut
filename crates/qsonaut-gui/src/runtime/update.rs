@@ -319,9 +319,11 @@ impl QsonautGuiApp {
         let (new_decodes, latest_decode_period) = {
             let mut s = self.state.lock().expect("ui state lock poisoned");
             s.workspace_mode = self.workspace_mode;
+            s.rade_mode = self.rade_mode;
             s.fst4_submode = self.fst4_submode;
             s.q65_submode = self.q65_submode;
             s.cw_auto_target_timeout_s = self.cw_auto_target_timeout_s;
+            s.js8_controls = self.js8_controls;
             s.ft8_deep_decode = self.ft8_deep_decode;
             s.ft4_deep_decode = self.ft4_deep_decode;
             s.selected_audio_hz = if self.workspace_mode == WorkspaceMode::Cw {
@@ -1634,7 +1636,6 @@ impl QsonautGuiApp {
                         (ProfileDrawerTab::Radio, "RADIO"),
                         (ProfileDrawerTab::Tuning, "TUNING"),
                         (ProfileDrawerTab::DigitalTiming, "DIGITAL TIMING"),
-                        (ProfileDrawerTab::Monitoring, "MONITORING"),
                     ] {
                         if ui
                             .selectable_label(self.profile_drawer_tab == tab, label)
@@ -1653,7 +1654,6 @@ impl QsonautGuiApp {
                         ProfileDrawerTab::Radio => self.draw_radio_profile_settings(ui),
                         ProfileDrawerTab::Tuning => self.draw_radio_profile_assignments(ui),
                         ProfileDrawerTab::DigitalTiming => self.draw_digital_timing_settings(ui),
-                        ProfileDrawerTab::Monitoring => self.draw_monitoring_settings(ui),
                     });
             });
             if !drawer_open {

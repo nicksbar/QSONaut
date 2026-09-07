@@ -818,6 +818,132 @@ impl QsonautGuiApp {
                 .small()
                 .color(Color32::GRAY),
         );
+        ui.add_space(8.0);
+        ui.label(RichText::new("Audio routing").strong());
+        ui.label(
+            RichText::new(
+                "These audio endpoints are global. Radio RX input/output remains configured in each radio profile.",
+            )
+            .small()
+            .color(Color32::GRAY),
+        );
+        let old_voice_input = self.config.audio.voice_input_device.clone();
+        let old_monitor_enabled = self.config.audio.monitor_enabled;
+        let old_monitor_output = self.config.audio.monitor_output_device.clone();
+        let old_monitor_volume = self.config.audio.monitor_volume;
+        let input_devices = self.audio_input_devices.clone();
+        let output_devices = self.audio_output_devices.clone();
+        egui::Grid::new("global_audio_settings_grid")
+            .num_columns(2)
+            .spacing([10.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Voice microphone");
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("global_voice_input_device")
+                        .selected_text(
+                            self.config
+                                .audio
+                                .voice_input_device
+                                .as_deref()
+                                .unwrap_or("System default microphone"),
+                        )
+                        .width((ui.available_width() - 34.0).max(180.0))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.config.audio.voice_input_device,
+                                None,
+                                "System default microphone",
+                            );
+                            for device in &input_devices {
+                                ui.selectable_value(
+                                    &mut self.config.audio.voice_input_device,
+                                    Some(device.clone()),
+                                    device,
+                                );
+                            }
+                        });
+                    if ui
+                        .small_button("↻")
+                        .on_hover_text("Re-scan audio input devices")
+                        .clicked()
+                    {
+                        self.refresh_device_lists();
+                    }
+                });
+                ui.end_row();
+
+                ui.label("RX monitor");
+                ui.checkbox(&mut self.config.audio.monitor_enabled, "Enabled");
+                ui.end_row();
+
+                ui.label("RX monitor output");
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("global_monitor_output_device")
+                        .selected_text(
+                            self.config
+                                .audio
+                                .monitor_output_device
+                                .as_deref()
+                                .or(self.config.audio.output_device.as_deref())
+                                .unwrap_or("Use radio audio output"),
+                        )
+                        .width((ui.available_width() - 34.0).max(180.0))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.config.audio.monitor_output_device,
+                                None,
+                                "Use radio audio output",
+                            );
+                            for device in &output_devices {
+                                ui.selectable_value(
+                                    &mut self.config.audio.monitor_output_device,
+                                    Some(device.clone()),
+                                    device,
+                                );
+                            }
+                        });
+                    if ui
+                        .small_button("↻")
+                        .on_hover_text("Re-scan audio output devices")
+                        .clicked()
+                    {
+                        self.refresh_device_lists();
+                    }
+                });
+                ui.end_row();
+
+                ui.label("RX monitor volume");
+                ui.add(
+                    egui::Slider::new(&mut self.config.audio.monitor_volume, 0.0..=2.0)
+                        .show_value(true)
+                        .text("level"),
+                );
+                ui.end_row();
+            });
+        let voice_input_changed = old_voice_input != self.config.audio.voice_input_device;
+        let monitor_routing_changed = old_monitor_enabled != self.config.audio.monitor_enabled
+            || old_monitor_output != self.config.audio.monitor_output_device
+            || (old_monitor_volume - self.config.audio.monitor_volume).abs() > f32::EPSILON;
+        if voice_input_changed || monitor_routing_changed {
+            self.config.audio.monitor_volume = self.config.audio.monitor_volume.clamp(0.0, 2.0);
+            self.monitor_volume.store(
+                self.config.audio.monitor_volume.to_bits(),
+                Ordering::Relaxed,
+            );
+            self.audio_restart_required |= monitor_routing_changed;
+            self.profile_dirty = true;
+            self.persist_profile("Global audio settings saved to");
+        }
+        if self.audio_restart_required {
+            if ui.button("Restart audio now").clicked() {
+                self.restart_audio();
+            }
+            ui.label(
+                RichText::new("Restart audio to apply monitor routing changes.")
+                    .small()
+                    .color(theme_warning(ui)),
+            );
+        }
         let previous_scale = self.gui_scale;
         egui::ComboBox::from_id_salt("gui_scale")
             .selected_text(format!(
@@ -1039,65 +1165,6 @@ impl QsonautGuiApp {
         if changed {
             self.profile_dirty = true;
             self.persist_profile("Radio tuning assignments saved to");
-        }
-    }
-
-    pub(in super::super) fn draw_monitoring_settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("RX monitoring");
-        ui.label(
-            RichText::new("Choose the profile-specific output. Enable, disable, and adjust RX monitor volume from the app toolbar.")
-                .small()
-                .color(Color32::GRAY),
-        );
-        let old_output = self.config.audio.monitor_output_device.clone();
-        ui.horizontal(|ui| {
-            ui.label("Output");
-            egui::ComboBox::from_id_salt("profile_monitor_output_device")
-                .selected_text(
-                    self.config
-                        .audio
-                        .monitor_output_device
-                        .as_deref()
-                        .or(self.config.audio.output_device.as_deref())
-                        .unwrap_or("Use audio output device"),
-                )
-                .width((ui.available_width() - 34.0).max(180.0))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.config.audio.monitor_output_device,
-                        None,
-                        "Use audio output device",
-                    );
-                    for device in &self.audio_output_devices {
-                        ui.selectable_value(
-                            &mut self.config.audio.monitor_output_device,
-                            Some(device.clone()),
-                            device,
-                        );
-                    }
-                });
-            if ui
-                .small_button("↻")
-                .on_hover_text("Re-scan audio output devices")
-                .clicked()
-            {
-                self.refresh_device_lists();
-            }
-        });
-        if old_output != self.config.audio.monitor_output_device {
-            self.audio_restart_required = true;
-            self.profile_dirty = true;
-            self.persist_profile("RX monitor settings saved to");
-        }
-        if self.audio_restart_required {
-            if ui.button("Restart audio now").clicked() {
-                self.restart_audio();
-            }
-            ui.label(
-                RichText::new("Restart audio to apply monitor device changes.")
-                    .small()
-                    .color(theme_warning(ui)),
-            );
         }
     }
 

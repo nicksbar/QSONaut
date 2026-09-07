@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::automation_hunter::load_automation_achievement_definitions;
 
 /// WASAPI and serial enumeration each take hundreds of milliseconds, which is
 /// long enough to delay the first paint and leave a ghost window on Windows.
@@ -41,22 +42,11 @@ pub(crate) fn audio_config_from_operator_profile(
     AudioConfig {
         enabled: profile.audio.enabled,
         input_device: profile.audio.input_device.clone(),
+        voice_input_device: fallback.voice_input_device.clone(),
         output_device: profile.audio.output_device.clone(),
-        monitor_enabled: if profile.profile_version >= AUDIO_MONITOR_PROFILE_VERSION {
-            profile.audio.monitor_enabled
-        } else {
-            fallback.monitor_enabled
-        },
-        monitor_output_device: if profile.profile_version >= AUDIO_MONITOR_PROFILE_VERSION {
-            profile.audio.monitor_output_device.clone()
-        } else {
-            fallback.monitor_output_device.clone()
-        },
-        monitor_volume: if profile.profile_version >= AUDIO_MONITOR_PROFILE_VERSION {
-            profile.audio.monitor_volume.clamp(0.0, 2.0)
-        } else {
-            fallback.monitor_volume
-        },
+        monitor_enabled: fallback.monitor_enabled,
+        monitor_output_device: fallback.monitor_output_device.clone(),
+        monitor_volume: fallback.monitor_volume,
         sample_rate_hz: profile.audio.sample_rate_hz,
         channels: profile.audio.channels,
     }
@@ -133,6 +123,7 @@ impl QsonautGuiApp {
         );
         let brand_icon =
             ctx.load_texture("qsonaut-brand-icon", brand_image, TextureOptions::LINEAR);
+        let global_settings = load_global_settings();
         let available_profiles = list_operator_profiles();
         let active_profile_name = active_operator_profile_name();
         let selected_profile_name = available_profiles
@@ -153,12 +144,6 @@ impl QsonautGuiApp {
                     config.audio.output_device = profile.audio.output_device.clone();
                     config.audio.sample_rate_hz = profile.audio.sample_rate_hz;
                     config.audio.channels = profile.audio.channels;
-                    if profile.profile_version >= AUDIO_MONITOR_PROFILE_VERSION {
-                        config.audio.monitor_enabled = profile.audio.monitor_enabled;
-                        config.audio.monitor_output_device =
-                            profile.audio.monitor_output_device.clone();
-                        config.audio.monitor_volume = profile.audio.monitor_volume.clamp(0.0, 2.0);
-                    }
                     config.radio.enabled = profile.radio.enabled;
                     config.radio.serial_port = profile.radio.serial_port.clone();
                     config.radio.backend = profile.radio.backend.clone();
@@ -183,6 +168,11 @@ impl QsonautGuiApp {
                 }
             }
         }
+
+        config.audio.voice_input_device = global_settings.audio_voice_input_device.clone();
+        config.audio.monitor_enabled = global_settings.audio_monitor_enabled;
+        config.audio.monitor_output_device = global_settings.audio_monitor_output_device.clone();
+        config.audio.monitor_volume = global_settings.audio_monitor_volume.clamp(0.0, 2.0);
 
         info!(
             profile = %selected_profile_name,
@@ -371,7 +361,6 @@ impl QsonautGuiApp {
             )
         });
 
-        let global_settings = load_global_settings();
         apply_font_family(ctx, global_settings.font_family.as_deref());
         let available_font_families = available_font_families();
         let station_callsign = global_settings.callsign.clone();
@@ -623,6 +612,7 @@ impl QsonautGuiApp {
                 recording_stream,
                 audio: profile::AudioProfileSettings {
                     input_device: config.audio.input_device.clone(),
+                    voice_input_device: config.audio.voice_input_device.clone(),
                     enabled: config.audio.enabled,
                     output_device: config.audio.output_device.clone(),
                     monitor_enabled: config.audio.monitor_enabled,
@@ -772,6 +762,8 @@ impl QsonautGuiApp {
             hunter_dupe_blocks: 0,
             hunter_decode_bursts: 0,
             hunter_custom_rules,
+            automation_achievement_evaluator: AchievementEvaluator::default(),
+            automation_achievement_definitions: load_automation_achievement_definitions(),
             radio_profiles,
             mode_radio_profile,
             radio_profile_name_input: String::new(),
@@ -863,6 +855,9 @@ impl QsonautGuiApp {
             activity: OperatingActivity::General,
             fst4_submode: modes::fst4::Submode::default(),
             cw_auto_target_timeout_s: 3,
+            js8_controls: Js8Controls::default(),
+            js8_target: None,
+            js8_tune_tx_with_rx: false,
             q65_submode: qsonaut_third_party::wsjt::Q65Submode::A30,
             display_tuning,
             repaint_ctx,
@@ -962,6 +957,7 @@ impl QsonautGuiApp {
             voice_lookup_requested: String::new(),
             voice_lookup_status: String::new(),
             voice_hamdb: None,
+            rade_mode: qsonaut_third_party::rade::RadeMode::V1,
             contest_enabled,
             contest_operating_mode,
             contest_split_policy,

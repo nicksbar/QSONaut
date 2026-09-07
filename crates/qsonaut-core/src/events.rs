@@ -31,6 +31,20 @@ pub enum AppEvent {
         call: String,
         band: String,
         frequency_hz: u64,
+        #[allow(dead_code)]
+        grid: String,
+        #[allow(dead_code)]
+        state: String,
+        #[allow(dead_code)]
+        country: String,
+        #[allow(dead_code)]
+        time_on: String,
+        #[allow(dead_code)]
+        report_received: String,
+        #[allow(dead_code)]
+        operation_mode: String,
+        #[allow(dead_code)]
+        contest_exchange_received: String,
     },
     ExternalMessageReceived {
         source: String,

@@ -5,6 +5,53 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.18] - Unreleased
+
+### Added
+- Added a declarative achievement catalog in `achievements.example.toml`,
+  covering QSO milestones, unique callsigns/bands/grids/modes, Worked All
+  States, FT8/FT4/CW progress, DX, time-of-day, contest, weak-signal, and
+  duplicate-defense achievements.
+- Added a shared stateful achievement evaluator to `qsonaut-automation` with
+  event-count, unique-field, tag, string, and numeric predicates.
+- Added structured QSO event metadata and semantic achievement tags for mode,
+  band, grid, state, country, UTC time, contest exchanges, DX, early/night
+  operation, weak signals, and duplicate TX blocks.
+- Added detailed achievement automation documentation covering the catalog
+  schema, event flow, persistence, safety boundaries, and limitations.
+
+### Changed
+- Routed achievement evaluation through normalized automation events rather
+  than application-log text parsing.
+- Updated the application and GUI to released Rigwright `0.1.25`, including
+  the FT-991A `IF;`-based mode-read fix.
+- Added catalog and per-mode progress visibility to the Achievement Hunter
+  panel while preserving existing profile unlock and acknowledgment state.
+- Removed the disabled VarAC header button and its proprietary-protocol
+  placeholder from the future modem roadmap.
+
+### Safety
+- Achievement definitions remain read-only observers. They do not receive
+  radio-control, transmit, external-send, or server-publish authority.
+- Existing automation capability grants and global TX safety gates remain the
+  authority for actions that can affect a radio or publish data.
+
+### Related open issues — partial progress
+- Advances [#66](https://github.com/nicksbar/QSONaut/issues/66) by documenting
+  the read-only achievement boundary, capability separation, structured event
+  evaluation, and safety limitations. The broader automation validation issue
+  remains open.
+- Advances [#79](https://github.com/nicksbar/QSONaut/issues/79) by defining and
+  exercising enriched QSO, decode, contest, and duplicate-defense event data.
+  The complete cross-component contract is still open.
+- Provides targeted duplicate and contest metadata coverage relevant to
+  [#28](https://github.com/nicksbar/QSONaut/issues/28) and
+  [#73](https://github.com/nicksbar/QSONaut/issues/73); neither issue is
+  closed by this release.
+
+See [`docs/achievement-automation.md`](docs/achievement-automation.md) for
+the implementation and operator-facing design details.
+
 ## [0.3.17] - 2026-09-05
 
 ### Changed

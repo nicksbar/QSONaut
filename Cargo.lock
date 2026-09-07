@@ -3483,7 +3483,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "anyhow",
  "clap",
@@ -3502,14 +3502,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-accelerate"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "qsonaut-audio"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "anyhow",
  "cpal",
@@ -3518,7 +3518,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-automation"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -3527,7 +3527,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-core"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "anyhow",
  "dotenvy",
@@ -3538,7 +3538,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-gui"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3556,6 +3556,7 @@ dependencies = [
  "qsonaut-core",
  "qsonaut-hostbridge-client",
  "qsonaut-hostbridge-protocol",
+ "qsonaut-js8",
  "qsonaut-log",
  "qsonaut-modems",
  "qsonaut-pskreporter",
@@ -3577,7 +3578,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-hostbridge-client"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -3603,8 +3604,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "qsonaut-js8"
+version = "0.1.0"
+source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=c93660a34b9ed65ea1eb46df57ffc856eb68e797#c93660a34b9ed65ea1eb46df57ffc856eb68e797"
+dependencies = [
+ "qsonaut-modems",
+ "rustfft",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "qsonaut-log"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -3618,21 +3629,21 @@ dependencies = [
 [[package]]
 name = "qsonaut-modems"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=6cc26b8#6cc26b8bc2b60a897b303e1f793dc10388f0485c"
+source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=c93660a34b9ed65ea1eb46df57ffc856eb68e797#c93660a34b9ed65ea1eb46df57ffc856eb68e797"
 dependencies = [
  "thiserror 2.0.20",
 ]
 
 [[package]]
 name = "qsonaut-pskreporter"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "qsonaut-server-client"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -3649,8 +3660,9 @@ dependencies = [
 [[package]]
 name = "qsonaut-third-party"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=052122b#052122bc93365e95db8ad9b6ea614ba9d88e5c92"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=502a9a459c4666b05a7278f526523d62f1dd2887#502a9a459c4666b05a7278f526523d62f1dd2887"
 dependencies = [
+ "cc",
  "cwdit-dsp",
  "cwdit-morse",
  "image",
@@ -4075,9 +4087,9 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rigwright"
-version = "0.1.24"
+version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9003c2fecedb3dd3c770a3a3a534d696fd31c54b2fb7edba4e4abe9a686e106d"
+checksum = "d2382dcc8f4dd59890e00c2b179057ccced840149d4c4e319b9f09f135c0014b"
 dependencies = [
  "anyhow",
  "async-trait",

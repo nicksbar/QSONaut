@@ -137,6 +137,9 @@ impl QsonautGuiApp {
             self.ft8_seq_status = status.clone();
             self.digital_tx_status = status;
             self.hunter_dupe_blocks = self.hunter_dupe_blocks.saturating_add(1);
+            self.observe_automation_achievements(
+                &AutomationEvent::new(EventKind::Command, "app.dupe_guard").tag("dupe_blocked"),
+            );
             self.push_hunter_alert(
                 "🛡 Dupe avoided",
                 format!("{target_call} on {band} {}", mode.label()),

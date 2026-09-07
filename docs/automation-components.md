@@ -28,6 +28,13 @@ radio / decoder / QSO log / QSONaut Server / connectors
 
 Events currently cover decodes, callsign hits, logged QSOs, radio state, contest state, operator profile changes, commands, external messages, QSONaut Server messages, and timers. Fields are intentionally open-ended so protocol- or connector-specific metadata can be added without changing every component.
 
+Achievement definitions are a read-only consumer of this normalized event
+stream. They are evaluated by the shared `qsonaut-automation` evaluator and
+persisted/presented by the GUI; they do not propose actions or receive radio,
+transmit, external-send, or server-publish authority. See the detailed
+[achievement automation guide](achievement-automation.md) and the checked-in
+[`achievements.example.toml`](../achievements.example.toml) catalog.
+
 ## Capabilities
 
 Actions are split into explicit capabilities:

@@ -69,6 +69,25 @@ pub(in super::super) fn run_native_digital_decode(
         .expect("ui state lock poisoned")
         .compute_backend;
     let q65_submode = state.lock().expect("ui state lock poisoned").q65_submode;
+    let js8_controls = state.lock().expect("ui state lock poisoned").js8_controls;
+    if mode == WorkspaceMode::Js8 {
+        let rms = (samples.iter().map(|sample| sample * sample).sum::<f32>()
+            / samples.len().max(1) as f32)
+            .sqrt();
+        let peak = samples
+            .iter()
+            .map(|sample| sample.abs())
+            .fold(0.0_f32, f32::max);
+        info!(
+            mode = ?js8_controls.mode,
+            waterfall = js8_controls.waterfall,
+            selected_audio_hz,
+            sample_count = samples.len(),
+            slot_rms_dbfs = 20.0 * rms.max(1e-9).log10(),
+            slot_peak_dbfs = 20.0 * peak.max(1e-9).log10(),
+            "JS8 decode pass starting"
+        );
+    }
     let budget =
         Duration::from_secs_f64(mode.slot_seconds(fst4_submode, q65_submode).unwrap_or(15.0));
     let mut trace = DecodeTrace::new(mode.label(), backend, samples.len(), budget);
@@ -193,6 +212,92 @@ pub(in super::super) fn run_native_digital_decode(
                 }
             }
         }
+        WorkspaceMode::Js8 => {
+            let audio = AudioBlock::new(12_000, samples).expect("normalized audio is valid");
+            let rx_config = js8_controls.rx_config(selected_audio_hz as f32);
+            let mut focused_decode = false;
+            let signal_rms = (audio
+                .samples
+                .iter()
+                .map(|sample| sample * sample)
+                .sum::<f32>()
+                / audio.samples.len().max(1) as f32)
+                .sqrt();
+            let waterfall_scan = js8_controls.waterfall && signal_rms >= 1.0e-4;
+            // Waterfall mode must be primary: a successful cursor decode must
+            // not hide the other carriers in the same JS8 window. Focused
+            // decoding remains available when waterfall mode is disabled.
+            if !waterfall_scan {
+                match qsonaut_js8::decode_audio_block_detailed(&audio, rx_config) {
+                    Ok(result) => {
+                        focused_decode = true;
+                        let message = crate::modes::js8::format_js8_message(&result.message);
+                        info!(
+                            message = %message,
+                            frequency_hz = ?result.event.audio_frequency_hz,
+                            snr_db = ?result.event.snr_db,
+                            "JS8 focused decode succeeded"
+                        );
+                        push(
+                            result.event.snr_db.unwrap_or_default(),
+                            result.event.delta_time_seconds.unwrap_or_default(),
+                            result.event.audio_frequency_hz.unwrap_or_default(),
+                            message,
+                        );
+                    }
+                    Err(error) => {
+                        debug!(error = %error, "JS8 focused decode did not produce a result");
+                    }
+                }
+            }
+            // A wide scan is substantially more expensive than a focused
+            // decode.  Do not start one for an empty slot: the null modem and
+            // real receivers both have quiet periods, and allowing a scan on
+            // every quiet slot can keep the single decode worker occupied
+            // across the next JS8 boundary.
+            if waterfall_scan {
+                let scan_started = Instant::now();
+                let mut scan_config = js8_controls.scan_config();
+                // A JS8 slot contains one protocol frame. The modem scanner
+                // supports recording scans with many rolling candidates, but
+                // using that policy here would retry the same slot once per
+                // second (up to the whole 15/30-second capture) and can run
+                // past the next slot boundary. The slot gate already gives us
+                // a protocol-aligned window, so perform one bounded waterfall
+                // extraction while retaining all configured signal passes.
+                scan_config.max_candidates = 1;
+                scan_config.step_samples = 1;
+                match qsonaut_js8::scan_audio_block_detailed(&audio, rx_config, scan_config) {
+                    Ok(results) => {
+                        info!(
+                            result_count = results.len(),
+                            elapsed_ms = scan_started.elapsed().as_millis() as u64,
+                            "JS8 waterfall scan complete"
+                        );
+                        for result in results {
+                            let message =
+                                crate::modes::js8::format_js8_message(&result.result.message);
+                            let event = result.result.event;
+                            push(
+                                event.snr_db.unwrap_or_default(),
+                                event.delta_time_seconds.unwrap_or_default(),
+                                event.audio_frequency_hz.unwrap_or_default(),
+                                message,
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        warn!(
+                            error = %error,
+                            elapsed_ms = scan_started.elapsed().as_millis() as u64,
+                            "JS8 waterfall scan failed"
+                        );
+                    }
+                }
+            } else if js8_controls.waterfall && !focused_decode {
+                debug!(signal_rms, "JS8 waterfall scan skipped for quiet input");
+            }
+        }
         WorkspaceMode::Msk144 => {
             if let Ok(batch) = decode_wsjt(
                 &AudioBlock::new(12_000, samples.clone()).expect("normalized audio is valid"),
@@ -212,7 +317,11 @@ pub(in super::super) fn run_native_digital_decode(
                 }
             }
         }
-        WorkspaceMode::Ft8 | WorkspaceMode::Cw | WorkspaceMode::Voice | WorkspaceMode::Sstv => {}
+        WorkspaceMode::Ft8
+        | WorkspaceMode::Cw
+        | WorkspaceMode::Voice
+        | WorkspaceMode::Rade
+        | WorkspaceMode::Sstv => {}
     });
 
     let telemetry = trace.finish(decoded.len());
@@ -363,6 +472,76 @@ mod tests {
                 .any(|entry| entry.mode == WorkspaceMode::Ft4 && entry.message.contains("W1AW")),
             "early FT4 capture did not publish a decode: {:?}",
             shared.digital_decodes
+        );
+    }
+
+    #[test]
+    fn js8_null_fixture_decodes_multiple_carriers_through_waterfall_path() {
+        let first_frequency_hz = 1_071;
+        let second_frequency_hz = 1_871;
+        let first_pcm = build_native_digital_tx_pcm(
+            WorkspaceMode::Js8,
+            "CQ+N7UF+++\u{2b}+",
+            first_frequency_hz,
+            Submode::default(),
+            20,
+            600,
+        )
+        .expect("JS8 fixture synthesis")
+        .0;
+        let second_pcm = build_native_digital_tx_pcm(
+            WorkspaceMode::Js8,
+            "W1AW FN31",
+            second_frequency_hz,
+            Submode::default(),
+            20,
+            600,
+        )
+        .expect("second JS8 fixture synthesis")
+        .0;
+        let samples = first_pcm
+            .into_iter()
+            .zip(second_pcm)
+            .map(|(first, second)| (first as f32 + second as f32) / i16::MAX as f32 * 0.06)
+            .collect::<Vec<_>>();
+        let mut samples = samples;
+        samples.resize(15 * 12_000, 0.0);
+        let state = Arc::new(Mutex::new(crate::GuiState {
+            selected_audio_hz: first_frequency_hz,
+            ..crate::GuiState::default()
+        }));
+
+        run_native_digital_decode(
+            WorkspaceMode::Js8,
+            Submode::default(),
+            samples,
+            42,
+            "00:05:15.000".to_string(),
+            first_frequency_hz,
+            false,
+            state.clone(),
+        );
+
+        let shared = state.lock().expect("state");
+        let js8_decodes: Vec<_> = shared
+            .digital_decodes
+            .iter()
+            .filter(|entry| entry.mode == WorkspaceMode::Js8)
+            .collect();
+        assert!(
+            js8_decodes.len() >= 2,
+            "JS8 waterfall did not decode both carriers: {:?}",
+            shared.digital_decodes
+        );
+        assert!(
+            js8_decodes
+                .iter()
+                .any(|entry| (entry.freq_hz as i32 - first_frequency_hz as i32).abs() <= 25)
+                && js8_decodes
+                    .iter()
+                    .any(|entry| (entry.freq_hz as i32 - second_frequency_hz as i32).abs() <= 25),
+            "JS8 waterfall frequencies were not recovered: {:?}",
+            js8_decodes
         );
     }
 

@@ -6,13 +6,13 @@
 
 [![CI](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml)
 [![Coverage gate](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml)
-[![Line coverage 61.09%](https://img.shields.io/badge/line%20coverage-61.09%25-yellow)](#coverage-area-snapshot)
-[![GUI core 52.20%](https://img.shields.io/badge/GUI%20core-52.20%25-yellow)](#coverage-area-snapshot)
-[![GUI workers 61.09%](https://img.shields.io/badge/GUI%20workers-61.09%25-yellow)](#coverage-area-snapshot)
-[![GUI modes 59.35%](https://img.shields.io/badge/GUI%20modes-59.35%25-yellow)](#coverage-area-snapshot)
-[![GUI panels 64.76%](https://img.shields.io/badge/GUI%20panels-64.76%25-yellow)](#coverage-area-snapshot)
+[![Line coverage 61.98%](https://img.shields.io/badge/line%20coverage-61.98%25-yellow)](#coverage-area-snapshot)
+[![GUI core 52.92%](https://img.shields.io/badge/GUI%20core-52.92%25-yellow)](#coverage-area-snapshot)
+[![GUI workers 62.09%](https://img.shields.io/badge/GUI%20workers-62.09%25-yellow)](#coverage-area-snapshot)
+[![GUI modes 64.25%](https://img.shields.io/badge/GUI%20modes-64.25%25-yellow)](#coverage-area-snapshot)
+[![GUI panels 64.40%](https://img.shields.io/badge/GUI%20panels-64.40%25-yellow)](#coverage-area-snapshot)
 [![Audio 36.28%](https://img.shields.io/badge/audio-36.28%25-yellow)](#coverage-area-snapshot)
-[![Core 87.21%](https://img.shields.io/badge/core-87.21%25-brightgreen)](#coverage-area-snapshot)
+[![Core 87.10%](https://img.shields.io/badge/core-87.10%25-brightgreen)](#coverage-area-snapshot)
 [![Server client 84.25%](https://img.shields.io/badge/server%20client-84.25%25-brightgreen)](#coverage-area-snapshot)
 [![PSK Reporter 82.74%](https://img.shields.io/badge/PSK%20Reporter-82.74%25-brightgreen)](#coverage-area-snapshot)
 [![Logging 85.36%](https://img.shields.io/badge/logging-85.36%25-brightgreen)](#coverage-area-snapshot)
@@ -56,7 +56,8 @@ console. This is an honest capability snapshot, not a compatibility promise:
 
 | Area | Current maturity |
 | --- | --- |
-| Digital modes | FT8 and FT4 provide native decode, activity, conversation, TX history, sequencing, logging, and explicit global TX disarm. FST4, JT9, JT65, and all currently exposed Q65 submodes have experimental receive/scheduled-TX paths; WSPR and MSK144 are receive-only integrations. |
+| Digital modes | FT8 and FT4 provide native decode, activity, conversation, TX history, sequencing, logging, and explicit global TX disarm. JS8 now has a first-party waterfall-wide receive path, semantic compose/TX support, multi-signal null-audio simulation, and an initial FT8-like activity UI; it remains experimental and incomplete. FST4, JT9, JT65, and all currently exposed Q65 submodes have experimental receive/scheduled-TX paths; WSPR and MSK144 are receive-only integrations. |
+| RADE voice | Initial V1/V2 digital-voice workspace, native loopback/speech fixtures, and explicit TX safety boundaries are wired through the third-party adapter. RADE is an early experimental start: operator workflow, broader coverage, and hardware validation remain open. |
 | SSTV and local images | Single-channel auto-targeting finds shifted VIS headers across the audio baseband, and Auto VIS receive or manual receive filtering decodes 13 Martin/Scottie/Robot/PD modes. Waterfall clicking overrides targeting; acquisition, ranked-candidate, progress, and failure diagnostics use the filterable Application Log. The pinned adapter also provides selectable experimental TX. Existing images can be browsed or generated through local Ollama/Lemonade models, and TX remains explicitly armed. |
 | CW | Software audio CW through [cw-dit](https://github.com/nicksbar/cw-dit), with selected-channel streaming decode, adaptive timing, noise-floor slicing, and generated subband TX. Paddle/keyed-carrier input, prosigns, punctuation, and auto-sequencing are not implemented yet. |
 | Radio control | Rigwright profiles cover Icom CI-V, modern and classic Yaesu CAT, and Kenwood PC control, with generic and model-specific profiles. Capability-gated power, AF/RF gain, squelch, RF power, preamp/attenuator, NB, NR, IP+, notch, AGC, tuner, normalized meters, and SWR controls are exposed where supported. IC-7300 is hardware-validated; other serial drivers remain experimental. |
@@ -65,12 +66,18 @@ console. This is an honest capability snapshot, not a compatibility promise:
 | SWR and tuner | Normalized live SWR display plus an experimental stepped active-band sweep with configurable range/step/interval, low-power carrier pipeline, tuner safety, stop/disarm handling, charting, and application-log diagnostics. |
 | Station workflow | Contact log with ADIF import/export, operator profiles, QSO history, PSK Reporter (optional and off by default), and a live in-app application log with filtering, highlighting, copy, and bottom-follow. |
 | QSONaut Server | Optional WSS event/catalog sync, station presence, radio metadata, idempotent QSO publication, shared channels, and manual diagnostics. Each outbound data category is independently opt-in. |
-| Automation and compute | Permission-gated automation foundations and compute-backend detection exist; Discord/IRC connectors and GPU/NPU decoder kernels are not validated yet. |
+| Automation and achievements | Permission-gated event automation and a structured, read-only achievement catalog are available; Discord/IRC connectors and GPU/NPU decoder kernels are not validated yet. |
 
 See the detailed [QSONaut feature matrix](docs/feature-matrix.md) for the
 implementation-level status of radio controls, normalized meters, SWR/tuner
 workflows, digital modes, SSTV, station tools, server integration, automation,
 and deliberate gaps.
+
+The [achievement automation guide](docs/achievement-automation.md) documents
+the declarative catalog, structured event flow, achievement persistence,
+operator alerts, safety boundaries, and current limitations. The checked-in
+[`achievements.example.toml`](achievements.example.toml) shows the catalog
+schema and built-in achievement definitions.
 
 The [project roadmap](docs/project-roadmap.md) is the current v0.4.0 through
 v1 planning source across QSONaut and its sibling repositories.
@@ -157,12 +164,13 @@ truth for included areas.
 
 ### Coverage area snapshot
 
-The current release-candidate measurement was generated on 2026-09-05 with
+The current release-candidate measurement was generated on 2026-09-06 with
 the workspace tests available in the validation environment. The grouped
-executable-contract report is 61.09% (19,188 / 31,411 lines), above the CI
+executable-contract report is 61.98% (20,939 / 33,783 lines), above the CI
 gate of 60%. Rigwright integration is 85.25% (3,374 / 3,958 lines), above its
-80% target. Physical-radio behavior still requires the documented
-hardware validation runs.
+80% target. JS8 and RADE are included in the measured GUI-mode area, with
+both mode files above the 50% per-mode target. Physical-radio behavior still
+requires the documented hardware validation runs.
 The high-coverage `qsonaut-sstv` crate is
 now maintained behind the pinned `qsonaut-third-party` boundary and is covered
 by that repository's workflow rather than this workspace. These are grouped
@@ -171,18 +179,20 @@ remains the detailed, per-file source of truth.
 
 | Area | Covered / executable lines | Line coverage |
 | --- | ---: | ---: |
-| qsonaut-automation | 384 / 447 | 85.91% |
+| qsonaut-automation | 510 / 581 | 87.78% |
 | qsonaut-log | 822 / 963 | 85.36% |
 | qsonaut-accelerate | 299 / 318 | 94.03% |
 | qsonaut-pskreporter | 278 / 336 | 82.74% |
 | qsonaut-server-client | 733 / 870 | 84.25% |
 | qsonaut-audio | 316 / 871 | 36.28% |
-| qsonaut-core | 409 / 469 | 87.21% |
+| qsonaut-core | 412 / 473 | 87.10% |
 | HostBridge client | 155 / 434 | 35.71% |
-| GUI core | 7,928 / 15,187 | 52.20% |
-| GUI workers | 1,677 / 2,745 | 61.09% |
-| GUI modes | 1,466 / 2,470 | 59.35% |
-| GUI panels | 1,152 / 1,779 | 64.76% |
+| GUI core | 8,272 / 15,630 | 52.92% |
+| GUI workers | 2,136 / 3,440 | 62.09% |
+| GUI modes | 2,281 / 3,550 | 64.25% |
+| JS8 mode (included in GUI modes) | 594 / 805 | 73.79% |
+| RADE mode (included in GUI modes) | 221 / 263 | 84.03% |
+| GUI panels | 1,156 / 1,795 | 64.40% |
 | Rigwright integration | 3,374 / 3,958 | 85.25% |
 | Application entry point | 195 / 564 | 34.57% |
 

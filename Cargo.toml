@@ -25,6 +25,9 @@ opt-level = 2
 [profile.dev.package.qsonaut-modems]
 opt-level = 2
 
+[profile.dev.package.qsonaut-js8]
+opt-level = 2
+
 # Opt in to fully unoptimized modem code when stepping through the lower-level
 # DSP implementation. This is deliberately separate from the normal dev
 # profile so application/UI debugging remains fast enough for daily use.
@@ -40,8 +43,11 @@ opt-level = 0
 [profile.modem-debug.package.qsonaut-modems]
 opt-level = 0
 
+[profile.modem-debug.package.qsonaut-js8]
+opt-level = 0
+
 [workspace.package]
-version = "0.3.17"
+version = "0.3.18"
 edition = "2021"
 license = "MIT"
 authors = ["QSONaut Contributors"]

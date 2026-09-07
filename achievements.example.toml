@@ -1,0 +1,185 @@
+# Declarative achievement definitions. These consume normalized automation events.
+# The GUI keeps profile-compatible unlock IDs while the evaluator owns progress.
+
+[[achievements]]
+id = "first-decode"
+title = "Signal Hunter"
+detail = "Capture your first decode burst"
+on = "decode"
+metric = "event_count"
+target = 1
+
+[[achievements]]
+id = "directed-call"
+title = "You Have Mail"
+detail = "Receive a directed callsign hit"
+on = "callsign_hit"
+metric = "event_count"
+target = 1
+
+[[achievements]]
+id = "first-qso"
+title = "Logbook Opened"
+detail = "Log your first contact"
+on = "qso_logged"
+metric = "event_count"
+target = 1
+
+[[achievements]]
+id = "ten-qsos"
+title = "Ragchew Rookie"
+detail = "Log 10 contacts"
+on = "qso_logged"
+metric = "event_count"
+target = 10
+
+[[achievements]]
+id = "fifty-qsos"
+title = "Pileup Wrangler"
+detail = "Log 50 contacts"
+on = "qso_logged"
+metric = "event_count"
+target = 50
+
+[[achievements]]
+id = "century-hunter"
+title = "Century Hunter"
+detail = "Hear 100 unique callsigns"
+on = "callsign_hit"
+metric = "unique_field"
+field = "call"
+target = 100
+
+[[achievements]]
+id = "band-collector"
+title = "Band Collector"
+detail = "Work contacts on five different bands"
+on = "qso_logged"
+metric = "unique_field"
+field = "band"
+target = 5
+
+[[achievements]]
+id = "grid-mapper"
+title = "Grid Mapper"
+detail = "Work 25 distinct grid squares"
+on = "qso_logged"
+metric = "unique_field"
+field = "grid"
+target = 25
+
+[[achievements]]
+id = "mode-cartographer"
+title = "Mode Cartographer"
+detail = "Log contacts in three different modes"
+on = "qso_logged"
+metric = "unique_field"
+field = "mode"
+target = 3
+
+[[achievements]]
+id = "state-line"
+title = "Worked All States"
+detail = "Work all 50 US states"
+on = "qso_logged"
+when = [{ match = "field_equals", field = "country", value = "US" }]
+metric = "unique_field"
+field = "state"
+target = 50
+
+[[achievements]]
+id = "qso-quarter"
+title = "QSO Quartermaster"
+detail = "Log 25 contacts"
+on = "qso_logged"
+metric = "event_count"
+target = 25
+
+[[achievements]]
+id = "audio-alchemist"
+title = "Audio Alchemist"
+detail = "Decode 1000 signal bursts"
+on = "decode"
+metric = "event_count"
+target = 1000
+
+[[achievements]]
+id = "dupe-shield"
+title = "Dupe Shield"
+detail = "Prevent 10 duplicate TX attempts"
+on = "command"
+when = [{ match = "has_tag", tag = "dupe_blocked" }]
+metric = "event_count"
+target = 10
+
+[[achievements]]
+id = "dx-chaser"
+title = "DX Chaser"
+detail = "Work a station outside your home country"
+on = "qso_logged"
+when = [{ match = "has_tag", tag = "dx" }]
+metric = "event_count"
+target = 1
+
+[[achievements]]
+id = "ft8-pathfinder"
+title = "FT8 Pathfinder"
+detail = "Log 25 FT8 contacts"
+on = "qso_logged"
+when = [{ match = "field_equals", field = "mode", value = "FT8" }]
+metric = "event_count"
+target = 25
+
+[[achievements]]
+id = "ft4-pathfinder"
+title = "FT4 Pathfinder"
+detail = "Log 25 FT4 contacts"
+on = "qso_logged"
+when = [{ match = "field_equals", field = "mode", value = "FT4" }]
+metric = "event_count"
+target = 25
+
+[[achievements]]
+id = "cw-operator"
+title = "CW Operator"
+detail = "Log 10 CW contacts"
+on = "qso_logged"
+when = [{ match = "field_equals", field = "mode", value = "CW" }]
+metric = "event_count"
+target = 10
+
+[[achievements]]
+id = "early-bird"
+title = "Early Bird"
+detail = "Log a QSO before 07:00 UTC"
+on = "qso_logged"
+when = [{ match = "has_tag", tag = "early_bird" }]
+metric = "event_count"
+target = 1
+
+[[achievements]]
+id = "night-owl"
+title = "Night Owl"
+detail = "Log a QSO after 23:00 UTC"
+on = "qso_logged"
+when = [{ match = "has_tag", tag = "night_owl" }]
+metric = "event_count"
+target = 1
+
+[[achievements]]
+id = "contest-operator"
+title = "Contest Operator"
+detail = "Complete a contest exchange"
+on = "qso_logged"
+when = [{ match = "has_tag", tag = "contest_operator" }]
+metric = "event_count"
+target = 1
+
+[[achievements]]
+id = "signal-survivor"
+title = "Signal Survivor"
+detail = "Log a contact below -20 dB"
+on = "qso_logged"
+when = [{ match = "has_tag", tag = "signal_survivor" }]
+metric = "event_count"
+target = 1

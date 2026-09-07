@@ -1,6 +1,6 @@
 # QSONaut Codebase Synthesis Report
 
-**Date:** 2026-08-15
+**Date:** 2026-09-05
 **Workspace:** /home/nick/RigForge
 
 ## Executive Summary
@@ -44,16 +44,29 @@ apps/qsonaut (main CLI entry)
 └── rigwright (external CI-V radio control)
 ```
 
-### Key Features (v0.2.3)
+### Key Features (v0.3.18 development)
 - ✅ Optional server integration via WebSocket
 - ✅ Multi-radio selection with model-aware profiles
 - ✅ Persistent UI state (window geometry, radio selection)
 - ✅ CI-V scope controls (hardware-validated on IC-7300)
 - ✅ Contest workflow with Fox/Hound roles
 - ✅ ADIF import/export
-- ✅ Achievement Hunter persistence
-- ✅ Automation with permission-gated actions
+- ✅ Achievement Hunter persistence and acknowledgment state
+- ✅ Declarative achievement catalog with structured event evaluation
+- ✅ Per-mode progress, Worked All States, DX/time/contest/signal achievements
+- ✅ Automation with permission-gated actions and read-only achievement observers
 - ✅ Server-sync for presence, logs, diagnostics, shared channels
+
+### Achievement automation
+
+The client normalizes radio, decoder, contest, duplicate-defense, and QSO-log
+activity into structured `AutomationEvent` values. The shared
+`qsonaut-automation` crate evaluates the checked-in catalog using event counts,
+unique fields, predicates, and semantic tags. The GUI persists completed
+achievement IDs and renders alerts/progress; achievement observers have no
+radio-control or transmit capabilities. See
+[`achievement-automation.md`](achievement-automation.md) and
+[`achievements.example.toml`](../achievements.example.toml).
 
 ---
 
