@@ -1,7 +1,9 @@
 # Existing production files with no covered executable lines at the initial
 # QSONaut coverage baseline. Remove an entry when its tests land.
+apps/qsonaut/build.rs
 apps/qsonaut/src/main.rs
 crates/qsonaut-gui/src/panels/profile_server.rs
+crates/qsonaut-gui/build.rs
 crates/qsonaut-gui/src/panels/spectrum.rs
 crates/qsonaut-gui/src/workers/cwdit_adapter.rs
 crates/qsonaut-gui/src/rendering/activity.rs

@@ -562,7 +562,7 @@ fn encode_rade_voice_pcm(
     let feature_count = context.feature_count();
     let mut feature_buffer = Vec::with_capacity(feature_count);
     let mut modem = Vec::new();
-    for frame in speech.chunks_exact(160) {
+    for frame in speech.as_chunks::<160>().0 {
         let features = encoder
             .encode_frame(frame)
             .context("RADE speech feature encoding failed")?;
@@ -614,7 +614,7 @@ pub(super) fn run_rade_tx_job(job: RadeTxJob) {
                 &job.abort,
             )?
             .ok_or_else(|| anyhow!("RADE TX microphone capture cancelled"))?;
-        if speech.chunks_exact(160).len() < 5 {
+        if speech.as_chunks::<160>().0.len() < 5 {
             anyhow::bail!("RADE TX microphone capture was too short");
         }
         info!(

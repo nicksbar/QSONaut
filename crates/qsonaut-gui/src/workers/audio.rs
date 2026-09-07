@@ -301,7 +301,7 @@ impl RadeSpeechReceiver {
             let result = self.context.rx_iq(&iq)?;
             status = format!("{:?}", result.status.state).to_uppercase();
             if let Some(features) = result.features {
-                for feature_frame in features.chunks_exact(36) {
+                for feature_frame in features.as_chunks::<36>().0 {
                     if let Some(audio) = self.speech_decoder.decode_frame(feature_frame)? {
                         speech_samples += audio.samples.len();
                         decoded_audio.extend(audio.samples);
@@ -2781,7 +2781,7 @@ mod tests {
         let mut decoder = qsonaut_third_party::rade::speech::SpeechDecoder::open()
             .expect("speech decoder should open");
         let mut decoded = Vec::new();
-        for frame in fixture.chunks_exact(160).take(80) {
+        for frame in fixture.as_chunks::<160>().0.iter().take(80) {
             let features = encoder
                 .encode_frame(frame)
                 .expect("speech encoder should accept fixture audio");
