@@ -6,8 +6,8 @@ QSONaut supports native desktop builds for these release targets:
 | --- | --- | --- | --- |
 | Linux | x86_64 | `x86_64-unknown-linux-gnu` | `.tar.gz` |
 | Linux | ARM64 | `aarch64-unknown-linux-gnu` | `.tar.gz` |
-| Windows | x86_64 | `x86_64-pc-windows-gnu` | `.zip` |
-| Windows | ARM64 | `aarch64-pc-windows-gnu` | `.zip` |
+| Windows | x86_64 | `x86_64-pc-windows-gnullvm` | `.zip` |
+| Windows | ARM64 | `aarch64-pc-windows-gnullvm` | `.zip` |
 
 The release matrix is in `.github/workflows/release-builds.yml`. It runs for
 version tags and can also be started manually. When a `v*` tag is pushed, the

@@ -56,7 +56,7 @@ jobs:
             os: linux
           - name: Windows x86_64
             runner: ubuntu-24.04
-            target: x86_64-pc-windows-gnu
+            target: x86_64-pc-windows-gnullvm
             artifact: qsonaut-windows-x86_64
             rade_artifact: windows-x86_64
             os: windows
