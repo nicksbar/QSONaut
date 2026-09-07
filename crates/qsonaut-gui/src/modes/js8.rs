@@ -417,14 +417,16 @@ mod tests {
 
     #[test]
     fn normalizes_scan_controls_and_renders_activity_workspace() {
-        let mut controls = Js8Controls::default();
-        controls.waterfall_low_hz = 3_000.0;
-        controls.waterfall_high_hz = 200.0;
-        controls.scan_step_samples = 0;
-        controls.scan_max_candidates = 0;
-        controls.sync_frequency_step_hz = 0.0;
-        controls.max_frequency_hypotheses = 0;
-        controls.max_signals_per_window = 0;
+        let controls = Js8Controls {
+            waterfall_low_hz: 3_000.0,
+            waterfall_high_hz: 200.0,
+            scan_step_samples: 0,
+            scan_max_candidates: 0,
+            sync_frequency_step_hz: 0.0,
+            max_frequency_hypotheses: 0,
+            max_signals_per_window: 0,
+            ..Default::default()
+        };
         let scan = controls.scan_config();
         assert_eq!(scan.waterfall_frequency_range_hz, Some((200.0, 3_000.0)));
         assert_eq!(scan.step_samples, 1);
@@ -465,8 +467,10 @@ mod tests {
             utc: "12:00:02".to_string(),
             message: "CQ QZ0NA CN87".to_string(),
         });
-        let mut snapshot = crate::GuiState::default();
-        snapshot.digital_decode_status = "JS8 listening".to_string();
+        let mut snapshot = crate::GuiState {
+            digital_decode_status: "JS8 listening".to_string(),
+            ..Default::default()
+        };
         snapshot.digital_decodes.push_back(DigitalDecodeEntry {
             mode: WorkspaceMode::Js8,
             period: 1,

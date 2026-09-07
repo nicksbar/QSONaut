@@ -285,8 +285,10 @@ mod tests {
             Vec::new(),
             Arc::new(Mutex::new(None)),
         );
-        let mut snapshot = GuiState::default();
-        snapshot.frequency_hz = Some(14_078_000);
+        let mut snapshot = GuiState {
+            frequency_hz: Some(14_078_000),
+            ..Default::default()
+        };
         app.rade_mode = RadeMode::V1;
         let _ = context.run(Default::default(), |ctx| {
             crate::egui::CentralPanel::default().show(ctx, |ui| {
