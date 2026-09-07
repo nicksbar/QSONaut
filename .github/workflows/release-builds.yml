@@ -110,43 +110,28 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           name: rade-${{ matrix.rade_artifact }}
-          path: QSONaut/native/rade
+          path: ${{ runner.temp }}/rade-artifact
 
       - name: Normalize RADE artifact layout
         working-directory: QSONaut
         shell: bash
         run: |
           set -euo pipefail
-          manifest="$(find native/rade -name RADE_ARTIFACT.txt -print -quit)"
-          test -n "$manifest"
-          artifact_root="$(realpath "$(dirname "$manifest")")"
-          expected_root="$(realpath native/rade)"
-          if [[ "$artifact_root" != "$expected_root" ]]; then
-            cp -a "$artifact_root"/. native/rade/
+          staging_dir="${RUNNER_TEMP}/rade-artifact"
+          manifest="$(find "$staging_dir" -name RADE_ARTIFACT.txt -type f -print -quit)"
+          test -n "$manifest" || { echo "RADE_ARTIFACT.txt not found under $staging_dir"; exit 1; }
+          artifact_root="$(dirname "$manifest")"
+
+          rm -rf native/rade
+          mkdir -p native/rade
+          cp -a "$artifact_root"/. native/rade/
+
+          test -f native/rade/RADE_ARTIFACT.txt
+          test -f native/rade/build/src/librade.so || test -f native/rade/build/src/librade.dll
+          if [[ "${{ matrix.os }}" == windows ]]; then
+            test -f native/rade/build/src/librade.dll.a
           fi
-          rade_library="$(find native/rade -type f \( -name 'librade.so*' -o -name 'librade.dll' \) -print -quit)"
-          test -n "$rade_library"
-          rade_dir="$(realpath native/rade/build/src)"
-          mkdir -p "$rade_dir"
-          if [[ "$rade_library" == *.dll ]]; then
-            rade_destination="$rade_dir/librade.dll"
-          else
-            rade_destination="$rade_dir/librade.so"
-          fi
-          if [[ "$(realpath "$rade_library")" != "$(realpath -m "$rade_destination")" ]]; then
-            cp "$rade_library" "$rade_destination"
-          fi
-          rade_import="$(find native/rade -type f -name 'librade.dll.a' -print -quit)"
-          if [[ -n "$rade_import" ]] && [[ "$(realpath "$rade_import")" != "$rade_dir/librade.dll.a" ]]; then
-            cp "$rade_import" "$rade_dir/librade.dll.a"
-          fi
-          opus_archive="$(find native/rade -type f -name libopus.a -print -quit)"
-          test -n "$opus_archive"
-          opus_dir="$(realpath native/rade/build/build_opus-prefix/src/build_opus/.libs)"
-          mkdir -p "$opus_dir"
-          if [[ "$(realpath "$opus_archive")" != "$(realpath -m "$opus_dir/libopus.a")" ]]; then
-            cp "$opus_archive" "$opus_dir/libopus.a"
-          fi
+          test -f native/rade/build/build_opus-prefix/src/build_opus/.libs/libopus.a
 
       - name: Build release binary
         working-directory: QSONaut
