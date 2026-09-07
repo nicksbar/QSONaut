@@ -1,12 +1,6 @@
 use super::super::*;
 use crate::ui_widgets::{operating_mode_button, OperatingModeIcon};
 
-const FUTURE_TEXT_MODES: &[(&str, &str, OperatingModeIcon)] = &[(
-    "JS8Call",
-    "Future text modem placeholder; protocol support is not enabled",
-    OperatingModeIcon::Text,
-)];
-
 impl QsonautGuiApp {
     pub(crate) fn draw_header_branding(&mut self, ui: &mut egui::Ui) {
         let spin_angle = self.logo_spin_until.map_or(0.0, |until| {
@@ -134,6 +128,7 @@ impl QsonautGuiApp {
                 draw_mode(ui, OperatingModeIcon::Digital, mode);
             }
             draw_mode(ui, OperatingModeIcon::Wspr, WorkspaceMode::Wspr);
+            draw_mode(ui, OperatingModeIcon::Text, WorkspaceMode::Js8);
             draw_mode(ui, OperatingModeIcon::Cw, WorkspaceMode::Cw);
             draw_mode(ui, OperatingModeIcon::Sstv, WorkspaceMode::Sstv);
             let response = operating_mode_button(
@@ -207,11 +202,6 @@ impl QsonautGuiApp {
                 {
                     self.send_command(GuiCommand::ApplyWorkspace { mode, frequency_hz });
                 }
-            }
-
-            for (label, tooltip, icon) in FUTURE_TEXT_MODES.iter().copied() {
-                operating_mode_button(ui, false, label, icon, false)
-                    .on_disabled_hover_text(tooltip);
             }
         });
     }

@@ -1,6 +1,6 @@
 use qsonaut_radio::BaseMode;
 
-use crate::modes::{cw, fst4, ft4, ft8, jt65, jt9, native, q65, rade, sstv, voice, wspr};
+use crate::modes::{cw, fst4, ft4, ft8, js8, jt65, jt9, native, q65, rade, sstv, voice, wspr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum WorkspaceMode {
@@ -11,6 +11,7 @@ pub(super) enum WorkspaceMode {
     Jt9,
     Jt65,
     Q65,
+    Js8,
     Msk144,
     Cw,
     Voice,
@@ -28,6 +29,7 @@ impl WorkspaceMode {
             Self::Jt9 => "JT9",
             Self::Jt65 => "JT65",
             Self::Q65 => "Q65",
+            Self::Js8 => "JS8",
             Self::Msk144 => "MSK144",
             Self::Cw => "CW",
             Self::Voice => "VOICE",
@@ -44,6 +46,7 @@ impl WorkspaceMode {
             Self::Wspr => Some(120.0),
             Self::Jt9 | Self::Jt65 => Some(60.0),
             Self::Q65 => Some(30.0),
+            Self::Js8 => Some(15.0),
             Self::Msk144 => Some(15.0),
             Self::Cw | Self::Voice | Self::Rade | Self::Sstv => None,
         }
@@ -70,7 +73,7 @@ impl WorkspaceMode {
     }
 }
 
-pub(super) const WORKSPACE_MODES: [WorkspaceMode; 12] = [
+pub(super) const WORKSPACE_MODES: [WorkspaceMode; 13] = [
     WorkspaceMode::Ft8,
     WorkspaceMode::Ft4,
     WorkspaceMode::Fst4,
@@ -78,6 +81,7 @@ pub(super) const WORKSPACE_MODES: [WorkspaceMode; 12] = [
     WorkspaceMode::Jt9,
     WorkspaceMode::Jt65,
     WorkspaceMode::Q65,
+    WorkspaceMode::Js8,
     WorkspaceMode::Msk144,
     WorkspaceMode::Cw,
     WorkspaceMode::Voice,
@@ -145,6 +149,7 @@ pub(super) fn workspace_band_plan(mode: WorkspaceMode) -> &'static [(&'static st
         WorkspaceMode::Jt9 => jt9::BAND_PLAN,
         WorkspaceMode::Jt65 => jt65::BAND_PLAN,
         WorkspaceMode::Q65 => q65::BAND_PLAN,
+        WorkspaceMode::Js8 => js8::BAND_PLAN,
         WorkspaceMode::Msk144 => native::MSK144_BAND_PLAN,
         WorkspaceMode::Cw => cw::BAND_PLAN,
         WorkspaceMode::Voice => voice::BAND_PLAN,

@@ -48,8 +48,31 @@ pub(super) fn build_native_digital_tx_pcm_with_q65(
     cw_wpm: u8,
     cw_tone_hz: u16,
 ) -> Result<(Vec<i16>, f64)> {
+    build_native_digital_tx_pcm_with_q65_and_js8(
+        mode,
+        compose,
+        tx_tone_hz,
+        fst4_submode,
+        q65_submode,
+        cw_wpm,
+        cw_tone_hz,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn build_native_digital_tx_pcm_with_q65_and_js8(
+    mode: WorkspaceMode,
+    compose: &str,
+    tx_tone_hz: u32,
+    fst4_submode: crate::modes::fst4::Submode,
+    q65_submode: Q65Submode,
+    cw_wpm: u8,
+    cw_tone_hz: u16,
+    js8_controls: Option<crate::modes::js8::Js8Controls>,
+) -> Result<(Vec<i16>, f64)> {
     let tokens: Vec<&str> = compose.split_whitespace().collect();
-    if mode != WorkspaceMode::Cw && tokens.len() != 3 {
+    if mode != WorkspaceMode::Cw && mode != WorkspaceMode::Js8 && tokens.len() != 3 {
         anyhow::bail!("{} TX needs exactly 3 message fields", mode.label());
     }
     let tone = tx_tone_hz as f32;
@@ -90,6 +113,22 @@ pub(super) fn build_native_digital_tx_pcm_with_q65(
             synthesize_q65_standard(compose, q65_submode, tone, FT8_TX_AMPLITUDE_I16)
                 .map(|audio| (audio, 1.0))
                 .ok_or_else(|| anyhow!("unable to pack Q65 message"))
+        }
+        WorkspaceMode::Js8 => {
+            let js8_controls = js8_controls.unwrap_or_default();
+            let message = crate::modes::js8::parse_js8_compose(compose).unwrap_or_else(|| {
+                qsonaut_js8::Js8Message::Raw {
+                    frame_type: qsonaut_js8::Js8FrameType::Unknown(js8_controls.frame_type),
+                    payload: compose.trim().to_ascii_uppercase(),
+                }
+            });
+            let audio = qsonaut_js8::encode_message_audio_block(&message, js8_controls.mode, tone)?;
+            let pcm = audio
+                .samples
+                .into_iter()
+                .map(|sample| (sample * FT8_TX_AMPLITUDE_I16 as f32).round() as i16)
+                .collect();
+            Ok((pcm, 0.0))
         }
         WorkspaceMode::Wspr => {
             tokens
@@ -840,10 +879,15 @@ mod tests {
             WorkspaceMode::Jt9,
             WorkspaceMode::Jt65,
             WorkspaceMode::Q65,
+            WorkspaceMode::Js8,
         ] {
             let (pcm, audio_start_s) = build_native_digital_tx_pcm(
                 mode,
-                "CQ W1AW AA00",
+                if mode == WorkspaceMode::Js8 {
+                    "CQ+N0CALL+++"
+                } else {
+                    "CQ W1AW AA00"
+                },
                 1_500,
                 crate::modes::fst4::Submode::S15,
                 20,

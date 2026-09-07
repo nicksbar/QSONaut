@@ -112,11 +112,40 @@ fn qsonaut_people(raw: Option<&'static str>) -> Vec<QsonautPerson> {
 }
 
 pub(crate) fn qsonaut_demo_people() -> Vec<QsonautPerson> {
-    qsonaut_people(option_env!("QSONAUT_CONTRIBUTORS"))
+    let mut people = qsonaut_people(option_env!("QSONAUT_CONTRIBUTORS"))
         .into_iter()
         .chain(qsonaut_people(option_env!("QSONAUT_TESTERS")))
         .filter(|person| person.enabled)
-        .collect()
+        .collect::<Vec<_>>();
+
+    // Keep the null modem and demos useful in developer builds where release
+    // contributor/tester variables are not present. These are intentionally
+    // fictional QZ-prefixed identities and are shared by every mode rather
+    // than being hidden in one mode's audio worker.
+    const FALLBACKS: &[(&str, &str, &str)] = &[
+        ("QZ0NA", "CN87", "QSONaut Alpha"),
+        ("QZ1NB", "FN31", "QSONaut Bravo"),
+        ("QZ2NC", "DM13", "QSONaut Charlie"),
+        ("QZ3ND", "EM12", "QSONaut Delta"),
+        ("QZ4NE", "IO91", "QSONaut Echo"),
+        ("QZ5NF", "JN58", "QSONaut Foxtrot"),
+    ];
+    for (callsign, grid, name) in FALLBACKS {
+        if people
+            .iter()
+            .any(|person| person.callsign.as_deref() == Some(*callsign))
+        {
+            continue;
+        }
+        people.push(QsonautPerson {
+            name: Some((*name).to_string()),
+            callsign: Some((*callsign).to_string()),
+            grid: Some((*grid).to_string()),
+            power_dbm: Some(30),
+            ..QsonautPerson::default()
+        });
+    }
+    people
 }
 
 fn qsonaut_credit_text(raw: Option<&'static str>) -> String {
@@ -203,6 +232,7 @@ use modes::exchange::{
     ReplyCandidate, SLOT_SECONDS,
 };
 pub(crate) use modes::ft8_types::{Ft8SeqState, Ft8TxQueuePolicy, PendingManualFt8Reply};
+use modes::js8::Js8Controls;
 use modes::voice::VoiceContestField;
 use profile::{
     active_operator_profile_name, default_contest_fake_split_offset_hz, default_cw_tone_hz,
@@ -404,6 +434,7 @@ fn parse_workspace_mode_token(mode: &str) -> Option<WorkspaceMode> {
         "JT9" => Some(WorkspaceMode::Jt9),
         "JT65" => Some(WorkspaceMode::Jt65),
         "Q65" => Some(WorkspaceMode::Q65),
+        "JS8" | "JS8CALL" => Some(WorkspaceMode::Js8),
         "MSK144" => Some(WorkspaceMode::Msk144),
         "CW" => Some(WorkspaceMode::Cw),
         "VOICE" | "SSB" | "PHONE" => Some(WorkspaceMode::Voice),
@@ -437,6 +468,7 @@ fn workspace_mode_supports_native_tx(mode: WorkspaceMode) -> bool {
             | WorkspaceMode::Jt9
             | WorkspaceMode::Jt65
             | WorkspaceMode::Q65
+            | WorkspaceMode::Js8
             | WorkspaceMode::Cw
             | WorkspaceMode::Sstv
     )
@@ -758,6 +790,7 @@ struct GuiState {
     ft4_last_decode_period: Option<u64>,
     digital_tx_period: Option<(WorkspaceMode, u64)>,
     selected_audio_hz: u32,
+    js8_controls: Js8Controls,
     fst4_submode: modes::fst4::Submode,
     q65_submode: Q65Submode,
     compute_backend: ActiveBackend,
@@ -944,6 +977,7 @@ impl Default for GuiState {
             ft4_last_decode_period: None,
             digital_tx_period: None,
             selected_audio_hz: default_rx_tone_hz(),
+            js8_controls: Js8Controls::default(),
             fst4_submode: modes::fst4::Submode::default(),
             q65_submode: Q65Submode::A30,
             compute_backend: ActiveBackend::CpuSimd,
@@ -1256,6 +1290,9 @@ struct QsonautGuiApp {
     activity: OperatingActivity,
     fst4_submode: modes::fst4::Submode,
     cw_auto_target_timeout_s: u8,
+    js8_controls: Js8Controls,
+    js8_target: Option<String>,
+    js8_tune_tx_with_rx: bool,
     q65_submode: Q65Submode,
     display_tuning: Arc<Mutex<DisplayTuning>>,
     repaint_ctx: Arc<OnceLock<egui::Context>>,
@@ -3246,6 +3283,7 @@ mod tests {
             WorkspaceMode::Jt9,
             WorkspaceMode::Jt65,
             WorkspaceMode::Q65,
+            WorkspaceMode::Js8,
             WorkspaceMode::Cw,
             WorkspaceMode::Sstv,
         ] {
@@ -4221,6 +4259,20 @@ mod tests {
     }
 
     #[test]
+    fn demo_people_include_the_shared_fictional_station_pool() {
+        let callsigns: HashSet<_> = qsonaut_demo_people()
+            .into_iter()
+            .filter_map(|person| person.callsign)
+            .collect();
+        for callsign in ["QZ0NA", "QZ1NB", "QZ2NC", "QZ3ND", "QZ4NE", "QZ5NF"] {
+            assert!(
+                callsigns.contains(callsign),
+                "missing demo station {callsign}"
+            );
+        }
+    }
+
+    #[test]
     fn workspace_mode_tokens_cover_aliases_and_whitespace() {
         for (token, expected) in [
             (" FST4 ", WorkspaceMode::Fst4),
@@ -4228,6 +4280,7 @@ mod tests {
             ("JT9", WorkspaceMode::Jt9),
             ("JT65", WorkspaceMode::Jt65),
             ("Q65", WorkspaceMode::Q65),
+            ("JS8Call", WorkspaceMode::Js8),
             ("MSK144", WorkspaceMode::Msk144),
             ("CW", WorkspaceMode::Cw),
             ("PHONE", WorkspaceMode::Voice),
@@ -4267,6 +4320,7 @@ mod tests {
             WorkspaceMode::Jt9,
             WorkspaceMode::Jt65,
             WorkspaceMode::Q65,
+            WorkspaceMode::Js8,
             WorkspaceMode::Cw,
             WorkspaceMode::Sstv,
         ] {

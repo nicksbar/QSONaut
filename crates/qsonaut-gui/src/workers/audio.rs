@@ -5,7 +5,7 @@ use super::decode::{
     run_native_digital_decode, warm_ft8_decoder,
 };
 use super::request_gui_repaint;
-use crate::tx_audio::build_native_digital_tx_pcm_with_q65;
+use crate::tx_audio::build_native_digital_tx_pcm_with_q65_and_js8;
 use hound::{SampleFormat, WavSpec, WavWriter};
 use qsonaut_audio::resample::BandlimitedResampler;
 use qsonaut_audio::{CANONICAL_CHANNELS, CANONICAL_SAMPLE_RATE_HZ};
@@ -151,7 +151,7 @@ fn strongest_cw_tone_hz(buffer: &[Complex<f32>], sample_rate_hz: u32) -> Option<
 }
 
 fn null_sim_stations(mode: WorkspaceMode) -> Vec<QsonautPerson> {
-    let mut stations = qsonaut_demo_people()
+    qsonaut_demo_people()
         .into_iter()
         .filter(|person| {
             person.modes.is_empty()
@@ -161,35 +161,7 @@ fn null_sim_stations(mode: WorkspaceMode) -> Vec<QsonautPerson> {
                     .any(|supported| supported.eq_ignore_ascii_case(mode.label()))
         })
         .filter(|person| person.callsign.as_deref().is_some_and(is_probable_callsign))
-        .collect::<Vec<_>>();
-    if stations.is_empty() {
-        stations.push(QsonautPerson {
-            name: Some("QSONaut".to_string()),
-            callsign: Some("N7UF".to_string()),
-            grid: Some("CN87".to_string()),
-            power_dbm: Some(30),
-            ..QsonautPerson::default()
-        });
-    }
-    if stations.len() < 2 {
-        stations.push(QsonautPerson {
-            name: Some("Test Station".to_string()),
-            callsign: Some("W1AW".to_string()),
-            grid: Some("FN31".to_string()),
-            power_dbm: Some(30),
-            ..QsonautPerson::default()
-        });
-    }
-    if stations.len() < 3 {
-        stations.push(QsonautPerson {
-            name: Some("Demo Station".to_string()),
-            callsign: Some("K6ABC".to_string()),
-            grid: Some("DM13".to_string()),
-            power_dbm: Some(30),
-            ..QsonautPerson::default()
-        });
-    }
-    stations
+        .collect()
 }
 
 struct NullAudioGenerator {
@@ -197,6 +169,7 @@ struct NullAudioGenerator {
     rade_mode: qsonaut_third_party::rade::RadeMode,
     fst4_submode: crate::modes::fst4::Submode,
     q65_submode: qsonaut_third_party::wsjt::Q65Submode,
+    js8_controls: crate::modes::js8::Js8Controls,
     waveforms: Vec<Vec<f32>>,
     rade_iq_waveform: Vec<RadeIqSample>,
     period_s: f64,
@@ -355,6 +328,7 @@ impl Default for NullAudioGenerator {
             rade_mode: qsonaut_third_party::rade::RadeMode::V1,
             fst4_submode: crate::modes::fst4::Submode::default(),
             q65_submode: qsonaut_third_party::wsjt::Q65Submode::A30,
+            js8_controls: crate::modes::js8::Js8Controls::default(),
             waveforms: Vec::new(),
             rade_iq_waveform: Vec::new(),
             period_s: 15.0,
@@ -371,18 +345,43 @@ impl NullAudioGenerator {
         self.rade_mode = state.rade_mode;
         self.fst4_submode = state.fst4_submode;
         self.q65_submode = state.q65_submode;
-        self.period_s = mode
-            .slot_seconds(state.fst4_submode, state.q65_submode)
-            .unwrap_or(match mode {
-                WorkspaceMode::Sstv => 60.0,
-                _ => 15.0,
-            });
-        self.start_s = if mode == WorkspaceMode::Sstv {
+        self.js8_controls = state.js8_controls;
+        self.period_s = if mode == WorkspaceMode::Js8 {
+            state.js8_controls.mode.tx_seconds() as f64
+        } else {
+            mode.slot_seconds(state.fst4_submode, state.q65_submode)
+                .unwrap_or(match mode {
+                    WorkspaceMode::Sstv => 60.0,
+                    _ => 15.0,
+                })
+        };
+        self.start_s = if mode == WorkspaceMode::Js8 {
+            // Waterfall candidate windows are aligned from sample zero. Keep
+            // the JS8 fixture aligned so the null modem exercises the
+            // multi-carrier scan instead of splitting each frame between
+            // adjacent candidate windows.
+            0.0
+        } else if mode == WorkspaceMode::Sstv {
             1.0
         } else {
             0.5
         };
-        self.source_sample_cursor = 0;
+        self.source_sample_cursor = if mode == WorkspaceMode::Js8 {
+            // The live JS8 decode gate uses Unix-epoch slot boundaries. Start
+            // the simulated source at the same phase; otherwise a generator
+            // initialized mid-slot produces a waveform that straddles two
+            // decoder windows and appears as mostly silence to the modem.
+            let period_samples = (self.period_s * f64::from(CANONICAL_SAMPLE_RATE_HZ))
+                .round()
+                .max(1.0) as u64;
+            let epoch_seconds = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64();
+            ((epoch_seconds * f64::from(CANONICAL_SAMPLE_RATE_HZ)) as u64) % period_samples
+        } else {
+            0
+        };
         self.waveforms.clear();
         {
             self.rade_iq_waveform.clear();
@@ -394,8 +393,8 @@ impl NullAudioGenerator {
             {
                 let fixtures = rade_demo_voice_fixtures();
                 if fixtures.is_empty() {
-                    let first = stations[0].callsign.as_deref().unwrap_or("K7ZZZ");
-                    let second = stations[1].callsign.as_deref().unwrap_or("W9LOL");
+                    let first = stations[0].callsign.as_deref().unwrap_or("QZ0NA");
+                    let second = stations[1].callsign.as_deref().unwrap_or("QZ1NB");
                     let speech = synthesize_rade_callsign_fixture(first, second);
                     self.rebuild_rade_waveform(state, &speech);
                 } else {
@@ -415,8 +414,8 @@ impl NullAudioGenerator {
 
         let first = &stations[0];
         let second = &stations[1];
-        let first_call = first.callsign.as_deref().unwrap_or("N7UF");
-        let second_call = second.callsign.as_deref().unwrap_or("W1AW");
+        let first_call = first.callsign.as_deref().unwrap_or("QZ0NA");
+        let second_call = second.callsign.as_deref().unwrap_or("QZ1NB");
         let first_grid = first.grid.as_deref().unwrap_or("CN87");
         let second_grid = second.grid.as_deref().unwrap_or("FN31");
         let first_power = first.power_dbm.unwrap_or(30);
@@ -429,7 +428,7 @@ impl NullAudioGenerator {
                     (
                         format!(
                             "{} {}",
-                            station.callsign.as_deref().unwrap_or("N7UF"),
+                            station.callsign.as_deref().unwrap_or("QZ0NA"),
                             station.name.as_deref().unwrap_or("IMAGE")
                         ),
                         1_500,
@@ -444,6 +443,36 @@ impl NullAudioGenerator {
                 (format!("{first_call} {first_grid} {first_power}"), 1_000),
                 (format!("{second_call} {second_grid} {second_power}"), 2_000),
             ],
+            WorkspaceMode::Js8 => {
+                // Give every demo station a stable audio channel in the same
+                // receiver passband. Each pair is one simulated slot, so the
+                // waterfall sees two simultaneous carriers while the six-slot
+                // cycle lets every station introduce itself and join several
+                // directed exchanges.
+                let cursor = state.selected_audio_hz.clamp(1_000, 1_600);
+                let offsets = [-800, -400, 0, 400, 800, 1_200];
+                let channels = stations
+                    .iter()
+                    .take(6)
+                    .enumerate()
+                    .map(|(index, station)| {
+                        let frequency = (cursor as i32 + offsets[index]).clamp(200, 2_800) as u32;
+                        (
+                            station.callsign.as_deref().unwrap_or("QZ0NA"),
+                            station.grid.as_deref().unwrap_or("CN87"),
+                            frequency,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let mut messages = Vec::with_capacity(12);
+                for (left, right) in [(0, 1), (2, 3), (4, 5), (1, 3), (0, 4), (2, 5)] {
+                    let (left_call, left_grid, left_frequency) = channels[left];
+                    let (right_call, _, right_frequency) = channels[right];
+                    messages.push((format!("CQ {left_call} {left_grid}"), left_frequency));
+                    messages.push((format!("{right_call} {left_call} QSL"), right_frequency));
+                }
+                messages
+            }
             _ => vec![
                 (format!("CQ {first_call} {first_grid}"), 700),
                 (format!("{first_call} {second_call} -10"), 1_400),
@@ -462,7 +491,8 @@ impl NullAudioGenerator {
                 | WorkspaceMode::Jt9
                 | WorkspaceMode::Jt65
                 | WorkspaceMode::Q65
-                | WorkspaceMode::Wspr => build_native_digital_tx_pcm_with_q65(
+                | WorkspaceMode::Js8
+                | WorkspaceMode::Wspr => build_native_digital_tx_pcm_with_q65_and_js8(
                     mode,
                     &message,
                     tone_hz,
@@ -470,6 +500,7 @@ impl NullAudioGenerator {
                     state.q65_submode,
                     state.cw_wpm,
                     state.selected_audio_hz as u16,
+                    (mode == WorkspaceMode::Js8).then_some(state.js8_controls),
                 )
                 .map(|(pcm, _)| pcm),
                 WorkspaceMode::Cw => build_native_digital_tx_pcm(
@@ -516,6 +547,27 @@ impl NullAudioGenerator {
                     };
             }
             self.waveforms.push(waveform);
+        }
+        if mode == WorkspaceMode::Js8 && self.waveforms.len() > 1 {
+            let carrier_waveforms = std::mem::take(&mut self.waveforms);
+            self.waveforms = carrier_waveforms
+                .chunks(2)
+                .map(|pair| {
+                    let mixed_len = pair.iter().map(Vec::len).max().unwrap_or_default();
+                    let mut mixed = vec![0.0f32; mixed_len];
+                    for waveform in pair {
+                        for (target, sample) in mixed.iter_mut().zip(waveform) {
+                            *target += *sample;
+                        }
+                    }
+                    mixed
+                })
+                .collect();
+            tracing::info!(
+                signal_count = 2,
+                slot_count = self.waveforms.len(),
+                "JS8 null modem loaded rotating waterfall conversation"
+            );
         }
         if mode == WorkspaceMode::Sstv {
             // Martin M1 is approximately 114 seconds at 320x256. Leave a
@@ -634,18 +686,20 @@ impl NullAudioGenerator {
         }
         let started = Instant::now();
         self.next_deadline = Some(started + chunk_duration);
-        let (workspace_mode, fst4_submode, q65_submode, rade_mode) = {
+        let (workspace_mode, fst4_submode, q65_submode, js8_controls, rade_mode) = {
             let shared = state.lock().expect("ui state lock poisoned");
             (
                 shared.workspace_mode,
                 shared.fst4_submode,
                 shared.q65_submode,
+                shared.js8_controls,
                 shared.rade_mode,
             )
         };
         if self.mode != Some(workspace_mode)
             || self.fst4_submode != fst4_submode
             || self.q65_submode != q65_submode
+            || (workspace_mode == WorkspaceMode::Js8 && self.js8_controls != js8_controls)
             || self.rade_mode != rade_mode
         {
             // Rebuilds are infrequent; keep the full snapshot on this path only.
@@ -1043,6 +1097,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut decode_workspace_last: Option<WorkspaceMode> = None;
         let mut decode_fst4_submode_last: Option<crate::modes::fst4::Submode> = None;
         let mut decode_q65_submode_last: Option<qsonaut_third_party::wsjt::Q65Submode> = None;
+        let mut decode_js8_controls_last: Option<crate::modes::js8::Js8Controls> = None;
         let mut decode_rade_mode_last: Option<qsonaut_third_party::rade::RadeMode> = None;
         // Waterfall rows arrive far faster than a human can see. Redrawing the
         // whole UI on every chunk is what pins the GPU, so cap the repaint rate
@@ -1265,11 +1320,18 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                         } else {
                             qsonaut_third_party::wsjt::Q65Submode::A30
                         };
+                        let active_js8_controls = if active_workspace_mode == WorkspaceMode::Js8 {
+                            state.lock().expect("ui state lock poisoned").js8_controls
+                        } else {
+                            crate::modes::js8::Js8Controls::default()
+                        };
                         let active_rade_mode =
                             state.lock().expect("ui state lock poisoned").rade_mode;
                         if decode_workspace_last != Some(active_workspace_mode)
                             || decode_fst4_submode_last != Some(active_fst4_submode)
                             || decode_q65_submode_last != Some(active_q65_submode)
+                            || (active_workspace_mode == WorkspaceMode::Js8
+                                && decode_js8_controls_last != Some(active_js8_controls))
                             || decode_rade_mode_last != Some(active_rade_mode)
                         {
                             info!(
@@ -1284,6 +1346,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             decode_workspace_last = Some(active_workspace_mode);
                             decode_fst4_submode_last = Some(active_fst4_submode);
                             decode_q65_submode_last = Some(active_q65_submode);
+                            decode_js8_controls_last = Some(active_js8_controls);
                             decode_rade_mode_last = Some(active_rade_mode);
                             {
                                 last_rade_status = None;
@@ -2415,19 +2478,30 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                             .to_string();
                                 }
                             }
-                        } else if let Some(slot_seconds) = active_workspace_mode
-                            .slot_seconds(active_fst4_submode, active_q65_submode)
+                        } else if let Some(slot_seconds) =
+                            if active_workspace_mode == WorkspaceMode::Js8 {
+                                Some(active_js8_controls.mode.tx_seconds() as f64)
+                            } else {
+                                active_workspace_mode
+                                    .slot_seconds(active_fst4_submode, active_q65_submode)
+                            }
                         {
                             digital_buf.extend_from_slice(&ds);
                             let slot_samples = (slot_seconds * 12_000.0).round() as usize;
-                            if digital_buf.len() > slot_samples {
-                                digital_buf.drain(..digital_buf.len() - slot_samples);
+                            // Keep enough history to remove the fractional
+                            // post-boundary capture delay before handing a
+                            // slot to a one-time-candidate decoder.
+                            let guard_samples = 12_000;
+                            let retained_samples = slot_samples + guard_samples;
+                            if digital_buf.len() > retained_samples {
+                                digital_buf.drain(..digital_buf.len() - retained_samples);
                             }
                             let now_s = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .map(|duration| duration.as_secs_f64())
                                 .unwrap_or(0.0);
                             let current_period = (now_s / slot_seconds) as u64;
+                            let slot_position_s = now_s % slot_seconds;
                             let buffer_ready =
                                 digital_buf.len() >= slot_samples.saturating_sub(12_000 / 2);
                             if digital_slot_gate.boundary(current_period, buffer_ready) {
@@ -2448,10 +2522,15 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                 if skip_own_tx {
                                     continue;
                                 }
+                                let boundary_offset_samples =
+                                    (slot_position_s * 12_000.0).round().max(0.0) as usize;
+                                let end = digital_buf.len().saturating_sub(boundary_offset_samples);
+                                let start = end.saturating_sub(slot_samples);
                                 let mut samples = vec![0.0f32; slot_samples];
-                                let copy_len = digital_buf.len().min(slot_samples);
+                                let available = digital_buf.get(start..end).unwrap_or(&[]);
+                                let copy_len = available.len().min(slot_samples);
                                 samples[slot_samples - copy_len..]
-                                    .copy_from_slice(&digital_buf[digital_buf.len() - copy_len..]);
+                                    .copy_from_slice(&available[available.len() - copy_len..]);
                                 let state_d = state.clone();
                                 let in_progress = digital_decode_in_progress.clone();
                                 if in_progress
@@ -2476,6 +2555,13 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                         utc,
                                         "digital decode triggered"
                                     );
+                                    if active_workspace_mode == WorkspaceMode::Js8 {
+                                        state
+                                            .lock()
+                                            .expect("ui state lock poisoned")
+                                            .digital_decode_status =
+                                            "JS8 decode running".to_string();
+                                    }
                                     let fst4_submode = active_fst4_submode;
                                     thread::spawn(move || {
                                         run_native_digital_decode(
@@ -2553,6 +2639,7 @@ mod tests {
             WorkspaceMode::Jt9,
             WorkspaceMode::Jt65,
             WorkspaceMode::Q65,
+            WorkspaceMode::Js8,
             WorkspaceMode::Cw,
             WorkspaceMode::Sstv,
         ] {
@@ -2601,6 +2688,27 @@ mod tests {
         assert_eq!(generator.waveforms.len(), 1);
         assert!(generator.waveforms[0].iter().any(|sample| *sample != 0.0));
         assert!(generator.waveforms[0].len() >= 12_000 * 6);
+    }
+
+    #[test]
+    fn js8_null_generator_mixes_multiple_waterfall_signals_across_slots() {
+        let state = GuiState {
+            workspace_mode: WorkspaceMode::Js8,
+            selected_audio_hz: 1_500,
+            ..GuiState::default()
+        };
+        let mut generator = NullAudioGenerator::default();
+        generator.rebuild(WorkspaceMode::Js8, &state);
+
+        assert_eq!(generator.waveforms.len(), 6);
+        assert!(generator
+            .waveforms
+            .iter()
+            .all(|waveform| waveform.iter().any(|sample| *sample != 0.0)));
+        assert!(generator
+            .waveforms
+            .windows(2)
+            .any(|pair| pair[0] != pair[1]));
     }
 
     #[test]
@@ -2699,6 +2807,19 @@ mod tests {
 
     #[test]
     fn null_audio_generator_uses_mode_slots_and_cycles_exchange_frames() {
+        let state = GuiState {
+            workspace_mode: WorkspaceMode::Js8,
+            ..GuiState::default()
+        };
+        let mut generator = NullAudioGenerator::default();
+        generator.rebuild(WorkspaceMode::Js8, &state);
+        assert_eq!(generator.period_s, 15.0);
+        assert_eq!(generator.waveforms.len(), 6);
+        assert!(generator
+            .waveforms
+            .windows(2)
+            .any(|pair| pair[0] != pair[1]));
+
         let state = GuiState {
             workspace_mode: WorkspaceMode::Ft8,
             ..GuiState::default()
@@ -2813,14 +2934,14 @@ mod tests {
     }
 
     #[test]
-    fn null_simulation_always_has_three_valid_fallback_stations() {
+    fn null_simulation_always_has_the_shared_station_pool() {
         for mode in [
             WorkspaceMode::Voice,
             WorkspaceMode::Ft8,
             WorkspaceMode::Sstv,
         ] {
             let stations = super::null_sim_stations(mode);
-            assert_eq!(stations.len(), 3);
+            assert_eq!(stations.len(), 6);
             assert!(stations.iter().all(|station| {
                 station
                     .callsign

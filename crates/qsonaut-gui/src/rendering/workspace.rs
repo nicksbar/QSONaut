@@ -15,6 +15,7 @@ impl QsonautGuiApp {
             WorkspaceMode::Jt9 => self.draw_jt9_workspace(ui, snapshot),
             WorkspaceMode::Jt65 => self.draw_jt65_workspace(ui, snapshot),
             WorkspaceMode::Q65 => self.draw_q65_workspace(ui, snapshot),
+            WorkspaceMode::Js8 => self.draw_js8_workspace(ui, snapshot),
             WorkspaceMode::Cw => self.draw_cw_workspace(ui, snapshot),
             WorkspaceMode::Voice => self.draw_voice_workspace(ui, snapshot),
             WorkspaceMode::Rade => self.draw_rade_workspace(ui, snapshot),
@@ -38,6 +39,7 @@ impl QsonautGuiApp {
                 | WorkspaceMode::Voice
                 | WorkspaceMode::Rade
                 | WorkspaceMode::Sstv
+                | WorkspaceMode::Js8
         ) {
             self.draw_workspace(ui, ctx, snapshot);
         } else {

@@ -3556,6 +3556,7 @@ dependencies = [
  "qsonaut-core",
  "qsonaut-hostbridge-client",
  "qsonaut-hostbridge-protocol",
+ "qsonaut-js8",
  "qsonaut-log",
  "qsonaut-modems",
  "qsonaut-pskreporter",
@@ -3603,6 +3604,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "qsonaut-js8"
+version = "0.1.0"
+source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=c93660a34b9ed65ea1eb46df57ffc856eb68e797#c93660a34b9ed65ea1eb46df57ffc856eb68e797"
+dependencies = [
+ "qsonaut-modems",
+ "rustfft",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "qsonaut-log"
 version = "0.3.18"
 dependencies = [
@@ -3618,7 +3629,7 @@ dependencies = [
 [[package]]
 name = "qsonaut-modems"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=b33d7bd#b33d7bdff7f97c365ff2107fb388f26925353bc3"
+source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=c93660a34b9ed65ea1eb46df57ffc856eb68e797#c93660a34b9ed65ea1eb46df57ffc856eb68e797"
 dependencies = [
  "thiserror 2.0.20",
 ]
@@ -3649,7 +3660,7 @@ dependencies = [
 [[package]]
 name = "qsonaut-third-party"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=ef5d404ada1521069b9337fad30bacc8187ed07d#ef5d404ada1521069b9337fad30bacc8187ed07d"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=502a9a459c4666b05a7278f526523d62f1dd2887#502a9a459c4666b05a7278f526523d62f1dd2887"
 dependencies = [
  "cc",
  "cwdit-dsp",

@@ -1,5 +1,7 @@
 use super::super::*;
-use crate::tx_audio::build_native_digital_tx_pcm_with_q65;
+use crate::tx_audio::{
+    build_native_digital_tx_pcm_with_q65, build_native_digital_tx_pcm_with_q65_and_js8,
+};
 
 fn native_sequence_enabled(
     mode: WorkspaceMode,
@@ -302,21 +304,39 @@ impl QsonautGuiApp {
             self.digital_tx_status = "TX unavailable: radio control is disabled".to_string();
             return;
         };
-        let slot_seconds = mode.slot_seconds(self.fst4_submode, self.q65_submode);
+        let slot_seconds = if mode == WorkspaceMode::Js8 {
+            Some(self.js8_controls.mode.tx_seconds() as f64)
+        } else {
+            mode.slot_seconds(self.fst4_submode, self.q65_submode)
+        };
         if slot_seconds.is_none() && mode != WorkspaceMode::Cw {
             self.digital_tx_status = format!("{} TX backend is not available", mode.label());
             return;
         }
         let tx_tone_hz = self.contest_effective_tx_tone_hz();
-        match build_native_digital_tx_pcm_with_q65(
-            mode,
-            &self.digital_compose,
-            tx_tone_hz,
-            self.fst4_submode,
-            self.q65_submode,
-            self.cw_wpm,
-            self.cw_tone_hz,
-        ) {
+        let tx_result = if mode == WorkspaceMode::Js8 {
+            build_native_digital_tx_pcm_with_q65_and_js8(
+                mode,
+                &self.digital_compose,
+                tx_tone_hz,
+                self.fst4_submode,
+                self.q65_submode,
+                self.cw_wpm,
+                self.cw_tone_hz,
+                Some(self.js8_controls),
+            )
+        } else {
+            build_native_digital_tx_pcm_with_q65(
+                mode,
+                &self.digital_compose,
+                tx_tone_hz,
+                self.fst4_submode,
+                self.q65_submode,
+                self.cw_wpm,
+                self.cw_tone_hz,
+            )
+        };
+        match tx_result {
             Ok((pcm, audio_offset_s)) => {
                 let now_s = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
