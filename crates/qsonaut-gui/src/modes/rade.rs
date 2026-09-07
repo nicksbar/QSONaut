@@ -259,3 +259,57 @@ fn rade_lane(ui: &mut egui::Ui, title: &str, status: &str, detail: &str, color: 
         ui.label(RichText::new(detail).small().color(theme_muted(ui)));
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::RadeMode;
+    use crate::{AppConfig, GraphicsPreferences, GuiState, QsonautGuiApp};
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn renders_both_waveform_variants_and_offline_state() {
+        let icon = eframe::icon_data::from_png_bytes(crate::QSONAUT_ICON_PNG).unwrap();
+        let context = crate::egui::Context::default();
+        let mut config = AppConfig::default();
+        config.radio.enabled = false;
+        let mut app = QsonautGuiApp::new_with_context(
+            config,
+            false,
+            false,
+            &context,
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+        let mut snapshot = GuiState::default();
+        snapshot.frequency_hz = Some(14_078_000);
+        app.rade_mode = RadeMode::V1;
+        let _ = context.run(Default::default(), |ctx| {
+            crate::egui::CentralPanel::default().show(ctx, |ui| {
+                app.draw_rade_workspace(ui, &snapshot);
+            });
+        });
+
+        app.rade_mode = RadeMode::V2;
+        app.digital_tx_active
+            .store(true, std::sync::atomic::Ordering::Release);
+        let _ = context.run(Default::default(), |ctx| {
+            crate::egui::CentralPanel::default().show(ctx, |ui| {
+                app.draw_rade_workspace(ui, &snapshot);
+            });
+        });
+
+        snapshot.frequency_hz = None;
+        app.digital_tx_active
+            .store(false, std::sync::atomic::Ordering::Release);
+        let _ = context.run(Default::default(), |ctx| {
+            crate::egui::CentralPanel::default().show(ctx, |ui| {
+                app.draw_rade_workspace(ui, &snapshot);
+            });
+        });
+    }
+}

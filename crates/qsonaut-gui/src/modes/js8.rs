@@ -326,8 +326,11 @@ fn js8_entry_callsign(entry: &DigitalDecodeEntry) -> Option<String> {
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        format_js8_message, js8_traffic_kind, parse_js8_compose, Js8TrafficKind, BAND_PLAN,
+        format_js8_message, js8_heard_callsign, js8_status, js8_traffic_kind, parse_js8_compose,
+        Js8Controls, Js8TrafficKind, BAND_PLAN,
     };
+    use crate::{DigitalDecodeEntry, DigitalTxChatEntry, QsonautGuiApp, WorkspaceMode};
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn exposes_the_initial_hf_js8_calling_plan() {
@@ -368,6 +371,131 @@ mod tests {
             js8_traffic_kind("QZ0NA QZ1NB QSL"),
             Js8TrafficKind::Conversation
         );
+        assert_eq!(
+            format_js8_message(&qsonaut_js8::Js8Message::Data {
+                encoded: "ABC".into(),
+                compressed: false,
+            }),
+            "DATA ABC"
+        );
+        assert_eq!(
+            format_js8_message(&qsonaut_js8::Js8Message::Data {
+                encoded: "ABC".into(),
+                compressed: true,
+            }),
+            "DATA-COMPRESSED ABC"
+        );
+        assert_eq!(
+            format_js8_message(&qsonaut_js8::Js8Message::Raw {
+                frame_type: qsonaut_js8::Js8FrameType::Unknown(1),
+                payload: "RAW".into(),
+            }),
+            "RAW"
+        );
+    }
+
+    #[test]
+    fn parses_all_initial_compose_shapes_and_heard_callsigns() {
+        assert!(parse_js8_compose("HEARTBEAT QZ0NA").is_some());
+        assert!(parse_js8_compose("QZ0NA QZ1NB ACK").is_some());
+        assert!(parse_js8_compose("QZ0NA QZ1NB SNR -12").is_some());
+        assert!(parse_js8_compose("QZ0NA QZ1NB QSL").is_some());
+        assert!(parse_js8_compose("QZ0NA CN87").is_some());
+        assert!(parse_js8_compose("0123456789AB").is_some());
+        assert!(parse_js8_compose("not a JS8 message").is_none());
+        assert_eq!(js8_heard_callsign("CQ+QZ0NA+CN87"), Some("QZ0NA".into()));
+        assert_eq!(
+            js8_heard_callsign("QZ0NA+QZ1NB+GRID?"),
+            Some("QZ0NA".into())
+        );
+        assert_eq!(
+            js8_heard_callsign("@ALLCALL HEARTBEAT"),
+            Some("@ALLCALL".into())
+        );
+        assert_eq!(js8_heard_callsign("noise"), None);
+    }
+
+    #[test]
+    fn normalizes_scan_controls_and_renders_activity_workspace() {
+        let mut controls = Js8Controls::default();
+        controls.waterfall_low_hz = 3_000.0;
+        controls.waterfall_high_hz = 200.0;
+        controls.scan_step_samples = 0;
+        controls.scan_max_candidates = 0;
+        controls.sync_frequency_step_hz = 0.0;
+        controls.max_frequency_hypotheses = 0;
+        controls.max_signals_per_window = 0;
+        let scan = controls.scan_config();
+        assert_eq!(scan.waterfall_frequency_range_hz, Some((200.0, 3_000.0)));
+        assert_eq!(scan.step_samples, 1);
+        assert_eq!(scan.max_candidates, 1);
+        assert_eq!(scan.sync_frequency_step_hz, 0.1);
+        assert_eq!(scan.max_frequency_hypotheses, 1);
+        assert_eq!(scan.max_signals_per_window, 1);
+        assert_eq!(controls.rx_config(1_500.0).center_frequency_hz, 1_500.0);
+
+        let icon = eframe::icon_data::from_png_bytes(crate::QSONAUT_ICON_PNG).unwrap();
+        let context = crate::egui::Context::default();
+        let mut config = crate::AppConfig::default();
+        config.radio.enabled = false;
+        let mut app = QsonautGuiApp::new_with_context(
+            config,
+            false,
+            false,
+            &context,
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            crate::GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+        app.js8_controls = controls;
+        app.js8_target = Some("QZ0NA".to_string());
+        assert_eq!(js8_status(&app), "RX · TX DISARMED");
+        app.digital_tx_status = "queued for next slot".to_string();
+        assert_eq!(js8_status(&app), "TX ARMED");
+        app.digital_tx_active
+            .store(true, std::sync::atomic::Ordering::Release);
+        assert_eq!(js8_status(&app), "TX IN PROGRESS");
+        app.digital_tx_chat.push_back(DigitalTxChatEntry {
+            mode: WorkspaceMode::Js8,
+            period: 2,
+            utc: "12:00:02".to_string(),
+            message: "CQ QZ0NA CN87".to_string(),
+        });
+        let mut snapshot = crate::GuiState::default();
+        snapshot.digital_decode_status = "JS8 listening".to_string();
+        snapshot.digital_decodes.push_back(DigitalDecodeEntry {
+            mode: WorkspaceMode::Js8,
+            period: 1,
+            utc: "12:00:01".to_string(),
+            snr_db: -8.0,
+            dt_s: 0.2,
+            freq_hz: 1_500,
+            message: "CQ QZ0NA CN87".to_string(),
+        });
+        snapshot.digital_decodes.push_back(DigitalDecodeEntry {
+            mode: WorkspaceMode::Js8,
+            period: 2,
+            utc: "12:00:02".to_string(),
+            snr_db: 3.0,
+            dt_s: 0.1,
+            freq_hz: 1_700,
+            message: "QZ0NA QZ1NB GRID?".to_string(),
+        });
+        let _ = context.run(Default::default(), |ctx| {
+            crate::egui::CentralPanel::default().show(ctx, |ui| {
+                app.draw_js8_workspace(ui, &snapshot);
+            });
+        });
+        snapshot.digital_decodes.clear();
+        let _ = context.run(Default::default(), |ctx| {
+            crate::egui::CentralPanel::default().show(ctx, |ui| {
+                app.draw_js8_workspace(ui, &snapshot);
+            });
+        });
     }
 }
 
