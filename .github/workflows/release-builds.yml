@@ -99,6 +99,8 @@ jobs:
           echo "$RUNNER_TEMP/llvm-mingw/bin" >> "$GITHUB_PATH"
           echo "CC=${{ matrix.llvm_target }}-w64-mingw32-clang" >> "$GITHUB_ENV"
           echo "CXX=${{ matrix.llvm_target }}-w64-mingw32-clang++" >> "$GITHUB_ENV"
+          target_linker_var="CARGO_TARGET_$(echo '${{ matrix.target }}' | tr '[:lower:]-' '[:upper:]_')_LINKER"
+          echo "${target_linker_var}=${{ matrix.llvm_target }}-w64-mingw32-clang" >> "$GITHUB_ENV"
           echo "RADE_CROSS_TARGET=windows" >> "$GITHUB_ENV"
           echo "RADE_CMAKE_SYSTEM_PROCESSOR=${{ matrix.processor }}" >> "$GITHUB_ENV"
           echo "RADE_CMAKE_COMPILER_TARGET=${{ matrix.llvm_target }}-w64-mingw32" >> "$GITHUB_ENV"
