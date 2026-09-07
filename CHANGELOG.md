@@ -5,7 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.18] - Unreleased
+## [0.3.19] - Unreleased
+
+### Fixed
+- Fixed Windows release builds by invoking the bundled RADE Bash helper
+  through Bash instead of attempting to execute the `.sh` file directly.
+
+## [0.3.18] - 2026-09-06
 
 ### Added
 - Added a declarative achievement catalog in `achievements.example.toml`,
