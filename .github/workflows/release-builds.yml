@@ -64,7 +64,7 @@ jobs:
             processor: x86_64
           - name: Windows ARM64
             runner: ubuntu-24.04
-            target: aarch64-pc-windows-gnu
+            target: aarch64-pc-windows-gnullvm
             artifact: qsonaut-windows-arm64
             rade_artifact: windows-arm64
             os: windows
@@ -111,6 +111,20 @@ jobs:
         with:
           name: rade-${{ matrix.rade_artifact }}
           path: QSONaut/native/rade
+
+      - name: Normalize RADE artifact layout
+        working-directory: QSONaut
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="$(find native/rade -name RADE_ARTIFACT.txt -print -quit)"
+          test -n "$manifest"
+          artifact_root="$(dirname "$manifest")"
+          if [[ "$artifact_root" != "$PWD/native/rade" ]]; then
+            cp -a "$artifact_root"/. native/rade/
+          fi
+          test -f native/rade/build/src/librade.so || test -f native/rade/build/src/librade.dll
+          test -f native/rade/build/build_opus-prefix/src/build_opus/.libs/libopus.a
 
       - name: Build release binary
         working-directory: QSONaut
