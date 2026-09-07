@@ -41,4 +41,4 @@ qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }
 qsonaut-server-client = { path = "../qsonaut-server-client" }
 qsonaut-modems = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "c93660a34b9ed65ea1eb46df57ffc856eb68e797" }
 qsonaut-js8 = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "c93660a34b9ed65ea1eb46df57ffc856eb68e797" }
-qsonaut-third-party = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "7519289bd6b38cab37bcd1be3d909d30243acbb1" }
+qsonaut-third-party = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "35d635fda07dec4fe4221967243302e08cba4b05" }

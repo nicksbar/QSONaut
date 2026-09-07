@@ -36,7 +36,7 @@ jobs:
 
   build:
     name: ${{ matrix.name }}
-    needs: verify-tag
+    needs: [verify-tag, rade]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -46,21 +46,25 @@ jobs:
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             artifact: qsonaut-linux-x86_64
+            rade_artifact: linux-x86_64
             os: linux
           - name: Linux ARM64
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: qsonaut-linux-arm64
+            rade_artifact: linux-arm64
             os: linux
           - name: Windows x86_64
             runner: windows-2025
             target: x86_64-pc-windows-msvc
             artifact: qsonaut-windows-x86_64
+            rade_artifact: windows-x86_64
             os: windows
           - name: Windows ARM64
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             artifact: qsonaut-windows-arm64
+            rade_artifact: windows-arm64
             os: windows
 
     steps:
@@ -79,11 +83,20 @@ jobs:
       - name: Install Rust target
         run: rustup target add ${{ matrix.target }}
 
+      - name: Download RADE component
+        uses: actions/download-artifact@v5
+        with:
+          name: rade-${{ matrix.rade_artifact }}
+          path: QSONaut/native/rade
+
       - name: Build release binary
         working-directory: QSONaut
         env:
           QSONAUT_CONTRIBUTORS: ${{ vars.QSONAUT_CONTRIBUTORS }}
           QSONAUT_TESTERS: ${{ vars.QSONAUT_TESTERS }}
+          RADE_C_DIR: ${{ github.workspace }}/QSONaut/native/rade
+          RADE_C_BUILD_DIR: ${{ github.workspace }}/QSONaut/native/rade/build
+          RADE_C_LIB_DIR: ${{ github.workspace }}/QSONaut/native/rade/build/src
         run: cargo build --locked --release --target ${{ matrix.target }} -p qsonaut
 
       - name: Package Linux distribution
@@ -93,6 +106,7 @@ jobs:
         run: |
           mkdir -p "dist/${{ matrix.artifact }}"
           cp "target/${{ matrix.target }}/release/qsonaut" "dist/${{ matrix.artifact }}/"
+          cp native/rade/build/src/librade.so* "dist/${{ matrix.artifact }}/"
           cp README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md qsonaut.toml.example "dist/${{ matrix.artifact }}/"
           tar -C dist -czf "dist/${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"
 
@@ -103,6 +117,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force "dist/${{ matrix.artifact }}" | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/qsonaut.exe" "dist/${{ matrix.artifact }}/"
+          Copy-Item "native/rade/build/src/rade.dll" "dist/${{ matrix.artifact }}/"
           Copy-Item README.md,CHANGELOG.md,LICENSE,THIRD_PARTY_NOTICES.md,qsonaut.toml.example "dist/${{ matrix.artifact }}/"
           Compress-Archive -Path "dist/${{ matrix.artifact }}/*" -DestinationPath "dist/${{ matrix.artifact }}.zip"
 
@@ -111,6 +126,71 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: QSONaut/dist/${{ matrix.artifact }}.*
+          if-no-files-found: error
+
+  rade:
+    name: RADE component / ${{ matrix.name }}
+    needs: verify-tag
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-24.04
+            os: linux
+            artifact: linux-x86_64
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+            os: linux
+            artifact: linux-arm64
+          - name: Windows x86_64
+            runner: windows-2025
+            os: windows
+            artifact: windows-x86_64
+          - name: Windows ARM64
+            runner: windows-11-arm
+            os: windows
+            artifact: windows-arm64
+
+    steps:
+      - name: Check out third-party build tooling
+        uses: actions/checkout@v6
+        with:
+          repository: nicksbar/qsonaut-third-party
+          ref: 35d635fda07dec4fe4221967243302e08cba4b05
+          path: qsonaut-third-party
+
+      - name: Install Linux RADE prerequisites
+        if: matrix.os == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y autoconf automake libtool
+
+      - name: Install Windows RADE prerequisites
+        if: matrix.os == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          update: false
+          install: >-
+            autoconf automake libtool make patch
+
+      - name: Build RADE component
+        working-directory: qsonaut-third-party
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./tools/build-rade-c.sh | tee rade-build-output.txt
+          grep -E '^(RADE_C_DIR|RADE_C_BUILD_DIR|RADE_C_LIB_DIR)=' rade-build-output.txt >> "$GITHUB_ENV"
+
+      - name: Package RADE component
+        working-directory: qsonaut-third-party
+        shell: bash
+        run: ./tools/package-rade-c.sh
+
+      - name: Upload RADE component
+        uses: actions/upload-artifact@v4
+        with:
+          name: rade-${{ matrix.artifact }}
+          path: qsonaut-third-party/rade-artifact
           if-no-files-found: error
 
   publish:
