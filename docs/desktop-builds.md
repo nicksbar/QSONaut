@@ -6,14 +6,15 @@ QSONaut supports native desktop builds for these release targets:
 | --- | --- | --- | --- |
 | Linux | x86_64 | `x86_64-unknown-linux-gnu` | `.tar.gz` |
 | Linux | ARM64 | `aarch64-unknown-linux-gnu` | `.tar.gz` |
-| Windows | x86_64 | `x86_64-pc-windows-msvc` | `.zip` |
-| Windows | ARM64 | `aarch64-pc-windows-msvc` | `.zip` |
+| Windows | x86_64 | `x86_64-pc-windows-gnu` | `.zip` |
+| Windows | ARM64 | `aarch64-pc-windows-gnu` | `.zip` |
 
 The release matrix is in `.github/workflows/release-builds.yml`. It runs for
 version tags and can also be started manually. When a `v*` tag is pushed, the
 workflow now also publishes the generated archives to a GitHub Release.
-ARM builds run on native ARM runners so audio, USB/serial, and desktop
-dependencies do not need a fragile cross-compilation setup.
+Windows RADE and application builds run on Linux with LLVM-MinGW. Windows
+runners are not required for compilation; the resulting PE executables are
+packaged as normal Windows distributions.
 
 ## Native dependencies
 
