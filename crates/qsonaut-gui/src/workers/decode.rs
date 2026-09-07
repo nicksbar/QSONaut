@@ -317,11 +317,7 @@ pub(in super::super) fn run_native_digital_decode(
                 }
             }
         }
-        WorkspaceMode::Ft8
-        | WorkspaceMode::Cw
-        | WorkspaceMode::Voice
-        | WorkspaceMode::Rade
-        | WorkspaceMode::Sstv => {}
+        WorkspaceMode::Ft8 | WorkspaceMode::Cw | WorkspaceMode::Voice | WorkspaceMode::Sstv => {}
     });
 
     let telemetry = trace.finish(decoded.len());

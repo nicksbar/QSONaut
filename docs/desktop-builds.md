@@ -12,9 +12,9 @@ QSONaut supports native desktop builds for these release targets:
 The release matrix is in `.github/workflows/release-builds.yml`. It runs for
 version tags and can also be started manually. When a `v*` tag is pushed, the
 workflow now also publishes the generated archives to a GitHub Release.
-Windows RADE and application builds run on Linux with LLVM-MinGW. Windows
-runners are not required for compilation; the resulting PE executables are
-packaged as normal Windows distributions.
+Windows application builds run on Linux with LLVM-MinGW. Windows runners are
+not required for compilation; the resulting PE executables are packaged as
+normal Windows distributions.
 
 ## Native dependencies
 

@@ -1,6 +1,6 @@
 use qsonaut_radio::BaseMode;
 
-use crate::modes::{cw, fst4, ft4, ft8, js8, jt65, jt9, native, q65, rade, sstv, voice, wspr};
+use crate::modes::{cw, fst4, ft4, ft8, js8, jt65, jt9, native, q65, sstv, voice, wspr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum WorkspaceMode {
@@ -15,7 +15,6 @@ pub(super) enum WorkspaceMode {
     Msk144,
     Cw,
     Voice,
-    Rade,
     Sstv,
 }
 
@@ -33,7 +32,6 @@ impl WorkspaceMode {
             Self::Msk144 => "MSK144",
             Self::Cw => "CW",
             Self::Voice => "VOICE",
-            Self::Rade => "RADE",
             Self::Sstv => "SSTV",
         }
     }
@@ -48,7 +46,7 @@ impl WorkspaceMode {
             Self::Q65 => Some(30.0),
             Self::Js8 => Some(15.0),
             Self::Msk144 => Some(15.0),
-            Self::Cw | Self::Voice | Self::Rade | Self::Sstv => None,
+            Self::Cw | Self::Voice | Self::Sstv => None,
         }
     }
 
@@ -65,7 +63,7 @@ impl WorkspaceMode {
     }
 
     pub(super) fn has_native_decoder(self) -> bool {
-        !matches!(self, Self::Cw | Self::Voice | Self::Rade | Self::Sstv)
+        !matches!(self, Self::Cw | Self::Voice | Self::Sstv)
     }
 
     pub(super) fn is_uhf(self) -> bool {
@@ -73,7 +71,7 @@ impl WorkspaceMode {
     }
 }
 
-pub(super) const WORKSPACE_MODES: [WorkspaceMode; 13] = [
+pub(super) const WORKSPACE_MODES: [WorkspaceMode; 12] = [
     WorkspaceMode::Ft8,
     WorkspaceMode::Ft4,
     WorkspaceMode::Fst4,
@@ -85,7 +83,6 @@ pub(super) const WORKSPACE_MODES: [WorkspaceMode; 13] = [
     WorkspaceMode::Msk144,
     WorkspaceMode::Cw,
     WorkspaceMode::Voice,
-    WorkspaceMode::Rade,
     WorkspaceMode::Sstv,
 ];
 
@@ -153,7 +150,6 @@ pub(super) fn workspace_band_plan(mode: WorkspaceMode) -> &'static [(&'static st
         WorkspaceMode::Msk144 => native::MSK144_BAND_PLAN,
         WorkspaceMode::Cw => cw::BAND_PLAN,
         WorkspaceMode::Voice => voice::BAND_PLAN,
-        WorkspaceMode::Rade => rade::BAND_PLAN,
         WorkspaceMode::Sstv => sstv::BAND_PLAN,
     }
 }
@@ -211,7 +207,7 @@ pub(super) fn workspace_radio_preset_for_frequency(
             filter: 1,
         };
     }
-    if matches!(mode, WorkspaceMode::Voice | WorkspaceMode::Rade) {
+    if matches!(mode, WorkspaceMode::Voice) {
         let base_mode = match frequency_hz.map(band_for_frequency) {
             Some("160m" | "80m" | "40m") => BaseMode::Lsb,
             Some("2m" | "70cm") => BaseMode::Fm,
@@ -219,7 +215,7 @@ pub(super) fn workspace_radio_preset_for_frequency(
         };
         return WorkspaceRadioPreset {
             base_mode,
-            data_mode: mode == WorkspaceMode::Rade,
+            data_mode: false,
             filter: 2,
         };
     }
@@ -297,6 +293,7 @@ mod tests {
         assert!(!preset.data_mode);
     }
 
+    #[cfg(any())]
     #[test]
     fn rade_uses_digital_usb_without_reusing_the_phone_mode() {
         let preset = workspace_radio_preset(WorkspaceMode::Rade);

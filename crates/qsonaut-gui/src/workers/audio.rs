@@ -7,18 +7,13 @@ use super::decode::{
 use super::request_gui_repaint;
 use crate::tx_audio::build_native_digital_tx_pcm_with_q65_and_js8;
 use hound::{SampleFormat, WavSpec, WavWriter};
-use qsonaut_audio::resample::BandlimitedResampler;
 use qsonaut_audio::{CANONICAL_CHANNELS, CANONICAL_SAMPLE_RATE_HZ};
 use qsonaut_modems::AudioNormalizer;
 use qsonaut_third_party::cw::CwDecode;
-use qsonaut_third_party::rade::native::RadeContext;
-use qsonaut_third_party::rade::native::RadeIqSample;
-use qsonaut_third_party::rade::speech::SpeechEncoder;
 use qsonaut_third_party::sstv as qsonaut_sstv;
 use serde_json::json;
 use std::fs::File;
 use std::io::BufWriter;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU32;
 
@@ -166,12 +161,10 @@ fn null_sim_stations(mode: WorkspaceMode) -> Vec<QsonautPerson> {
 
 struct NullAudioGenerator {
     mode: Option<WorkspaceMode>,
-    rade_mode: qsonaut_third_party::rade::RadeMode,
     fst4_submode: crate::modes::fst4::Submode,
     q65_submode: qsonaut_third_party::wsjt::Q65Submode,
     js8_controls: crate::modes::js8::Js8Controls,
     waveforms: Vec<Vec<f32>>,
-    rade_iq_waveform: Vec<RadeIqSample>,
     period_s: f64,
     start_s: f64,
     source_sample_cursor: u64,
@@ -180,9 +173,9 @@ struct NullAudioGenerator {
 
 struct NullAudioChunk {
     samples: Vec<f32>,
-    rade_iq: Option<Vec<RadeIqSample>>,
 }
 
+#[cfg(any())]
 /// A deterministic, speech-shaped fixture for native RADE loopback tests.
 /// RADE transports PCM speech; it does not synthesize text or callsigns. This
 /// fixture gives the null modem a voiced conversation-like signal without a
@@ -220,6 +213,7 @@ fn synthesize_rade_callsign_fixture(first: &str, second: &str) -> Vec<f32> {
     samples
 }
 
+#[cfg(any())]
 fn rade_demo_voice_fixtures() -> Vec<Vec<f32>> {
     const FIXTURES: &[&[u8]] = &[
         include_bytes!("../../../../assets/rade/demo_voice/01-cq-k7zzz.wav"),
@@ -253,6 +247,7 @@ fn rade_demo_voice_fixtures() -> Vec<Vec<f32>> {
         .collect()
 }
 
+#[cfg(any())]
 struct RadeSpeechReceiver {
     context: RadeContext,
     speech_decoder: qsonaut_third_party::rade::speech::SpeechDecoder,
@@ -261,6 +256,7 @@ struct RadeSpeechReceiver {
     modem_iq_samples: Vec<RadeIqSample>,
 }
 
+#[cfg(any())]
 impl RadeSpeechReceiver {
     fn open(mode: qsonaut_third_party::rade::RadeMode) -> anyhow::Result<Self> {
         Ok(Self {
@@ -315,9 +311,6 @@ impl RadeSpeechReceiver {
 }
 
 fn monitor_raw_audio_for_mode(mode: WorkspaceMode, can_decode: bool) -> bool {
-    if mode == WorkspaceMode::Rade {
-        return false;
-    }
     mode != WorkspaceMode::Cw || !can_decode
 }
 
@@ -325,12 +318,10 @@ impl Default for NullAudioGenerator {
     fn default() -> Self {
         Self {
             mode: None,
-            rade_mode: qsonaut_third_party::rade::RadeMode::V1,
             fst4_submode: crate::modes::fst4::Submode::default(),
             q65_submode: qsonaut_third_party::wsjt::Q65Submode::A30,
             js8_controls: crate::modes::js8::Js8Controls::default(),
             waveforms: Vec::new(),
-            rade_iq_waveform: Vec::new(),
             period_s: 15.0,
             start_s: 0.5,
             source_sample_cursor: 0,
@@ -342,7 +333,6 @@ impl Default for NullAudioGenerator {
 impl NullAudioGenerator {
     fn rebuild(&mut self, mode: WorkspaceMode, state: &GuiState) {
         self.mode = Some(mode);
-        self.rade_mode = state.rade_mode;
         self.fst4_submode = state.fst4_submode;
         self.q65_submode = state.q65_submode;
         self.js8_controls = state.js8_controls;
@@ -383,34 +373,8 @@ impl NullAudioGenerator {
             0
         };
         self.waveforms.clear();
-        {
-            self.rade_iq_waveform.clear();
-        }
 
         let stations = null_sim_stations(mode);
-
-        if mode == WorkspaceMode::Rade {
-            {
-                let fixtures = rade_demo_voice_fixtures();
-                if fixtures.is_empty() {
-                    let first = stations[0].callsign.as_deref().unwrap_or("QZ0NA");
-                    let second = stations[1].callsign.as_deref().unwrap_or("QZ1NB");
-                    let speech = synthesize_rade_callsign_fixture(first, second);
-                    self.rebuild_rade_waveform(state, &speech);
-                } else {
-                    let order = [0, 2, 1, 3, 6, 4, 5, 7];
-                    let mut conversation = Vec::new();
-                    for (position, index) in order.into_iter().enumerate() {
-                        if position > 0 {
-                            conversation.extend(std::iter::repeat_n(0.0, 16_000 / 4));
-                        }
-                        conversation.extend_from_slice(&fixtures[index]);
-                    }
-                    self.rebuild_rade_speech_waveform(state, &conversation);
-                }
-            }
-            return;
-        }
 
         let first = &stations[0];
         let second = &stations[1];
@@ -589,10 +553,12 @@ impl NullAudioGenerator {
         }
     }
 
+    #[cfg(any())]
     fn rebuild_rade_waveform(&mut self, state: &GuiState, _speech: &[f32]) {
         self.rebuild_rade_speech_waveform(state, _speech);
     }
 
+    #[cfg(any())]
     fn rebuild_rade_speech_waveform(&mut self, state: &GuiState, speech: &[f32]) {
         let Ok(mut context) = RadeContext::open(state.rade_mode) else {
             tracing::warn!(mode = ?state.rade_mode, "native RADE speech waveform unavailable");
@@ -665,13 +631,6 @@ impl NullAudioGenerator {
         )
     }
 
-    fn cycle_index(&self) -> usize {
-        let period_samples = (self.period_s * f64::from(CANONICAL_SAMPLE_RATE_HZ))
-            .round()
-            .max(1.0) as u64;
-        (self.source_sample_cursor / period_samples) as usize
-    }
-
     fn read_chunk(&mut self, sample_count: usize, state: &Arc<Mutex<GuiState>>) -> NullAudioChunk {
         // A real CPAL stream blocks until the requested audio exists. Without
         // the same pacing, the worker can consume the null source thousands
@@ -686,21 +645,19 @@ impl NullAudioGenerator {
         }
         let started = Instant::now();
         self.next_deadline = Some(started + chunk_duration);
-        let (workspace_mode, fst4_submode, q65_submode, js8_controls, rade_mode) = {
+        let (workspace_mode, fst4_submode, q65_submode, js8_controls) = {
             let shared = state.lock().expect("ui state lock poisoned");
             (
                 shared.workspace_mode,
                 shared.fst4_submode,
                 shared.q65_submode,
                 shared.js8_controls,
-                shared.rade_mode,
             )
         };
         if self.mode != Some(workspace_mode)
             || self.fst4_submode != fst4_submode
             || self.q65_submode != q65_submode
             || (workspace_mode == WorkspaceMode::Js8 && self.js8_controls != js8_controls)
-            || self.rade_mode != rade_mode
         {
             // Rebuilds are infrequent; keep the full snapshot on this path only.
             // The normal audio path must not clone waterfall rows, decode history,
@@ -716,13 +673,7 @@ impl NullAudioGenerator {
         let cycle = (source_start / period_samples) as usize;
         let waveform = self
             .waveforms
-            .get(if self.mode == Some(WorkspaceMode::Rade) {
-                // A deterministic permutation keeps the demo conversational
-                // without coupling it to host RNG state or making tests flaky.
-                cycle.wrapping_mul(5).wrapping_add(1) % self.waveforms.len().max(1)
-            } else {
-                cycle % self.waveforms.len().max(1)
-            })
+            .get(cycle % self.waveforms.len().max(1))
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         let samples = (0..sample_count)
@@ -742,30 +693,11 @@ impl NullAudioGenerator {
         self.source_sample_cursor = self
             .source_sample_cursor
             .saturating_add(sample_count as u64);
-        let rade_iq = if self.mode == Some(WorkspaceMode::Rade) && !self.rade_iq_waveform.is_empty()
-        {
-            let start_sample = (self.start_s * f64::from(CANONICAL_SAMPLE_RATE_HZ)) as u64;
-            let start = if slot_start < start_sample {
-                0
-            } else {
-                ((slot_start - start_sample) * 8_000 / u64::from(CANONICAL_SAMPLE_RATE_HZ)) as usize
-            };
-            let end_slot = slot_start.saturating_add(sample_count as u64);
-            let end = if end_slot < start_sample {
-                0
-            } else {
-                ((end_slot - start_sample) * 8_000 / u64::from(CANONICAL_SAMPLE_RATE_HZ)) as usize
-            };
-            let start = start.min(self.rade_iq_waveform.len());
-            let end = end.min(self.rade_iq_waveform.len()).max(start);
-            Some(self.rade_iq_waveform[start..end].to_vec())
-        } else {
-            None
-        };
-        NullAudioChunk { samples, rade_iq }
+        NullAudioChunk { samples }
     }
 }
 
+#[cfg(any())]
 fn resample_rade_8k_to_12k(input: &[f32]) -> Vec<f32> {
     if input.is_empty() {
         return Vec::new();
@@ -1030,9 +962,6 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let decode_in_progress = Arc::new(AtomicBool::new(false));
         let deferred_decode: Arc<Mutex<Option<PendingFt8Decode>>> = Arc::new(Mutex::new(None));
         let digital_decode_in_progress = Arc::new(AtomicBool::new(false));
-        let mut rade_speech_receiver: Option<RadeSpeechReceiver> = None;
-        let mut rade_pending_monitor_audio = Vec::<f32>::new();
-        let mut rade_monitor_primed = false;
 
         // 12 kHz decimation pipeline for FT8 decode
         let can_decode = sample_rate_hz == 48_000;
@@ -1098,7 +1027,6 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut decode_fst4_submode_last: Option<crate::modes::fst4::Submode> = None;
         let mut decode_q65_submode_last: Option<qsonaut_third_party::wsjt::Q65Submode> = None;
         let mut decode_js8_controls_last: Option<crate::modes::js8::Js8Controls> = None;
-        let mut decode_rade_mode_last: Option<qsonaut_third_party::rade::RadeMode> = None;
         // Waterfall rows arrive far faster than a human can see. Redrawing the
         // whole UI on every chunk is what pins the GPU, so cap the repaint rate
         // and let egui coalesce the rest.
@@ -1107,9 +1035,6 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
         let mut monitor_runtime_error: Option<String> = None;
         let mut last_audio_read_error: Option<String> = None;
         let mut last_monitor_clock_log = Instant::now() - Duration::from_secs(30);
-        let mut last_rade_telemetry_log = Instant::now() - Duration::from_secs(1);
-        let mut last_rade_status: Option<String> = None;
-        let mut last_null_rade_cycle: Option<usize> = None;
         let mut remote_media_seen = false;
         let mut remote_audio_deadline = Instant::now();
 
@@ -1126,12 +1051,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
             match if let Some(stream) = stream.as_mut() {
                 stream
                     .read_frames_f32_until_stopped(chunk_samples, &stop)
-                    .map(|samples| {
-                        samples.map(|samples| NullAudioChunk {
-                            samples,
-                            rade_iq: None,
-                        })
-                    })
+                    .map(|samples| samples.map(|samples| NullAudioChunk { samples }))
             } else if let Some(queue) = &remote_queue {
                 let chunk = queue.lock().ok().and_then(|mut queue| queue.pop_front());
                 if chunk.is_none() {
@@ -1142,7 +1062,6 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 // later HostBridge frame can feed the decoder and waterfall.
                 Ok(Some(NullAudioChunk {
                     samples: chunk.unwrap_or_default(),
-                    rade_iq: None,
                 }))
             } else {
                 Ok(Some(
@@ -1153,7 +1072,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                 ))
             } {
                 Ok(Some(input)) => {
-                    let NullAudioChunk { samples, rade_iq } = input;
+                    let NullAudioChunk { samples } = input;
                     if remote_audio && !samples.is_empty() {
                         let now = Instant::now();
                         if remote_audio_deadline < now {
@@ -1325,20 +1244,13 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                         } else {
                             crate::modes::js8::Js8Controls::default()
                         };
-                        let active_rade_mode =
-                            state.lock().expect("ui state lock poisoned").rade_mode;
                         if decode_workspace_last != Some(active_workspace_mode)
                             || decode_fst4_submode_last != Some(active_fst4_submode)
                             || decode_q65_submode_last != Some(active_q65_submode)
                             || (active_workspace_mode == WorkspaceMode::Js8
                                 && decode_js8_controls_last != Some(active_js8_controls))
-                            || decode_rade_mode_last != Some(active_rade_mode)
                         {
-                            info!(
-                                workspace = %active_workspace_mode.label(),
-                                rade_mode = ?active_rade_mode,
-                                "Audio decoder configuration changed"
-                            );
+                            info!(workspace = %active_workspace_mode.label(), "Audio decoder configuration changed");
                             if recording_active {
                                 let _ = recording_tx.try_send(RecordingMessage::Stop);
                                 recording_active = false;
@@ -1347,10 +1259,6 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             decode_fst4_submode_last = Some(active_fst4_submode);
                             decode_q65_submode_last = Some(active_q65_submode);
                             decode_js8_controls_last = Some(active_js8_controls);
-                            decode_rade_mode_last = Some(active_rade_mode);
-                            {
-                                last_rade_status = None;
-                            }
                             ft8_buf.clear();
                             digital_buf.clear();
                             cw_stream_decoder = None;
@@ -1379,30 +1287,6 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                             *dec = AudioNormalizer::new(sample_rate_hz)
                                 .expect("validated 48 kHz input");
                             let mut s = state.lock().expect("ui state lock poisoned");
-                            {
-                                rade_pending_monitor_audio.clear();
-                                rade_monitor_primed = false;
-                                rade_speech_receiver =
-                                    if active_workspace_mode == WorkspaceMode::Rade {
-                                        match RadeSpeechReceiver::open(s.rade_mode) {
-                                            Ok(receiver) => {
-                                                info!(
-                                                    mode = ?s.rade_mode,
-                                                    reason = "configuration_changed",
-                                                    "RADE receiver opened"
-                                                );
-                                                Some(receiver)
-                                            }
-                                            Err(error) => {
-                                                s.digital_decode_status =
-                                                    format!("RADE unavailable: {error}");
-                                                None
-                                            }
-                                        }
-                                    } else {
-                                        None
-                                    };
-                            }
                             if active_workspace_mode == WorkspaceMode::Ft8 {
                                 s.ft8_decode_status =
                                     "READY: collecting a fresh FT8 slot".to_string();
@@ -1445,6 +1329,10 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                         let ds = dec
                             .process_f32_mono(&samples_f32)
                             .expect("audio capture samples are finite");
+                        macro_rules! disabled_rade_code {
+                            ($($tokens:tt)*) => {};
+                        }
+                        disabled_rade_code! {
                         if active_workspace_mode == WorkspaceMode::Rade {
                             if null_audio {
                                 if let Some(generator) = null_generator.as_ref() {
@@ -1588,6 +1476,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
                                     }
                                 }
                             }
+                        }
                         }
                         let (
                             recording_enabled,
@@ -2620,7 +2509,6 @@ mod tests {
         save_sstv_debug_capture_in, strongest_cw_tone_hz, GuiState, NullAudioGenerator,
         WorkspaceMode,
     };
-    use super::{RadeSpeechReceiver, SpeechEncoder};
     use crate::is_probable_callsign;
     use qsonaut_third_party::sstv as qsonaut_sstv;
     use rustfft::num_complex::Complex;
@@ -2664,6 +2552,7 @@ mod tests {
         }
     }
 
+    #[cfg(any())]
     #[test]
     fn native_rade_null_generator_uses_the_real_encoder() {
         let state = GuiState {
@@ -2677,6 +2566,7 @@ mod tests {
         assert!(generator.waveforms[0].len() >= 12_000 * 6);
     }
 
+    #[cfg(any())]
     #[test]
     fn native_rade_null_generator_uses_the_speech_bridge() {
         let state = GuiState {
@@ -2711,6 +2601,7 @@ mod tests {
             .any(|pair| pair[0] != pair[1]));
     }
 
+    #[cfg(any())]
     #[test]
     fn native_rade_speech_waveform_reaches_the_receive_boundary() {
         for rade_mode in [
@@ -2750,6 +2641,7 @@ mod tests {
         }
     }
 
+    #[cfg(any())]
     #[test]
     fn native_rade_null_transport_carries_native_iq() {
         let state = Arc::new(Mutex::new(GuiState {
@@ -2771,6 +2663,7 @@ mod tests {
         );
     }
 
+    #[cfg(any())]
     #[test]
     fn native_rade_speech_bridge_returns_audible_pcm() {
         let fixture = super::rade_demo_voice_fixtures()

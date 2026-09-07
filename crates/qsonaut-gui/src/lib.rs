@@ -65,7 +65,6 @@ use qsonaut_server_client::{
     log_idempotency_key, new_instance_id, ConnectionConfig as ServerConnectionConfig,
     ConnectionState as ServerConnectionState, Presence as ServerPresence, ServerClient,
 };
-use qsonaut_third_party::rade::RadeMode;
 use qsonaut_third_party::sstv as qsonaut_sstv;
 use qsonaut_third_party::wsjt::Q65Submode;
 use rustfft::{num_complex::Complex, FftPlanner};
@@ -278,7 +277,6 @@ use tx_audio::{
     DigitalTxChatEntry, DigitalTxEvent, DigitalTxJob, Ft8ChatDirection, Ft8ChatLine,
     Ft8TxChatEntry, Ft8TxEvent, Ft8TxJob,
 };
-use tx_audio::{run_rade_tx_job, RadeTxJob};
 use ui_format::{format_signal_report, ft8_period_progress, qso_stage_label, utc_hhmmss_millis};
 use ui_widgets::{
     draw_ai_icon, draw_radio_about_icon, draw_speaker_icon, format_swr_display,
@@ -438,7 +436,6 @@ fn parse_workspace_mode_token(mode: &str) -> Option<WorkspaceMode> {
         "MSK144" => Some(WorkspaceMode::Msk144),
         "CW" => Some(WorkspaceMode::Cw),
         "VOICE" | "SSB" | "PHONE" => Some(WorkspaceMode::Voice),
-        "RADE" | "RADE-V1" | "RADE-V2" => Some(WorkspaceMode::Rade),
         "SSTV" => Some(WorkspaceMode::Sstv),
         _ => None,
     }
@@ -750,7 +747,6 @@ struct GuiState {
     ft8_acquisition_generation: u64,
     ft4_clock_offset_s: Option<f32>,
     workspace_mode: WorkspaceMode,
-    rade_mode: RadeMode,
     ft8_deep_decode: bool,
     ft4_deep_decode: bool,
     ft8_pending: Vec<Ft8DecodeEntry>,
@@ -937,7 +933,6 @@ impl Default for GuiState {
             ft8_acquisition_generation: u64::MAX,
             ft4_clock_offset_s: None,
             workspace_mode: WorkspaceMode::Ft8,
-            rade_mode: RadeMode::V1,
             ft8_deep_decode: false,
             ft4_deep_decode: false,
             ft8_pending: Vec::new(),
@@ -1395,7 +1390,6 @@ struct QsonautGuiApp {
     voice_lookup_requested: String,
     voice_lookup_status: String,
     voice_hamdb: Option<HamDbCacheEntry>,
-    rade_mode: RadeMode,
     contest_enabled: bool,
     contest_operating_mode: ContestOperatingMode,
     contest_split_policy: SplitPolicy,
@@ -4175,10 +4169,6 @@ mod tests {
         assert_eq!(parse_workspace_mode_token("FT8"), Some(WorkspaceMode::Ft8));
         assert_eq!(parse_workspace_mode_token("ft4"), Some(WorkspaceMode::Ft4));
         assert_eq!(
-            parse_workspace_mode_token("RADE"),
-            Some(WorkspaceMode::Rade)
-        );
-        assert_eq!(
             parse_workspace_mode_token("ssb"),
             Some(WorkspaceMode::Voice)
         );
@@ -4207,7 +4197,6 @@ mod tests {
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Cw));
         assert!(workspace_mode_supports_native_tx(WorkspaceMode::Sstv));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Voice));
-        assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Rade));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Ft8));
         assert!(!workspace_mode_supports_native_tx(WorkspaceMode::Wspr));
     }
@@ -4284,7 +4273,6 @@ mod tests {
             ("MSK144", WorkspaceMode::Msk144),
             ("CW", WorkspaceMode::Cw),
             ("PHONE", WorkspaceMode::Voice),
-            ("rade-v2", WorkspaceMode::Rade),
         ] {
             assert_eq!(parse_workspace_mode_token(token), Some(expected));
         }
@@ -4331,7 +4319,6 @@ mod tests {
             WorkspaceMode::Wspr,
             WorkspaceMode::Msk144,
             WorkspaceMode::Voice,
-            WorkspaceMode::Rade,
         ] {
             assert!(!workspace_mode_supports_native_tx(mode));
         }

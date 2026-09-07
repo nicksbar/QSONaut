@@ -127,7 +127,6 @@ pub(super) enum OperatingModeIcon {
     Sstv,
     Msk144,
     Voice,
-    Rade,
     Text,
 }
 
@@ -245,34 +244,6 @@ pub(super) fn draw_operating_mode_icon(
                 [
                     egui::pos2(center.x - 4.0, center.y + 10.0),
                     egui::pos2(center.x + 4.0, center.y + 10.0),
-                ],
-                stroke,
-            );
-        }
-        OperatingModeIcon::Rade => {
-            let bubble = egui::Rect::from_center_size(
-                egui::pos2(center.x, center.y - 1.0),
-                egui::vec2(14.0, 10.0),
-            );
-            painter.rect_stroke(bubble, 2.0, stroke, egui::StrokeKind::Inside);
-            painter.line_segment(
-                [
-                    egui::pos2(center.x - 3.0, bubble.bottom()),
-                    egui::pos2(center.x - 5.0, bubble.bottom() + 4.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    egui::pos2(center.x - 5.0, bubble.bottom() + 4.0),
-                    egui::pos2(center.x + 1.0, bubble.bottom()),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    egui::pos2(center.x - 4.0, center.y - 1.0),
-                    egui::pos2(center.x + 4.0, center.y - 1.0),
                 ],
                 stroke,
             );

@@ -154,28 +154,6 @@ impl QsonautGuiApp {
                 }
             }
 
-            let rade_response = operating_mode_button(
-                ui,
-                self.workspace_mode == WorkspaceMode::Rade,
-                "RADE",
-                OperatingModeIcon::Rade,
-                true,
-            )
-            .on_hover_text("Switch workspace to RADE digital voice");
-            if rade_response.clicked() {
-                self.workspace_mode = WorkspaceMode::Rade;
-                self.profile_dirty = true;
-                self.persist_profile("Mode saved to");
-                if let Some(frequency_hz) =
-                    workspace_frequency_for_current_band(WorkspaceMode::Rade, snapshot.frequency_hz)
-                {
-                    self.send_command(GuiCommand::ApplyWorkspace {
-                        mode: WorkspaceMode::Rade,
-                        frequency_hz,
-                    });
-                }
-            }
-
             let mode = WorkspaceMode::Msk144;
             let enabled = !mode.is_uhf();
             let response = operating_mode_button(

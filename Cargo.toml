@@ -19,9 +19,6 @@ resolver = "2"
 [profile.dev.package.mfsk-core]
 opt-level = 2
 
-[profile.dev.package.qsonaut-third-party]
-opt-level = 2
-
 [profile.dev.package.qsonaut-modems]
 opt-level = 2
 
@@ -35,9 +32,6 @@ opt-level = 2
 inherits = "dev"
 
 [profile.modem-debug.package.mfsk-core]
-opt-level = 0
-
-[profile.modem-debug.package.qsonaut-third-party]
 opt-level = 0
 
 [profile.modem-debug.package.qsonaut-modems]

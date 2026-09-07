@@ -36,7 +36,7 @@ jobs:
 
   build:
     name: ${{ matrix.name }}
-    needs: [verify-tag, rade]
+    needs: [verify-tag]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -46,39 +46,30 @@ jobs:
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             artifact: qsonaut-linux-x86_64
-            rade_artifact: linux-x86_64
             os: linux
           - name: Linux ARM64
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: qsonaut-linux-arm64
-            rade_artifact: linux-arm64
             os: linux
           - name: Windows x86_64
             runner: ubuntu-24.04
             target: x86_64-pc-windows-gnullvm
             artifact: qsonaut-windows-x86_64
-            rade_artifact: windows-x86_64
             os: windows
             llvm_target: x86_64
-            processor: x86_64
           - name: Windows ARM64
             runner: ubuntu-24.04
             target: aarch64-pc-windows-gnullvm
             artifact: qsonaut-windows-arm64
-            rade_artifact: windows-arm64
             os: windows
             llvm_target: aarch64
-            processor: aarch64
 
     steps:
-      # Shared modem dependencies are resolved from pinned upstream Git revisions.
       - name: Check out QSONaut
         uses: actions/checkout@v6
         with:
           path: QSONaut
-
-      # Rigwright and shared components are resolved from immutable Git revisions.
 
       - name: Install Linux native libraries
         if: matrix.os == 'linux'
@@ -101,48 +92,15 @@ jobs:
           echo "CXX=${{ matrix.llvm_target }}-w64-mingw32-clang++" >> "$GITHUB_ENV"
           target_linker_var="CARGO_TARGET_$(echo '${{ matrix.target }}' | tr '[:lower:]-' '[:upper:]_')_LINKER"
           echo "${target_linker_var}=${{ matrix.llvm_target }}-w64-mingw32-clang" >> "$GITHUB_ENV"
-          echo "RADE_CROSS_TARGET=windows" >> "$GITHUB_ENV"
-          echo "RADE_CMAKE_SYSTEM_PROCESSOR=${{ matrix.processor }}" >> "$GITHUB_ENV"
-          echo "RADE_CMAKE_COMPILER_TARGET=${{ matrix.llvm_target }}-w64-mingw32" >> "$GITHUB_ENV"
 
       - name: Install Rust target
         run: rustup target add ${{ matrix.target }}
-
-      - name: Download RADE component
-        uses: actions/download-artifact@v5
-        with:
-          name: rade-${{ matrix.rade_artifact }}
-          path: ${{ runner.temp }}/rade-artifact
-
-      - name: Normalize RADE artifact layout
-        working-directory: QSONaut
-        shell: bash
-        run: |
-          set -euo pipefail
-          staging_dir="${RUNNER_TEMP}/rade-artifact"
-          manifest="$(find "$staging_dir" -name RADE_ARTIFACT.txt -type f -print -quit)"
-          test -n "$manifest" || { echo "RADE_ARTIFACT.txt not found under $staging_dir"; exit 1; }
-          artifact_root="$(dirname "$manifest")"
-
-          rm -rf native/rade
-          mkdir -p native/rade
-          cp -a "$artifact_root"/. native/rade/
-
-          test -f native/rade/RADE_ARTIFACT.txt
-          test -f native/rade/build/src/librade.so || test -f native/rade/build/src/librade.dll
-          if [[ "${{ matrix.os }}" == windows ]]; then
-            test -f native/rade/build/src/librade.dll.a
-          fi
-          test -f native/rade/build/build_opus-prefix/src/build_opus/.libs/libopus.a
 
       - name: Build release binary
         working-directory: QSONaut
         env:
           QSONAUT_CONTRIBUTORS: ${{ vars.QSONAUT_CONTRIBUTORS }}
           QSONAUT_TESTERS: ${{ vars.QSONAUT_TESTERS }}
-          RADE_C_DIR: ${{ github.workspace }}/QSONaut/native/rade
-          RADE_C_BUILD_DIR: ${{ github.workspace }}/QSONaut/native/rade/build
-          RADE_C_LIB_DIR: ${{ github.workspace }}/QSONaut/native/rade/build/src
         run: cargo build --locked --release --target ${{ matrix.target }} -p qsonaut
 
       - name: Package Linux distribution
@@ -152,7 +110,6 @@ jobs:
         run: |
           mkdir -p "dist/${{ matrix.artifact }}"
           cp "target/${{ matrix.target }}/release/qsonaut" "dist/${{ matrix.artifact }}/"
-          cp native/rade/build/src/librade.so* "dist/${{ matrix.artifact }}/"
           cp README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md qsonaut.toml.example "dist/${{ matrix.artifact }}/"
           tar -C dist -czf "dist/${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"
 
@@ -164,7 +121,6 @@ jobs:
           set -euo pipefail
           mkdir -p "dist/${{ matrix.artifact }}"
           cp "target/${{ matrix.target }}/release/qsonaut.exe" "dist/${{ matrix.artifact }}/"
-          cp native/rade/build/src/librade.dll "dist/${{ matrix.artifact }}/"
           cp README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md qsonaut.toml.example "dist/${{ matrix.artifact }}/"
           (cd dist && zip -r "${{ matrix.artifact }}.zip" "${{ matrix.artifact }}")
 
@@ -173,104 +129,6 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: QSONaut/dist/${{ matrix.artifact }}.*
-          if-no-files-found: error
-
-  rade:
-    name: RADE component / ${{ matrix.name }}
-    needs: verify-tag
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Linux x86_64
-            runner: ubuntu-24.04
-            os: linux
-            artifact: linux-x86_64
-          - name: Linux ARM64
-            runner: ubuntu-24.04-arm
-            os: linux
-            artifact: linux-arm64
-          - name: Windows x86_64
-            runner: ubuntu-24.04
-            os: windows
-            artifact: windows-x86_64
-            llvm_target: x86_64
-            processor: x86_64
-          - name: Windows ARM64
-            runner: ubuntu-24.04
-            os: windows
-            artifact: windows-arm64
-            llvm_target: aarch64
-            processor: aarch64
-
-    steps:
-      - name: Check out third-party build tooling
-        uses: actions/checkout@v6
-        with:
-          repository: nicksbar/qsonaut-third-party
-          ref: 5d56f3bc8b737a8b106467d79dc19dc2c6cf4583
-          path: qsonaut-third-party
-
-      - name: Install Linux RADE prerequisites
-        if: matrix.os == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y autoconf automake libtool
-
-      - name: Install LLVM-MinGW cross compiler
-        if: matrix.os == 'windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          version=20250114
-          archive="llvm-mingw-${version}-ucrt-ubuntu-20.04-x86_64.tar.xz"
-          curl --fail --location --retry 3 \
-            "https://github.com/mstorsjo/llvm-mingw/releases/download/${version}/${archive}" \
-            --output "$RUNNER_TEMP/$archive"
-          mkdir -p "$RUNNER_TEMP/llvm-mingw"
-          tar -xJf "$RUNNER_TEMP/$archive" --strip-components=1 -C "$RUNNER_TEMP/llvm-mingw"
-          echo "$RUNNER_TEMP/llvm-mingw/bin" >> "$GITHUB_PATH"
-          echo "CC=${{ matrix.llvm_target }}-w64-mingw32-clang" >> "$GITHUB_ENV"
-          echo "CXX=${{ matrix.llvm_target }}-w64-mingw32-clang++" >> "$GITHUB_ENV"
-          echo "RADE_CROSS_TARGET=windows" >> "$GITHUB_ENV"
-          echo "RADE_CMAKE_SYSTEM_PROCESSOR=${{ matrix.processor }}" >> "$GITHUB_ENV"
-          echo "RADE_CMAKE_COMPILER_TARGET=${{ matrix.llvm_target }}-w64-mingw32" >> "$GITHUB_ENV"
-
-      - name: Build RADE component
-        if: matrix.os == 'linux'
-        working-directory: qsonaut-third-party
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./tools/build-rade-c.sh | tee rade-build-output.txt
-          grep -E '^(RADE_C_DIR|RADE_C_BUILD_DIR|RADE_C_LIB_DIR)=' rade-build-output.txt >> "$GITHUB_ENV"
-
-      - name: Build RADE component (Linux cross-build)
-        if: matrix.os == 'windows'
-        working-directory: qsonaut-third-party
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./tools/build-rade-c.sh | tee rade-build-output.txt
-          grep -E '^(RADE_C_DIR|RADE_C_BUILD_DIR|RADE_C_LIB_DIR)=' rade-build-output.txt >> "$GITHUB_ENV"
-
-      - name: Package RADE component
-        if: matrix.os == 'linux'
-        working-directory: qsonaut-third-party
-        shell: bash
-        run: ./tools/package-rade-c.sh
-
-      - name: Package RADE component (Linux cross-build)
-        if: matrix.os == 'windows'
-        working-directory: qsonaut-third-party
-        shell: bash
-        run: ./tools/package-rade-c.sh
-
-      - name: Upload RADE component
-        uses: actions/upload-artifact@v4
-        with:
-          name: rade-${{ matrix.artifact }}
-          path: qsonaut-third-party/rade-artifact
-          include-hidden-files: true
           if-no-files-found: error
 
   publish:

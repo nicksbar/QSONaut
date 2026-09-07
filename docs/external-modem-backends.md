@@ -39,31 +39,6 @@ Candidate Rust backends observed:
 - `qsantos/ripmors`
   - Fast Morse encoder/decoder crate, useful for text-domain CW handling.
 
-### RADE voice adapter
-
-RADE V1 and V2 are now exposed as a first-class QSONaut `WorkspaceMode` and
-share the Voice mode's band vocabulary. The GUI uses the adapter's stable
-capability metadata and labels V2 as upstream development; it does not hide
-V2 behind an experimental product path or create a second voice GUI.
-
-The current consumer boundary is intentionally visible in the RADE panel:
-the third-party adapter provides the V1/V2 modem/IQ and speech feature
-surface, while QSONaut owns capture, buffering, resampling, status, and TX
-safety. With `rade-speech` enabled, the audio worker routes captured audio
-through the RADE receiver and FARGAN speech decoder, suppresses raw modem
-monitoring, and sends synthesized 16 kHz speech to the existing audio monitor.
-QSONaut does not claim live RADE TX yet.
-
-The desktop `qsonaut` application enables the `qsonaut-gui/rade-bundled`
-feature. Its third-party build script checks out and builds the pinned RADE
-native source in the shared cache automatically, so the normal application
-build does not require hand-written `RADE_C_*` environment variables. The
-null-audio source then runs deterministic 16 kHz speech frames through the
-third-party LPCNet/FARGAN bridge, aggregates them into RADE V1/V2 modem
-frames, and resamples the resulting 8 kHz waveform into QSONaut's simulated
-audio stream. Library consumers may still use the lower-level `rade-c` or
-`rade-speech` features when they provide their own native build.
-
 ### Future modem review
 
 VarAC is intentionally not presented as a QSONaut roadmap target because its

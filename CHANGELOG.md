@@ -5,11 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.19] - Unreleased
+## [0.3.19] - 2026-09-07
 
-### Fixed
-- Fixed Windows release builds by invoking the bundled RADE Bash helper
-  through Bash instead of attempting to execute the `.sh` file directly.
+### Changed
+- Removed the active RADE workspace, native build/link path, release packaging,
+  and CI artifact pipeline. RADE source and third-party tooling remain
+  preserved for possible future work.
+- Updated the pinned `qsonaut-third-party` revision to the Linux/Windows
+  cross-build fix at `5d56f3b`.
 
 ## [0.3.18] - 2026-09-06
 

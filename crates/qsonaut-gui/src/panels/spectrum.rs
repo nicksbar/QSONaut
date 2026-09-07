@@ -534,7 +534,6 @@ impl QsonautGuiApp {
         let filter_bw_hz = 3_000;
         let is_cw = self.workspace_mode == WorkspaceMode::Cw;
         let is_sstv = self.workspace_mode == WorkspaceMode::Sstv;
-        let is_rade = self.workspace_mode == WorkspaceMode::Rade;
         let bw_hz = filter_bw_hz;
         let sstv_target_offset_hz = if snapshot.sstv_auto_target {
             snapshot.sstv_locked_offset_hz
@@ -660,14 +659,8 @@ impl QsonautGuiApp {
             self.audio_waterfall_texture_theme = self.waterfall_theme;
         }
         if let Some(tex) = &self.audio_waterfall_texture {
-            // RADE is a wideband voice modem, not a narrow audio-tone mode.
-            // Do not present the generic RX/TX cursor or let clicks pretend
-            // that an audio-frequency tune operation is meaningful here.
-            let image_widget = egui::Image::new((tex.id(), display_size)).sense(if is_rade {
-                egui::Sense::hover()
-            } else {
-                egui::Sense::click()
-            });
+            let image_widget =
+                egui::Image::new((tex.id(), display_size)).sense(egui::Sense::click());
             let response = ui.add(image_widget);
 
             if let Some(pos) = response.interact_pointer_pos() {
@@ -675,7 +668,7 @@ impl QsonautGuiApp {
                 let capped_bw = bw_hz.clamp(100, AUDIO_MAX_FREQ_HZ);
                 let pick_hz = ((rel * capped_bw as f32).round() as u32).clamp(100, capped_bw);
 
-                if response.clicked() && !is_rade {
+                if response.clicked() {
                     if is_sstv {
                         let minimum_center_hz = 1_900 + qsonaut_sstv::AUTO_TARGET_MIN_OFFSET_HZ;
                         let maximum_center_hz = (capped_bw as i32 - 400)
@@ -725,7 +718,7 @@ impl QsonautGuiApp {
                             format!("RX audio cursor set: {} Hz", self.rx_tone_hz);
                     }
                 }
-                if response.secondary_clicked() && !is_sstv && !is_rade {
+                if response.secondary_clicked() && !is_sstv {
                     let selected_hz = if is_cw {
                         pick_hz.clamp(200, 3_000)
                     } else {
@@ -744,27 +737,6 @@ impl QsonautGuiApp {
                     self.persist_profile("Auto-saved");
                     self.profile_io_status = format!("TX tone set: {} Hz", self.tx_tone_hz);
                 }
-            }
-
-            if is_rade {
-                ui.painter().text(
-                    response.rect.left_top() + egui::vec2(6.0, 4.0),
-                    egui::Align2::LEFT_TOP,
-                    format!(
-                        "RADE {} · wideband voice channel · waterfall monitor",
-                        snapshot.rade_mode.label()
-                    ),
-                    egui::TextStyle::Small.resolve(ui.style()),
-                    Color32::from_rgb(117, 225, 255),
-                );
-                draw_scope_attribution(
-                    ui,
-                    response.rect,
-                    snapshot.audio_waterfall_rows.len(),
-                    AUDIO_WF_HEIGHT,
-                    "QSONaut audio monitor",
-                );
-                return;
             }
 
             let bw = bw_hz.clamp(1, AUDIO_MAX_FREQ_HZ) as f32;

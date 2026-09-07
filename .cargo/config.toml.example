@@ -12,8 +12,6 @@ qsonaut-hostbridge-protocol = { path = "../QSONaut-HostBridge/crates/qsonaut-hos
 [patch."https://github.com/nicksbar/qsonaut-modems.git"]
 qsonaut-modems = { path = "../qsonaut-modems/crates/qsonaut-modems" }
 
-[patch."https://github.com/nicksbar/qsonaut-third-party.git"]
-qsonaut-third-party = { path = "../qsonaut-third-party/crates/qsonaut-third-party" }
 
 [patch."https://github.com/jl1nie/mfsk-core.git"]
 mfsk-core = { path = "../mfsk-core/mfsk-core" }
