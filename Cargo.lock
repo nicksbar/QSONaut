@@ -2520,8 +2520,8 @@ dependencies = [
 
 [[package]]
 name = "mfsk-core"
-version = "0.10.1"
-source = "git+https://github.com/jl1nie/mfsk-core.git#b871cb74b9ae00323ce3de207d5a68e62409ebec"
+version = "0.10.2"
+source = "git+https://github.com/jl1nie/mfsk-core.git?rev=c9eec972bb0881982c4de9b2ef604f55dfa97686#c9eec972bb0881982c4de9b2ef604f55dfa97686"
 dependencies = [
  "crc",
  "num-complex",
@@ -3660,7 +3660,7 @@ dependencies = [
 [[package]]
 name = "qsonaut-third-party"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=9fbcb257bbb19fbbff89d9f61dfeee1988c3c810#9fbcb257bbb19fbbff89d9f61dfeee1988c3c810"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=7519289bd6b38cab37bcd1be3d909d30243acbb1#7519289bd6b38cab37bcd1be3d909d30243acbb1"
 dependencies = [
  "cc",
  "cwdit-dsp",
