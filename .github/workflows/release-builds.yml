@@ -148,10 +148,14 @@ jobs:
             runner: windows-2025
             os: windows
             artifact: windows-x86_64
+            compiler_package: mingw-w64-x86_64-gcc
+            c_compiler: x86_64-w64-mingw32-gcc
           - name: Windows ARM64
             runner: windows-11-arm
             os: windows
             artifact: windows-arm64
+            compiler_package: mingw-w64-clang-aarch64-clang
+            c_compiler: aarch64-w64-mingw32-clang
 
     steps:
       - name: Check out third-party build tooling
@@ -171,7 +175,7 @@ jobs:
         with:
           update: false
           install: >-
-            autoconf automake libtool make patch git cmake
+            autoconf automake libtool make patch git cmake ${{ matrix.compiler_package }}
 
       - name: Build RADE component
         if: matrix.os == 'linux'
@@ -186,6 +190,8 @@ jobs:
         if: matrix.os == 'windows'
         working-directory: qsonaut-third-party
         shell: msys2 {0}
+        env:
+          CC: ${{ matrix.c_compiler }}
         run: |
           set -euo pipefail
           ./tools/build-rade-c.sh | tee rade-build-output.txt
