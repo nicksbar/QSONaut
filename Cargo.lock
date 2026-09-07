@@ -3660,7 +3660,7 @@ dependencies = [
 [[package]]
 name = "qsonaut-third-party"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=7519289bd6b38cab37bcd1be3d909d30243acbb1#7519289bd6b38cab37bcd1be3d909d30243acbb1"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=99997f7#99997f7e9df12b4a66221baa466333a767c3aeb2"
 dependencies = [
  "cc",
  "cwdit-dsp",
