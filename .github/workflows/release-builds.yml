@@ -174,6 +174,7 @@ jobs:
             autoconf automake libtool make patch
 
       - name: Build RADE component
+        if: matrix.os == 'linux'
         working-directory: qsonaut-third-party
         shell: bash
         run: |
@@ -181,9 +182,25 @@ jobs:
           ./tools/build-rade-c.sh | tee rade-build-output.txt
           grep -E '^(RADE_C_DIR|RADE_C_BUILD_DIR|RADE_C_LIB_DIR)=' rade-build-output.txt >> "$GITHUB_ENV"
 
+      - name: Build RADE component (MSYS2)
+        if: matrix.os == 'windows'
+        working-directory: qsonaut-third-party
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          ./tools/build-rade-c.sh | tee rade-build-output.txt
+          grep -E '^(RADE_C_DIR|RADE_C_BUILD_DIR|RADE_C_LIB_DIR)=' rade-build-output.txt >> "$GITHUB_ENV"
+
       - name: Package RADE component
+        if: matrix.os == 'linux'
         working-directory: qsonaut-third-party
         shell: bash
+        run: ./tools/package-rade-c.sh
+
+      - name: Package RADE component (MSYS2)
+        if: matrix.os == 'windows'
+        working-directory: qsonaut-third-party
+        shell: msys2 {0}
         run: ./tools/package-rade-c.sh
 
       - name: Upload RADE component
