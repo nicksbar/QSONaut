@@ -47,7 +47,7 @@ opt-level = 0
 opt-level = 0
 
 [workspace.package]
-version = "0.3.18"
+version = "0.3.19"
 edition = "2021"
 license = "MIT"
 authors = ["QSONaut Contributors"]
