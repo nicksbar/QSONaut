@@ -119,8 +119,9 @@ jobs:
           set -euo pipefail
           manifest="$(find native/rade -name RADE_ARTIFACT.txt -print -quit)"
           test -n "$manifest"
-          artifact_root="$(dirname "$manifest")"
-          if [[ "$artifact_root" != "$PWD/native/rade" ]]; then
+          artifact_root="$(realpath "$(dirname "$manifest")")"
+          expected_root="$(realpath native/rade)"
+          if [[ "$artifact_root" != "$expected_root" ]]; then
             cp -a "$artifact_root"/. native/rade/
           fi
           test -f native/rade/build/src/librade.so || test -f native/rade/build/src/librade.dll
