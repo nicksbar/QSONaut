@@ -1089,9 +1089,10 @@ pub fn run_gui(config: AppConfig) -> Result<Option<GraphicsPreferences>> {
         .with_title("QSONaut — Amateur Radio Mission Control")
         .with_icon(app_icon.clone())
         .with_resizable(true)
-        // eframe also enforces this for WGPU, but keeping it explicit makes
-        // the startup visibility contract clear at the application boundary.
-        .with_visible(false);
+        // Keep the native window visible after winit applies the restored
+        // geometry. Leaving this false hides the window permanently because
+        // the application does not issue a later viewport visibility command.
+        .with_visible(true);
     if let Some(geometry) = stored_geometry {
         viewport = geometry.apply(viewport);
     }
