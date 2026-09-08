@@ -937,6 +937,8 @@ impl QsonautGuiApp {
             ft8_max_log_entries,
             station_callsign,
             station_grid,
+            persisted_station_callsign: global_settings.callsign.clone(),
+            persisted_station_grid: global_settings.grid.clone(),
             station_qth,
             station_rig,
             station_antenna,

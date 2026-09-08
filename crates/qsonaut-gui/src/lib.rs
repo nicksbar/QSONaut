@@ -1370,6 +1370,8 @@ struct QsonautGuiApp {
     ft8_max_log_entries: usize,
     station_callsign: String,
     station_grid: String,
+    persisted_station_callsign: String,
+    persisted_station_grid: String,
     station_qth: String,
     station_rig: String,
     station_antenna: String,

@@ -61,8 +61,8 @@ impl QsonautGuiApp {
             .expect("display tuning lock poisoned");
         OperatorProfile {
             profile_version: OPERATOR_PROFILE_VERSION,
-            callsign: self.station_callsign_or_default().to_string(),
-            grid: self.station_grid_or_default().to_string(),
+            callsign: self.station_callsign_for_persistence(),
+            grid: self.station_grid_for_persistence(),
             qth: self.station_qth.trim().to_string(),
             station_rig: self.station_rig.trim().to_string(),
             station_antenna: self.station_antenna.trim().to_string(),
@@ -327,8 +327,8 @@ impl QsonautGuiApp {
 
     pub(crate) fn current_global_settings(&self) -> GlobalSettings {
         GlobalSettings {
-            callsign: self.station_callsign_or_default().to_string(),
-            grid: self.station_grid_or_default().to_string(),
+            callsign: self.station_callsign_for_persistence(),
+            grid: self.station_grid_for_persistence(),
             qth: self.station_qth.trim().to_string(),
             station_rig: String::new(),
             station_antenna: String::new(),
@@ -343,6 +343,30 @@ impl QsonautGuiApp {
             audio_monitor_enabled: self.config.audio.monitor_enabled,
             audio_monitor_output_device: self.config.audio.monitor_output_device.clone(),
             audio_monitor_volume: self.config.audio.monitor_volume.clamp(0.0, 2.0),
+        }
+    }
+
+    fn station_callsign_for_persistence(&self) -> String {
+        let callsign = self.station_callsign.trim();
+        if !callsign.is_empty() {
+            return callsign.to_string();
+        }
+        if self.persisted_station_callsign.trim().is_empty() {
+            "N0CALL".to_string()
+        } else {
+            self.persisted_station_callsign.trim().to_string()
+        }
+    }
+
+    fn station_grid_for_persistence(&self) -> String {
+        let grid = self.station_grid.trim();
+        if !grid.is_empty() {
+            return grid.to_string();
+        }
+        if self.persisted_station_grid.trim().is_empty() {
+            "AA00".to_string()
+        } else {
+            self.persisted_station_grid.trim().to_string()
         }
     }
 
