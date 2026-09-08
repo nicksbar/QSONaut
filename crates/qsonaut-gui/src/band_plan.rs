@@ -293,15 +293,6 @@ mod tests {
         assert!(!preset.data_mode);
     }
 
-    #[cfg(any())]
-    #[test]
-    fn rade_uses_digital_usb_without_reusing_the_phone_mode() {
-        let preset = workspace_radio_preset(WorkspaceMode::Rade);
-        assert_eq!(preset.base_mode, BaseMode::Usb);
-        assert!(preset.data_mode);
-        assert_eq!(workspace_band_plan(WorkspaceMode::Rade), voice::BAND_PLAN);
-    }
-
     #[test]
     fn voice_uses_band_conventional_sidebands() {
         assert_eq!(

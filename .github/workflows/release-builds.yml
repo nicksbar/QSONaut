@@ -36,7 +36,7 @@ jobs:
 
   build:
     name: ${{ matrix.name }}
-    needs: [verify-tag]
+    needs: verify-tag
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -53,45 +53,28 @@ jobs:
             artifact: qsonaut-linux-arm64
             os: linux
           - name: Windows x86_64
-            runner: ubuntu-24.04
-            target: x86_64-pc-windows-gnullvm
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
             artifact: qsonaut-windows-x86_64
             os: windows
-            llvm_target: x86_64
           - name: Windows ARM64
-            runner: ubuntu-24.04
-            target: aarch64-pc-windows-gnullvm
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
             artifact: qsonaut-windows-arm64
             os: windows
-            llvm_target: aarch64
 
     steps:
+      # Shared modem dependencies are resolved from pinned upstream Git revisions.
       - name: Check out QSONaut
         uses: actions/checkout@v6
         with:
           path: QSONaut
 
+      # Rigwright and shared components are resolved from immutable Git revisions.
+
       - name: Install Linux native libraries
         if: matrix.os == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
-
-      - name: Install LLVM-MinGW cross compiler
-        if: matrix.os == 'windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          version=20250114
-          archive="llvm-mingw-${version}-ucrt-ubuntu-20.04-x86_64.tar.xz"
-          curl --fail --location --retry 3 \
-            "https://github.com/mstorsjo/llvm-mingw/releases/download/${version}/${archive}" \
-            --output "$RUNNER_TEMP/$archive"
-          mkdir -p "$RUNNER_TEMP/llvm-mingw"
-          tar -xJf "$RUNNER_TEMP/$archive" --strip-components=1 -C "$RUNNER_TEMP/llvm-mingw"
-          echo "$RUNNER_TEMP/llvm-mingw/bin" >> "$GITHUB_PATH"
-          echo "CC=${{ matrix.llvm_target }}-w64-mingw32-clang" >> "$GITHUB_ENV"
-          echo "CXX=${{ matrix.llvm_target }}-w64-mingw32-clang++" >> "$GITHUB_ENV"
-          target_linker_var="CARGO_TARGET_$(echo '${{ matrix.target }}' | tr '[:lower:]-' '[:upper:]_')_LINKER"
-          echo "${target_linker_var}=${{ matrix.llvm_target }}-w64-mingw32-clang" >> "$GITHUB_ENV"
 
       - name: Install Rust target
         run: rustup target add ${{ matrix.target }}
@@ -101,21 +84,7 @@ jobs:
         env:
           QSONAUT_CONTRIBUTORS: ${{ vars.QSONAUT_CONTRIBUTORS }}
           QSONAUT_TESTERS: ${{ vars.QSONAUT_TESTERS }}
-          RUSTFLAGS: ${{ matrix.os == 'windows' && '-C target-feature=+crt-static' || '' }}
         run: cargo build --locked --release --target ${{ matrix.target }} -p qsonaut
-
-      - name: Verify Windows runtime is statically linked
-        if: matrix.os == 'windows'
-        working-directory: QSONaut
-        shell: bash
-        run: |
-          set -euo pipefail
-          needed_libs="$(objdump -p "target/${{ matrix.target }}/release/qsonaut.exe" | awk '/DLL Name:/ {print $3}')"
-          printf '%s\n' "$needed_libs"
-          if grep -Eiq '^(libunwind|libgcc_s_seh|libwinpthread)' <<<"$needed_libs"; then
-            echo "The Windows executable still has a MinGW runtime DLL dependency."
-            exit 1
-          fi
 
       - name: Package Linux distribution
         if: matrix.os == 'linux'
@@ -130,13 +99,12 @@ jobs:
       - name: Package Windows distribution
         if: matrix.os == 'windows'
         working-directory: QSONaut
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          mkdir -p "dist/${{ matrix.artifact }}"
-          cp "target/${{ matrix.target }}/release/qsonaut.exe" "dist/${{ matrix.artifact }}/"
-          cp README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md qsonaut.toml.example "dist/${{ matrix.artifact }}/"
-          (cd dist && zip -r "${{ matrix.artifact }}.zip" "${{ matrix.artifact }}")
+          New-Item -ItemType Directory -Force "dist/${{ matrix.artifact }}" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/qsonaut.exe" "dist/${{ matrix.artifact }}/"
+          Copy-Item README.md,CHANGELOG.md,LICENSE,THIRD_PARTY_NOTICES.md,qsonaut.toml.example "dist/${{ matrix.artifact }}/"
+          Compress-Archive -Path "dist/${{ matrix.artifact }}/*" -DestinationPath "dist/${{ matrix.artifact }}.zip"
 
       - name: Upload distribution
         uses: actions/upload-artifact@v4
