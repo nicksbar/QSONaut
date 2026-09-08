@@ -101,7 +101,21 @@ jobs:
         env:
           QSONAUT_CONTRIBUTORS: ${{ vars.QSONAUT_CONTRIBUTORS }}
           QSONAUT_TESTERS: ${{ vars.QSONAUT_TESTERS }}
+          RUSTFLAGS: ${{ matrix.os == 'windows' && '-C target-feature=+crt-static' || '' }}
         run: cargo build --locked --release --target ${{ matrix.target }} -p qsonaut
+
+      - name: Verify Windows runtime is statically linked
+        if: matrix.os == 'windows'
+        working-directory: QSONaut
+        shell: bash
+        run: |
+          set -euo pipefail
+          needed_libs="$(objdump -p "target/${{ matrix.target }}/release/qsonaut.exe" | awk '/DLL Name:/ {print $3}')"
+          printf '%s\n' "$needed_libs"
+          if grep -Eiq '^(libunwind|libgcc_s_seh|libwinpthread)' <<<"$needed_libs"; then
+            echo "The Windows executable still has a MinGW runtime DLL dependency."
+            exit 1
+          fi
 
       - name: Package Linux distribution
         if: matrix.os == 'linux'
