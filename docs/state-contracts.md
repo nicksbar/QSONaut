@@ -32,6 +32,9 @@ the original ID; consumers must ignore a result for an unknown or already
 terminal ID. A timeout cancels eligibility for the requested action, but does
 not claim that hardware completed it.
 
+Command IDs are unique while pending. A duplicate pending ID is rejected and
+cannot replace, replay, or mutate the original command.
+
 The GUI radio worker publishes these results on `AppEvent::CommandResult` and
 advances its command generation when the worker stops or is replaced. Legacy
 internal PTT senders are assigned an envelope at the worker boundary so they
@@ -94,6 +97,14 @@ event, but cannot mutate the event held by another subscriber. A `QsoLogged`
 event is emitted only after the record has passed validation and persistence;
 failed saves must emit an error instead of a success event.
 
+Logging ownership is split into four explicit stages: the GUI owns the
+in-memory working set, the log service owns durable TOML persistence and
+duplicate IDs, the ADIF boundary owns import/export conversion, and external
+reporting services own any LoTW/server submission. A successful `QsoLogged`
+event is emitted only after the durable save succeeds. Backup or restore must
+use the same validated record path; a failed backup or restore must not replace
+the active working set.
+
 Events describe completed ownership transitions. They do not grant the
 subscriber permission to mutate the owning state directly.
 
@@ -108,6 +119,12 @@ provenance in its detail. Connector failure or disconnection must not disable
 manual radio workflows. `AiCapability` describes provider/model availability,
 not whether AI is required; unavailable or failed AI remains an optional
 degraded capability with a manual fallback.
+
+Each connector transport owns its own `Starting` → `Ready` → `Disconnected` /
+`Failed` → `Starting` generation. Incoming messages carry transport, author,
+channel, and message provenance; connector events never imply radio or TX
+authority. A connector reconnect may resume observation, but it may not replay
+an old external action without a fresh automation permission decision.
 
 Automation dispatch publishes an immutable result containing the triggering
 event source and approved, denied, and error counts. A denied action is never

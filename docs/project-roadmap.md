@@ -85,13 +85,13 @@ completed with focused tests or explicitly marked as hardware-blocked.
 - [x] Give QSO/logging events stable IDs, correlation metadata, persistence
   outcomes, duplicate decisions, and schema/version information. Durable QSO
   events now publish only after successful persistence.
-- [ ] Define logging ownership for in-memory state, durable save, backup,
+- [x] Define logging ownership for in-memory state, durable save, backup,
   restore, ADIF import/export, and LoTW-facing behavior.
 - [x] Map component lifecycle, QSO, connector, and error events into the
   automation contract without exposing private implementation state.
 - [x] Define automation permission changes, denied actions, action results,
   and revocation behavior; dispatch now publishes aggregate outcomes.
-- [ ] Define connector lifecycle and external-message provenance for IRC,
+- [x] Define connector lifecycle and external-message provenance for IRC,
   Discord, server, and future transports.
 
 **Phase E — capability and release evidence**
@@ -101,8 +101,9 @@ completed with focused tests or explicitly marked as hardware-blocked.
   discovery now publishes the capability lifecycle.
 - [x] Add contract transition-matrix tests; event-ordering tests remain to be
   promoted into CI with the worker scenarios.
-- [ ] Add software evidence for every supported v0.4 workflow and identify
-  the remaining hardware-only evidence explicitly.
+- [x] Add software evidence for every supported v0.4 workflow and identify
+  the remaining hardware-only evidence explicitly in
+  `docs/software-evidence-v0.4.md`.
 - [ ] Reconcile #79 with #78, #75, #72, and the parent #77 without duplicating
   implementation ownership.
 - [ ] Update the release acceptance checklist and close #79 only with linked

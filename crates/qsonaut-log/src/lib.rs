@@ -477,6 +477,10 @@ pub struct AdifImportSummary {
 }
 
 impl QsoLog {
+    pub fn backup_path(path: &Path) -> PathBuf {
+        path.with_extension("toml.backup")
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         let source = match fs::read_to_string(path) {
             Ok(source) => source,
@@ -501,8 +505,17 @@ impl QsoLog {
         let body = toml::to_string_pretty(self).context("serialize QSO log")?;
         let temporary = path.with_extension("toml.tmp");
         fs::write(&temporary, body).with_context(|| format!("write {}", temporary.display()))?;
+        if path.exists() {
+            let backup = Self::backup_path(path);
+            fs::copy(path, &backup).with_context(|| format!("backup {}", path.display()))?;
+        }
         fs::rename(&temporary, path).with_context(|| format!("replace {}", path.display()))?;
         Ok(())
+    }
+
+    pub fn restore_backup(path: &Path) -> Result<Self> {
+        let backup = Self::backup_path(path);
+        Self::load(&backup).with_context(|| format!("restore backup {}", backup.display()))
     }
 
     pub fn export_adif(&self, path: &Path) -> Result<()> {
@@ -1097,6 +1110,37 @@ mod tests {
         let loaded = QsoLog::load(&path).unwrap();
         let _ = fs::remove_file(&path);
         assert_eq!(loaded.contacts, log.contacts);
+    }
+
+    #[test]
+    fn save_keeps_previous_log_and_restore_loads_the_backup() {
+        let thread_name = std::thread::current()
+            .name()
+            .unwrap_or("test")
+            .replace(|c: char| !c.is_ascii_alphanumeric(), "_");
+        let path = std::env::temp_dir().join(format!(
+            "qsonaut-qso-backup-{}-{}.toml",
+            std::process::id(),
+            thread_name
+        ));
+        let backup = QsoLog::backup_path(&path);
+        let original = QsoLog {
+            version: 1,
+            contacts: vec![QsoRecord::new("K1ABC", "FT8", "20m", 14_074_000, 0, 1)],
+        };
+        let replacement = QsoLog {
+            version: 1,
+            contacts: vec![QsoRecord::new("W1AW", "FT4", "40m", 7_074_000, 0, 2)],
+        };
+        original.save(&path).unwrap();
+        replacement.save(&path).unwrap();
+
+        let restored = QsoLog::restore_backup(&path).unwrap();
+        assert_eq!(restored.contacts, original.contacts);
+        assert_eq!(QsoLog::load(&path).unwrap().contacts, replacement.contacts);
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(backup);
     }
 
     #[test]

@@ -934,12 +934,13 @@ fn spawn_radio_worker_inner(
                         )
                     }
                 };
+                let accepted = command_tracker.begin(envelope.clone(), Instant::now());
+                let accepted_for_execution = accepted.outcome == CommandOutcome::Accepted;
                 if let Some(app_events) = &app_events {
-                    app_events.publish(AppEvent::CommandResult(
-                        command_tracker.begin(envelope.clone(), Instant::now()),
-                    ));
-                } else {
-                    command_tracker.begin(envelope.clone(), Instant::now());
+                    app_events.publish(AppEvent::CommandResult(accepted));
+                }
+                if !accepted_for_execution {
+                    continue;
                 }
                 let command_id = envelope.id.clone();
                 let radio_unavailable = {

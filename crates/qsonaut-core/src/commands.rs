@@ -85,6 +85,13 @@ impl CommandTracker {
 
     pub fn begin(&mut self, envelope: CommandEnvelope, now: Instant) -> CommandResult {
         let id = envelope.id.clone();
+        if self.pending.contains_key(&id) {
+            return CommandResult {
+                id,
+                outcome: CommandOutcome::Rejected,
+                detail: "duplicate command id is already pending".to_string(),
+            };
+        }
         self.pending.insert(
             id.clone(),
             PendingCommand {
@@ -255,5 +262,31 @@ mod tests {
         let expired = tracker.expire(now + Duration::from_millis(11));
         assert_eq!(expired.len(), 1);
         assert_eq!(expired[0].outcome, CommandOutcome::TimedOut);
+    }
+
+    #[test]
+    fn tracker_rejects_duplicate_pending_command_ids_without_replacing_work() {
+        let now = std::time::Instant::now();
+        let mut tracker = CommandTracker::default();
+        let command = CommandEnvelope {
+            id: CommandId::new("duplicate"),
+            kind: CommandKind::Tune,
+            timeout_ms: 100,
+        };
+        assert_eq!(
+            tracker.begin(command.clone(), now).outcome,
+            CommandOutcome::Accepted
+        );
+        assert_eq!(
+            tracker.begin(command.clone(), now).outcome,
+            CommandOutcome::Rejected
+        );
+        assert_eq!(
+            tracker
+                .finish(&command.id, CommandOutcome::Completed, "original completed")
+                .unwrap()
+                .outcome,
+            CommandOutcome::Completed
+        );
     }
 }
