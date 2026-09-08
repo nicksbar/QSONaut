@@ -96,27 +96,40 @@ impl QsonautGuiApp {
     pub(crate) fn draw_banner_op_modes(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         ui.separator();
         ui.horizontal_wrapped(|ui| {
-            let mut draw_mode =
-                |ui: &mut egui::Ui, icon: OperatingModeIcon, mode: WorkspaceMode| {
-                    let response = operating_mode_button(
-                        ui,
-                        self.workspace_mode == mode,
-                        mode.label(),
-                        icon,
-                        true,
-                    )
-                    .on_hover_text(format!("Switch workspace to {}", mode.label()));
-                    if response.clicked() {
-                        self.workspace_mode = mode;
-                        self.profile_dirty = true;
-                        self.persist_profile("Mode saved to");
-                        if let Some(frequency_hz) =
-                            workspace_frequency_for_current_band(mode, snapshot.frequency_hz)
-                        {
-                            self.send_command(GuiCommand::ApplyWorkspace { mode, frequency_hz });
-                        }
+            let mut draw_mode = |ui: &mut egui::Ui,
+                                 icon: OperatingModeIcon,
+                                 mode: WorkspaceMode| {
+                let response = operating_mode_button(
+                    ui,
+                    self.workspace_mode == mode,
+                    mode.label(),
+                    icon,
+                    radio_supports_workspace_mode(
+                        native_radio_profile(&self.config.radio.backend, &self.config.radio.model),
+                        mode,
+                    ),
+                )
+                .on_hover_text(
+                    if radio_supports_workspace_mode(
+                        native_radio_profile(&self.config.radio.backend, &self.config.radio.model),
+                        mode,
+                    ) {
+                        format!("Switch workspace to {}", mode.label())
+                    } else {
+                        format!("{} is not supported by the selected radio", mode.label())
+                    },
+                );
+                if response.clicked() {
+                    self.workspace_mode = mode;
+                    self.profile_dirty = true;
+                    self.persist_profile("Mode saved to");
+                    if let Some(frequency_hz) =
+                        workspace_frequency_for_current_band(mode, snapshot.frequency_hz)
+                    {
+                        self.send_command(GuiCommand::ApplyWorkspace { mode, frequency_hz });
                     }
-                };
+                }
+            };
             for mode in [
                 WorkspaceMode::Ft8,
                 WorkspaceMode::Ft4,
@@ -136,7 +149,10 @@ impl QsonautGuiApp {
                 self.workspace_mode == WorkspaceMode::Voice,
                 "Voice",
                 OperatingModeIcon::Voice,
-                true,
+                radio_supports_workspace_mode(
+                    native_radio_profile(&self.config.radio.backend, &self.config.radio.model),
+                    WorkspaceMode::Voice,
+                ),
             )
             .on_hover_text("Switch workspace to Voice");
             if response.clicked() {
@@ -155,7 +171,11 @@ impl QsonautGuiApp {
             }
 
             let mode = WorkspaceMode::Msk144;
-            let enabled = !mode.is_uhf();
+            let enabled = !mode.is_uhf()
+                && radio_supports_workspace_mode(
+                    native_radio_profile(&self.config.radio.backend, &self.config.radio.model),
+                    mode,
+                );
             let response = operating_mode_button(
                 ui,
                 self.workspace_mode == mode,

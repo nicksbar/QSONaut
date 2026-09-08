@@ -45,7 +45,7 @@ fn model_docs_for(model: &str) -> (&'static str, &'static str) {
         "CAT (generic)" => "yaesu-generic", "FT-710" => "ft-710", "FTDX10" => "ftdx10",
         "FTDX101D" => "ftdx101d", "FTDX101MP" => "ftdx101mp", "FT-991A" => "ft-991a",
         "PC control (generic)" => "kenwood-generic", "TS-590SG" => "ts-590sg", "TS-890S" => "ts-890s",
-        "TS-2000" => "ts-2000",
+        "TS-2000" => "ts-2000", "TM-V71A" => "kenwood-generic", "TM-D710" => "kenwood-generic",
     );
     model_docs!("unknown")
 }
@@ -145,6 +145,8 @@ mod tests {
             "TS-590SG",
             "TS-890S",
             "TS-2000",
+            "TM-V71A",
+            "TM-D710",
         ] {
             let help = help_for_model(model);
             assert!(!help.blurb.is_empty());

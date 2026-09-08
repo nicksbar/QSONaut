@@ -1,6 +1,7 @@
 use eframe::egui;
 use eframe::egui::Color32;
 
+use crate::band_plan::WorkspaceMode;
 use qsonaut_radio::models::find_model;
 
 /// Paint the AI tab icon with egui primitives so it does not depend on an
@@ -417,6 +418,32 @@ pub(super) fn radio_supports_band(
     }
 }
 
+pub(super) fn radio_supports_workspace_mode(
+    profile: Option<&qsonaut_radio::models::RadioModelProfile>,
+    mode: WorkspaceMode,
+) -> bool {
+    let Some(profile) = profile else {
+        return true;
+    };
+    if matches!(profile.model, "TM-V71A" | "TM-D710") {
+        return mode == WorkspaceMode::Voice;
+    }
+    true
+}
+
+pub(super) fn radio_supports_native_mode(
+    profile: Option<&qsonaut_radio::models::RadioModelProfile>,
+    mode: qsonaut_radio::Mode,
+) -> bool {
+    let Some(profile) = profile else {
+        return true;
+    };
+    if matches!(profile.model, "TM-V71A" | "TM-D710") {
+        return matches!(mode, qsonaut_radio::Mode::Fm | qsonaut_radio::Mode::Am);
+    }
+    true
+}
+
 pub(super) fn format_swr_display(
     presentation: Option<qsonaut_radio::MeterPresentation>,
     normalized: Option<u8>,
@@ -462,9 +489,10 @@ pub(super) fn swr_chart_value(
 mod tests {
     use super::{
         draw_ai_icon, draw_radio_about_icon, draw_speaker_icon, format_swr_display,
-        native_radio_profile, radio_baud_rates, radio_supports_band, styled_selection_button,
-        swr_chart_value,
+        native_radio_profile, radio_baud_rates, radio_supports_band, radio_supports_native_mode,
+        radio_supports_workspace_mode, styled_selection_button, swr_chart_value,
     };
+    use crate::band_plan::WorkspaceMode;
     use eframe::egui::{self, Color32};
 
     #[test]
@@ -507,6 +535,28 @@ mod tests {
         assert!(native_radio_profile("rigctld", "IC-7300").is_none());
         assert!(native_radio_profile("native", "not-a-model").is_none());
         assert!(radio_baud_rates("not-a-model").is_empty());
+    }
+
+    #[test]
+    fn vhf_uhf_profiles_expose_only_supported_modes() {
+        for model in ["TM-V71A", "TM-D710"] {
+            let profile = native_radio_profile("native", model);
+            assert!(!radio_supports_band(profile, "20m"));
+            assert!(radio_supports_band(profile, "2m"));
+            assert!(radio_supports_band(profile, "70cm"));
+            assert!(radio_supports_workspace_mode(profile, WorkspaceMode::Voice));
+            assert!(!radio_supports_workspace_mode(profile, WorkspaceMode::Ft8));
+            assert!(radio_supports_native_mode(profile, qsonaut_radio::Mode::Fm));
+            assert!(radio_supports_native_mode(profile, qsonaut_radio::Mode::Am));
+            assert!(!radio_supports_native_mode(
+                profile,
+                qsonaut_radio::Mode::Usb
+            ));
+            assert!(!radio_supports_native_mode(
+                profile,
+                qsonaut_radio::Mode::Data
+            ));
+        }
     }
 
     #[test]

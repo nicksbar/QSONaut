@@ -754,12 +754,13 @@ impl QsonautGuiApp {
                                 (Mode::CwReverse, "CW-R"),
                                 (Mode::RttyReverse, "RTTY-R"),
                             ] {
+                                let mode_supported = radio_supports_native_mode(radio_profile, mode);
                                 if styled_selection_button(
                                     ui,
                                     label,
                                     current_radio_mode == label,
                                     Color32::from_rgb(190, 215, 235),
-                                    true,
+                                    mode_supported,
                                 )
                                 .clicked()
                                 {
