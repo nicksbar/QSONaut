@@ -173,6 +173,11 @@ impl QsonautGuiApp {
             if let Ok(mut state) = self.state.lock() {
                 state.audio_spectrum_status = "STOPPED (audio worker failed)".to_string();
             }
+            self.publish_component_state(
+                Component::Audio,
+                ComponentState::Failed,
+                "audio worker stopped unexpectedly",
+            );
         }
         let active_radio_finished = self
             .radio_worker_handle
@@ -187,6 +192,11 @@ impl QsonautGuiApp {
             if let Ok(mut state) = self.state.lock() {
                 state.radio_waterfall_status = "STOPPED (radio worker failed)".to_string();
             }
+            self.publish_component_state(
+                Component::Radio,
+                ComponentState::Failed,
+                "radio worker stopped unexpectedly",
+            );
         }
 
         // Poll for the selected radio initialization result from background thread
@@ -256,7 +266,7 @@ impl QsonautGuiApp {
                             baud = self.config.radio.baud_rate,
                             "Starting GUI radio worker (deferred initialization)"
                         );
-                        let handle = workers::radio::spawn_radio_worker(
+                        let handle = workers::radio::spawn_radio_worker_with_gate_with_events(
                             radio,
                             self.state.clone(),
                             self.radio_worker_stop.clone(),
@@ -265,6 +275,8 @@ impl QsonautGuiApp {
                             rx,
                             self.repaint_ctx.clone(),
                             self.ptt_allowed.clone(),
+                            self.tx_gate.clone(),
+                            self.app_events.clone(),
                         );
                         self.command_tx = Some(tx);
                         self.radio_worker_handle = Some(handle);
@@ -294,6 +306,11 @@ impl QsonautGuiApp {
                             ));
                         }
                         warn!(profile = %self.selected_profile_name, "Radio initialization failed; profile runtime stopped");
+                        self.publish_component_state(
+                            Component::Radio,
+                            ComponentState::Failed,
+                            "radio initialization failed",
+                        );
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
                         // Thread panicked or dropped
@@ -307,6 +324,11 @@ impl QsonautGuiApp {
                                 "UNAVAILABLE (init thread crashed)".to_string();
                         }
                         warn!(profile = %self.selected_profile_name, "Radio initialization thread failed; profile runtime stopped");
+                        self.publish_component_state(
+                            Component::Radio,
+                            ComponentState::Failed,
+                            "radio initialization thread stopped unexpectedly",
+                        );
                     }
                     Err(mpsc::TryRecvError::Empty) => {
                         // Still initializing...

@@ -22,6 +22,25 @@ Requests are not state mutations. The owning component validates and applies a
 request, then publishes the resulting state or error. A caller must not update
 another component's state optimistically.
 
+## Command correlation and outcomes
+
+Worker-facing requests use a `CommandEnvelope` with a stable `CommandId`, a
+typed `CommandKind`, and a timeout. The owner may publish `Accepted` while work
+is pending, but only the owner may publish the terminal `Completed`,
+`Canceled`, `TimedOut`, `Rejected`, or `Failed` result. Every result carries
+the original ID; consumers must ignore a result for an unknown or already
+terminal ID. A timeout cancels eligibility for the requested action, but does
+not claim that hardware completed it.
+
+The GUI radio worker publishes these results on `AppEvent::CommandResult` and
+advances its command generation when the worker stops or is replaced. Legacy
+internal PTT senders are assigned an envelope at the worker boundary so they
+retain the same ownership and shutdown semantics.
+
+Commands are at-least-once at the transport boundary and therefore owners must
+make cancellation, disarm, and shutdown idempotent. Replaying a stale command
+after a component generation changes is rejected rather than applied.
+
 ## TX safety contract
 
 The safety gate is authoritative for every transmit path, including digital
@@ -39,9 +58,21 @@ not a substitute for checking the gate at execution time.
 
 ## Audio lifecycle contract
 
-Audio consumers observe the lifecycle in this order:
+All audio consumers use the typed `AudioFormat` contract. QSONaut's canonical
+format is 48,000 Hz, one or two channels, with a positive block size; device
+formats are converted at the audio boundary before data reaches monitor,
+waterfall, or decoder consumers. A device negotiation failure is a lifecycle
+failure and must not silently change the decoder's assumed sample rate.
 
-`Disabled` → `Opening` → `Active` → `Stopping` → `Disabled`
+Audio consumers observe the shared lifecycle vocabulary in this order:
+
+`Starting` → `Ready` → `Stopping` → `Stopped`
+
+An input or output device that remains usable but loses one capability may
+enter `Degraded`; a failed or disconnected device must recover through a new
+`Starting` generation. The implementation uses the same vocabulary for null,
+local, and HostBridge audio so software-only validation exercises the same
+contract as hardware operation.
 
 An unavailable device, disconnect, or incompatible sample-rate change follows
 the same stopping path. The worker must stop producing buffers, publish a
@@ -65,6 +96,24 @@ failed saves must emit an error instead of a success event.
 
 Events describe completed ownership transitions. They do not grant the
 subscriber permission to mutate the owning state directly.
+
+Lifecycle events are validated against the shared transition matrix. Repeated
+states are valid because delivery is at-least-once; a `Stopped` or `Failed`
+generation cannot jump directly to `Ready`, and must restart through
+`Starting`. Consumers should retain the last accepted state and ignore stale
+events rather than reconstructing state from display strings.
+
+Connector state is scoped to the external transport and must include message
+provenance in its detail. Connector failure or disconnection must not disable
+manual radio workflows. `AiCapability` describes provider/model availability,
+not whether AI is required; unavailable or failed AI remains an optional
+degraded capability with a manual fallback.
+
+Automation dispatch publishes an immutable result containing the triggering
+event source and approved, denied, and error counts. A denied action is never
+replayed automatically; changing grants affects subsequent dispatches only.
+Permission changes and revocation therefore have an observable result without
+exposing the automation host's private component implementation.
 
 ## Shutdown and recovery
 

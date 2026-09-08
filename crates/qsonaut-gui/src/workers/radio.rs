@@ -1,5 +1,6 @@
 use super::super::*;
 use super::request_gui_repaint;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 
 const RADIO_CORE_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -19,6 +20,7 @@ static FIRST_RADIO_CORE_POLL: AtomicBool = AtomicBool::new(true);
 static REMOTE_LEVEL_POLL_INDEX: AtomicUsize = AtomicUsize::new(0);
 static REMOTE_LEVEL_CONTROL_INDEX: AtomicUsize = AtomicUsize::new(0);
 static REMOTE_CORE_POLL_INDEX: AtomicUsize = AtomicUsize::new(0);
+static LEGACY_COMMAND_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScheduledMeter {
@@ -171,6 +173,7 @@ fn workspace_audio_controls_clear_noise() -> (ControlId, ControlValue, ControlId
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn spawn_radio_worker(
     radio: impl Into<RadioHandle>,
     state: Arc<Mutex<GuiState>>,
@@ -181,8 +184,98 @@ pub(crate) fn spawn_radio_worker(
     repaint_ctx: Arc<OnceLock<egui::Context>>,
     ptt_allowed: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
+    spawn_radio_worker_with_gate(
+        radio,
+        state,
+        stop,
+        swr_sweep_abort,
+        display_tuning,
+        rx,
+        repaint_ctx,
+        ptt_allowed,
+        Arc::new(Mutex::new(TxGate::default())),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
+pub(crate) fn spawn_radio_worker_with_gate(
+    radio: impl Into<RadioHandle>,
+    state: Arc<Mutex<GuiState>>,
+    stop: Arc<AtomicBool>,
+    swr_sweep_abort: Arc<AtomicBool>,
+    display_tuning: Arc<Mutex<DisplayTuning>>,
+    rx: mpsc::Receiver<GuiCommand>,
+    repaint_ctx: Arc<OnceLock<egui::Context>>,
+    ptt_allowed: Arc<AtomicBool>,
+    tx_gate: Arc<Mutex<TxGate>>,
+) -> std::thread::JoinHandle<()> {
+    spawn_radio_worker_inner(
+        radio,
+        state,
+        stop,
+        swr_sweep_abort,
+        display_tuning,
+        rx,
+        repaint_ctx,
+        ptt_allowed,
+        tx_gate,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_radio_worker_with_gate_with_events(
+    radio: impl Into<RadioHandle>,
+    state: Arc<Mutex<GuiState>>,
+    stop: Arc<AtomicBool>,
+    swr_sweep_abort: Arc<AtomicBool>,
+    display_tuning: Arc<Mutex<DisplayTuning>>,
+    rx: mpsc::Receiver<GuiCommand>,
+    repaint_ctx: Arc<OnceLock<egui::Context>>,
+    ptt_allowed: Arc<AtomicBool>,
+    tx_gate: Arc<Mutex<TxGate>>,
+    app_events: AppEventBus,
+) -> std::thread::JoinHandle<()> {
+    spawn_radio_worker_inner(
+        radio,
+        state,
+        stop,
+        swr_sweep_abort,
+        display_tuning,
+        rx,
+        repaint_ctx,
+        ptt_allowed,
+        tx_gate,
+        Some(app_events),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_radio_worker_inner(
+    radio: impl Into<RadioHandle>,
+    state: Arc<Mutex<GuiState>>,
+    stop: Arc<AtomicBool>,
+    swr_sweep_abort: Arc<AtomicBool>,
+    display_tuning: Arc<Mutex<DisplayTuning>>,
+    rx: mpsc::Receiver<GuiCommand>,
+    repaint_ctx: Arc<OnceLock<egui::Context>>,
+    ptt_allowed: Arc<AtomicBool>,
+    tx_gate: Arc<Mutex<TxGate>>,
+    app_events: Option<AppEventBus>,
+) -> std::thread::JoinHandle<()> {
     let radio = radio.into();
     thread::spawn(move || {
+        let publish_lifecycle = |state: ComponentState, detail: &str| {
+            if let Some(app_events) = &app_events {
+                app_events.publish(AppEvent::ComponentStateChanged {
+                    component: Component::Radio,
+                    state,
+                    detail: detail.to_string(),
+                });
+            }
+        };
+        publish_lifecycle(ComponentState::Starting, "radio worker starting");
         {
             let mut s = state.lock().expect("ui state lock poisoned");
             if let RadioHandle::Remote(remote) = &radio {
@@ -762,12 +855,32 @@ pub(crate) fn spawn_radio_worker(
         // the lightweight core probe completes.
         poll_radio_core_state(&rt, &radio, &state, false);
         info!("Initial radio poll completed");
+        let initial_ready =
+            state.lock().expect("ui state lock poisoned").radio_power_on == Some(true);
+        publish_lifecycle(
+            if initial_ready {
+                ComponentState::Ready
+            } else {
+                ComponentState::Failed
+            },
+            if initial_ready {
+                "radio worker ready"
+            } else {
+                "radio initial probe failed"
+            },
+        );
         let mut next_core_poll = Instant::now() + RADIO_CORE_POLL_INTERVAL;
         let mut next_level_poll = Instant::now() + RADIO_LEVEL_POLL_INTERVAL;
         let mut radio_power_settle_until = Instant::now();
         let mut hostbridge_was_connected = true;
+        let mut command_tracker = CommandTracker::default();
 
         while !stop.load(Ordering::Relaxed) {
+            if let Some(app_events) = &app_events {
+                for result in command_tracker.expire(Instant::now()) {
+                    app_events.publish(AppEvent::CommandResult(result));
+                }
+            }
             if let Some(hostbridge_connected) = radio.pump_events() {
                 if !hostbridge_connected {
                     ptt_allowed.store(false, Ordering::Release);
@@ -778,6 +891,10 @@ pub(crate) fn spawn_radio_worker(
                             "DISCONNECTED · HostBridge (TX disarmed)".to_string();
                         s.last_error = Some("HostBridge disconnected; TX disarmed".to_string());
                         drop(s);
+                        publish_lifecycle(
+                            ComponentState::Disconnected,
+                            "HostBridge disconnected; TX disarmed",
+                        );
                         request_gui_repaint(&repaint_ctx);
                     }
                 } else if !hostbridge_was_connected {
@@ -785,6 +902,10 @@ pub(crate) fn spawn_radio_worker(
                     s.radio_waterfall_status =
                         "CONNECTED · HostBridge (TX remains disarmed)".to_string();
                     drop(s);
+                    publish_lifecycle(
+                        ComponentState::Ready,
+                        "HostBridge reconnected; TX remains disarmed",
+                    );
                     request_gui_repaint(&repaint_ctx);
                 }
                 hostbridge_was_connected = hostbridge_connected;
@@ -798,7 +919,29 @@ pub(crate) fn spawn_radio_worker(
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
 
-            if let Some(cmd) = cmd {
+            if let Some(raw_cmd) = cmd {
+                let (envelope, cmd) = match raw_cmd {
+                    GuiCommand::Correlated { envelope, command } => (envelope, *command),
+                    command => {
+                        let id = LEGACY_COMMAND_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+                        (
+                            CommandEnvelope {
+                                id: CommandId::new(format!("legacy-{id}")),
+                                kind: CommandKind::Other,
+                                timeout_ms: 3_000,
+                            },
+                            command,
+                        )
+                    }
+                };
+                if let Some(app_events) = &app_events {
+                    app_events.publish(AppEvent::CommandResult(
+                        command_tracker.begin(envelope.clone(), Instant::now()),
+                    ));
+                } else {
+                    command_tracker.begin(envelope.clone(), Instant::now());
+                }
+                let command_id = envelope.id.clone();
                 let radio_unavailable = {
                     let s = state.lock().expect("ui state lock poisoned");
                     s.radio_power_on == Some(false)
@@ -808,15 +951,34 @@ pub(crate) fn spawn_radio_worker(
                 if radio_unavailable && !matches!(&cmd, GuiCommand::Quit | GuiCommand::SetPower(_))
                 {
                     warn!(command = ?cmd, "Radio command skipped while radio is unavailable");
+                    tx_gate.lock().expect("TX gate lock poisoned").disarm();
                     let mut s = state.lock().expect("ui state lock poisoned");
                     s.last_error = Some("radio command skipped: radio is unavailable".to_string());
                     if let GuiCommand::SetPttWithAck(_, ack_tx) = &cmd {
                         let _ = ack_tx.send(Err("radio is powered off".to_string()));
                     }
+                    if let Some(app_events) = &app_events {
+                        if let Some(result) = command_tracker.finish(
+                            &command_id,
+                            CommandOutcome::Rejected,
+                            "radio is unavailable",
+                        ) {
+                            app_events.publish(AppEvent::CommandResult(result));
+                        }
+                    }
                     continue;
                 }
                 match cmd {
-                    GuiCommand::Quit => return,
+                    GuiCommand::Quit => {
+                        if let Some(app_events) = &app_events {
+                            for result in command_tracker.advance_generation() {
+                                app_events.publish(AppEvent::CommandResult(result));
+                            }
+                        }
+                        publish_lifecycle(ComponentState::Stopping, "radio worker stopping");
+                        publish_lifecycle(ComponentState::Stopped, "radio worker stopped");
+                        return;
+                    }
                     GuiCommand::TuneDelta(delta) => {
                         let freq = rt.block_on(radio.get_frequency_hz()).ok();
                         if let Some(freq) = freq {
@@ -825,6 +987,11 @@ pub(crate) fn spawn_radio_worker(
                             } else {
                                 freq.saturating_add(delta as u64)
                             };
+                            {
+                                let mut s = state.lock().expect("ui state lock poisoned");
+                                s.frequency_requested_hz = Some(target);
+                                s.frequency_write_pending = true;
+                            }
                             info!(
                                 delta_hz = delta,
                                 from_hz = freq,
@@ -833,8 +1000,6 @@ pub(crate) fn spawn_radio_worker(
                             );
                             match rt.block_on(radio.set_frequency_hz(target)) {
                                 Ok(()) => {
-                                    state.lock().expect("ui state lock poisoned").frequency_hz =
-                                        Some(target);
                                     info!(frequency_hz = target, "Radio tune command accepted")
                                 }
                                 Err(err) => {
@@ -852,11 +1017,14 @@ pub(crate) fn spawn_radio_worker(
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::TuneTo(target) => {
+                        {
+                            let mut s = state.lock().expect("ui state lock poisoned");
+                            s.frequency_requested_hz = Some(target);
+                            s.frequency_write_pending = true;
+                        }
                         info!(target_hz = target, "Radio direct tune command requested");
                         match rt.block_on(radio.set_frequency_hz(target)) {
                             Ok(()) => {
-                                state.lock().expect("ui state lock poisoned").frequency_hz =
-                                    Some(target);
                                 info!(frequency_hz = target, "Radio direct tune command accepted")
                             }
                             Err(err) => {
@@ -876,6 +1044,11 @@ pub(crate) fn spawn_radio_worker(
                             Mode::Data => Mode::Usb,
                             _ => Mode::Usb,
                         };
+                        {
+                            let mut s = state.lock().expect("ui state lock poisoned");
+                            s.mode_requested = Some(format!("{next:?}"));
+                            s.mode_write_pending = true;
+                        }
                         info!(from = ?current, to = ?next, "Radio mode cycle requested");
                         match rt.block_on(Radio::set_mode(&radio, next)) {
                             Ok(()) => info!(mode = ?next, "Radio mode cycle accepted"),
@@ -888,6 +1061,11 @@ pub(crate) fn spawn_radio_worker(
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
                     GuiCommand::SetRadioMode(mode) => {
+                        {
+                            let mut s = state.lock().expect("ui state lock poisoned");
+                            s.mode_requested = Some(format!("{mode:?}"));
+                            s.mode_write_pending = true;
+                        }
                         info!(mode = ?mode, "Radio mode command requested");
                         match rt.block_on(Radio::set_mode(&radio, mode)) {
                             Ok(()) => info!(mode = ?mode, "Radio mode command accepted"),
@@ -904,6 +1082,27 @@ pub(crate) fn spawn_radio_worker(
                             warn!("Radio PTT command blocked while profile is inactive");
                             continue;
                         }
+                        if target {
+                            let mut gate = tx_gate.lock().expect("TX gate lock poisoned");
+                            let result = match gate.state() {
+                                TxState::Disarmed => gate
+                                    .apply(TxAction::Arm)
+                                    .and_then(|_| gate.apply(TxAction::Queue))
+                                    .and_then(|_| gate.apply(TxAction::Start)),
+                                TxState::Armed => gate
+                                    .apply(TxAction::Queue)
+                                    .and_then(|_| gate.apply(TxAction::Start)),
+                                TxState::Queued | TxState::Transmitting => {
+                                    Err(TxError::AlreadyArmed)
+                                }
+                            };
+                            if let Err(error) = result {
+                                warn!(?error, "Radio PTT command blocked by TX gate");
+                                continue;
+                            }
+                        } else {
+                            tx_gate.lock().expect("TX gate lock poisoned").disarm();
+                        }
                         info!(ptt = target, "Radio PTT command requested");
                         let result = rt
                             .block_on(radio.set_ptt(target))
@@ -916,6 +1115,11 @@ pub(crate) fn spawn_radio_worker(
                                 s.last_error = None;
                             }
                             Err(error) => {
+                                tx_gate
+                                    .lock()
+                                    .expect("TX gate lock poisoned")
+                                    .apply(TxAction::Fail)
+                                    .ok();
                                 error!(ptt = target, error = %error, "Radio PTT command failed");
                                 s.last_error = Some(error)
                             }
@@ -930,6 +1134,27 @@ pub(crate) fn spawn_radio_worker(
                                     .to_string()));
                             warn!("Radio PTT command blocked while profile is inactive");
                             continue;
+                        }
+                        if target {
+                            let mut gate = tx_gate.lock().expect("TX gate lock poisoned");
+                            let result = match gate.state() {
+                                TxState::Disarmed => gate
+                                    .apply(TxAction::Arm)
+                                    .and_then(|_| gate.apply(TxAction::Queue))
+                                    .and_then(|_| gate.apply(TxAction::Start)),
+                                TxState::Armed => gate
+                                    .apply(TxAction::Queue)
+                                    .and_then(|_| gate.apply(TxAction::Start)),
+                                TxState::Queued | TxState::Transmitting => {
+                                    Err(TxError::AlreadyArmed)
+                                }
+                            };
+                            if let Err(error) = result {
+                                let _ = ack_tx.send(Err(error.to_string()));
+                                continue;
+                            }
+                        } else {
+                            tx_gate.lock().expect("TX gate lock poisoned").disarm();
                         }
                         info!(
                             ptt = target,
@@ -947,6 +1172,11 @@ pub(crate) fn spawn_radio_worker(
                                     s.last_error = None;
                                 }
                                 Err(error) => {
+                                    tx_gate
+                                        .lock()
+                                        .expect("TX gate lock poisoned")
+                                        .apply(TxAction::Fail)
+                                        .ok();
                                     error!(ptt = target, error = %error, "Radio PTT command failed");
                                     s.last_error = Some(error.clone())
                                 }
@@ -988,6 +1218,26 @@ pub(crate) fn spawn_radio_worker(
                         // cannot briefly reuse the previous digital mode.
                         state.lock().expect("ui state lock poisoned").workspace_mode =
                             workspace_mode;
+                        {
+                            let mut s = state.lock().expect("ui state lock poisoned");
+                            s.frequency_requested_hz = Some(frequency_hz);
+                            s.frequency_write_pending = true;
+                            s.mode_requested =
+                                Some(if workspace_mode_supports_native_tx(workspace_mode) {
+                                    "Data".to_string()
+                                } else {
+                                    "Usb".to_string()
+                                });
+                            s.mode_write_pending = true;
+                            s.filter_requested = Some(
+                                workspace_radio_preset_for_frequency(
+                                    workspace_mode,
+                                    Some(frequency_hz),
+                                )
+                                .filter,
+                            );
+                            s.filter_write_pending = true;
+                        }
                         let preset = workspace_radio_preset_for_frequency(
                             workspace_mode,
                             Some(frequency_hz),
@@ -1046,7 +1296,6 @@ pub(crate) fn spawn_radio_worker(
                             let mut s = state.lock().expect("ui state lock poisoned");
                             s.mode = icom_base_mode_label(preset.base_mode).to_string();
                             s.data_mode = Some(preset.data_mode);
-                            s.frequency_hz = Some(frequency_hz);
                             s.radio_power_on = Some(true);
                             s.last_error = None;
                             info!(workspace = %workspace_mode.label(), frequency_hz, mode = ?preset.base_mode, data_mode = preset.data_mode, filter, "Radio workspace preset accepted");
@@ -1057,6 +1306,11 @@ pub(crate) fn spawn_radio_worker(
                         let workspace_mode =
                             state.lock().expect("ui state lock poisoned").workspace_mode;
                         let target_filter = supported_control_value(&radio, ControlId::Filter, n);
+                        {
+                            let mut s = state.lock().expect("ui state lock poisoned");
+                            s.filter_requested = Some(target_filter);
+                            s.filter_write_pending = true;
+                        }
                         info!(filter = target_filter, workspace = %workspace_mode.label(), "Radio filter change requested");
                         let result =
                             if radio.supports_control_write(ControlId::Filter) {
@@ -1455,6 +1709,28 @@ pub(crate) fn spawn_radio_worker(
                         }
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
+                    GuiCommand::Correlated { .. } => {
+                        unreachable!("correlated commands are unwrapped before dispatch")
+                    }
+                }
+                let failed = state
+                    .lock()
+                    .expect("ui state lock poisoned")
+                    .last_error
+                    .clone();
+                let outcome = if failed.is_some() {
+                    CommandOutcome::Failed
+                } else {
+                    CommandOutcome::Completed
+                };
+                if let Some(result) = command_tracker.finish(
+                    &command_id,
+                    outcome,
+                    failed.unwrap_or_else(|| "command completed".to_string()),
+                ) {
+                    if let Some(app_events) = &app_events {
+                        app_events.publish(AppEvent::CommandResult(result));
+                    }
                 }
                 next_core_poll = Instant::now() + RADIO_CORE_POLL_INTERVAL;
                 next_level_poll = Instant::now() + RADIO_LEVEL_POLL_INTERVAL;
@@ -1485,6 +1761,13 @@ pub(crate) fn spawn_radio_worker(
                 request_gui_repaint(&repaint_ctx);
             }
         }
+        if let Some(app_events) = &app_events {
+            for result in command_tracker.advance_generation() {
+                app_events.publish(AppEvent::CommandResult(result));
+            }
+        }
+        publish_lifecycle(ComponentState::Stopping, "radio worker stopping");
+        publish_lifecycle(ComponentState::Stopped, "radio worker stopped");
     })
 }
 
@@ -1542,6 +1825,9 @@ fn poll_radio_core_state(
             match (frequency, mode) {
                 (Ok(frequency_hz), Ok(mode)) => {
                     s.frequency_hz = Some(frequency_hz);
+                    if s.frequency_requested_hz == Some(frequency_hz) {
+                        s.frequency_write_pending = false;
+                    }
                     if let Some(vfo) = reported_vfo {
                         s.active_vfo = vfo;
                     }
@@ -1559,7 +1845,16 @@ fn poll_radio_core_state(
                     }
                     .to_string();
                     s.data_mode = Some(mode == Mode::Data);
+                    if s.mode_write_pending
+                        && s.mode_requested.as_deref().is_some_and(|requested| {
+                            requested.eq_ignore_ascii_case(&format!("{mode:?}"))
+                                || (mode == Mode::Data && requested.eq_ignore_ascii_case("data"))
+                        })
+                    {
+                        s.mode_write_pending = false;
+                    }
                     s.radio_power_on = Some(true);
+                    s.radio_power_requested = None;
                     s.radio_power_command_pending = false;
                     s.radio_power_settling = false;
                     s.radio_power_wake_deadline = None;
@@ -1583,6 +1878,7 @@ fn poll_radio_core_state(
                     // the displayed state.
                     if !wake_pending && !was_ready {
                         s.radio_power_on = Some(false);
+                        s.radio_power_requested = None;
                         s.radio_power_command_pending = false;
                         s.radio_power_wake_deadline = None;
                     }
@@ -1630,6 +1926,7 @@ fn poll_radio_core_state(
                 .is_some_and(|deadline| Instant::now() < deadline);
         if !wake_pending {
             s.radio_power_on = Some(false);
+            s.radio_power_requested = None;
             s.radio_power_command_pending = false;
             s.radio_power_wake_deadline = None;
             s.last_error = Some(error.to_string());
@@ -1716,11 +2013,15 @@ fn poll_radio_core_state(
     let mut s = state.lock().expect("ui state lock poisoned");
     if let Ok(status) = status_result {
         s.radio_power_on = Some(true);
+        s.radio_power_requested = None;
         s.radio_power_command_pending = false;
         s.radio_power_settling = false;
         s.radio_power_wake_deadline = None;
         if let Some(freq) = status.frequency_hz {
             s.frequency_hz = Some(freq);
+            if s.frequency_requested_hz == Some(freq) {
+                s.frequency_write_pending = false;
+            }
         }
         if let Some(vfo) = reported_vfo {
             s.active_vfo = vfo;
@@ -1803,6 +2104,9 @@ fn poll_radio_core_state(
     }
     if let Some(v) = filt {
         s.filter = Some(v);
+        if s.filter_requested == Some(v) {
+            s.filter_write_pending = false;
+        }
     }
 }
 
@@ -1946,6 +2250,7 @@ fn expire_power_on_wake(state: &mut GuiState, now: Instant) -> bool {
             .is_some_and(|deadline| now >= deadline)
     {
         state.radio_power_on = Some(false);
+        state.radio_power_requested = None;
         state.radio_power_command_pending = false;
         state.radio_power_settling = false;
         state.radio_power_wake_deadline = None;
@@ -1960,6 +2265,7 @@ fn accept_power_command(state: &mut GuiState, target: bool, now: Instant) {
     // A successful write only means the command was accepted. Do not show ON
     // until a status probe confirms that the radio has actually woken.
     state.radio_power_on = if target { None } else { Some(false) };
+    state.radio_power_requested = Some(target);
     state.radio_power_command_pending = target;
     state.radio_power_settling = target;
     state.radio_power_wake_deadline = target.then_some(now + Duration::from_secs(12));
@@ -1968,6 +2274,7 @@ fn accept_power_command(state: &mut GuiState, target: bool, now: Instant) {
 
 fn reject_power_command(state: &mut GuiState, error: String) {
     state.last_error = Some(error);
+    state.radio_power_requested = None;
     state.radio_power_command_pending = false;
     state.radio_power_settling = false;
     state.radio_power_wake_deadline = None;
@@ -4586,6 +4893,181 @@ mod level_poll_tests {
         assert_eq!(state.frequency_hz, Some(7_101_000));
         assert_eq!(state.mode, "USB");
         assert!(!state.ptt_on);
+    }
+
+    #[test]
+    fn null_radio_worker_enforces_tx_gate_for_ptt_lifecycle() {
+        let state = Arc::new(Mutex::new(GuiState::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let sweep_abort = Arc::new(AtomicBool::new(false));
+        let display_tuning = Arc::new(Mutex::new(DisplayTuning::default()));
+        let repaint = Arc::new(OnceLock::new());
+        let ptt_allowed = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker(
+            ConfiguredRadio::Null(qsonaut_radio::NullRadio::new()),
+            state.clone(),
+            stop,
+            sweep_abort,
+            display_tuning,
+            rx,
+            repaint,
+            ptt_allowed,
+        );
+
+        let (on_tx, on_rx) = mpsc::channel();
+        tx.send(GuiCommand::SetPttWithAck(true, on_tx))
+            .expect("request null-radio PTT");
+        assert_eq!(on_rx.recv().expect("PTT-on acknowledgement"), Ok(()));
+        assert!(state.lock().expect("state lock").ptt_on);
+
+        let (off_tx, off_rx) = mpsc::channel();
+        tx.send(GuiCommand::SetPttWithAck(false, off_tx))
+            .expect("release null-radio PTT");
+        assert_eq!(off_rx.recv().expect("PTT-off acknowledgement"), Ok(()));
+        assert!(!state.lock().expect("state lock").ptt_on);
+
+        tx.send(GuiCommand::Quit).expect("quit null-radio worker");
+        handle
+            .join()
+            .expect("null-radio worker should stop cleanly");
+    }
+
+    #[test]
+    fn correlated_null_radio_command_publishes_acceptance_and_completion() {
+        let events = AppEventBus::new(16);
+        let mut subscriber = events.subscribe();
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker_with_gate_with_events(
+            ConfiguredRadio::Null(qsonaut_radio::NullRadio::new()),
+            Arc::new(Mutex::new(GuiState::default())),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(DisplayTuning::default())),
+            rx,
+            Arc::new(OnceLock::new()),
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(Mutex::new(TxGate::default())),
+            events,
+        );
+        let command_id = CommandId::new("null-tune-1");
+        tx.send(GuiCommand::Correlated {
+            envelope: CommandEnvelope {
+                id: command_id.clone(),
+                kind: CommandKind::Tune,
+                timeout_ms: 1_000,
+            },
+            command: Box::new(GuiCommand::TuneTo(14_075_000)),
+        })
+        .expect("send correlated null-radio tune");
+
+        let mut outcomes = Vec::new();
+        while outcomes.len() < 2 {
+            if let Ok(AppEvent::CommandResult(result)) = subscriber.try_recv() {
+                if result.id == command_id {
+                    outcomes.push(result.outcome);
+                }
+            }
+        }
+        assert_eq!(
+            outcomes,
+            vec![CommandOutcome::Accepted, CommandOutcome::Completed]
+        );
+
+        tx.send(GuiCommand::Quit).expect("quit null-radio worker");
+        handle
+            .join()
+            .expect("null-radio worker should stop cleanly");
+    }
+
+    #[test]
+    fn null_radio_worker_publishes_ready_and_shutdown_lifecycle() {
+        let events = AppEventBus::new(8);
+        let mut subscriber = events.subscribe();
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker_with_gate_with_events(
+            ConfiguredRadio::Null(qsonaut_radio::NullRadio::new()),
+            Arc::new(Mutex::new(GuiState::default())),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(DisplayTuning::default())),
+            rx,
+            Arc::new(OnceLock::new()),
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(Mutex::new(TxGate::default())),
+            events,
+        );
+        tx.send(GuiCommand::Quit).expect("quit null-radio worker");
+        handle
+            .join()
+            .expect("null-radio worker should stop cleanly");
+
+        let mut states = Vec::new();
+        while states.len() < 4 {
+            let event = subscriber.try_recv().expect("radio lifecycle event");
+            if let AppEvent::ComponentStateChanged {
+                component: Component::Radio,
+                state,
+                ..
+            } = event
+            {
+                states.push(state);
+            }
+        }
+        assert_eq!(
+            states,
+            vec![
+                ComponentState::Starting,
+                ComponentState::Ready,
+                ComponentState::Stopping,
+                ComponentState::Stopped,
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_radio_probe_publishes_failed_then_shutdown_lifecycle() {
+        let events = AppEventBus::new(8);
+        let mut subscriber = events.subscribe();
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_radio_worker_with_gate_with_events(
+            ConfiguredRadio::Rigctld(qsonaut_radio::rigctld::RigctldRadio::new("127.0.0.1:1")),
+            Arc::new(Mutex::new(GuiState::default())),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(DisplayTuning::default())),
+            rx,
+            Arc::new(OnceLock::new()),
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(Mutex::new(TxGate::default())),
+            events,
+        );
+        tx.send(GuiCommand::Quit).expect("quit failed radio worker");
+        handle
+            .join()
+            .expect("failed radio worker should stop cleanly");
+
+        let mut states = Vec::new();
+        while states.len() < 4 {
+            let event = subscriber.try_recv().expect("radio lifecycle event");
+            if let AppEvent::ComponentStateChanged {
+                component: Component::Radio,
+                state,
+                ..
+            } = event
+            {
+                states.push(state);
+            }
+        }
+        assert_eq!(
+            states,
+            vec![
+                ComponentState::Starting,
+                ComponentState::Failed,
+                ComponentState::Stopping,
+                ComponentState::Stopped,
+            ]
+        );
     }
 
     #[test]

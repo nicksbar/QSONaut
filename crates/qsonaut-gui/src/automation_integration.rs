@@ -16,6 +16,16 @@ pub(crate) fn parse_automation_hook_detail(detail: &str) -> BTreeMap<String, Str
 
 pub(crate) fn normalize_app_event_for_automation(event: AppEvent) -> Option<AutomationEvent> {
     match event {
+        AppEvent::ComponentStateChanged {
+            component,
+            state,
+            detail,
+        } => Some(
+            AutomationEvent::new(EventKind::ComponentState, "app.component_state")
+                .field("component", format!("{component:?}").to_ascii_lowercase())
+                .field("state", format!("{state:?}").to_ascii_lowercase())
+                .field("detail", detail),
+        ),
         AppEvent::ContestProfileChanged {
             enabled,
             operating_mode,
@@ -50,6 +60,8 @@ pub(crate) fn normalize_app_event_for_automation(event: AppEvent) -> Option<Auto
             })
         }
         AppEvent::QsoLogged {
+            id,
+            schema_version,
             mode,
             call,
             band,
@@ -61,8 +73,11 @@ pub(crate) fn normalize_app_event_for_automation(event: AppEvent) -> Option<Auto
             report_received,
             operation_mode,
             contest_exchange_received,
+            persistence,
         } => {
             let mut event = AutomationEvent::new(EventKind::QsoLogged, "app.qso_log")
+                .field("id", id.to_string())
+                .field("schema_version", schema_version.to_string())
                 .field("mode", mode)
                 .field("call", call)
                 .field("band", band)
@@ -76,6 +91,10 @@ pub(crate) fn normalize_app_event_for_automation(event: AppEvent) -> Option<Auto
                 .field(
                     "contest_exchange_received",
                     contest_exchange_received.clone(),
+                )
+                .field(
+                    "persistence",
+                    format!("{persistence:?}").to_ascii_lowercase(),
                 );
             if let Some(hour) = time_on.get(..2).and_then(|hour| hour.parse::<u8>().ok()) {
                 if hour < 7 {

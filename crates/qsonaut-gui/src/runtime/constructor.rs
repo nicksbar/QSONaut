@@ -295,6 +295,7 @@ impl QsonautGuiApp {
                 let session_ft8_tx_active = Arc::new(AtomicBool::new(false));
                 let session_digital_tx_active = Arc::new(AtomicBool::new(false));
                 let session_ptt_allowed = Arc::new(AtomicBool::new(false));
+                let session_tx_gate = Arc::new(Mutex::new(TxGate::default()));
                 let session_audio_worker_handle = None;
                 info!(
                     profile = profile_name,
@@ -319,6 +320,7 @@ impl QsonautGuiApp {
                         ft8_tx_active: session_ft8_tx_active,
                         digital_tx_active: session_digital_tx_active,
                         ptt_allowed: session_ptt_allowed,
+                        tx_gate: session_tx_gate,
                         init_rx,
                         init_attempted: false,
                         worker_handle: None,
@@ -330,10 +332,11 @@ impl QsonautGuiApp {
 
         let ft8_tx_active = Arc::new(AtomicBool::new(false));
         let ptt_allowed = Arc::new(AtomicBool::new(true));
+        let tx_gate = Arc::new(Mutex::new(TxGate::default()));
         let digital_tx_active = Arc::new(AtomicBool::new(false));
         let monitor_volume = Arc::new(AtomicU32::new(config.audio.monitor_volume.to_bits()));
         let audio_worker_handle = start_workers.then(|| {
-            spawn_audio_spectrum_worker(
+            spawn_audio_spectrum_worker_with_events(
                 state.clone(),
                 audio_worker_stop.clone(),
                 ft8_tx_active.clone(),
@@ -358,6 +361,7 @@ impl QsonautGuiApp {
                 monitor_volume.clone(),
                 repaint_ctx.clone(),
                 display_tuning.clone(),
+                app_events.clone(),
             )
         });
 
@@ -746,6 +750,13 @@ impl QsonautGuiApp {
         Self {
             config,
             app_events,
+            component_states: BTreeMap::from([
+                (Component::Radio, ComponentState::Starting),
+                (Component::Audio, ComponentState::Starting),
+                (Component::Transmit, ComponentState::Stopped),
+                (Component::Logging, ComponentState::Starting),
+                (Component::Connector, ComponentState::Starting),
+            ]),
             automation_event_rx,
             automation_host,
             automation_status,
@@ -890,6 +901,7 @@ impl QsonautGuiApp {
             ft8_tx_abort: Arc::new(AtomicBool::new(false)),
             ft8_tx_active,
             ptt_allowed,
+            tx_gate,
             ft8_tx_event_tx,
             ft8_tx_event_rx,
             ft8_last_tx_was_cq: false,

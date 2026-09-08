@@ -39,8 +39,9 @@ use qsonaut_automation::{
     Capability, CapabilitySet, EventKind, ExternalSourceConfig, RuleComponent, RuleComponentConfig,
 };
 use qsonaut_core::{
-    AppConfig, AppEvent, AppEventBus, AudioConfig, ContestOperatingMode, ContestProfile,
-    FoxHoundRole, RadioConfig, SplitPolicy,
+    AppConfig, AppEvent, AppEventBus, AudioConfig, CommandEnvelope, CommandId, CommandKind,
+    CommandOutcome, CommandTracker, Component, ComponentState, ContestOperatingMode,
+    ContestProfile, FoxHoundRole, RadioConfig, SplitPolicy, TxAction, TxError, TxGate, TxState,
 };
 use qsonaut_hostbridge_client::{HostBridgeClient, HostBridgeConfig, HostBridgeEvent};
 use qsonaut_hostbridge_protocol::{HostHello, RadioDriver};
@@ -72,7 +73,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::f32::consts::PI;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -294,7 +295,7 @@ use workers::decode::{
 };
 #[cfg(test)]
 use workers::radio::apply_waterfall_bins;
-use workers::spawn_audio_spectrum_worker;
+use workers::spawn_audio_spectrum_worker_with_events;
 
 const RADIO_WF_WIDTH: usize = 360;
 const RADIO_WF_HEIGHT: usize = 180;
@@ -302,6 +303,7 @@ const MAX_RADIO_WF_BINS: usize = 1_024;
 const AUDIO_BINS: usize = 512;
 const AUDIO_WF_HEIGHT: usize = 120;
 const AUDIO_MAX_FREQ_HZ: u32 = 4_000;
+static GUI_COMMAND_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 // 8192 samples @ 48 kHz = 170 ms window, ~5.9 Hz/bin, ~683 useful bins for 0-4 kHz.
 const FFT_SIZE: usize = 8192;
 const GUI_SCALE_BASE: f32 = 1.2;
@@ -658,12 +660,18 @@ impl SstvAiPipelineMode {
 #[derive(Debug, Clone)]
 struct GuiState {
     frequency_hz: Option<u64>,
+    frequency_requested_hz: Option<u64>,
+    frequency_write_pending: bool,
     /// Active VFO selector: 0 = A, 1 = B. Drivers without reliable readback
     /// remain on the safe startup assumption of VFO A.
     active_vfo: u8,
     mode: String,
+    mode_requested: Option<String>,
+    mode_write_pending: bool,
     data_mode: Option<bool>,
     filter: Option<u8>,
+    filter_requested: Option<u8>,
+    filter_write_pending: bool,
     af_gain: Option<u8>,
     tuning_step: Option<u8>,
     antenna: Option<u8>,
@@ -706,6 +714,7 @@ struct GuiState {
     swr_sweep_interval_ms: u64,
     swr_sweep_band: Option<String>,
     radio_power_on: Option<bool>,
+    radio_power_requested: Option<bool>,
     radio_power_supported: bool,
     radio_power_command_pending: bool,
     radio_power_settling: bool,
@@ -846,10 +855,16 @@ impl Default for GuiState {
     fn default() -> Self {
         Self {
             frequency_hz: None,
+            frequency_requested_hz: None,
+            frequency_write_pending: false,
             active_vfo: 0,
             mode: "(unknown)".to_string(),
+            mode_requested: None,
+            mode_write_pending: false,
             data_mode: None,
             filter: None,
+            filter_requested: None,
+            filter_write_pending: false,
             af_gain: None,
             tuning_step: None,
             antenna: None,
@@ -892,6 +907,7 @@ impl Default for GuiState {
             swr_sweep_interval_ms: 500,
             swr_sweep_band: None,
             radio_power_on: None,
+            radio_power_requested: None,
             radio_power_supported: false,
             radio_power_command_pending: false,
             radio_power_settling: false,
@@ -987,6 +1003,10 @@ impl Default for GuiState {
 
 #[derive(Debug, Clone)]
 enum GuiCommand {
+    Correlated {
+        envelope: CommandEnvelope,
+        command: Box<GuiCommand>,
+    },
     TuneDelta(i64),
     TuneTo(u64),
     CycleMode,
@@ -1176,6 +1196,7 @@ fn preferred_renderer() -> eframe::Renderer {
 struct QsonautGuiApp {
     config: AppConfig,
     app_events: AppEventBus,
+    component_states: BTreeMap<Component, ComponentState>,
     automation_event_rx: tokio::sync::broadcast::Receiver<AppEvent>,
     automation_host: AutomationHost,
     automation_status: String,
@@ -1323,6 +1344,7 @@ struct QsonautGuiApp {
     ft8_tx_abort: Arc<AtomicBool>,
     ft8_tx_active: Arc<AtomicBool>,
     ptt_allowed: Arc<AtomicBool>,
+    tx_gate: Arc<Mutex<TxGate>>,
     ft8_tx_event_tx: mpsc::Sender<Ft8TxEvent>,
     ft8_tx_event_rx: mpsc::Receiver<Ft8TxEvent>,
     ft8_last_tx_was_cq: bool,
@@ -1514,6 +1536,7 @@ struct RadioSession {
     ft8_tx_active: Arc<AtomicBool>,
     digital_tx_active: Arc<AtomicBool>,
     ptt_allowed: Arc<AtomicBool>,
+    tx_gate: Arc<Mutex<TxGate>>,
     init_rx: Option<mpsc::Receiver<Option<RadioHandle>>>,
     init_attempted: bool,
     worker_handle: Option<std::thread::JoinHandle<()>>,
@@ -1685,6 +1708,7 @@ impl QsonautGuiApp {
     }
 
     fn disarm_all_tx_with_persistence(&mut self, reason: &str, persist: bool) {
+        self.tx_gate.lock().expect("TX gate lock poisoned").disarm();
         self.force_stop_tx();
         self.stop_native_digital_tx();
         self.ft8_autoseq = false;
@@ -1698,6 +1722,7 @@ impl QsonautGuiApp {
         self.digital_last_tx_message = None;
         self.ft8_seq_status = reason.to_string();
         self.digital_tx_status = reason.to_string();
+        self.publish_component_state(Component::Transmit, ComponentState::Stopped, reason);
         if persist {
             self.profile_dirty = true;
             self.persist_profile("All TX disarmed");
@@ -1734,6 +1759,31 @@ impl QsonautGuiApp {
         self.app_events.publish(AppEvent::AutomationHook {
             kind: "operator_profile".to_string(),
             source: "gui.operator_profile".to_string(),
+            detail: detail.into(),
+        });
+    }
+
+    fn publish_component_state(
+        &mut self,
+        component: Component,
+        state: ComponentState,
+        detail: impl Into<String>,
+    ) {
+        if !qsonaut_core::is_valid_component_transition(
+            self.component_states.get(&component).copied(),
+            state,
+        ) {
+            warn!(
+                ?component,
+                ?state,
+                "Ignoring stale component lifecycle transition"
+            );
+            return;
+        }
+        self.component_states.insert(component, state);
+        self.app_events.publish(AppEvent::ComponentStateChanged {
+            component,
+            state,
             detail: detail.into(),
         });
     }
@@ -1787,10 +1837,10 @@ impl QsonautGuiApp {
     }
 
     fn publish_external_ingress_message(&mut self) {
-        let source = self.external_ingress_source.trim();
-        let author = self.external_ingress_author.trim();
-        let channel = self.external_ingress_channel.trim();
-        let message = self.external_ingress_message.trim();
+        let source = self.external_ingress_source.trim().to_string();
+        let author = self.external_ingress_author.trim().to_string();
+        let channel = self.external_ingress_channel.trim().to_string();
+        let message = self.external_ingress_message.trim().to_string();
         if source.is_empty() || author.is_empty() || message.is_empty() {
             warn!(
                 source_present = !source.is_empty(),
@@ -1800,20 +1850,32 @@ impl QsonautGuiApp {
             );
             self.automation_status =
                 "External ingress blocked: source, author, and message are required".to_string();
+            self.publish_component_state(
+                Component::Connector,
+                ComponentState::Failed,
+                "external ingress metadata is incomplete",
+            );
             return;
         }
 
+        self.publish_component_state(
+            Component::Connector,
+            ComponentState::Ready,
+            format!("external ingress accepted from {source}"),
+        );
+
+        let message_length = message.chars().count();
         self.app_events.publish(AppEvent::ExternalMessageReceived {
-            source: source.to_string(),
-            author: author.to_string(),
-            message: message.to_string(),
+            source: source.clone(),
+            author: author.clone(),
+            message: message.clone(),
             channel: if channel.is_empty() {
                 "(unspecified)".to_string()
             } else {
                 channel.to_string()
             },
         });
-        info!(source = %source, author = %author, channel = %if channel.is_empty() { "(unspecified)" } else { channel }, message_length = message.chars().count(), "External ingress accepted");
+        info!(source = %source, author = %author, channel = %if channel.is_empty() { "(unspecified)" } else { &channel }, message_length, "External ingress accepted");
         self.automation_status =
             format!("External message injected from {source} as {author}: {message}");
         self.external_ingress_message.clear();
@@ -1821,7 +1883,27 @@ impl QsonautGuiApp {
 
     fn send_command(&self, cmd: GuiCommand) {
         if let Some(tx) = &self.command_tx {
-            let _ = tx.send(cmd);
+            let kind = match &cmd {
+                GuiCommand::TuneDelta(_) | GuiCommand::TuneTo(_) => CommandKind::Tune,
+                GuiCommand::CycleMode | GuiCommand::SetRadioMode(_) => CommandKind::SetMode,
+                GuiCommand::SetPtt(_) | GuiCommand::SetPttWithAck(_, _) => CommandKind::SetPtt,
+                GuiCommand::SetPower(_) => CommandKind::SetPower,
+                GuiCommand::SetControl(_, _) | GuiCommand::SetFilter(_) => CommandKind::SetControl,
+                GuiCommand::ApplyWorkspace { .. } => CommandKind::ApplyWorkspace,
+                GuiCommand::StartTuner => CommandKind::StartTuner,
+                GuiCommand::StartSwrSweep { .. } => CommandKind::StartSwrSweep,
+                _ => CommandKind::Other,
+            };
+            let id = GUI_COMMAND_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let envelope = CommandEnvelope {
+                id: CommandId::new(format!("gui-{id}")),
+                kind,
+                timeout_ms: 3_000,
+            };
+            let _ = tx.send(GuiCommand::Correlated {
+                envelope,
+                command: Box::new(cmd),
+            });
         }
     }
 
@@ -1968,6 +2050,7 @@ fn append_ft8_log_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qsonaut_core::LogOutcome;
 
     #[test]
     fn scope_retry_status_does_not_mark_healthy_radio_offline() {
@@ -3926,6 +4009,31 @@ mod tests {
     }
 
     #[test]
+    fn normalize_component_state_event_for_automation() {
+        let event = normalize_app_event_for_automation(AppEvent::ComponentStateChanged {
+            component: Component::Transmit,
+            state: ComponentState::Stopped,
+            detail: "operator stop".to_string(),
+        })
+        .expect("component state event");
+
+        assert_eq!(event.kind, EventKind::ComponentState);
+        assert_eq!(event.source, "app.component_state");
+        assert_eq!(
+            event.fields.get("component").map(String::as_str),
+            Some("transmit")
+        );
+        assert_eq!(
+            event.fields.get("state").map(String::as_str),
+            Some("stopped")
+        );
+        assert_eq!(
+            event.fields.get("detail").map(String::as_str),
+            Some("operator stop")
+        );
+    }
+
+    #[test]
     fn normalize_contest_profile_event_for_automation() {
         let event = normalize_app_event_for_automation(AppEvent::ContestProfileChanged {
             enabled: true,
@@ -3992,6 +4100,8 @@ mod tests {
         );
 
         let qso = normalize_app_event_for_automation(AppEvent::QsoLogged {
+            id: 7,
+            schema_version: 1,
             mode: "CW".to_string(),
             call: "K1ABC".to_string(),
             band: "20m".to_string(),
@@ -4003,6 +4113,7 @@ mod tests {
             report_received: "-10".to_string(),
             operation_mode: "General".to_string(),
             contest_exchange_received: String::new(),
+            persistence: LogOutcome::Persisted,
         })
         .expect("qso event");
         assert_eq!(qso.kind, EventKind::QsoLogged);
@@ -4014,6 +4125,8 @@ mod tests {
         assert!(qso.fields.contains_key("report_received"));
 
         let early_dx = normalize_app_event_for_automation(AppEvent::QsoLogged {
+            id: 8,
+            schema_version: 1,
             mode: "FT8".to_string(),
             call: "JA1ABC".to_string(),
             band: "20m".to_string(),
@@ -4025,6 +4138,7 @@ mod tests {
             report_received: "-23".to_string(),
             operation_mode: "General".to_string(),
             contest_exchange_received: String::new(),
+            persistence: LogOutcome::Persisted,
         })
         .expect("tagged qso event");
         assert!(early_dx.tags.contains("early_bird"));

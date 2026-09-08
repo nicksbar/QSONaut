@@ -245,6 +245,11 @@ pub(super) fn join_handle_for_shutdown(handle: std::thread::JoinHandle<()>, work
 }
 
 pub(super) fn stop_radio_session(session: RadioSession) {
+    session
+        .tx_gate
+        .lock()
+        .expect("TX gate lock poisoned")
+        .disarm();
     request_radio_session_stop(&session);
     join_radio_session(session);
 }
@@ -312,6 +317,17 @@ impl QsonautGuiApp {
                 self.reconnect_radio();
                 self.restart_audio();
             } else {
+                self.disarm_all_tx_with_persistence("Workers stopped by operator", false);
+                self.publish_component_state(
+                    Component::Radio,
+                    ComponentState::Stopping,
+                    "radio worker stopping by operator request",
+                );
+                self.publish_component_state(
+                    Component::Audio,
+                    ComponentState::Stopping,
+                    "audio worker stopping by operator request",
+                );
                 self.radio_worker_stop.store(true, Ordering::Relaxed);
                 self.audio_worker_stop.store(true, Ordering::Relaxed);
                 if let Some(tx) = &self.command_tx {
@@ -328,6 +344,16 @@ impl QsonautGuiApp {
                     state.radio_waterfall_status = "STOPPED (by operator)".to_string();
                     state.audio_spectrum_status = "STOPPED (by operator)".to_string();
                 }
+                self.publish_component_state(
+                    Component::Radio,
+                    ComponentState::Stopped,
+                    "radio worker stopped by operator",
+                );
+                self.publish_component_state(
+                    Component::Audio,
+                    ComponentState::Stopped,
+                    "audio worker stopped by operator",
+                );
             }
             return;
         }
@@ -358,7 +384,7 @@ impl QsonautGuiApp {
             ));
             session.init_attempted = false;
             if session.audio_worker_handle.is_none() {
-                session.audio_worker_handle = Some(spawn_audio_spectrum_worker(
+                session.audio_worker_handle = Some(spawn_audio_spectrum_worker_with_events(
                     session.state.clone(),
                     session.audio_worker_stop.clone(),
                     session.ft8_tx_active.clone(),
@@ -383,6 +409,7 @@ impl QsonautGuiApp {
                     session.monitor_volume.clone(),
                     self.repaint_ctx.clone(),
                     session.display_tuning.clone(),
+                    self.app_events.clone(),
                 ));
             }
         } else {
@@ -457,7 +484,7 @@ impl QsonautGuiApp {
                 self.start_active_radio_session();
             }
             if self.audio_worker_handle.is_none() {
-                self.audio_worker_handle = Some(spawn_audio_spectrum_worker(
+                self.audio_worker_handle = Some(spawn_audio_spectrum_worker_with_events(
                     self.state.clone(),
                     self.audio_worker_stop.clone(),
                     self.ft8_tx_active.clone(),
@@ -482,6 +509,7 @@ impl QsonautGuiApp {
                     self.monitor_volume.clone(),
                     self.repaint_ctx.clone(),
                     self.display_tuning.clone(),
+                    self.app_events.clone(),
                 ));
             }
             info!(
@@ -505,7 +533,7 @@ impl QsonautGuiApp {
             self.ptt_allowed = Arc::new(AtomicBool::new(true));
             self.digital_tx_active = Arc::new(AtomicBool::new(false));
             self.start_active_radio_session();
-            self.audio_worker_handle = Some(spawn_audio_spectrum_worker(
+            self.audio_worker_handle = Some(spawn_audio_spectrum_worker_with_events(
                 self.state.clone(),
                 self.audio_worker_stop.clone(),
                 self.ft8_tx_active.clone(),
@@ -530,6 +558,7 @@ impl QsonautGuiApp {
                 self.monitor_volume.clone(),
                 self.repaint_ctx.clone(),
                 self.display_tuning.clone(),
+                self.app_events.clone(),
             ));
             self.apply_tab_preferences(&profile);
             self.restore_tab_view_state(TabViewState::default());
@@ -568,11 +597,17 @@ impl QsonautGuiApp {
             ft8_tx_active: self.ft8_tx_active.clone(),
             digital_tx_active: self.digital_tx_active.clone(),
             ptt_allowed: self.ptt_allowed.clone(),
+            tx_gate: self.tx_gate.clone(),
             init_rx: self.radio_init_rx.take(),
             init_attempted: self.radio_init_attempted,
             worker_handle: self.radio_worker_handle.take(),
             audio_worker_handle: self.audio_worker_handle.take(),
         };
+        session
+            .tx_gate
+            .lock()
+            .expect("TX gate lock poisoned")
+            .disarm();
         session.ptt_allowed.store(false, Ordering::Release);
         if let Some(previous) = self.parked_radio_sessions.insert(name, session) {
             stop_radio_session(previous);
@@ -588,6 +623,11 @@ impl QsonautGuiApp {
             if let Ok(mut state) = self.state.lock() {
                 state.radio_waterfall_status = "UNAVAILABLE (radio disabled)".to_string();
             }
+            self.publish_component_state(
+                Component::Radio,
+                ComponentState::Stopped,
+                "radio disabled by operator",
+            );
             return;
         }
         let port = self.config.radio.serial_port.clone().unwrap_or_default();
@@ -610,6 +650,11 @@ impl QsonautGuiApp {
             state.radio_waterfall_status = "CONNECTING…".to_string();
             state.last_error = None;
         }
+        self.publish_component_state(
+            Component::Radio,
+            ComponentState::Starting,
+            "radio initialization queued",
+        );
     }
 
     pub(super) fn pump_parked_radio_sessions(&mut self) {
@@ -650,16 +695,19 @@ impl QsonautGuiApp {
                 Ok(Some(radio)) => {
                     session.init_attempted = true;
                     let (tx, command_rx) = mpsc::channel::<GuiCommand>();
-                    session.worker_handle = Some(workers::radio::spawn_radio_worker(
-                        radio,
-                        session.state.clone(),
-                        session.worker_stop.clone(),
-                        session.swr_sweep_abort.clone(),
-                        session.display_tuning.clone(),
-                        command_rx,
-                        repaint_ctx.clone(),
-                        session.ptt_allowed.clone(),
-                    ));
+                    session.worker_handle =
+                        Some(workers::radio::spawn_radio_worker_with_gate_with_events(
+                            radio,
+                            session.state.clone(),
+                            session.worker_stop.clone(),
+                            session.swr_sweep_abort.clone(),
+                            session.display_tuning.clone(),
+                            command_rx,
+                            repaint_ctx.clone(),
+                            session.ptt_allowed.clone(),
+                            session.tx_gate.clone(),
+                            self.app_events.clone(),
+                        ));
                     session.command_tx = Some(tx);
                     let mut profile = session.profile.clone();
                     update_profile_connection_settings(

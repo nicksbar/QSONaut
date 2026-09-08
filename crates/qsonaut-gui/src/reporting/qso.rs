@@ -1,4 +1,5 @@
 use super::super::*;
+use qsonaut_core::LogOutcome;
 
 pub(crate) fn qso_log_path() -> PathBuf {
     app_config_dir().join(QSO_LOG_FILE)
@@ -31,16 +32,38 @@ pub(crate) fn qso_timestamp(record: &QsoRecord) -> Option<String> {
 }
 
 impl QsonautGuiApp {
-    pub(crate) fn persist_qso_log(&mut self, status_prefix: &str) {
+    pub(crate) fn persist_qso_log(&mut self, status_prefix: &str) -> LogOutcome {
+        if !matches!(
+            self.component_states.get(&Component::Logging),
+            Some(ComponentState::Starting | ComponentState::Ready)
+        ) {
+            self.publish_component_state(
+                Component::Logging,
+                ComponentState::Starting,
+                format!("saving QSO log: {status_prefix}"),
+            );
+        }
         match self.qso_log.save(&qso_log_path()) {
             Ok(()) => {
                 info!(contacts = self.qso_log.contacts.len(), status = %status_prefix, "QSO log saved");
                 self.qso_log_status = format!("{status_prefix} {}", QSO_LOG_FILE);
                 self.qso_log_dirty = false;
+                self.publish_component_state(
+                    Component::Logging,
+                    ComponentState::Ready,
+                    format!("{} contacts persisted", self.qso_log.contacts.len()),
+                );
+                LogOutcome::Persisted
             }
             Err(error) => {
                 warn!(error = %error, path = %qso_log_path().display(), "QSO log save failed");
                 self.qso_log_status = format!("Log save failed: {error}");
+                self.publish_component_state(
+                    Component::Logging,
+                    ComponentState::Failed,
+                    format!("QSO log save failed: {error}"),
+                );
+                LogOutcome::Failed
             }
         }
     }
@@ -83,28 +106,35 @@ impl QsonautGuiApp {
         }
         self.qso_log.contacts.push(record);
         let published = self.qso_log.contacts.last().cloned();
+        let persistence = self.persist_qso_log(status);
         if let Some(last) = &published {
-            self.app_events.publish(AppEvent::QsoLogged {
-                mode: last.mode.clone(),
-                call: last.callsign.clone(),
-                band: last.band.clone(),
-                frequency_hz: last.frequency_hz,
-                grid: last.grid.clone(),
-                state: last.state.clone(),
-                country: last
-                    .hamdb
-                    .as_ref()
-                    .map(|entry| entry.country.clone())
-                    .unwrap_or_default(),
-                time_on: last.time_on.clone(),
-                report_received: last.report_received.clone(),
-                operation_mode: last.operation_mode.clone(),
-                contest_exchange_received: last.contest_exchange_received.clone(),
-            });
+            if persistence == LogOutcome::Persisted {
+                self.app_events.publish(AppEvent::QsoLogged {
+                    id: last.id,
+                    schema_version: self.qso_log.version,
+                    mode: last.mode.clone(),
+                    call: last.callsign.clone(),
+                    band: last.band.clone(),
+                    frequency_hz: last.frequency_hz,
+                    grid: last.grid.clone(),
+                    state: last.state.clone(),
+                    country: last
+                        .hamdb
+                        .as_ref()
+                        .map(|entry| entry.country.clone())
+                        .unwrap_or_default(),
+                    time_on: last.time_on.clone(),
+                    report_received: last.report_received.clone(),
+                    operation_mode: last.operation_mode.clone(),
+                    contest_exchange_received: last.contest_exchange_received.clone(),
+                    persistence,
+                });
+            }
         }
         self.qso_selected = self.qso_log.contacts.last().map(|contact| contact.id);
-        self.qso_log_dirty = true;
-        self.persist_qso_log(status);
+        if persistence != LogOutcome::Persisted {
+            self.qso_log_dirty = true;
+        }
         if let Some(record) = &published {
             self.publish_qso_to_server(record);
         }
