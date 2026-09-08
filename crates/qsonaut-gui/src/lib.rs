@@ -1970,6 +1970,7 @@ fn append_ft8_log_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qsonaut_core::{CommandId, CommandOutcome, CommandResult, Component, ComponentState};
 
     #[test]
     fn scope_retry_status_does_not_mark_healthy_radio_offline() {
@@ -4045,6 +4046,41 @@ mod tests {
         assert_eq!(
             server.fields.get("kind").map(String::as_str),
             Some("radio_state")
+        );
+    }
+
+    #[test]
+    fn normalize_contract_events_exposes_lifecycle_and_command_results() {
+        let lifecycle = normalize_app_event_for_automation(AppEvent::ComponentStateChanged {
+            component: Component::Audio,
+            state: ComponentState::Ready,
+            detail: "audio worker ready".to_string(),
+        })
+        .expect("component state event");
+        assert_eq!(lifecycle.kind, EventKind::ComponentState);
+        assert_eq!(
+            lifecycle.fields.get("component").map(String::as_str),
+            Some("audio")
+        );
+        assert_eq!(
+            lifecycle.fields.get("state").map(String::as_str),
+            Some("ready")
+        );
+
+        let command = normalize_app_event_for_automation(AppEvent::CommandResult(CommandResult {
+            id: CommandId::new("radio-1"),
+            outcome: CommandOutcome::Completed,
+            detail: "frequency observed".to_string(),
+        }))
+        .expect("command result event");
+        assert_eq!(command.kind, EventKind::Command);
+        assert_eq!(
+            command.fields.get("id").map(String::as_str),
+            Some("radio-1")
+        );
+        assert_eq!(
+            command.fields.get("outcome").map(String::as_str),
+            Some("completed")
         );
     }
 

@@ -16,6 +16,16 @@ pub(crate) fn parse_automation_hook_detail(detail: &str) -> BTreeMap<String, Str
 
 pub(crate) fn normalize_app_event_for_automation(event: AppEvent) -> Option<AutomationEvent> {
     match event {
+        AppEvent::ComponentStateChanged {
+            component,
+            state,
+            detail,
+        } => Some(
+            AutomationEvent::new(EventKind::ComponentState, "app.component_state")
+                .field("component", format!("{component:?}").to_ascii_lowercase())
+                .field("state", format!("{state:?}").to_ascii_lowercase())
+                .field("detail", detail),
+        ),
         AppEvent::ContestProfileChanged {
             enabled,
             operating_mode,
@@ -149,6 +159,15 @@ pub(crate) fn normalize_app_event_for_automation(event: AppEvent) -> Option<Auto
             }
             Some(event)
         }
+        AppEvent::CommandResult(result) => Some(
+            AutomationEvent::new(EventKind::Command, "app.command_result")
+                .field("id", result.id.0)
+                .field(
+                    "outcome",
+                    format!("{:?}", result.outcome).to_ascii_lowercase(),
+                )
+                .field("detail", result.detail),
+        ),
         _ => None,
     }
 }

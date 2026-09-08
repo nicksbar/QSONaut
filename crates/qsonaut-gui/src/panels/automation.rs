@@ -23,6 +23,7 @@ fn event_label(event: EventKind) -> &'static str {
         EventKind::ContestState => "contest_state",
         EventKind::OperatorProfile => "operator_profile",
         EventKind::Command => "command",
+        EventKind::ComponentState => "component_state",
         EventKind::ExternalMessage => "external_message",
         EventKind::ServerMessage => "server_message",
         EventKind::Timer => "timer",

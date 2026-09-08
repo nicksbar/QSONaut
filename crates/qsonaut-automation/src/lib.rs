@@ -20,6 +20,7 @@ pub enum EventKind {
     Command,
     ExternalMessage,
     ServerMessage,
+    ComponentState,
     Timer,
     ControlRead,
 }

@@ -1,8 +1,84 @@
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Component {
+    Radio,
+    Audio,
+    Decoder,
+    Transmit,
+    Logging,
+    Automation,
+    Connector,
+    AiCapability,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComponentState {
+    Starting,
+    Ready,
+    Degraded,
+    Disconnected,
+    Stopping,
+    Stopped,
+    Failed,
+}
+
+pub fn is_valid_component_transition(
+    previous: Option<ComponentState>,
+    next: ComponentState,
+) -> bool {
+    let Some(previous) = previous else {
+        return matches!(next, ComponentState::Starting | ComponentState::Stopped);
+    };
+    if previous == next {
+        return true;
+    }
+    matches!(
+        (previous, next),
+        (
+            ComponentState::Starting,
+            ComponentState::Ready
+                | ComponentState::Stopping
+                | ComponentState::Stopped
+                | ComponentState::Failed
+        ) | (
+            ComponentState::Ready,
+            ComponentState::Degraded
+                | ComponentState::Disconnected
+                | ComponentState::Stopping
+                | ComponentState::Failed
+        ) | (
+            ComponentState::Degraded,
+            ComponentState::Ready
+                | ComponentState::Disconnected
+                | ComponentState::Stopping
+                | ComponentState::Failed
+        ) | (
+            ComponentState::Disconnected,
+            ComponentState::Starting | ComponentState::Stopping | ComponentState::Failed
+        ) | (
+            ComponentState::Stopping,
+            ComponentState::Stopped | ComponentState::Failed
+        ) | (ComponentState::Stopped, ComponentState::Starting)
+            | (
+                ComponentState::Failed,
+                ComponentState::Starting | ComponentState::Stopping
+            )
+    )
+}
 
 #[derive(Debug, Clone)]
 pub enum AppEvent {
+    ComponentStateChanged {
+        component: Component,
+        state: ComponentState,
+        detail: String,
+    },
     DeviceDiscovered {
         subsystem: String,
         name: String,
@@ -66,21 +142,39 @@ pub enum AppEvent {
         source: String,
         fields: BTreeMap<String, String>,
     },
+    CommandResult(crate::CommandResult),
     ShutdownRequested,
 }
 
 #[derive(Clone)]
 pub struct AppEventBus {
     tx: broadcast::Sender<AppEvent>,
+    lifecycle: Arc<Mutex<BTreeMap<Component, ComponentState>>>,
 }
 
 impl AppEventBus {
     pub fn new(capacity: usize) -> Self {
         let (tx, _) = broadcast::channel(capacity);
-        Self { tx }
+        Self {
+            tx,
+            lifecycle: Arc::new(Mutex::new(BTreeMap::new())),
+        }
     }
 
     pub fn publish(&self, event: AppEvent) {
+        if let AppEvent::ComponentStateChanged {
+            component, state, ..
+        } = &event
+        {
+            let mut lifecycle = self
+                .lifecycle
+                .lock()
+                .expect("event lifecycle lock poisoned");
+            if !is_valid_component_transition(lifecycle.get(component).copied(), *state) {
+                return;
+            }
+            lifecycle.insert(*component, *state);
+        }
         let _ = self.tx.send(event);
     }
 
@@ -91,7 +185,7 @@ impl AppEventBus {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppEvent, AppEventBus};
+    use super::{is_valid_component_transition, AppEvent, AppEventBus, Component, ComponentState};
 
     #[test]
     fn publishes_events_to_subscribers() {
@@ -128,5 +222,62 @@ mod tests {
         ));
         assert!(first.try_recv().is_err());
         assert!(second.try_recv().is_err());
+    }
+
+    #[test]
+    fn lifecycle_transitions_accept_recovery_and_reject_invalid_jumps() {
+        assert!(is_valid_component_transition(
+            None,
+            ComponentState::Starting
+        ));
+        assert!(is_valid_component_transition(
+            Some(ComponentState::Starting),
+            ComponentState::Ready
+        ));
+        assert!(is_valid_component_transition(
+            Some(ComponentState::Disconnected),
+            ComponentState::Starting
+        ));
+        assert!(!is_valid_component_transition(
+            Some(ComponentState::Ready),
+            ComponentState::Starting
+        ));
+    }
+
+    #[test]
+    fn lifecycle_events_are_typed_and_serializable() {
+        assert_eq!(
+            serde_json::to_string(&Component::Audio).unwrap(),
+            "\"audio\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ComponentState::Ready).unwrap(),
+            "\"ready\""
+        );
+    }
+
+    #[test]
+    fn event_bus_rejects_invalid_lifecycle_jumps() {
+        let bus = AppEventBus::new(4);
+        let mut subscriber = bus.subscribe();
+        bus.publish(AppEvent::ComponentStateChanged {
+            component: Component::Radio,
+            state: ComponentState::Starting,
+            detail: "starting".to_string(),
+        });
+        bus.publish(AppEvent::ComponentStateChanged {
+            component: Component::Radio,
+            state: ComponentState::Stopped,
+            detail: "stopped".to_string(),
+        });
+        bus.publish(AppEvent::ComponentStateChanged {
+            component: Component::Radio,
+            state: ComponentState::Ready,
+            detail: "invalid".to_string(),
+        });
+
+        assert!(subscriber.try_recv().is_ok());
+        assert!(subscriber.try_recv().is_ok());
+        assert!(subscriber.try_recv().is_err());
     }
 }
