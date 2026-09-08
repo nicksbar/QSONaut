@@ -122,10 +122,11 @@ completed with focused tests or explicitly marked as hardware-blocked.
   opt-in server/automation boundaries.
 - [x] Reach the current 60% overall QSONaut executable-line coverage baseline;
   preserve the Rigwright integration gate.
-- [ ] Raise QSONaut's Rigwright integration coverage from the current 74.33%
-  snapshot to the enforced 80% gate.
-- [ ] Finish the deterministic regression-fixture catalog and promote the
-  remaining high-value cases into CI.
+- [x] Raise QSONaut's Rigwright integration coverage from the prior 74.33%
+  snapshot to the enforced 80% gate; the current release-candidate snapshot
+  is 85.25% (3,374 / 3,958 lines).
+- [x] Finish the deterministic regression-fixture catalog and document the
+  currently promoted high-value cases in `docs/regression-fixtures.md`.
 - [ ] Complete a documented IC-7300 acceptance run for the v0.4 release
   candidate, including safe settings restoration and sanitized logs.
 - [ ] Reconcile release metadata, dependency revisions, README badges, and
