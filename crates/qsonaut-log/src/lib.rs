@@ -689,13 +689,22 @@ impl QsoLog {
             push_adif(&mut output, "CALL", &contact.callsign);
             push_adif(&mut output, "BAND", &contact.band);
             push_adif(&mut output, "MODE", &contact.mode);
-            if !contact.operation_mode.trim().is_empty() {
-                push_adif(&mut output, "COMMENT", &contact.operation_mode);
-            }
+            push_adif(
+                &mut output,
+                "QSONAUT_OPERATION_MODE",
+                &contact.operation_mode,
+            );
             if !contact.pota_reference.trim().is_empty() {
                 push_adif(&mut output, "SIG", "POTA");
                 push_adif(&mut output, "SIG_INFO", &contact.pota_reference);
             }
+            push_adif(&mut output, "QSONAUT_POTA_ROLE", &contact.pota_role);
+            push_adif(&mut output, "QSONAUT_POTA_NAME", &contact.pota_name);
+            push_adif(
+                &mut output,
+                "QSONAUT_POTA_REFERENCES",
+                &contact.pota_references,
+            );
             if contact.frequency_hz > 0 {
                 push_adif(
                     &mut output,
@@ -1031,6 +1040,41 @@ mod tests {
         assert!(adif.contains("<SRX:2>34"));
         assert!(adif.contains("<STX_STRING:7>5NN 012"));
         assert!(adif.contains("<SRX_STRING:7>5NN 034"));
+    }
+
+    #[test]
+    fn adif_round_trip_preserves_qsonaut_metadata() {
+        let mut record = QsoRecord::new("K1ABC", "FT8", "20m", 14_074_000, 0, 1);
+        record.operation_mode = "Contest".to_string();
+        record.pota_role = "Activator".to_string();
+        record.pota_reference = "US-0001".to_string();
+        record.pota_name = "Example Park".to_string();
+        record.pota_references = "US-0001,US-0002".to_string();
+        record.notes = "Keep this note".to_string();
+        let original = record.clone();
+        let exported = QsoLog {
+            version: 1,
+            contacts: vec![record],
+        }
+        .to_adif();
+
+        assert!(exported.contains("<QSONAUT_OPERATION_MODE:7>Contest"));
+        assert!(exported.contains("<QSONAUT_POTA_ROLE:9>Activator"));
+        assert!(exported.contains("<QSONAUT_POTA_NAME:12>Example Park"));
+
+        let mut imported = QsoLog::default();
+        let summary = imported.import_adif_from_str(&exported);
+
+        assert_eq!(summary.imported, 1);
+        assert_eq!(imported.contacts[0].operation_mode, original.operation_mode);
+        assert_eq!(imported.contacts[0].pota_role, original.pota_role);
+        assert_eq!(imported.contacts[0].pota_reference, original.pota_reference);
+        assert_eq!(imported.contacts[0].pota_name, original.pota_name);
+        assert_eq!(
+            imported.contacts[0].pota_references,
+            original.pota_references
+        );
+        assert_eq!(imported.contacts[0].notes, original.notes);
     }
 
     #[test]
