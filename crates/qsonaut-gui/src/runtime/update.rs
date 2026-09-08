@@ -85,6 +85,16 @@ impl QsonautGuiApp {
         }
         if !self.first_frame_logged {
             self.first_frame_logged = true;
+            // WSLg/Wayland can retain a newly-created native viewport as
+            // hidden or unfocused even when the builder requested visibility.
+            // Re-assert both commands after the first paint so the operator
+            // gets a usable window instead of a running headless process.
+            let wayland_session = std::env::var_os("WAYLAND_DISPLAY").is_some();
+            if wayland_session && ctx.input(|input| input.viewport().maximized == Some(true)) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             info!(
                 renderer = %self.selected_renderer,
                 os = std::env::consts::OS,
