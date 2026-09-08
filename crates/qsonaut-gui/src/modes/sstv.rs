@@ -1124,20 +1124,10 @@ impl QsonautGuiApp {
     }
 
     pub(crate) fn refresh_local_image_models(&mut self) {
-        self.publish_component_state(
-            Component::AiCapability,
-            ComponentState::Starting,
-            "checking local AI provider",
-        );
         if let Err(error) =
             local_ai::validate_loopback_endpoint(self.local_image_settings.endpoint())
         {
             self.local_image_status = error.to_string();
-            self.publish_component_state(
-                Component::AiCapability,
-                ComponentState::Failed,
-                error.to_string(),
-            );
             return;
         }
         let settings = self.local_image_settings.clone();
@@ -1353,47 +1343,22 @@ impl QsonautGuiApp {
                         );
                     }
                     let _ = self.local_image_settings.save();
-                    self.publish_component_state(
-                        Component::AiCapability,
-                        ComponentState::Ready,
-                        format!("{} local models discovered", self.local_image_models.len()),
-                    );
                 }
                 LocalImageEvent::Models(Err(error)) => {
                     tracing::warn!(error = %error, "local AI model discovery failed");
                     self.local_image_status = format!("Model discovery failed: {error}");
-                    self.publish_component_state(
-                        Component::AiCapability,
-                        ComponentState::Failed,
-                        format!("model discovery failed: {error}"),
-                    );
                 }
                 LocalImageEvent::Vision(Err(error)) => {
                     tracing::warn!(error = %error, "local AI vision analysis failed");
                     self.local_image_status = format!("Vision analysis failed: {error}");
-                    self.publish_component_state(
-                        Component::AiCapability,
-                        ComponentState::Failed,
-                        format!("vision analysis failed: {error}"),
-                    );
                 }
                 LocalImageEvent::Generated(Err(error)) => {
                     tracing::warn!(error = %error, "local AI image generation failed");
                     self.local_image_status = format!("Image generation failed: {error}");
-                    self.publish_component_state(
-                        Component::AiCapability,
-                        ComponentState::Failed,
-                        format!("image generation failed: {error}"),
-                    );
                 }
                 LocalImageEvent::Edited(Err(error)) => {
                     tracing::warn!(error = %error, "local AI image reinterpretation failed");
                     self.local_image_status = format!("Image reinterpretation failed: {error}");
-                    self.publish_component_state(
-                        Component::AiCapability,
-                        ComponentState::Failed,
-                        format!("image editing failed: {error}"),
-                    );
                 }
                 LocalImageEvent::Vision(Ok((image_id, analysis))) => {
                     let mut shared = self.state.lock().expect("ui state lock poisoned");

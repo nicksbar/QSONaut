@@ -35,10 +35,6 @@ impl QsonautGuiApp {
             self.state
                 .lock()
                 .expect("ui state lock poisoned")
-                .radio_power_requested = Some(!power_on);
-            self.state
-                .lock()
-                .expect("ui state lock poisoned")
                 .radio_power_command_pending = true;
             self.send_command(GuiCommand::SetPower(!power_on));
         }

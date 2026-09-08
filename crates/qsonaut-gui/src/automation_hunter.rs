@@ -845,18 +845,6 @@ impl QsonautGuiApp {
                     };
                     self.observe_automation_achievements(&event);
                     let report = self.automation_host.dispatch(&event);
-                    self.app_events.publish(AppEvent::AutomationResult {
-                        source: "automation.dispatch".to_string(),
-                        fields: BTreeMap::from([
-                            ("event_source".to_string(), event.source.clone()),
-                            (
-                                "approved_count".to_string(),
-                                report.approved.len().to_string(),
-                            ),
-                            ("denied_count".to_string(), report.denied.len().to_string()),
-                            ("error_count".to_string(), report.errors.len().to_string()),
-                        ]),
-                    });
 
                     for approved in &report.approved {
                         let action_name = match &approved.action {

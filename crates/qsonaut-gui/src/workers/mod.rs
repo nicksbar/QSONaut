@@ -3,7 +3,7 @@ pub(super) mod cwdit_adapter;
 pub(super) mod decode;
 pub(super) mod radio;
 
-pub(super) use audio::spawn_audio_spectrum_worker_with_events;
+pub(super) use audio::spawn_audio_spectrum_worker;
 
 use eframe::egui;
 use std::sync::atomic::{AtomicU64, Ordering};

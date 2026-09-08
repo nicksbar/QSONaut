@@ -20,7 +20,6 @@ fn event_label(event: EventKind) -> &'static str {
         EventKind::CallsignHit => "callsign_hit",
         EventKind::QsoLogged => "qso_logged",
         EventKind::RadioState => "radio_state",
-        EventKind::ComponentState => "component_state",
         EventKind::ContestState => "contest_state",
         EventKind::OperatorProfile => "operator_profile",
         EventKind::Command => "command",

@@ -103,7 +103,7 @@ impl QsonautGuiApp {
             return;
         }
         self.audio_worker_stop = Arc::new(AtomicBool::new(false));
-        self.audio_worker_handle = Some(spawn_audio_spectrum_worker_with_events(
+        self.audio_worker_handle = Some(spawn_audio_spectrum_worker(
             self.state.clone(),
             self.audio_worker_stop.clone(),
             self.ft8_tx_active.clone(),
@@ -128,7 +128,6 @@ impl QsonautGuiApp {
             self.monitor_volume.clone(),
             self.repaint_ctx.clone(),
             self.display_tuning.clone(),
-            self.app_events.clone(),
         ));
         self.audio_restart_required = false;
         info!("Audio worker restart queued");

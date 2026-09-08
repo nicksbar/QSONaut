@@ -601,7 +601,6 @@ fn save_sstv_debug_capture_in(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(dead_code)]
 pub(in super::super) fn spawn_audio_spectrum_worker(
     state: Arc<Mutex<GuiState>>,
     stop: Arc<AtomicBool>,
@@ -618,91 +617,7 @@ pub(in super::super) fn spawn_audio_spectrum_worker(
     repaint_ctx: Arc<OnceLock<egui::Context>>,
     display_tuning: Arc<Mutex<DisplayTuning>>,
 ) -> std::thread::JoinHandle<()> {
-    spawn_audio_spectrum_worker_inner(
-        state,
-        stop,
-        tx_active,
-        digital_tx_active,
-        enabled,
-        render_waterfall,
-        sample_rate_hz,
-        channels,
-        preferred_device,
-        monitor_enabled,
-        monitor_output_device,
-        monitor_volume,
-        repaint_ctx,
-        display_tuning,
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(in super::super) fn spawn_audio_spectrum_worker_with_events(
-    state: Arc<Mutex<GuiState>>,
-    stop: Arc<AtomicBool>,
-    tx_active: Arc<AtomicBool>,
-    digital_tx_active: Arc<AtomicBool>,
-    enabled: bool,
-    render_waterfall: bool,
-    sample_rate_hz: u32,
-    channels: u8,
-    preferred_device: Option<String>,
-    monitor_enabled: bool,
-    monitor_output_device: Option<String>,
-    monitor_volume: Arc<AtomicU32>,
-    repaint_ctx: Arc<OnceLock<egui::Context>>,
-    display_tuning: Arc<Mutex<DisplayTuning>>,
-    app_events: AppEventBus,
-) -> std::thread::JoinHandle<()> {
-    spawn_audio_spectrum_worker_inner(
-        state,
-        stop,
-        tx_active,
-        digital_tx_active,
-        enabled,
-        render_waterfall,
-        sample_rate_hz,
-        channels,
-        preferred_device,
-        monitor_enabled,
-        monitor_output_device,
-        monitor_volume,
-        repaint_ctx,
-        display_tuning,
-        Some(app_events),
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn spawn_audio_spectrum_worker_inner(
-    state: Arc<Mutex<GuiState>>,
-    stop: Arc<AtomicBool>,
-    tx_active: Arc<AtomicBool>,
-    digital_tx_active: Arc<AtomicBool>,
-    enabled: bool,
-    render_waterfall: bool,
-    sample_rate_hz: u32,
-    channels: u8,
-    preferred_device: Option<String>,
-    monitor_enabled: bool,
-    monitor_output_device: Option<String>,
-    monitor_volume: Arc<AtomicU32>,
-    repaint_ctx: Arc<OnceLock<egui::Context>>,
-    display_tuning: Arc<Mutex<DisplayTuning>>,
-    app_events: Option<AppEventBus>,
-) -> std::thread::JoinHandle<()> {
     thread::spawn(move || {
-        let publish_lifecycle = |state: ComponentState, detail: &str| {
-            if let Some(app_events) = &app_events {
-                app_events.publish(AppEvent::ComponentStateChanged {
-                    component: Component::Audio,
-                    state,
-                    detail: detail.to_string(),
-                });
-            }
-        };
-        publish_lifecycle(ComponentState::Starting, "audio worker starting");
         {
             let mut shared = state.lock().expect("ui state lock poisoned");
             shared.audio_device_sample_rate_hz = None;
@@ -717,10 +632,6 @@ fn spawn_audio_spectrum_worker_inner(
             info!("Audio worker disabled by configuration");
             let mut s = state.lock().expect("ui state lock poisoned");
             s.audio_spectrum_status = "DISABLED".to_string();
-            publish_lifecycle(
-                ComponentState::Stopped,
-                "audio worker disabled by configuration",
-            );
             return;
         }
 
@@ -752,7 +663,6 @@ fn spawn_audio_spectrum_worker_inner(
                     tracing::error!(sample_rate_hz, channels = CANONICAL_CHANNELS, error = %err, "Audio input stream failed to open");
                     let mut s = state.lock().expect("ui state lock poisoned");
                     s.audio_spectrum_status = format!("NO INPUT ({err})");
-                    publish_lifecycle(ComponentState::Failed, "audio input stream failed to open");
                     return;
                 }
             }
@@ -784,7 +694,6 @@ fn spawn_audio_spectrum_worker_inner(
             monitor_enabled,
             "Audio input worker started"
         );
-        publish_lifecycle(ComponentState::Ready, "audio worker ready");
         if let Some(stream) = &stream {
             for attempt in stream.fallback_attempts() {
                 warn!(attempt, "Audio input configuration fallback");
@@ -972,7 +881,6 @@ fn spawn_audio_spectrum_worker_inner(
                     }
                     if last_audio_read_error.take().is_some() {
                         info!("Audio input stream recovered");
-                        publish_lifecycle(ComponentState::Ready, "audio input stream recovered");
                     }
                     let monitor_raw_audio = {
                         let shared = state.lock().expect("ui state lock poisoned");
@@ -1020,10 +928,6 @@ fn spawn_audio_spectrum_worker_inner(
                         }
                         if let Some(error) = monitor.take_error() {
                             tracing::error!(error = %error, "RX audio monitor failed during playback");
-                            publish_lifecycle(
-                                ComponentState::Degraded,
-                                "audio monitor failed during playback",
-                            );
                             monitor_runtime_error = Some(error);
                         }
                     }
@@ -2222,10 +2126,6 @@ fn spawn_audio_spectrum_worker_inner(
                     let message = err.to_string();
                     if last_audio_read_error.as_deref() != Some(message.as_str()) {
                         warn!(error = %message, "Audio input stream read failed; retrying");
-                        publish_lifecycle(
-                            ComponentState::Degraded,
-                            "audio input stream read failed",
-                        );
                         last_audio_read_error = Some(message.clone());
                     }
                     state
@@ -2236,8 +2136,6 @@ fn spawn_audio_spectrum_worker_inner(
                 }
             }
         }
-        publish_lifecycle(ComponentState::Stopping, "audio worker stopping");
-        publish_lifecycle(ComponentState::Stopped, "audio worker stopped");
     })
 }
 
@@ -2250,7 +2148,6 @@ mod tests {
         WorkspaceMode,
     };
     use crate::is_probable_callsign;
-    use qsonaut_core::{AppEvent, AppEventBus, Component, ComponentState};
     use qsonaut_third_party::sstv as qsonaut_sstv;
     use rustfft::num_complex::Complex;
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -2443,100 +2340,6 @@ mod tests {
     }
 
     #[test]
-    fn audio_worker_disabled_path_publishes_lifecycle_events() {
-        let events = AppEventBus::new(8);
-        let mut subscriber = events.subscribe();
-        let handle = super::spawn_audio_spectrum_worker_with_events(
-            Arc::new(Mutex::new(GuiState::default())),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
-            false,
-            false,
-            48_000,
-            1,
-            None,
-            false,
-            None,
-            Arc::new(AtomicU32::new(1.0_f32.to_bits())),
-            Arc::new(OnceLock::new()),
-            Arc::new(Mutex::new(crate::DisplayTuning::default())),
-            events,
-        );
-        handle.join().expect("disabled audio worker should exit");
-
-        let lifecycle = (0..2)
-            .map(|_| subscriber.try_recv().expect("audio lifecycle event"))
-            .collect::<Vec<_>>();
-        assert!(matches!(
-            lifecycle[0],
-            AppEvent::ComponentStateChanged {
-                component: Component::Audio,
-                state: ComponentState::Starting,
-                ..
-            }
-        ));
-        assert!(matches!(
-            lifecycle[1],
-            AppEvent::ComponentStateChanged {
-                component: Component::Audio,
-                state: ComponentState::Stopped,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn audio_worker_input_open_failure_publishes_failed_lifecycle() {
-        let state = Arc::new(Mutex::new(GuiState::default()));
-        let events = AppEventBus::new(8);
-        let mut subscriber = events.subscribe();
-        let handle = super::spawn_audio_spectrum_worker_with_events(
-            state.clone(),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
-            true,
-            false,
-            48_000,
-            1,
-            Some("QSONaut definitely missing audio device".to_string()),
-            false,
-            None,
-            Arc::new(AtomicU32::new(1.0_f32.to_bits())),
-            Arc::new(OnceLock::new()),
-            Arc::new(Mutex::new(crate::DisplayTuning::default())),
-            events,
-        );
-        handle.join().expect("failed audio worker should exit");
-
-        let lifecycle = (0..2)
-            .map(|_| subscriber.try_recv().expect("audio lifecycle event"))
-            .collect::<Vec<_>>();
-        assert!(matches!(
-            lifecycle[0],
-            AppEvent::ComponentStateChanged {
-                component: Component::Audio,
-                state: ComponentState::Starting,
-                ..
-            }
-        ));
-        assert!(matches!(
-            lifecycle[1],
-            AppEvent::ComponentStateChanged {
-                component: Component::Audio,
-                state: ComponentState::Failed,
-                ..
-            }
-        ));
-        assert!(state
-            .lock()
-            .expect("audio state lock")
-            .audio_spectrum_status
-            .starts_with("NO INPUT"));
-    }
-
-    #[test]
     fn null_simulation_always_has_the_shared_station_pool() {
         for mode in [
             WorkspaceMode::Voice,
@@ -2574,14 +2377,12 @@ mod tests {
         let monitor_volume = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
         let repaint = Arc::new(OnceLock::new());
         let tuning = Arc::new(Mutex::new(crate::DisplayTuning::default()));
-        let events = AppEventBus::new(8);
-        let mut subscriber = events.subscribe();
 
         let stopper = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(2));
             stop_after_startup.store(true, Ordering::Relaxed);
         });
-        let handle = super::spawn_audio_spectrum_worker_with_events(
+        let handle = super::spawn_audio_spectrum_worker(
             state.clone(),
             stop,
             tx_active,
@@ -2596,31 +2397,9 @@ mod tests {
             monitor_volume,
             repaint,
             tuning,
-            events,
         );
         handle.join().expect("null audio worker should stop");
         stopper.join().expect("worker stopper should stop");
-
-        let lifecycle = (0..4)
-            .map(|_| subscriber.try_recv().expect("audio lifecycle event"))
-            .filter_map(|event| match event {
-                AppEvent::ComponentStateChanged {
-                    component: Component::Audio,
-                    state,
-                    ..
-                } => Some(state),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            lifecycle,
-            vec![
-                ComponentState::Starting,
-                ComponentState::Ready,
-                ComponentState::Stopping,
-                ComponentState::Stopped,
-            ]
-        );
 
         let state = state.lock().expect("state lock");
         assert_eq!(

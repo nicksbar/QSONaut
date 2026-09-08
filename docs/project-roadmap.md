@@ -32,83 +32,6 @@ documented in [achievement automation](achievement-automation.md).
 The v0.4 release should make the current architecture honest and usable, not
 expand every possible radio or modem surface.
 
-#### #79 cross-component contract program
-
-Issue #79 is intentionally decomposed into small, evidence-backed goals. The
-typed lifecycle event work is only the foundation; each goal below should be
-completed with focused tests or explicitly marked as hardware-blocked.
-
-**Phase A — contract foundation**
-
-- [x] Define the owner, inputs, outputs, persistence, error states, and
-  shutdown behavior for radio, audio, decoder, TX, logging, automation,
-  connectors, and AI capability state in `docs/state-contracts.md`.
-- [x] Add typed component lifecycle names and stable serialized values in
-  `qsonaut-core`.
-- [x] Publish and normalize the first radio, audio-failure, and global-TX
-  lifecycle transitions.
-- [x] Add typed command identity, correlation, timeout, cancellation, and
-  completion/failure outcomes for worker-facing commands.
-- [x] Define event ordering, duplicate-event, stale-event, and shutdown rules.
-- [x] Document the contract in `docs/state-contracts.md` and link the
-  implementation work to this roadmap.
-
-**Phase B — radio and audio boundaries**
-
-- [ ] Represent radio startup, ready, degraded, disconnected, reconnecting,
-  stopped, and failed transitions consistently.
-- [ ] Represent audio startup, device selection, sample-rate negotiation,
-  running, degraded, disconnected, stopped, and failed transitions.
-- [x] Define the supported audio block/sample-rate contract between capture,
-  monitor, waterfall, and decoder paths with typed `AudioFormat` values.
-- [x] Define radio command ownership and distinguish requested, pending, and
-  observed state for frequency, mode, filter, power, and worker commands.
-- [ ] Add deterministic tests for radio/audio disconnect, reconnect, worker
-  failure, cancellation, and shutdown ordering. The shared lifecycle matrix
-  and stale-event rejection are now covered; hardware-worker scenarios remain.
-
-**Phase C — mode and TX safety**
-
-- [ ] Define active mode, operator activity, profile, slot/session, and decode
-  batch context as explicit state rather than scattered strings and flags.
-- [x] Model TX armed, queued, transmitting, completed, canceled, failed, and
-  globally stopped transitions in the shared `TxGate`.
-- [x] Make global disarm idempotent at the shared gate and clear the GUI's
-  mode-specific TX queue, active flag, PTT request, and automatic sequence.
-- [ ] Prove radio/audio disconnect and application shutdown cannot leave a TX
-  request eligible for execution.
-- [ ] Add end-to-end safety tests covering manual, scheduled, digital, voice,
-  CW, SSTV, and automation-triggered TX paths.
-
-**Phase D — logging and automation contracts**
-
-- [x] Give QSO/logging events stable IDs, correlation metadata, persistence
-  outcomes, duplicate decisions, and schema/version information. Durable QSO
-  events now publish only after successful persistence.
-- [x] Define logging ownership for in-memory state, durable save, backup,
-  restore, ADIF import/export, and LoTW-facing behavior.
-- [x] Map component lifecycle, QSO, connector, and error events into the
-  automation contract without exposing private implementation state.
-- [x] Define automation permission changes, denied actions, action results,
-  and revocation behavior; dispatch now publishes aggregate outcomes.
-- [x] Define connector lifecycle and external-message provenance for IRC,
-  Discord, server, and future transports.
-
-**Phase E — capability and release evidence**
-
-- [x] Define AI provider/model capability, availability, failure, privacy, and
-  fallback events without making AI a release prerequisite; local model
-  discovery now publishes the capability lifecycle.
-- [x] Add contract transition-matrix tests; event-ordering tests remain to be
-  promoted into CI with the worker scenarios.
-- [x] Add software evidence for every supported v0.4 workflow and identify
-  the remaining hardware-only evidence explicitly in
-  `docs/software-evidence-v0.4.md`.
-- [ ] Reconcile #79 with #78, #75, #72, and the parent #77 without duplicating
-  implementation ownership.
-- [ ] Update the release acceptance checklist and close #79 only with linked
-  test, documentation, and hardware evidence where required.
-
 - [x] Consume driver-owned Rigwright sessions and profile-gated controls.
 - [x] Keep modem ownership behind `qsonaut-modems` and
   `qsonaut-third-party` with pinned revisions.
@@ -122,11 +45,10 @@ completed with focused tests or explicitly marked as hardware-blocked.
   opt-in server/automation boundaries.
 - [x] Reach the current 60% overall QSONaut executable-line coverage baseline;
   preserve the Rigwright integration gate.
-- [x] Raise QSONaut's Rigwright integration coverage from the prior 74.33%
-  snapshot to the enforced 80% gate; the current release-candidate snapshot
-  is 85.25% (3,374 / 3,958 lines).
-- [x] Finish the deterministic regression-fixture catalog and document the
-  currently promoted high-value cases in `docs/regression-fixtures.md`.
+- [ ] Raise QSONaut's Rigwright integration coverage from the current 74.33%
+  snapshot to the enforced 80% gate.
+- [ ] Finish the deterministic regression-fixture catalog and promote the
+  remaining high-value cases into CI.
 - [ ] Complete a documented IC-7300 acceptance run for the v0.4 release
   candidate, including safe settings restoration and sanitized logs.
 - [ ] Reconcile release metadata, dependency revisions, README badges, and
