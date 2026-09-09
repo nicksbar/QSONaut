@@ -39,7 +39,23 @@ impl QsonautGuiApp {
                     .color(Color32::from_rgb(255, 137, 108)),
             );
         });
-        self.draw_activity_selector(ui);
+        ui.vertical(|ui| {
+            self.draw_activity_selector(ui);
+            let unread = self.chat_unread;
+            let label = if unread == 0 {
+                "💬 Chat".to_string()
+            } else {
+                format!("💬 Chat · {unread}")
+            };
+            if ui
+                .small_button(label)
+                .on_hover_text("Open unified JS8/N3FJP/LAN chat")
+                .clicked()
+            {
+                self.signal_panel_tab = SignalPanelTab::Chat;
+                self.chat_unread = 0;
+            }
+        });
     }
 }
 

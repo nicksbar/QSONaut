@@ -2,6 +2,7 @@ mod activity;
 mod automation_hunter;
 mod automation_integration;
 mod band_plan;
+mod chat;
 mod contest;
 mod decode_model;
 mod font;
@@ -212,6 +213,7 @@ use band_plan::{
     band_for_frequency, band_picker_plan, workspace_radio_preset,
     workspace_radio_preset_for_frequency, WorkspaceMode, WORKSPACE_MODES,
 };
+use chat::{ChatUser, UnifiedChatMessage};
 use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
     DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, Ft8SyncState, OperatorCallHit, PendingFt8Decode,
@@ -338,6 +340,7 @@ enum SignalPanelTab {
     Ai,
     Server,
     ThirdParty,
+    Chat,
     RadioTuning,
     AppLog,
 }
@@ -1337,6 +1340,11 @@ struct QsonautGuiApp {
     ft4_session: Option<QsoSession>,
     ft4_seen_decodes: HashSet<(u64, u32, String)>,
     digital_tx_chat: VecDeque<DigitalTxChatEntry>,
+    chat_messages: VecDeque<UnifiedChatMessage>,
+    chat_users: BTreeMap<String, ChatUser>,
+    chat_seen_js8: HashSet<(u64, String)>,
+    chat_unread: usize,
+    chat_compose: String,
     digital_queued_tx_message: Option<String>,
     digital_last_tx_message: Option<String>,
     digital_tx_status: String,

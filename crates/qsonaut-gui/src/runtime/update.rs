@@ -412,6 +412,7 @@ impl QsonautGuiApp {
         }
 
         let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
+        self.sync_js8_chat(&snapshot);
         self.emit_radio_state_hook_if_changed(&snapshot);
         self.publish_server_presence(&snapshot);
 
@@ -1519,6 +1520,12 @@ impl QsonautGuiApp {
                                 Color32::from_rgb(255, 190, 105),
                             ),
                             (
+                                SignalPanelTab::Chat,
+                                "💬",
+                                "CHAT",
+                                Color32::from_rgb(125, 225, 150),
+                            ),
+                            (
                                 SignalPanelTab::RadioTuning,
                                 "📻",
                                 "RADIO TUNING",
@@ -1591,6 +1598,7 @@ impl QsonautGuiApp {
                                 SignalPanelTab::Ai => self.draw_ai_panel(ui),
                                 SignalPanelTab::Server => self.draw_server_panel(ui),
                                 SignalPanelTab::ThirdParty => self.draw_third_party_panel(ui),
+                                SignalPanelTab::Chat => self.draw_chat_panel(ui),
                                 SignalPanelTab::RadioTuning => {
                                     self.draw_radio_tuning_panel(ui, &snapshot)
                                 }
