@@ -1173,6 +1173,24 @@ impl QsonautGuiApp {
             );
         });
         ui.add_space(5.0);
+        ui.collapsing("QSONaut LAN discovery", |ui| {
+            ui.checkbox(
+                &mut self.config.third_party.lan_discovery.enabled,
+                "Announce this station and discover nearby QSONaut users",
+            );
+            ui.horizontal(|ui| {
+                ui.label("Discovery port");
+                ui.add_enabled(
+                    self.config.third_party.lan_discovery.enabled,
+                    egui::DragValue::new(&mut self.config.third_party.lan_discovery.port)
+                        .range(1..=u16::MAX),
+                );
+            });
+            ui.label(
+                "Opt-in UDP presence only. Discovery does not grant trust or transmit messages automatically.",
+            );
+        });
+        ui.add_space(5.0);
         ui.collapsing("UDP logging broadcasts", |ui| {
             ui.checkbox(
                 &mut self.config.third_party.udp_logging.enabled,

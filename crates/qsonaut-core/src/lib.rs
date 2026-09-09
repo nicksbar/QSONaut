@@ -8,7 +8,7 @@ pub use commands::{
     CommandEnvelope, CommandId, CommandKind, CommandOutcome, CommandResult, CommandTracker,
 };
 pub use config::{
-    AppConfig, AudioConfig, ContestOperatingMode, ContestProfile, FoxHoundRole,
+    AppConfig, AudioConfig, ContestOperatingMode, ContestProfile, FoxHoundRole, LanDiscoveryConfig,
     N3fjpEndpointConfig, RadioConfig, ServerConfig, SplitPolicy, StationConfig, ThirdPartyConfig,
     UdpLoggingConfig,
 };

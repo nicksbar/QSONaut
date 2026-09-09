@@ -1,5 +1,5 @@
 use super::*;
-use crate::third_party::ThirdPartyChatEvent;
+use crate::third_party::{ThirdPartyChatEvent, ThirdPartyUserSource};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -65,13 +65,17 @@ impl QsonautGuiApp {
                         outgoing: false,
                     });
                 }
-                ThirdPartyChatEvent::Users(users) => {
+                ThirdPartyChatEvent::Users { source, users } => {
+                    let source = match source {
+                        ThirdPartyUserSource::N3fjp => ChatSource::N3fjp,
+                        ThirdPartyUserSource::Lan => ChatSource::Lan,
+                    };
                     for callsign in users {
                         self.chat_users.insert(
                             callsign.clone(),
                             ChatUser {
                                 callsign,
-                                source: ChatSource::N3fjp,
+                                source,
                                 last_seen: chat_now(),
                             },
                         );

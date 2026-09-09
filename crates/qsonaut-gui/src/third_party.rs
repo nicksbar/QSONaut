@@ -1,4 +1,4 @@
-use qsonaut_core::{N3fjpEndpointConfig, ThirdPartyConfig};
+use qsonaut_core::{LanDiscoveryConfig, N3fjpEndpointConfig, ThirdPartyConfig};
 use qsonaut_log::QsoRecord;
 use qsonaut_n3fjp::{
     api::{Client as ApiClient, Command, CommandKind, Entry},
@@ -7,7 +7,7 @@ use qsonaut_n3fjp::{
     Config as ProtocolConfig,
 };
 use std::{
-    net::SocketAddr,
+    net::{SocketAddr, UdpSocket},
     sync::mpsc::{self, Receiver, Sender},
     sync::{Arc, Mutex},
     thread,
@@ -31,8 +31,20 @@ enum WorkerCommand {
 
 #[derive(Debug, Clone)]
 pub(crate) enum ThirdPartyChatEvent {
-    Message { from: String, text: String },
-    Users(Vec<String>),
+    Message {
+        from: String,
+        text: String,
+    },
+    Users {
+        source: ThirdPartyUserSource,
+        users: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ThirdPartyUserSource {
+    N3fjp,
+    Lan,
 }
 
 #[derive(Debug)]
@@ -45,6 +57,7 @@ pub(crate) struct ThirdPartyStatus {
     pub(crate) api: String,
     pub(crate) network: String,
     pub(crate) udp: String,
+    pub(crate) lan: String,
     pub(crate) published: u64,
     pub(crate) last_error: Option<String>,
 }
@@ -54,6 +67,7 @@ impl ThirdPartyBridge {
         if !config.n3fjp_api.enabled
             && !config.station_network.enabled
             && !config.udp_logging.enabled
+            && !config.lan_discovery.enabled
         {
             return None;
         }
@@ -66,6 +80,7 @@ impl ThirdPartyBridge {
             api: enabled_label(config.n3fjp_api.enabled),
             network: enabled_label(config.station_network.enabled),
             udp: enabled_label(config.udp_logging.enabled),
+            lan: enabled_label(config.lan_discovery.enabled),
             ..ThirdPartyStatus::default()
         }));
         let config = config.clone();
@@ -145,6 +160,7 @@ fn run_worker(
     let udp = build_udp(&config);
     let mut api = connect_api(&config.n3fjp_api);
     let mut network = connect_network(&config.station_network, &station_callsign);
+    let lan = bind_lan(&config.lan_discovery);
     set_status(&status, |current| {
         current.api = if api.is_some() {
             "CONNECTED".to_string()
@@ -161,8 +177,14 @@ fn run_worker(
         } else {
             enabled_label(config.udp_logging.enabled)
         };
+        current.lan = if lan.is_some() {
+            "READY".to_string()
+        } else {
+            enabled_label(config.lan_discovery.enabled)
+        };
     });
     let mut last_network_check = Instant::now();
+    let mut last_lan_beacon = Instant::now() - Duration::from_secs(30);
 
     loop {
         if stop_rx.try_recv().is_ok() {
@@ -222,6 +244,14 @@ fn run_worker(
             }
         }
 
+        if let Some(socket) = lan.as_ref() {
+            if last_lan_beacon.elapsed() >= Duration::from_secs(15) {
+                broadcast_lan(socket, &station_callsign, config.lan_discovery.port);
+                last_lan_beacon = Instant::now();
+            }
+            poll_lan(socket, &station_callsign, &chat_event_tx);
+        }
+
         if let Some(client) = network.as_mut() {
             if last_network_check.elapsed() >= Duration::from_secs(30) {
                 if let Err(error) = client.heartbeat(Duration::from_secs(30)) {
@@ -241,7 +271,10 @@ fn run_worker(
                                         .send(ThirdPartyChatEvent::Message { from, text });
                                 }
                                 Message::Who(users) => {
-                                    let _ = chat_event_tx.send(ThirdPartyChatEvent::Users(users));
+                                    let _ = chat_event_tx.send(ThirdPartyChatEvent::Users {
+                                        source: ThirdPartyUserSource::N3fjp,
+                                        users,
+                                    });
                                 }
                                 message => debug!(?message, "N3FJP station-network message"),
                             }
@@ -263,6 +296,51 @@ fn enabled_label(enabled: bool) -> String {
         "STARTING".to_string()
     } else {
         "DISABLED".to_string()
+    }
+}
+
+fn bind_lan(config: &LanDiscoveryConfig) -> Option<UdpSocket> {
+    if !config.enabled {
+        return None;
+    }
+    let socket = UdpSocket::bind(("0.0.0.0", config.port)).ok()?;
+    socket.set_broadcast(true).ok()?;
+    socket.set_nonblocking(true).ok()?;
+    Some(socket)
+}
+
+fn broadcast_lan(socket: &UdpSocket, station: &str, port: u16) {
+    let payload = format!("QSONAUT/1|{station}");
+    if let Err(error) = socket.send_to(payload.as_bytes(), ("255.255.255.255", port)) {
+        debug!(%error, "LAN discovery beacon failed");
+    }
+}
+
+fn poll_lan(socket: &UdpSocket, station: &str, events: &Sender<ThirdPartyChatEvent>) {
+    let mut buffer = [0_u8; 256];
+    for _ in 0..16 {
+        match socket.recv_from(&mut buffer) {
+            Ok((size, _peer)) => {
+                let Ok(payload) = std::str::from_utf8(&buffer[..size]) else {
+                    continue;
+                };
+                let Some(callsign) = payload.strip_prefix("QSONAUT/1|") else {
+                    continue;
+                };
+                let callsign = callsign.trim();
+                if !callsign.is_empty() && !callsign.eq_ignore_ascii_case(station) {
+                    let _ = events.send(ThirdPartyChatEvent::Users {
+                        source: ThirdPartyUserSource::Lan,
+                        users: vec![callsign.to_string()],
+                    });
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => {
+                debug!(%error, "LAN discovery receive failed");
+                break;
+            }
+        }
     }
 }
 

@@ -97,6 +97,16 @@ pub struct ThirdPartyConfig {
     pub station_network: N3fjpEndpointConfig,
     #[serde(default)]
     pub udp_logging: UdpLoggingConfig,
+    #[serde(default)]
+    pub lan_discovery: LanDiscoveryConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LanDiscoveryConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_lan_discovery_port")]
+    pub port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -139,6 +149,15 @@ impl Default for UdpLoggingConfig {
     }
 }
 
+impl Default for LanDiscoveryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_lan_discovery_port(),
+        }
+    }
+}
+
 impl Default for ThirdPartyConfig {
     fn default() -> Self {
         Self {
@@ -148,6 +167,7 @@ impl Default for ThirdPartyConfig {
                 ..N3fjpEndpointConfig::default()
             },
             udp_logging: UdpLoggingConfig::default(),
+            lan_discovery: LanDiscoveryConfig::default(),
         }
     }
 }
@@ -455,6 +475,10 @@ fn default_n3fjp_api_port() -> u16 {
 
 fn default_n3fjp_network_port() -> u16 {
     1000
+}
+
+fn default_lan_discovery_port() -> u16 {
+    45454
 }
 
 fn default_udp_format() -> String {

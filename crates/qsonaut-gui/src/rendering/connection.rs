@@ -121,10 +121,11 @@ impl QsonautGuiApp {
             if let Some(bridge) = &self.third_party_bridge {
                 let status = bridge.status();
                 let label = format!(
-                    "🔌 EXT {} · {} · {} · {} QSO{}",
+                    "🔌 EXT {} · {} · UDP {} · LAN {} · {} QSO{}",
                     status.api,
                     status.network,
                     status.udp,
+                    status.lan,
                     status.published,
                     if status.published == 1 { "" } else { "s" }
                 );
