@@ -117,6 +117,15 @@ pub struct ServerAutomationEvent {
     pub fields: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerChannelMessage {
+    pub id: String,
+    pub author_callsign: String,
+    pub channel: String,
+    pub message: String,
+    pub created_at: String,
+}
+
 #[derive(Debug)]
 enum Command {
     Presence(Box<Presence>),
@@ -131,6 +140,7 @@ pub struct ServerClient {
     commands: mpsc::UnboundedSender<Command>,
     status: Arc<Mutex<ConnectionStatus>>,
     automation_events: Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    channel_messages: Arc<Mutex<VecDeque<ServerChannelMessage>>>,
     log_queue: Arc<Mutex<DurableLogQueue>>,
     stop: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
@@ -221,6 +231,8 @@ impl ServerClient {
         let worker_status = Arc::clone(&status);
         let automation_events = Arc::new(Mutex::new(VecDeque::with_capacity(256)));
         let worker_events = Arc::clone(&automation_events);
+        let channel_messages = Arc::new(Mutex::new(VecDeque::with_capacity(256)));
+        let worker_channel_messages = Arc::clone(&channel_messages);
         let worker_queue = Arc::clone(&log_queue);
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
@@ -234,6 +246,7 @@ impl ServerClient {
                     receiver,
                     worker_status,
                     worker_events,
+                    worker_channel_messages,
                     worker_queue,
                     worker_stop,
                 )),
@@ -246,6 +259,7 @@ impl ServerClient {
             commands,
             status,
             automation_events,
+            channel_messages,
             log_queue,
             stop,
             worker: Some(worker),
@@ -296,6 +310,15 @@ impl ServerClient {
     }
 
     #[must_use]
+    pub fn drain_channel_messages(&self) -> Vec<ServerChannelMessage> {
+        self.channel_messages
+            .lock()
+            .expect("server channel message lock poisoned")
+            .drain(..)
+            .collect()
+    }
+
+    #[must_use]
     pub fn status(&self) -> ConnectionStatus {
         self.status
             .lock()
@@ -326,6 +349,7 @@ async fn run(
     mut commands: mpsc::UnboundedReceiver<Command>,
     status: Arc<Mutex<ConnectionStatus>>,
     automation_events: Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    channel_messages: Arc<Mutex<VecDeque<ServerChannelMessage>>>,
     log_queue: Arc<Mutex<DurableLogQueue>>,
     stop: Arc<AtomicBool>,
 ) {
@@ -341,6 +365,7 @@ async fn run(
             &mut commands,
             &status,
             &automation_events,
+            &channel_messages,
             &log_queue,
         )
         .await
@@ -380,6 +405,7 @@ async fn connect(
     commands: &mut mpsc::UnboundedReceiver<Command>,
     status: &Arc<Mutex<ConnectionStatus>>,
     automation_events: &Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    channel_messages: &Arc<Mutex<VecDeque<ServerChannelMessage>>>,
     log_queue: &Arc<Mutex<DurableLogQueue>>,
 ) -> Result<ConnectionEnd> {
     let socket_url = websocket_url(&config.server_url)?;
@@ -454,7 +480,7 @@ async fn connect(
                 }
             },
             message = reader.next() => match message {
-                Some(Ok(Message::Text(text))) => receive(&text, status, automation_events, log_queue, &mut inflight)?,
+                Some(Ok(Message::Text(text))) => receive_with_channels(&text, status, automation_events, channel_messages, log_queue, &mut inflight)?,
                 Some(Ok(Message::Close(_))) | None => return Ok(ConnectionEnd::Disconnected),
                 Some(Err(error)) => return Err(error).context("WebSocket receive failed"),
                 _ => {}
@@ -518,10 +544,30 @@ where
     Ok(())
 }
 
+#[cfg(test)]
 fn receive(
     text: &str,
     status: &Arc<Mutex<ConnectionStatus>>,
     automation_events: &Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    log_queue: &Arc<Mutex<DurableLogQueue>>,
+    inflight: &mut BTreeMap<Uuid, String>,
+) -> Result<()> {
+    let channel_messages = Arc::new(Mutex::new(VecDeque::new()));
+    receive_with_channels(
+        text,
+        status,
+        automation_events,
+        &channel_messages,
+        log_queue,
+        inflight,
+    )
+}
+
+fn receive_with_channels(
+    text: &str,
+    status: &Arc<Mutex<ConnectionStatus>>,
+    automation_events: &Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    server_channel_messages: &Arc<Mutex<VecDeque<ServerChannelMessage>>>,
     log_queue: &Arc<Mutex<DurableLogQueue>>,
     inflight: &mut BTreeMap<Uuid, String>,
 ) -> Result<()> {
@@ -587,14 +633,17 @@ fn receive(
                 ],
             );
             for message in channel_messages {
-                push_channel_event(automation_events, "channel_history", message);
+                push_channel_event(automation_events, "channel_history", &message);
+                push_channel_message(server_channel_messages, message);
             }
         }
         ServerMessage::ChannelMessagePublished(message) => {
-            push_channel_event(automation_events, "channel_message", message);
+            push_channel_event(automation_events, "channel_message", &message);
+            push_channel_message(server_channel_messages, message);
         }
         ServerMessage::ChannelMessageAccepted(message) => {
-            push_channel_event(automation_events, "message_accepted", message);
+            push_channel_event(automation_events, "message_accepted", &message);
+            push_channel_message(server_channel_messages, message);
         }
         ServerMessage::DiagnosticAccepted(value) => {
             push_automation_event(
@@ -658,19 +707,32 @@ fn receive(
 fn push_channel_event(
     events: &Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
     kind: &str,
-    message: ChannelMessage,
+    message: &ChannelMessage,
 ) {
     push_automation_event(
         events,
         kind,
         [
-            ("id", message.id),
-            ("author", message.author_callsign),
-            ("channel", message.channel),
-            ("message", message.message),
-            ("created_at", message.created_at),
+            ("id", message.id.clone()),
+            ("author", message.author_callsign.clone()),
+            ("channel", message.channel.clone()),
+            ("message", message.message.clone()),
+            ("created_at", message.created_at.clone()),
         ],
     );
+}
+
+fn push_channel_message(
+    messages: &Arc<Mutex<VecDeque<ServerChannelMessage>>>,
+    message: ChannelMessage,
+) {
+    let mut queue = messages
+        .lock()
+        .expect("server channel message lock poisoned");
+    if queue.len() == 256 {
+        queue.pop_front();
+    }
+    queue.push_back(message.into());
 }
 
 fn push_automation_event<const N: usize>(
@@ -779,6 +841,18 @@ struct ChannelMessage {
     channel: String,
     message: String,
     created_at: String,
+}
+
+impl From<ChannelMessage> for ServerChannelMessage {
+    fn from(message: ChannelMessage) -> Self {
+        Self {
+            id: message.id,
+            author_callsign: message.author_callsign,
+            channel: message.channel,
+            message: message.message,
+            created_at: message.created_at,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -935,6 +1009,36 @@ mod tests {
         assert_eq!(event.kind, "channel_message");
         assert_eq!(event.fields["author"], "W1AW");
         assert_eq!(event.fields["channel"], "ops");
+    }
+
+    #[test]
+    fn published_channel_message_enters_the_gui_queue() {
+        let status = Arc::new(Mutex::new(ConnectionStatus::default()));
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let messages = Arc::new(Mutex::new(VecDeque::new()));
+        let queue = Arc::new(Mutex::new(DurableLogQueue::load(&test_queue_path())));
+        let mut inflight = BTreeMap::new();
+        receive_with_channels(
+            r#"{
+                "protocol_version":"v1",
+                "event_id":"00000000-0000-0000-0000-000000000000",
+                "type":"channel_message_published",
+                "payload":{
+                    "id":"message-1","author_callsign":"W1AW","channel":"ops",
+                    "message":"Hello UTF-8 🌍","created_at":"2026-08-14T12:00:00Z"
+                }
+            }"#,
+            &status,
+            &events,
+            &messages,
+            &queue,
+            &mut inflight,
+        )
+        .unwrap();
+        let message = messages.lock().unwrap().pop_front().unwrap();
+        assert_eq!(message.id, "message-1");
+        assert_eq!(message.message, "Hello UTF-8 🌍");
+        assert_eq!(message.channel, "ops");
     }
 
     #[test]

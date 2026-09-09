@@ -85,6 +85,44 @@ impl QsonautGuiApp {
         }
     }
 
+    pub(crate) fn poll_server_chat(&mut self) {
+        let Some(client) = self.server_client.as_ref() else {
+            return;
+        };
+        for message in client.drain_channel_messages() {
+            if !self.chat_seen_server.insert(message.id) {
+                continue;
+            }
+            self.chat_users.insert(
+                message.author_callsign.clone(),
+                ChatUser {
+                    callsign: message.author_callsign.clone(),
+                    source: ChatSource::Server,
+                    last_seen: message.created_at.clone(),
+                },
+            );
+            let outgoing = message
+                .author_callsign
+                .eq_ignore_ascii_case(self.station_callsign_or_default());
+            if !outgoing && self.signal_panel_tab != SignalPanelTab::Chat {
+                self.chat_unread = self.chat_unread.saturating_add(1);
+            }
+            self.chat_messages.push_back(UnifiedChatMessage {
+                source: ChatSource::Server,
+                author: message.author_callsign,
+                message: format!("#{} · {}", message.channel, message.message),
+                utc: message.created_at,
+                outgoing,
+            });
+        }
+        while self.chat_messages.len() > 300 {
+            self.chat_messages.pop_front();
+        }
+        if self.chat_seen_server.len() > 600 {
+            self.chat_seen_server.clear();
+        }
+    }
+
     pub(crate) fn sync_js8_chat(&mut self, snapshot: &GuiState) {
         for entry in &snapshot.digital_decodes {
             if entry.mode != WorkspaceMode::Js8 {
@@ -151,7 +189,7 @@ impl QsonautGuiApp {
                     .color(theme_accent(ui)),
             );
             ui.label(
-                RichText::new("JS8 active · N3FJP/LAN/Server ready to join")
+                RichText::new("JS8 active · N3FJP/LAN/Server unified")
                     .small()
                     .color(theme_muted(ui)),
             );
@@ -219,7 +257,7 @@ impl QsonautGuiApp {
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.chat_compose)
                     .desired_width(ui.available_width() - 75.0)
-                    .hint_text("Message or /users /help /source js8"),
+                    .hint_text("Message or /server ops message /users /help"),
             );
             if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter))
                 || ui.small_button("Send").clicked()
@@ -228,9 +266,11 @@ impl QsonautGuiApp {
             }
         });
         ui.label(
-            RichText::new("Commands: /help · /users · /source js8 · /clear")
-                .small()
-                .color(theme_muted(ui)),
+            RichText::new(
+                "Commands: /server CHANNEL message · /n3fjp CALLSIGN message · /users · /clear",
+            )
+            .small()
+            .color(theme_muted(ui)),
         );
     }
 
@@ -285,6 +325,39 @@ impl QsonautGuiApp {
                     source: ChatSource::N3fjp,
                     author: "SYSTEM".to_string(),
                     message: "N3FJP station network is not connected".to_string(),
+                    utc: chat_now(),
+                    outgoing: false,
+                });
+            }
+        } else if let Some(payload) = input.strip_prefix("/server ") {
+            let mut parts = payload.splitn(2, char::is_whitespace);
+            let channel = parts.next().unwrap_or_default().trim();
+            let text = parts.next().unwrap_or_default().trim();
+            if channel.is_empty() || text.is_empty() {
+                self.chat_messages.push_back(UnifiedChatMessage {
+                    source: ChatSource::Server,
+                    author: "SYSTEM".to_string(),
+                    message: "Usage: /server CHANNEL message".to_string(),
+                    utc: chat_now(),
+                    outgoing: false,
+                });
+            } else if let Some(client) = self.server_client.as_ref() {
+                if client.status().state == ServerConnectionState::Connected {
+                    client.publish_channel_message(channel, text);
+                } else {
+                    self.chat_messages.push_back(UnifiedChatMessage {
+                        source: ChatSource::Server,
+                        author: "SYSTEM".to_string(),
+                        message: "QSONaut Server is not connected".to_string(),
+                        utc: chat_now(),
+                        outgoing: false,
+                    });
+                }
+            } else {
+                self.chat_messages.push_back(UnifiedChatMessage {
+                    source: ChatSource::Server,
+                    author: "SYSTEM".to_string(),
+                    message: "QSONaut Server is disabled".to_string(),
                     utc: chat_now(),
                     outgoing: false,
                 });

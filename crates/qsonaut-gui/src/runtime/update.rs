@@ -413,6 +413,7 @@ impl QsonautGuiApp {
 
         let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
         self.poll_third_party_chat();
+        self.poll_server_chat();
         self.sync_js8_chat(&snapshot);
         self.emit_radio_state_hook_if_changed(&snapshot);
         self.publish_server_presence(&snapshot);

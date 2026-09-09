@@ -1343,6 +1343,7 @@ struct QsonautGuiApp {
     chat_messages: VecDeque<UnifiedChatMessage>,
     chat_users: BTreeMap<String, ChatUser>,
     chat_seen_js8: HashSet<(u64, String)>,
+    chat_seen_server: HashSet<String>,
     chat_unread: usize,
     chat_compose: String,
     digital_queued_tx_message: Option<String>,

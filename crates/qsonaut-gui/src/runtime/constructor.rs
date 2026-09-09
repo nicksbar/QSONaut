@@ -907,6 +907,7 @@ impl QsonautGuiApp {
             chat_messages: VecDeque::new(),
             chat_users: BTreeMap::new(),
             chat_seen_js8: HashSet::new(),
+            chat_seen_server: HashSet::new(),
             chat_unread: 0,
             chat_compose: String::new(),
             digital_queued_tx_message: None,
