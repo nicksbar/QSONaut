@@ -3662,9 +3662,8 @@ dependencies = [
 [[package]]
 name = "qsonaut-third-party"
 version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=fa32f151f01dda58d01db52d6f94e21c053e76c3#fa32f151f01dda58d01db52d6f94e21c053e76c3"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=5d2c4c7b618a523ff93824602ab98217d2623c66#5d2c4c7b618a523ff93824602ab98217d2623c66"
 dependencies = [
- "cc",
  "cwdit-dsp",
  "cwdit-morse",
  "image",
@@ -4819,7 +4818,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
