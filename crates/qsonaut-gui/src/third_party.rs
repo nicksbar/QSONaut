@@ -16,10 +16,28 @@ use std::{
 use tracing::{debug, info, warn};
 
 pub(crate) struct ThirdPartyBridge {
-    tx: Sender<QsoRecord>,
+    tx: Sender<WorkerCommand>,
+    chat_events: Receiver<ThirdPartyChatEvent>,
+    chat_tx: Sender<ThirdPartyChatCommand>,
     stop: Option<Sender<()>>,
     worker: Option<thread::JoinHandle<()>>,
     status: Arc<Mutex<ThirdPartyStatus>>,
+}
+
+#[derive(Debug)]
+enum WorkerCommand {
+    Qso(QsoRecord),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ThirdPartyChatEvent {
+    Message { from: String, text: String },
+    Users(Vec<String>),
+}
+
+#[derive(Debug)]
+pub(crate) enum ThirdPartyChatCommand {
+    Send { to: String, text: String },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -41,6 +59,8 @@ impl ThirdPartyBridge {
         }
 
         let (tx, rx) = mpsc::channel();
+        let (chat_tx, chat_rx) = mpsc::channel();
+        let (chat_event_tx, chat_events) = mpsc::channel();
         let (stop, stop_rx) = mpsc::channel();
         let status = Arc::new(Mutex::new(ThirdPartyStatus {
             api: enabled_label(config.n3fjp_api.enabled),
@@ -53,10 +73,22 @@ impl ThirdPartyBridge {
         let worker_status = Arc::clone(&status);
         let worker = thread::Builder::new()
             .name("qsonaut-third-party".to_string())
-            .spawn(move || run_worker(config, station_callsign, rx, stop_rx, worker_status))
+            .spawn(move || {
+                run_worker(
+                    config,
+                    station_callsign,
+                    rx,
+                    stop_rx,
+                    chat_rx,
+                    chat_event_tx,
+                    worker_status,
+                )
+            })
             .ok()?;
         Some(Self {
             tx,
+            chat_events,
+            chat_tx,
             stop: Some(stop),
             worker: Some(worker),
             status,
@@ -64,9 +96,22 @@ impl ThirdPartyBridge {
     }
 
     pub(crate) fn publish(&self, record: QsoRecord) {
-        if let Err(error) = self.tx.send(record) {
+        if let Err(error) = self.tx.send(WorkerCommand::Qso(record)) {
             warn!(error = %error, "third-party QSO worker is unavailable");
         }
+    }
+
+    pub(crate) fn send_chat(&self, to: impl Into<String>, text: impl Into<String>) {
+        if let Err(error) = self.chat_tx.send(ThirdPartyChatCommand::Send {
+            to: to.into(),
+            text: text.into(),
+        }) {
+            warn!(error = %error, "third-party chat worker is unavailable");
+        }
+    }
+
+    pub(crate) fn poll_chat_events(&self) -> Vec<ThirdPartyChatEvent> {
+        self.chat_events.try_iter().collect()
     }
 
     pub(crate) fn status(&self) -> ThirdPartyStatus {
@@ -91,8 +136,10 @@ impl Drop for ThirdPartyBridge {
 fn run_worker(
     config: ThirdPartyConfig,
     station_callsign: String,
-    rx: Receiver<QsoRecord>,
+    rx: Receiver<WorkerCommand>,
     stop_rx: Receiver<()>,
+    chat_rx: Receiver<ThirdPartyChatCommand>,
+    chat_event_tx: Sender<ThirdPartyChatEvent>,
     status: Arc<Mutex<ThirdPartyStatus>>,
 ) {
     let udp = build_udp(&config);
@@ -129,7 +176,7 @@ fn run_worker(
         }
 
         match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(record) => {
+            Ok(WorkerCommand::Qso(record)) => {
                 if let Some(broadcaster) = udp.as_ref() {
                     broadcast_udp(
                         broadcaster,
@@ -159,6 +206,22 @@ fn run_worker(
                 api = None;
             }
         }
+        while let Ok(command) = chat_rx.try_recv() {
+            if let Some(client) = network.as_mut() {
+                match command {
+                    ThirdPartyChatCommand::Send { to, text } => {
+                        if let Err(error) = client.send(&Message::Chat {
+                            to,
+                            from: station_callsign.clone(),
+                            text,
+                        }) {
+                            warn!(error = %error, "N3FJP station-network chat send failed");
+                        }
+                    }
+                }
+            }
+        }
+
         if let Some(client) = network.as_mut() {
             if last_network_check.elapsed() >= Duration::from_secs(30) {
                 if let Err(error) = client.heartbeat(Duration::from_secs(30)) {
@@ -172,7 +235,16 @@ fn run_worker(
                 match client.poll() {
                     Ok(messages) => {
                         for message in messages {
-                            debug!(?message, "N3FJP station-network message");
+                            match message {
+                                Message::Chat { from, text, .. } => {
+                                    let _ = chat_event_tx
+                                        .send(ThirdPartyChatEvent::Message { from, text });
+                                }
+                                Message::Who(users) => {
+                                    let _ = chat_event_tx.send(ThirdPartyChatEvent::Users(users));
+                                }
+                                message => debug!(?message, "N3FJP station-network message"),
+                            }
                         }
                     }
                     Err(error) => {

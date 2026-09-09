@@ -1,8 +1,10 @@
 use super::*;
+use crate::third_party::ThirdPartyChatEvent;
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum ChatSource {
+    #[default]
     Js8,
     N3fjp,
     Lan,
@@ -36,13 +38,49 @@ pub(crate) struct ChatUser {
     pub(crate) last_seen: String,
 }
 
-impl Default for ChatSource {
-    fn default() -> Self {
-        Self::Js8
-    }
-}
-
 impl QsonautGuiApp {
+    pub(crate) fn poll_third_party_chat(&mut self) {
+        let Some(bridge) = self.third_party_bridge.as_ref() else {
+            return;
+        };
+        for event in bridge.poll_chat_events() {
+            match event {
+                ThirdPartyChatEvent::Message { from, text } => {
+                    self.chat_users.insert(
+                        from.clone(),
+                        ChatUser {
+                            callsign: from.clone(),
+                            source: ChatSource::N3fjp,
+                            last_seen: chat_now(),
+                        },
+                    );
+                    if self.signal_panel_tab != SignalPanelTab::Chat {
+                        self.chat_unread = self.chat_unread.saturating_add(1);
+                    }
+                    self.chat_messages.push_back(UnifiedChatMessage {
+                        source: ChatSource::N3fjp,
+                        author: from,
+                        message: text,
+                        utc: chat_now(),
+                        outgoing: false,
+                    });
+                }
+                ThirdPartyChatEvent::Users(users) => {
+                    for callsign in users {
+                        self.chat_users.insert(
+                            callsign.clone(),
+                            ChatUser {
+                                callsign,
+                                source: ChatSource::N3fjp,
+                                last_seen: chat_now(),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     pub(crate) fn sync_js8_chat(&mut self, snapshot: &GuiState) {
         for entry in &snapshot.digital_decodes {
             if entry.mode != WorkspaceMode::Js8 {
@@ -95,9 +133,8 @@ impl QsonautGuiApp {
         while self.chat_messages.len() > 300 {
             self.chat_messages.pop_front();
         }
-        while self.chat_seen_js8.len() > 600 {
+        if self.chat_seen_js8.len() > 600 {
             self.chat_seen_js8.clear();
-            break;
         }
     }
 
@@ -218,6 +255,36 @@ impl QsonautGuiApp {
                 utc: "now".to_string(),
                 outgoing: false,
             });
+        } else if let Some(payload) = input.strip_prefix("/n3fjp ") {
+            let mut parts = payload.splitn(2, char::is_whitespace);
+            let to = parts.next().unwrap_or("*").trim();
+            let text = parts.next().unwrap_or_default().trim();
+            if to.is_empty() || text.is_empty() {
+                self.chat_messages.push_back(UnifiedChatMessage {
+                    source: ChatSource::N3fjp,
+                    author: "SYSTEM".to_string(),
+                    message: "Usage: /n3fjp CALLSIGN message".to_string(),
+                    utc: chat_now(),
+                    outgoing: false,
+                });
+            } else if let Some(bridge) = self.third_party_bridge.as_ref() {
+                bridge.send_chat(to, text);
+                self.chat_messages.push_back(UnifiedChatMessage {
+                    source: ChatSource::N3fjp,
+                    author: self.station_callsign_or_default().to_string(),
+                    message: text.to_string(),
+                    utc: chat_now(),
+                    outgoing: true,
+                });
+            } else {
+                self.chat_messages.push_back(UnifiedChatMessage {
+                    source: ChatSource::N3fjp,
+                    author: "SYSTEM".to_string(),
+                    message: "N3FJP station network is not connected".to_string(),
+                    utc: chat_now(),
+                    outgoing: false,
+                });
+            }
         } else if input.starts_with('/') {
             self.chat_messages.push_back(UnifiedChatMessage {
                 source: ChatSource::Js8,
@@ -239,4 +306,11 @@ impl QsonautGuiApp {
         }
         self.chat_compose.clear();
     }
+}
+
+fn chat_now() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "now".to_string())
 }
