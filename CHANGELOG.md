@@ -7,10 +7,34 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [0.4.0] - 2026-09-08
 
+### Added
+- Added the v0.4 state and event contract foundation: typed component
+  lifecycle transitions, command correlation and timeout handling, explicit TX
+  gate transitions, canonical audio format validation, and GUI automation
+  integration.
+- Added deterministic software evidence for lifecycle recovery, TX
+  cancellation/disarm, malformed profile rejection, ADIF metadata round trips,
+  and the Rigwright TM-V71A/TM-D710 capability boundary.
+
 ### Changed
 - Preserved QSONaut metadata when exporting ADIF records.
 - Refreshed the pinned `qsonaut-third-party` adapters, including the immutable
   `mfsk-core` `0.10.2` revision used by the WSJT-family modem paths.
+- Updated native radio consumers to Rigwright `0.1.28`, including catalog/help
+  and capability coverage for the IC-756PRO family and Yaesu FT-1000/FT-1000D
+  profiles.
+- Repinned the HostBridge client and protocol to the published `0.1.4`
+  release, keeping all workspace consumers on one protocol version.
+- Added a dedicated CI job for the deterministic core, logging, and GUI
+  fixture suites.
+
+### Release boundary
+- Issues [#77](https://github.com/nicksbar/QSONaut/issues/77),
+  [#79](https://github.com/nicksbar/QSONaut/issues/79), and
+  [#83](https://github.com/nicksbar/QSONaut/issues/83) remain open for broader
+  cross-component acceptance, physical evidence, and additional fixture
+  provenance. This release does not claim hardware validation for new radio
+  profiles or alternate audio/radio paths.
 
 ## [0.3.19] - 2026-09-07
 

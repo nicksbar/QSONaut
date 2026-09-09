@@ -10,6 +10,26 @@ permissions:
   contents: read
 
 jobs:
+  deterministic-fixtures:
+    name: Deterministic fixture suites
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out QSONaut
+        uses: actions/checkout@v6
+
+      - name: Install Linux native libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+
+      - name: Install Rust components
+        run: rustup component add rustfmt
+
+      - name: Run core, logging, and GUI fixture suites
+        run: |
+          cargo test --locked -p qsonaut-core --lib
+          cargo test --locked -p qsonaut-log --lib
+          cargo test --locked -p qsonaut-gui --lib
+
   quality:
     name: Rust quality checks
     runs-on: ubuntu-24.04

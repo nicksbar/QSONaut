@@ -531,6 +531,23 @@ mod tests {
     #[test]
     fn native_profile_selection_is_backend_and_model_aware() {
         assert!(native_radio_profile("native", "IC-7300").is_some());
+        for model in [
+            "IC-756PRO",
+            "IC-756PROII",
+            "IC-756PROIII",
+            "FT-1000",
+            "FT-1000D",
+        ] {
+            assert!(native_radio_profile("native", model).is_some());
+            assert!(radio_supports_band(
+                native_radio_profile("native", model),
+                "20m"
+            ));
+            assert!(!radio_supports_band(
+                native_radio_profile("native", model),
+                "2m"
+            ));
+        }
         assert!(native_radio_profile(" NATIVE ", "IC-7300").is_some());
         assert!(native_radio_profile("rigctld", "IC-7300").is_none());
         assert!(native_radio_profile("native", "not-a-model").is_none());

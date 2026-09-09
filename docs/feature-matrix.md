@@ -113,11 +113,13 @@ can be advertised to the UI.
 | Icom IC-705 | Gated / Experimental | Profile-specific controls, tuner, normalized SWR, and scope geometry; no broad physical validation. |
 | Icom IC-7610 | Gated / Experimental | Profile-specific controls, main/sub metadata, tuner, normalized SWR, and dual-receiver scope geometry; no broad physical validation. |
 | Icom IC-9700 | Gated / Experimental | Profile-specific controls, external preamp, main/sub metadata, tuner, normalized SWR, and VHF/UHF scope ranges; no broad physical validation. |
+| Icom IC-756PRO, IC-756PROII, IC-756PROIII | Gated / Experimental | Rigwright 0.1.28 CI-V profiles with model-specific addresses and HF capability metadata; framework support only until physical evidence is recorded. |
 | Modern Yaesu CAT generic | Gated / Experimental | Protocol-only profile; typed modern controls and meters require an exact model profile. |
 | FT-710, FTDX10, FTDX101D, FTDX101MP | Gated / Experimental | Frequency, mode, readable PTT, power, profile split, AGC, NR, NR level, and normalized signal/power/SWR/ALC/compression/current/voltage meters. |
 | FT-991A | Gated / Experimental | Same modern CAT meter/control family, with model-specific mode/range behavior and split not currently profiled as typed. |
 | Classic Yaesu CAT generic | Gated / Experimental | Protocol-only five-byte CAT profile; no model-specific split until an exact classic model is selected. |
 | FT-817ND, FT-818, FT-857D, FT-897D | Gated / Experimental | Frequency, mode, readable/writable PTT, status, and split through the legacy CAT family. Power, normalized meters, tuner, and modern controls are intentionally absent. |
+| FT-1000, FT-1000D | Gated / Experimental | Rigwright 0.1.28 legacy CAT profiles with model-specific serial settings and frequency/mode/PTT support; framework support only until physical evidence is recorded. |
 | Kenwood PC control generic | Gated / Experimental | Protocol-only profile; model-specific power, split, meter selector, range, and PTT behavior require an exact model. |
 | TS-590SG, TS-890S, TS-2000 | Gated / Experimental | Frequency, mode, power, split, model-specific PTT behavior, normalized signal/SWR, and interleaved Auto Information response handling. |
 
