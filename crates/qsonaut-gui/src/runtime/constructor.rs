@@ -173,6 +173,7 @@ impl QsonautGuiApp {
         config.audio.monitor_enabled = global_settings.audio_monitor_enabled;
         config.audio.monitor_output_device = global_settings.audio_monitor_output_device.clone();
         config.audio.monitor_volume = global_settings.audio_monitor_volume.clamp(0.0, 2.0);
+        config.third_party = global_settings.third_party.clone();
 
         info!(
             profile = %selected_profile_name,
@@ -747,6 +748,7 @@ impl QsonautGuiApp {
 
         Self {
             config,
+            global_settings_snapshot: global_settings.clone(),
             app_events,
             automation_event_rx,
             automation_host,

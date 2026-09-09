@@ -1513,6 +1513,12 @@ impl QsonautGuiApp {
                                 Color32::from_rgb(110, 220, 255),
                             ),
                             (
+                                SignalPanelTab::ThirdParty,
+                                "🔌",
+                                "THIRD-PARTY",
+                                Color32::from_rgb(255, 190, 105),
+                            ),
+                            (
                                 SignalPanelTab::RadioTuning,
                                 "📻",
                                 "RADIO TUNING",
@@ -1584,6 +1590,7 @@ impl QsonautGuiApp {
                                 }
                                 SignalPanelTab::Ai => self.draw_ai_panel(ui),
                                 SignalPanelTab::Server => self.draw_server_panel(ui),
+                                SignalPanelTab::ThirdParty => self.draw_third_party_panel(ui),
                                 SignalPanelTab::RadioTuning => {
                                     self.draw_radio_tuning_panel(ui, &snapshot)
                                 }

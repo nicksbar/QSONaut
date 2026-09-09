@@ -9,6 +9,7 @@ use qsonaut_n3fjp::{
 use std::{
     net::SocketAddr,
     sync::mpsc::{self, Receiver, Sender},
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -18,6 +19,16 @@ pub(crate) struct ThirdPartyBridge {
     tx: Sender<QsoRecord>,
     stop: Option<Sender<()>>,
     worker: Option<thread::JoinHandle<()>>,
+    status: Arc<Mutex<ThirdPartyStatus>>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ThirdPartyStatus {
+    pub(crate) api: String,
+    pub(crate) network: String,
+    pub(crate) udp: String,
+    pub(crate) published: u64,
+    pub(crate) last_error: Option<String>,
 }
 
 impl ThirdPartyBridge {
@@ -31,16 +42,24 @@ impl ThirdPartyBridge {
 
         let (tx, rx) = mpsc::channel();
         let (stop, stop_rx) = mpsc::channel();
+        let status = Arc::new(Mutex::new(ThirdPartyStatus {
+            api: enabled_label(config.n3fjp_api.enabled),
+            network: enabled_label(config.station_network.enabled),
+            udp: enabled_label(config.udp_logging.enabled),
+            ..ThirdPartyStatus::default()
+        }));
         let config = config.clone();
         let station_callsign = station_callsign.to_string();
+        let worker_status = Arc::clone(&status);
         let worker = thread::Builder::new()
             .name("qsonaut-third-party".to_string())
-            .spawn(move || run_worker(config, station_callsign, rx, stop_rx))
+            .spawn(move || run_worker(config, station_callsign, rx, stop_rx, worker_status))
             .ok()?;
         Some(Self {
             tx,
             stop: Some(stop),
             worker: Some(worker),
+            status,
         })
     }
 
@@ -48,6 +67,13 @@ impl ThirdPartyBridge {
         if let Err(error) = self.tx.send(record) {
             warn!(error = %error, "third-party QSO worker is unavailable");
         }
+    }
+
+    pub(crate) fn status(&self) -> ThirdPartyStatus {
+        self.status
+            .lock()
+            .map(|status| status.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -67,10 +93,28 @@ fn run_worker(
     station_callsign: String,
     rx: Receiver<QsoRecord>,
     stop_rx: Receiver<()>,
+    status: Arc<Mutex<ThirdPartyStatus>>,
 ) {
     let udp = build_udp(&config);
     let mut api = connect_api(&config.n3fjp_api);
     let mut network = connect_network(&config.station_network, &station_callsign);
+    set_status(&status, |current| {
+        current.api = if api.is_some() {
+            "CONNECTED".to_string()
+        } else {
+            enabled_label(config.n3fjp_api.enabled)
+        };
+        current.network = if network.is_some() {
+            "CONNECTED".to_string()
+        } else {
+            enabled_label(config.station_network.enabled)
+        };
+        current.udp = if udp.is_some() {
+            "READY".to_string()
+        } else {
+            enabled_label(config.udp_logging.enabled)
+        };
+    });
     let mut last_network_check = Instant::now();
 
     loop {
@@ -100,6 +144,9 @@ fn run_worker(
                 if let Some(client) = network.as_mut() {
                     send_network(client, &station_callsign, &record);
                 }
+                set_status(&status, |current| {
+                    current.published = current.published.saturating_add(1)
+                });
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -136,6 +183,20 @@ fn run_worker(
                 }
             }
         }
+    }
+}
+
+fn enabled_label(enabled: bool) -> String {
+    if enabled {
+        "STARTING".to_string()
+    } else {
+        "DISABLED".to_string()
+    }
+}
+
+fn set_status(status: &Arc<Mutex<ThirdPartyStatus>>, update: impl FnOnce(&mut ThirdPartyStatus)) {
+    if let Ok(mut status) = status.lock() {
+        update(&mut status);
     }
 }
 

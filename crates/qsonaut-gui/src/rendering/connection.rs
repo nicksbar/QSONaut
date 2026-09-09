@@ -118,6 +118,29 @@ impl QsonautGuiApp {
             ui.separator();
             ui.label(RichText::new(server_label).color(server_color));
             ui.separator();
+            if let Some(bridge) = &self.third_party_bridge {
+                let status = bridge.status();
+                let label = format!(
+                    "🔌 EXT {} · {} · {} · {} QSO{}",
+                    status.api,
+                    status.network,
+                    status.udp,
+                    status.published,
+                    if status.published == 1 { "" } else { "s" }
+                );
+                let detail = status
+                    .last_error
+                    .map(|error| format!("Third-party integration error: {error}"))
+                    .unwrap_or_else(|| {
+                        "Third-party integrations\nAPI: N3FJP application API\nNetwork: N3FJP station network\nUDP: external logging broadcasts\nQSOs are persisted locally before delivery.".to_string()
+                    });
+                ui.label(RichText::new(label).color(Color32::LIGHT_GREEN))
+                    .on_hover_text(detail);
+            } else {
+                ui.label(RichText::new("🔌 EXT OFF").color(Color32::GRAY))
+                    .on_hover_text("Third-party integrations are disabled. Configure them in the THIRD-PARTY panel.");
+            }
+            ui.separator();
             let pota_activators = self
                 .pota_spots
                 .iter()

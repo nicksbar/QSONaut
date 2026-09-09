@@ -242,7 +242,7 @@ use profile::{
     default_waterfall_deck_height, list_operator_profiles, load_global_settings,
     load_operator_profile, load_operator_profile_named, load_radio_profile_library,
     save_operator_profile, save_operator_profile_named, save_radio_profile_library,
-    select_operator_profile, OperatorProfile, RadioProfile, OPERATOR_PROFILE_FILE,
+    select_operator_profile, GlobalSettings, OperatorProfile, RadioProfile, OPERATOR_PROFILE_FILE,
     OPERATOR_PROFILE_VERSION,
 };
 use radio_faq::{help_for_model, render_document};
@@ -337,6 +337,7 @@ enum SignalPanelTab {
     Settings,
     Ai,
     Server,
+    ThirdParty,
     RadioTuning,
     AppLog,
 }
@@ -1177,6 +1178,7 @@ fn preferred_renderer() -> eframe::Renderer {
 
 struct QsonautGuiApp {
     config: AppConfig,
+    global_settings_snapshot: GlobalSettings,
     app_events: AppEventBus,
     automation_event_rx: tokio::sync::broadcast::Receiver<AppEvent>,
     automation_host: AutomationHost,

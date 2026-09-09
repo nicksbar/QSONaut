@@ -326,24 +326,56 @@ impl QsonautGuiApp {
     }
 
     pub(crate) fn current_global_settings(&self) -> GlobalSettings {
-        GlobalSettings {
-            callsign: self.station_callsign_for_persistence(),
-            grid: self.station_grid_for_persistence(),
-            qth: self.station_qth.trim().to_string(),
-            station_rig: String::new(),
-            station_antenna: String::new(),
-            station_notes: self.station_notes.trim().to_string(),
-            llm_prompt_context: self.llm_prompt_context.trim().to_string(),
-            sstv_image_requirements: self.sstv_image_requirements.trim().to_string(),
-            llm_model_notes: self.llm_model_notes.trim().to_string(),
-            gui_scale: self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX),
-            compute_preference: self.compute_preference,
-            font_family: self.font_family.clone(),
-            audio_voice_input_device: self.config.audio.voice_input_device.clone(),
-            audio_monitor_enabled: self.config.audio.monitor_enabled,
-            audio_monitor_output_device: self.config.audio.monitor_output_device.clone(),
-            audio_monitor_volume: self.config.audio.monitor_volume.clamp(0.0, 2.0),
+        let mut settings = self.global_settings_snapshot.clone();
+        let callsign = self.station_callsign_for_persistence();
+        let grid = self.station_grid_for_persistence();
+        // Never replace a real persisted identity with the UI fallback values.
+        // This protects global settings during profile/worker saves when the
+        // identity controls have not finished restoring yet.
+        if !Self::is_default_identity(&callsign) || Self::is_default_identity(&settings.callsign) {
+            settings.callsign = callsign;
         }
+        if !Self::is_default_identity(&grid) || Self::is_default_identity(&settings.grid) {
+            settings.grid = grid;
+        }
+        settings.qth = Self::prefer_nonempty(&self.station_qth, &settings.qth);
+        settings.station_rig = String::new();
+        settings.station_antenna = String::new();
+        settings.station_notes =
+            Self::prefer_nonempty(&self.station_notes, &settings.station_notes);
+        settings.llm_prompt_context =
+            Self::prefer_nonempty(&self.llm_prompt_context, &settings.llm_prompt_context);
+        settings.sstv_image_requirements = Self::prefer_nonempty(
+            &self.sstv_image_requirements,
+            &settings.sstv_image_requirements,
+        );
+        settings.llm_model_notes =
+            Self::prefer_nonempty(&self.llm_model_notes, &settings.llm_model_notes);
+        settings.gui_scale = self.gui_scale.clamp(GUI_SCALE_MIN, GUI_SCALE_MAX);
+        settings.compute_preference = self.compute_preference;
+        settings.font_family = self.font_family.clone();
+        settings.audio_voice_input_device = self.config.audio.voice_input_device.clone();
+        settings.audio_monitor_enabled = self.config.audio.monitor_enabled;
+        settings.audio_monitor_output_device = self.config.audio.monitor_output_device.clone();
+        settings.audio_monitor_volume = self.config.audio.monitor_volume.clamp(0.0, 2.0);
+        settings.third_party = self.config.third_party.clone();
+        settings
+    }
+
+    fn prefer_nonempty(current: &str, persisted: &str) -> String {
+        let current = current.trim();
+        if current.is_empty() {
+            persisted.to_string()
+        } else {
+            current.to_string()
+        }
+    }
+
+    fn is_default_identity(value: &str) -> bool {
+        matches!(
+            value.trim().to_ascii_uppercase().as_str(),
+            "" | "N0CALL" | "AA00"
+        )
     }
 
     fn station_callsign_for_persistence(&self) -> String {
@@ -484,5 +516,23 @@ impl QsonautGuiApp {
         );
         self.profile_io_status = format!("Deleted profile ‘{name}’ and stopped its tab");
         self.profile_dirty = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blank_global_text_keeps_loaded_value() {
+        assert_eq!(QsonautGuiApp::prefer_nonempty("  ", "FN20"), "FN20");
+        assert_eq!(QsonautGuiApp::prefer_nonempty("  Shack", "FN20"), "Shack");
+    }
+
+    #[test]
+    fn default_identity_values_are_recognized() {
+        assert!(QsonautGuiApp::is_default_identity("N0CALL"));
+        assert!(QsonautGuiApp::is_default_identity("aa00"));
+        assert!(!QsonautGuiApp::is_default_identity("W1AW"));
     }
 }

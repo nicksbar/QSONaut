@@ -2,7 +2,9 @@ use std::{fs, path::PathBuf};
 
 use anyhow::Result;
 use qsonaut_accelerate::ComputePreference;
-use qsonaut_core::{ContestOperatingMode, FoxHoundRole, ServerConfig, SplitPolicy};
+use qsonaut_core::{
+    ContestOperatingMode, FoxHoundRole, ServerConfig, SplitPolicy, ThirdPartyConfig,
+};
 use qsonaut_log::app_config_dir;
 use serde::{Deserialize, Serialize};
 
@@ -330,6 +332,8 @@ pub(super) struct GlobalSettings {
     pub(super) audio_monitor_output_device: Option<String>,
     #[serde(default = "default_audio_monitor_volume")]
     pub(super) audio_monitor_volume: f32,
+    #[serde(default)]
+    pub(super) third_party: ThirdPartyConfig,
 }
 
 fn global_settings_path() -> PathBuf {
@@ -369,6 +373,7 @@ pub(super) fn load_global_settings() -> GlobalSettings {
             audio_monitor_enabled: false,
             audio_monitor_output_device: None,
             audio_monitor_volume: default_audio_monitor_volume(),
+            third_party: ThirdPartyConfig::default(),
         });
     let mut settings = settings;
     migrate_legacy_global_audio_settings(&mut settings, "");
