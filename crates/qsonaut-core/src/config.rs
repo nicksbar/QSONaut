@@ -107,6 +107,10 @@ pub struct LanDiscoveryConfig {
     pub enabled: bool,
     #[serde(default = "default_lan_discovery_port")]
     pub port: u16,
+    #[serde(default)]
+    pub trusted_callsigns: Vec<String>,
+    #[serde(default)]
+    pub blocked_callsigns: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -154,6 +158,8 @@ impl Default for LanDiscoveryConfig {
         Self {
             enabled: false,
             port: default_lan_discovery_port(),
+            trusted_callsigns: Vec::new(),
+            blocked_callsigns: Vec::new(),
         }
     }
 }

@@ -6,6 +6,7 @@ use qsonaut_n3fjp::{
     udp::{Broadcaster, Config as UdpConfig, Format, Qso as UdpQso},
     Config as ProtocolConfig,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     net::{SocketAddr, UdpSocket},
     sync::mpsc::{self, Receiver, Sender},
@@ -32,6 +33,7 @@ enum WorkerCommand {
 #[derive(Debug, Clone)]
 pub(crate) enum ThirdPartyChatEvent {
     Message {
+        source: ThirdPartyUserSource,
         from: String,
         text: String,
     },
@@ -50,6 +52,19 @@ pub(crate) enum ThirdPartyUserSource {
 #[derive(Debug)]
 pub(crate) enum ThirdPartyChatCommand {
     Send { to: String, text: String },
+    SendLan { to: String, text: String },
+    SetLanTrust { callsign: String, trusted: bool },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LanPacket {
+    version: String,
+    kind: String,
+    from: String,
+    #[serde(default)]
+    to: String,
+    #[serde(default)]
+    text: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -125,6 +140,22 @@ impl ThirdPartyBridge {
         }
     }
 
+    pub(crate) fn send_lan_chat(&self, to: impl Into<String>, text: impl Into<String>) {
+        if let Err(error) = self.chat_tx.send(ThirdPartyChatCommand::SendLan {
+            to: to.into(),
+            text: text.into(),
+        }) {
+            warn!(error = %error, "LAN chat worker is unavailable");
+        }
+    }
+
+    pub(crate) fn set_lan_trust(&self, callsign: impl Into<String>, trusted: bool) {
+        let _ = self.chat_tx.send(ThirdPartyChatCommand::SetLanTrust {
+            callsign: callsign.into(),
+            trusted,
+        });
+    }
+
     pub(crate) fn poll_chat_events(&self) -> Vec<ThirdPartyChatEvent> {
         self.chat_events.try_iter().collect()
     }
@@ -161,6 +192,8 @@ fn run_worker(
     let mut api = connect_api(&config.n3fjp_api);
     let mut network = connect_network(&config.station_network, &station_callsign);
     let lan = bind_lan(&config.lan_discovery);
+    let mut trusted_lan = config.lan_discovery.trusted_callsigns.clone();
+    let mut blocked_lan = config.lan_discovery.blocked_callsigns.clone();
     set_status(&status, |current| {
         current.api = if api.is_some() {
             "CONNECTED".to_string()
@@ -229,9 +262,9 @@ fn run_worker(
             }
         }
         while let Ok(command) = chat_rx.try_recv() {
-            if let Some(client) = network.as_mut() {
-                match command {
-                    ThirdPartyChatCommand::Send { to, text } => {
+            match command {
+                ThirdPartyChatCommand::Send { to, text } => {
+                    if let Some(client) = network.as_mut() {
                         if let Err(error) = client.send(&Message::Chat {
                             to,
                             from: station_callsign.clone(),
@@ -239,6 +272,26 @@ fn run_worker(
                         }) {
                             warn!(error = %error, "N3FJP station-network chat send failed");
                         }
+                    }
+                }
+                ThirdPartyChatCommand::SendLan { to, text } => {
+                    if let Some(socket) = lan.as_ref() {
+                        broadcast_lan_chat(
+                            socket,
+                            &station_callsign,
+                            &to,
+                            &text,
+                            config.lan_discovery.port,
+                        );
+                    }
+                }
+                ThirdPartyChatCommand::SetLanTrust { callsign, trusted } => {
+                    trusted_lan.retain(|peer| !peer.eq_ignore_ascii_case(&callsign));
+                    blocked_lan.retain(|peer| !peer.eq_ignore_ascii_case(&callsign));
+                    if trusted {
+                        trusted_lan.push(callsign);
+                    } else {
+                        blocked_lan.push(callsign);
                     }
                 }
             }
@@ -249,7 +302,13 @@ fn run_worker(
                 broadcast_lan(socket, &station_callsign, config.lan_discovery.port);
                 last_lan_beacon = Instant::now();
             }
-            poll_lan(socket, &station_callsign, &chat_event_tx);
+            poll_lan(
+                socket,
+                &station_callsign,
+                &trusted_lan,
+                &blocked_lan,
+                &chat_event_tx,
+            );
         }
 
         if let Some(client) = network.as_mut() {
@@ -267,8 +326,11 @@ fn run_worker(
                         for message in messages {
                             match message {
                                 Message::Chat { from, text, .. } => {
-                                    let _ = chat_event_tx
-                                        .send(ThirdPartyChatEvent::Message { from, text });
+                                    let _ = chat_event_tx.send(ThirdPartyChatEvent::Message {
+                                        source: ThirdPartyUserSource::N3fjp,
+                                        from,
+                                        text,
+                                    });
                                 }
                                 Message::Who(users) => {
                                     let _ = chat_event_tx.send(ThirdPartyChatEvent::Users {
@@ -310,28 +372,78 @@ fn bind_lan(config: &LanDiscoveryConfig) -> Option<UdpSocket> {
 }
 
 fn broadcast_lan(socket: &UdpSocket, station: &str, port: u16) {
-    let payload = format!("QSONAUT/1|{station}");
-    if let Err(error) = socket.send_to(payload.as_bytes(), ("255.255.255.255", port)) {
+    let payload = serde_json::to_vec(&LanPacket {
+        version: "QSONAUT/1".to_string(),
+        kind: "hello".to_string(),
+        from: station.to_string(),
+        to: String::new(),
+        text: String::new(),
+    })
+    .unwrap_or_default();
+    if let Err(error) = socket.send_to(&payload, ("255.255.255.255", port)) {
         debug!(%error, "LAN discovery beacon failed");
     }
 }
 
-fn poll_lan(socket: &UdpSocket, station: &str, events: &Sender<ThirdPartyChatEvent>) {
-    let mut buffer = [0_u8; 256];
+fn broadcast_lan_chat(socket: &UdpSocket, station: &str, to: &str, text: &str, port: u16) {
+    if text.len() > 1024 || to.len() > 32 {
+        return;
+    }
+    let Ok(payload) = serde_json::to_vec(&LanPacket {
+        version: "QSONAUT/1".to_string(),
+        kind: "chat".to_string(),
+        from: station.to_string(),
+        to: to.to_string(),
+        text: text.to_string(),
+    }) else {
+        return;
+    };
+    if let Err(error) = socket.send_to(&payload, ("255.255.255.255", port)) {
+        debug!(%error, "LAN chat broadcast failed");
+    }
+}
+
+fn poll_lan(
+    socket: &UdpSocket,
+    station: &str,
+    trusted_lan: &[String],
+    blocked_lan: &[String],
+    events: &Sender<ThirdPartyChatEvent>,
+) {
+    let mut buffer = [0_u8; 2048];
     for _ in 0..16 {
         match socket.recv_from(&mut buffer) {
             Ok((size, _peer)) => {
-                let Ok(payload) = std::str::from_utf8(&buffer[..size]) else {
+                let Ok(payload) = serde_json::from_slice::<LanPacket>(&buffer[..size]) else {
                     continue;
                 };
-                let Some(callsign) = payload.strip_prefix("QSONAUT/1|") else {
+                if payload.version != "QSONAUT/1" {
                     continue;
-                };
-                let callsign = callsign.trim();
-                if !callsign.is_empty() && !callsign.eq_ignore_ascii_case(station) {
+                }
+                let callsign = payload.from.trim();
+                if callsign.is_empty() || callsign.len() > 32 {
+                    continue;
+                }
+                if payload.kind == "hello" && !callsign.eq_ignore_ascii_case(station) {
                     let _ = events.send(ThirdPartyChatEvent::Users {
                         source: ThirdPartyUserSource::Lan,
                         users: vec![callsign.to_string()],
+                    });
+                }
+                if payload.kind == "chat"
+                    && !callsign.eq_ignore_ascii_case(station)
+                    && (payload.to.is_empty() || payload.to.eq_ignore_ascii_case(station))
+                    && trusted_lan
+                        .iter()
+                        .any(|trusted| trusted.eq_ignore_ascii_case(callsign))
+                    && !blocked_lan
+                        .iter()
+                        .any(|blocked| blocked.eq_ignore_ascii_case(callsign))
+                {
+                    let _ = events.send(ThirdPartyChatEvent::Message {
+                        source: ThirdPartyUserSource::Lan,
+                        from: callsign.to_string(),
+                        text: payload.text,
                     });
                 }
             }

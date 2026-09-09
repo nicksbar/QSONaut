@@ -45,12 +45,16 @@ impl QsonautGuiApp {
         };
         for event in bridge.poll_chat_events() {
             match event {
-                ThirdPartyChatEvent::Message { from, text } => {
+                ThirdPartyChatEvent::Message { source, from, text } => {
+                    let source = match source {
+                        ThirdPartyUserSource::N3fjp => ChatSource::N3fjp,
+                        ThirdPartyUserSource::Lan => ChatSource::Lan,
+                    };
                     self.chat_users.insert(
                         from.clone(),
                         ChatUser {
                             callsign: from.clone(),
-                            source: ChatSource::N3fjp,
+                            source,
                             last_seen: chat_now(),
                         },
                     );
@@ -58,7 +62,7 @@ impl QsonautGuiApp {
                         self.chat_unread = self.chat_unread.saturating_add(1);
                     }
                     self.chat_messages.push_back(UnifiedChatMessage {
-                        source: ChatSource::N3fjp,
+                        source,
                         author: from,
                         message: text,
                         utc: chat_now(),
@@ -208,9 +212,71 @@ impl QsonautGuiApp {
             egui::ScrollArea::vertical()
                 .id_salt("chat-users")
                 .show(&mut columns[0], |ui| {
-                    for user in self.chat_users.values() {
-                        ui.label(format!("● {} · {}", user.callsign, user.source.label()))
-                            .on_hover_text(format!("Last seen {}", user.last_seen));
+                    let users = self
+                        .chat_users
+                        .values()
+                        .map(|user| (user.callsign.clone(), user.source, user.last_seen.clone()))
+                        .collect::<Vec<_>>();
+                    for (callsign, source, last_seen) in users {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("● {} · {}", callsign, source.label()))
+                                .on_hover_text(format!("Last seen {}", last_seen));
+                            if source == ChatSource::Lan {
+                                let trusted = self
+                                    .config
+                                    .third_party
+                                    .lan_discovery
+                                    .trusted_callsigns
+                                    .iter()
+                                    .any(|peer| peer.eq_ignore_ascii_case(&callsign));
+                                let blocked = self
+                                    .config
+                                    .third_party
+                                    .lan_discovery
+                                    .blocked_callsigns
+                                    .iter()
+                                    .any(|peer| peer.eq_ignore_ascii_case(&callsign));
+                                if !trusted && ui.small_button("Trust").clicked() {
+                                    let peers = &mut self
+                                        .config
+                                        .third_party
+                                        .lan_discovery
+                                        .trusted_callsigns;
+                                    if !trusted {
+                                        peers.push(callsign.clone());
+                                    }
+                                    self.config
+                                        .third_party
+                                        .lan_discovery
+                                        .blocked_callsigns
+                                        .retain(|peer| !peer.eq_ignore_ascii_case(&callsign));
+                                    if let Some(bridge) = self.third_party_bridge.as_ref() {
+                                        bridge.set_lan_trust(callsign.clone(), true);
+                                    }
+                                    self.profile_dirty = true;
+                                    self.persist_profile("LAN peer trust saved to");
+                                }
+                                if !blocked && ui.small_button("Block").clicked() {
+                                    self.config
+                                        .third_party
+                                        .lan_discovery
+                                        .trusted_callsigns
+                                        .retain(|peer| !peer.eq_ignore_ascii_case(&callsign));
+                                    if !blocked {
+                                        self.config
+                                            .third_party
+                                            .lan_discovery
+                                            .blocked_callsigns
+                                            .push(callsign.clone());
+                                    }
+                                    if let Some(bridge) = self.third_party_bridge.as_ref() {
+                                        bridge.set_lan_trust(callsign.clone(), false);
+                                    }
+                                    self.profile_dirty = true;
+                                    self.persist_profile("LAN peer block saved to");
+                                }
+                            }
+                        });
                     }
                 });
             columns[1].heading("Messages");
@@ -257,7 +323,7 @@ impl QsonautGuiApp {
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.chat_compose)
                     .desired_width(ui.available_width() - 75.0)
-                    .hint_text("Message or /server ops message /users /help"),
+                    .hint_text("Message or /lan CALLSIGN message /server ops message"),
             );
             if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter))
                 || ui.small_button("Send").clicked()
@@ -267,7 +333,7 @@ impl QsonautGuiApp {
         });
         ui.label(
             RichText::new(
-                "Commands: /server CHANNEL message · /n3fjp CALLSIGN message · /users · /clear",
+                "Commands: /lan CALLSIGN message · /server CHANNEL message · /n3fjp CALLSIGN message · /users · /clear",
             )
             .small()
             .color(theme_muted(ui)),
@@ -360,6 +426,43 @@ impl QsonautGuiApp {
                     message: "QSONaut Server is disabled".to_string(),
                     utc: chat_now(),
                     outgoing: false,
+                });
+            }
+        } else if let Some(payload) = input.strip_prefix("/lan ") {
+            let mut parts = payload.splitn(2, char::is_whitespace);
+            let to = parts.next().unwrap_or_default().trim();
+            let text = parts.next().unwrap_or_default().trim();
+            let trusted = self
+                .config
+                .third_party
+                .lan_discovery
+                .trusted_callsigns
+                .iter()
+                .any(|peer| peer.eq_ignore_ascii_case(to));
+            if to.is_empty() || text.is_empty() {
+                self.chat_messages.push_back(UnifiedChatMessage {
+                    source: ChatSource::Lan,
+                    author: "SYSTEM".to_string(),
+                    message: "Usage: /lan CALLSIGN message".to_string(),
+                    utc: chat_now(),
+                    outgoing: false,
+                });
+            } else if !trusted {
+                self.chat_messages.push_back(UnifiedChatMessage {
+                    source: ChatSource::Lan,
+                    author: "SYSTEM".to_string(),
+                    message: "Trust this LAN peer before sending messages".to_string(),
+                    utc: chat_now(),
+                    outgoing: false,
+                });
+            } else if let Some(bridge) = self.third_party_bridge.as_ref() {
+                bridge.send_lan_chat(to, text);
+                self.chat_messages.push_back(UnifiedChatMessage {
+                    source: ChatSource::Lan,
+                    author: self.station_callsign_or_default().to_string(),
+                    message: text.to_string(),
+                    utc: chat_now(),
+                    outgoing: true,
                 });
             }
         } else if input.starts_with('/') {

@@ -1187,7 +1187,7 @@ impl QsonautGuiApp {
                 );
             });
             ui.label(
-                "Opt-in UDP presence only. Discovery does not grant trust or transmit messages automatically.",
+                "Opt-in UDP presence and trusted-peer chat. Discovery never grants trust; approve peers in the Chat roster before messaging.",
             );
         });
         ui.add_space(5.0);
