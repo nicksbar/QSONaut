@@ -8,8 +8,9 @@ pub use commands::{
     CommandEnvelope, CommandId, CommandKind, CommandOutcome, CommandResult, CommandTracker,
 };
 pub use config::{
-    AppConfig, AudioConfig, ContestOperatingMode, ContestProfile, FoxHoundRole, RadioConfig,
-    ServerConfig, SplitPolicy, StationConfig,
+    AppConfig, AudioConfig, ContestOperatingMode, ContestProfile, FoxHoundRole,
+    N3fjpEndpointConfig, RadioConfig, ServerConfig, SplitPolicy, StationConfig, ThirdPartyConfig,
+    UdpLoggingConfig,
 };
 pub use contracts::{AudioFormat, LogOutcome};
 pub use events::{is_valid_component_transition, AppEvent, AppEventBus, Component, ComponentState};

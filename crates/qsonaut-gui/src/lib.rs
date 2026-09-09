@@ -18,6 +18,7 @@ mod rendering;
 mod reporting;
 mod runtime;
 mod server_integration;
+mod third_party;
 mod tx_audio;
 mod ui_format;
 mod ui_widgets;
@@ -270,6 +271,7 @@ pub(crate) use runtime::constructor::{
     audio_config_from_operator_profile, configure_unix_gui_environment, spawn_acceleration_probe,
     spawn_device_scan,
 };
+use third_party::ThirdPartyBridge;
 #[cfg(test)]
 use tx_audio::FT8_TX_AUDIO_START_S;
 use tx_audio::{
@@ -1485,6 +1487,7 @@ struct QsonautGuiApp {
     psk_repeat_cache_secs: u64,
     psk_max_pending: usize,
     psk_reporter: Option<Reporter>,
+    third_party_bridge: Option<ThirdPartyBridge>,
     server_client: Option<ServerClient>,
     server_active_club: Option<(String, String)>,
     server_active_event: Option<(String, String)>,

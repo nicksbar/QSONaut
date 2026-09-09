@@ -106,6 +106,9 @@ impl QsonautGuiApp {
         self.qso_log_dirty = true;
         self.persist_qso_log(status);
         if let Some(record) = &published {
+            if let Some(bridge) = &self.third_party_bridge {
+                bridge.publish(record.clone());
+            }
             self.publish_qso_to_server(record);
         }
     }

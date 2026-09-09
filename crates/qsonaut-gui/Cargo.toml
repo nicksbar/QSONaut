@@ -42,3 +42,4 @@ qsonaut-server-client = { path = "../qsonaut-server-client" }
 qsonaut-modems = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "c93660a34b9ed65ea1eb46df57ffc856eb68e797" }
 qsonaut-js8 = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "c93660a34b9ed65ea1eb46df57ffc856eb68e797" }
 qsonaut-third-party = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "5d2c4c7b618a523ff93824602ab98217d2623c66" }
+qsonaut-n3fjp = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "26abb027feded0df17948beb765619273cda83df", package = "qsonaut-n3fjp" }

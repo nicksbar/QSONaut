@@ -3561,6 +3561,7 @@ dependencies = [
  "qsonaut-js8",
  "qsonaut-log",
  "qsonaut-modems",
+ "qsonaut-n3fjp",
  "qsonaut-pskreporter",
  "qsonaut-server-client",
  "qsonaut-third-party",
@@ -3634,6 +3635,14 @@ version = "0.1.0"
 source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=c93660a34b9ed65ea1eb46df57ffc856eb68e797#c93660a34b9ed65ea1eb46df57ffc856eb68e797"
 dependencies = [
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "qsonaut-n3fjp"
+version = "0.1.0"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=26abb027feded0df17948beb765619273cda83df#26abb027feded0df17948beb765619273cda83df"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

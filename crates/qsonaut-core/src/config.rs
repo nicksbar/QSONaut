@@ -12,6 +12,8 @@ pub struct AppConfig {
     pub server: ServerConfig,
     #[serde(default)]
     pub contest: ContestProfile,
+    #[serde(default)]
+    pub third_party: ThirdPartyConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +87,69 @@ pub struct ServerConfig {
     /// diagnostic snapshots. This never enables automatic uploads.
     #[serde(default)]
     pub share_debug_logs: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ThirdPartyConfig {
+    #[serde(default)]
+    pub n3fjp_api: N3fjpEndpointConfig,
+    #[serde(default)]
+    pub station_network: N3fjpEndpointConfig,
+    #[serde(default)]
+    pub udp_logging: UdpLoggingConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct N3fjpEndpointConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_n3fjp_host")]
+    pub host: String,
+    #[serde(default = "default_n3fjp_api_port")]
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UdpLoggingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub destinations: Vec<String>,
+    #[serde(default = "default_udp_format")]
+    pub format: String,
+}
+
+impl Default for N3fjpEndpointConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: default_n3fjp_host(),
+            port: default_n3fjp_api_port(),
+        }
+    }
+}
+
+impl Default for UdpLoggingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            destinations: Vec::new(),
+            format: default_udp_format(),
+        }
+    }
+}
+
+impl Default for ThirdPartyConfig {
+    fn default() -> Self {
+        Self {
+            n3fjp_api: N3fjpEndpointConfig::default(),
+            station_network: N3fjpEndpointConfig {
+                port: default_n3fjp_network_port(),
+                ..N3fjpEndpointConfig::default()
+            },
+            udp_logging: UdpLoggingConfig::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -180,6 +245,7 @@ impl Default for AppConfig {
             },
             server: ServerConfig::default(),
             contest: ContestProfile::default(),
+            third_party: ThirdPartyConfig::default(),
         }
     }
 }
@@ -377,6 +443,22 @@ fn default_radio_civ_address() -> u8 {
 
 fn default_controller_civ_address() -> u8 {
     0xE0
+}
+
+fn default_n3fjp_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_n3fjp_api_port() -> u16 {
+    1100
+}
+
+fn default_n3fjp_network_port() -> u16 {
+    1000
+}
+
+fn default_udp_format() -> String {
+    "n1mm_contact_info".to_string()
 }
 
 fn default_serial_start() -> u32 {

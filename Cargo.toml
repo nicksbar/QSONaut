@@ -22,6 +22,9 @@ opt-level = 2
 [profile.dev.package.qsonaut-third-party]
 opt-level = 2
 
+[profile.dev.package.qsonaut-n3fjp]
+opt-level = 2
+
 [profile.dev.package.qsonaut-modems]
 opt-level = 2
 
@@ -38,6 +41,9 @@ inherits = "dev"
 opt-level = 0
 
 [profile.modem-debug.package.qsonaut-third-party]
+opt-level = 0
+
+[profile.modem-debug.package.qsonaut-n3fjp]
 opt-level = 0
 
 [profile.modem-debug.package.qsonaut-modems]

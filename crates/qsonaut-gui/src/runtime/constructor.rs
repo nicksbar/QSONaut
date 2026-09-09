@@ -731,6 +731,8 @@ impl QsonautGuiApp {
             },
             &state,
         );
+        let third_party_bridge =
+            ThirdPartyBridge::spawn(&config.third_party, station_callsign.trim());
         let psk_sender = psk_reporter.as_ref().map(Reporter::sender);
         for session in parked_radio_sessions.values() {
             if let Ok(mut session_state) = session.state.lock() {
@@ -1052,6 +1054,7 @@ impl QsonautGuiApp {
             psk_repeat_cache_secs,
             psk_max_pending,
             psk_reporter,
+            third_party_bridge,
             server_client,
             server_active_club: None,
             server_active_event: None,
