@@ -37,6 +37,8 @@ pub(crate) struct ChatUser {
     pub(crate) source: ChatSource,
     pub(crate) last_seen: String,
     pub(crate) last_seen_epoch: u64,
+    pub(crate) band: Option<String>,
+    pub(crate) mode: Option<String>,
 }
 
 impl QsonautGuiApp {
@@ -51,15 +53,20 @@ impl QsonautGuiApp {
                         ThirdPartyUserSource::N3fjp => ChatSource::N3fjp,
                         ThirdPartyUserSource::Lan => ChatSource::Lan,
                     };
-                    self.chat_users.insert(
-                        from.clone(),
-                        ChatUser {
+                    let user = self
+                        .chat_users
+                        .entry(from.clone())
+                        .or_insert_with(|| ChatUser {
                             callsign: from.clone(),
                             source,
                             last_seen: chat_now(),
                             last_seen_epoch: chat_now_epoch(),
-                        },
-                    );
+                            band: None,
+                            mode: None,
+                        });
+                    user.source = source;
+                    user.last_seen = chat_now();
+                    user.last_seen_epoch = chat_now_epoch();
                     if self.signal_panel_tab != SignalPanelTab::Chat {
                         self.chat_unread = self.chat_unread.saturating_add(1);
                     }
@@ -77,16 +84,61 @@ impl QsonautGuiApp {
                         ThirdPartyUserSource::Lan => ChatSource::Lan,
                     };
                     for callsign in users {
-                        self.chat_users.insert(
-                            callsign.clone(),
-                            ChatUser {
-                                callsign,
+                        let user =
+                            self.chat_users
+                                .entry(callsign.clone())
+                                .or_insert_with(|| ChatUser {
+                                    callsign: callsign.clone(),
+                                    source,
+                                    last_seen: chat_now(),
+                                    last_seen_epoch: chat_now_epoch(),
+                                    band: None,
+                                    mode: None,
+                                });
+                        user.source = source;
+                        user.last_seen = chat_now();
+                        user.last_seen_epoch = chat_now_epoch();
+                    }
+                }
+                ThirdPartyChatEvent::Station {
+                    source,
+                    callsign,
+                    band,
+                    mode,
+                } => {
+                    let source = match source {
+                        ThirdPartyUserSource::N3fjp => ChatSource::N3fjp,
+                        ThirdPartyUserSource::Lan => ChatSource::Lan,
+                    };
+                    let user =
+                        self.chat_users
+                            .entry(callsign.clone())
+                            .or_insert_with(|| ChatUser {
+                                callsign: callsign.clone(),
                                 source,
                                 last_seen: chat_now(),
                                 last_seen_epoch: chat_now_epoch(),
-                            },
-                        );
-                    }
+                                band: None,
+                                mode: None,
+                            });
+                    user.source = source;
+                    user.last_seen = chat_now();
+                    user.last_seen_epoch = chat_now_epoch();
+                    user.band = Some(band);
+                    user.mode = Some(mode);
+                }
+                ThirdPartyChatEvent::Error { source, text } => {
+                    let source = match source {
+                        ThirdPartyUserSource::N3fjp => ChatSource::N3fjp,
+                        ThirdPartyUserSource::Lan => ChatSource::Lan,
+                    };
+                    self.chat_messages.push_back(UnifiedChatMessage {
+                        source,
+                        author: "SYSTEM".to_string(),
+                        message: text,
+                        utc: chat_now(),
+                        outgoing: false,
+                    });
                 }
             }
         }
@@ -111,6 +163,8 @@ impl QsonautGuiApp {
                     source: ChatSource::Server,
                     last_seen: message.created_at.clone(),
                     last_seen_epoch: chat_now_epoch(),
+                    band: None,
+                    mode: None,
                 },
             );
             let outgoing = message
@@ -162,6 +216,8 @@ impl QsonautGuiApp {
                         source: ChatSource::Js8,
                         last_seen: entry.utc.clone(),
                         last_seen_epoch: chat_now_epoch(),
+                        band: None,
+                        mode: None,
                     },
                 );
                 if self.signal_panel_tab != SignalPanelTab::Chat {
@@ -368,7 +424,7 @@ impl QsonautGuiApp {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.chat_n3fjp_target)
                         .desired_width(150.0)
-                        .hint_text("* or callsign"),
+                        .hint_text("* or callsign; * broadcasts"),
                 );
             });
         }
@@ -399,195 +455,245 @@ impl QsonautGuiApp {
             }
         });
         ui.separator();
-        ui.columns(2, |columns| {
-            columns[0].heading("Users");
-            columns[0].label(
-                RichText::new(format!("{} heard", self.chat_users.len()))
-                    .small()
-                    .color(theme_muted(&columns[0])),
-            );
-            egui::ScrollArea::vertical()
-                .id_salt("chat-users")
-                .show(&mut columns[0], |ui| {
-                    let users = self
-                        .chat_users
-                        .values()
-                        .map(|user| {
-                            (
-                                user.callsign.clone(),
-                                user.source,
-                                user.last_seen.clone(),
-                                user.last_seen_epoch,
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    let now = chat_now_epoch();
-                    for (callsign, source, last_seen, last_seen_epoch) in users {
-                        ui.horizontal(|ui| {
-                            let online = source != ChatSource::Lan
-                                || now.saturating_sub(last_seen_epoch) <= 45;
-                            let marker = if online { "●" } else { "○" };
-                            ui.label(format!("{} {} · {}", marker, callsign, source.label()))
-                                .on_hover_text(format!("Last seen {}", last_seen));
-                            if source == ChatSource::Lan {
-                                let trusted = self
-                                    .config
-                                    .third_party
-                                    .lan_discovery
-                                    .trusted_callsigns
-                                    .iter()
-                                    .any(|peer| peer.eq_ignore_ascii_case(&callsign));
-                                let blocked = self
-                                    .config
-                                    .third_party
-                                    .lan_discovery
-                                    .blocked_callsigns
-                                    .iter()
-                                    .any(|peer| peer.eq_ignore_ascii_case(&callsign));
-                                if !trusted && !blocked && ui.small_button("Trust").clicked() {
-                                    let peers = &mut self
-                                        .config
-                                        .third_party
-                                        .lan_discovery
-                                        .trusted_callsigns;
-                                    if !trusted {
-                                        peers.push(callsign.clone());
-                                    }
-                                    self.config
-                                        .third_party
-                                        .lan_discovery
-                                        .blocked_callsigns
-                                        .retain(|peer| !peer.eq_ignore_ascii_case(&callsign));
-                                    if let Some(bridge) = self.third_party_bridge.as_ref() {
-                                        bridge.set_lan_trust(callsign.clone(), true);
-                                    }
-                                    self.profile_dirty = true;
-                                    self.persist_profile("LAN peer trust saved to");
-                                }
-                                if trusted && ui.small_button("Untrust").clicked() {
-                                    self.config
-                                        .third_party
-                                        .lan_discovery
-                                        .trusted_callsigns
-                                        .retain(|peer| !peer.eq_ignore_ascii_case(&callsign));
-                                    if let Some(bridge) = self.third_party_bridge.as_ref() {
-                                        bridge.clear_lan_trust(callsign.clone());
-                                    }
-                                    self.profile_dirty = true;
-                                    self.persist_profile("LAN peer trust removed from");
-                                }
-                                if !blocked && !trusted && ui.small_button("Block").clicked() {
-                                    self.config
-                                        .third_party
-                                        .lan_discovery
-                                        .trusted_callsigns
-                                        .retain(|peer| !peer.eq_ignore_ascii_case(&callsign));
-                                    if !blocked {
-                                        self.config
+        let composer_height = 34.0;
+        let message_area = egui::vec2(
+            ui.available_width(),
+            (ui.available_height() - composer_height).max(0.0),
+        );
+        ui.allocate_ui_with_layout(
+            message_area,
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.columns(2, |columns| {
+                    columns[0].heading("Users");
+                    columns[0].label(
+                        RichText::new(format!("{} heard", self.chat_users.len()))
+                            .small()
+                            .color(theme_muted(&columns[0])),
+                    );
+                    egui::ScrollArea::vertical().id_salt("chat-users").show(
+                        &mut columns[0],
+                        |ui| {
+                            let users = self
+                                .chat_users
+                                .values()
+                                .map(|user| {
+                                    (
+                                        user.callsign.clone(),
+                                        user.source,
+                                        user.last_seen.clone(),
+                                        user.last_seen_epoch,
+                                        user.band.clone(),
+                                        user.mode.clone(),
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+                            let now = chat_now_epoch();
+                            for (callsign, source, last_seen, last_seen_epoch, band, mode) in users
+                            {
+                                ui.horizontal(|ui| {
+                                    let online = source != ChatSource::Lan
+                                        || now.saturating_sub(last_seen_epoch) <= 45;
+                                    let marker = if online { "●" } else { "○" };
+                                    let station_label = match (band.as_deref(), mode.as_deref()) {
+                                        (Some(band), Some(mode)) => {
+                                            format!(
+                                                "{} {} · {} · {} {}",
+                                                marker,
+                                                callsign,
+                                                source.label(),
+                                                band,
+                                                mode
+                                            )
+                                        }
+                                        _ => {
+                                            format!("{} {} · {}", marker, callsign, source.label())
+                                        }
+                                    };
+                                    ui.label(station_label)
+                                        .on_hover_text(format!("Last seen {}", last_seen));
+                                    if source == ChatSource::Lan {
+                                        let trusted = self
+                                            .config
+                                            .third_party
+                                            .lan_discovery
+                                            .trusted_callsigns
+                                            .iter()
+                                            .any(|peer| peer.eq_ignore_ascii_case(&callsign));
+                                        let blocked = self
+                                            .config
                                             .third_party
                                             .lan_discovery
                                             .blocked_callsigns
-                                            .push(callsign.clone());
+                                            .iter()
+                                            .any(|peer| peer.eq_ignore_ascii_case(&callsign));
+                                        if !trusted
+                                            && !blocked
+                                            && ui.small_button("Trust").clicked()
+                                        {
+                                            let peers = &mut self
+                                                .config
+                                                .third_party
+                                                .lan_discovery
+                                                .trusted_callsigns;
+                                            if !trusted {
+                                                peers.push(callsign.clone());
+                                            }
+                                            self.config
+                                                .third_party
+                                                .lan_discovery
+                                                .blocked_callsigns
+                                                .retain(|peer| {
+                                                    !peer.eq_ignore_ascii_case(&callsign)
+                                                });
+                                            if let Some(bridge) = self.third_party_bridge.as_ref() {
+                                                bridge.set_lan_trust(callsign.clone(), true);
+                                            }
+                                            self.profile_dirty = true;
+                                            self.persist_profile("LAN peer trust saved to");
+                                        }
+                                        if trusted && ui.small_button("Untrust").clicked() {
+                                            self.config
+                                                .third_party
+                                                .lan_discovery
+                                                .trusted_callsigns
+                                                .retain(|peer| {
+                                                    !peer.eq_ignore_ascii_case(&callsign)
+                                                });
+                                            if let Some(bridge) = self.third_party_bridge.as_ref() {
+                                                bridge.clear_lan_trust(callsign.clone());
+                                            }
+                                            self.profile_dirty = true;
+                                            self.persist_profile("LAN peer trust removed from");
+                                        }
+                                        if !blocked
+                                            && !trusted
+                                            && ui.small_button("Block").clicked()
+                                        {
+                                            self.config
+                                                .third_party
+                                                .lan_discovery
+                                                .trusted_callsigns
+                                                .retain(|peer| {
+                                                    !peer.eq_ignore_ascii_case(&callsign)
+                                                });
+                                            if !blocked {
+                                                self.config
+                                                    .third_party
+                                                    .lan_discovery
+                                                    .blocked_callsigns
+                                                    .push(callsign.clone());
+                                            }
+                                            if let Some(bridge) = self.third_party_bridge.as_ref() {
+                                                bridge.set_lan_trust(callsign.clone(), false);
+                                            }
+                                            self.profile_dirty = true;
+                                            self.persist_profile("LAN peer block saved to");
+                                        }
+                                        if blocked && ui.small_button("Unblock").clicked() {
+                                            self.config
+                                                .third_party
+                                                .lan_discovery
+                                                .blocked_callsigns
+                                                .retain(|peer| {
+                                                    !peer.eq_ignore_ascii_case(&callsign)
+                                                });
+                                            if let Some(bridge) = self.third_party_bridge.as_ref() {
+                                                bridge.clear_lan_trust(callsign.clone());
+                                            }
+                                            self.profile_dirty = true;
+                                            self.persist_profile("LAN peer block removed from");
+                                        }
                                     }
-                                    if let Some(bridge) = self.third_party_bridge.as_ref() {
-                                        bridge.set_lan_trust(callsign.clone(), false);
-                                    }
-                                    self.profile_dirty = true;
-                                    self.persist_profile("LAN peer block saved to");
-                                }
-                                if blocked && ui.small_button("Unblock").clicked() {
-                                    self.config
-                                        .third_party
-                                        .lan_discovery
-                                        .blocked_callsigns
-                                        .retain(|peer| !peer.eq_ignore_ascii_case(&callsign));
-                                    if let Some(bridge) = self.third_party_bridge.as_ref() {
-                                        bridge.clear_lan_trust(callsign.clone());
-                                    }
-                                    self.profile_dirty = true;
-                                    self.persist_profile("LAN peer block removed from");
-                                }
+                                });
                             }
-                        });
-                    }
-                });
-            columns[1].heading("Messages");
-            egui::ScrollArea::vertical()
-                .id_salt("unified-chat")
-                .stick_to_bottom(true)
-                .show(&mut columns[1], |ui| {
-                    if self.chat_messages.is_empty() {
-                        ui.label(
+                        },
+                    );
+                    columns[1].heading("Messages");
+                    egui::ScrollArea::vertical()
+                        .id_salt("unified-chat")
+                        .stick_to_bottom(true)
+                        .show(&mut columns[1], |ui| {
+                            if self.chat_messages.is_empty() {
+                                ui.label(
                             RichText::new(
                                 "No chat yet. JS8 messages will appear here as they are decoded.",
                             )
                             .color(theme_muted(ui)),
                         );
-                    }
-                    for message in &self.chat_messages {
-                        let outgoing = message.outgoing;
-                        let fill = if outgoing {
-                            Color32::from_rgb(53, 43, 25)
-                        } else {
-                            Color32::from_rgb(25, 49, 38)
-                        };
-                        egui::Frame::group(ui.style()).fill(fill).show(ui, |ui| {
-                            let layout = if outgoing {
-                                egui::Layout::right_to_left(egui::Align::TOP)
-                            } else {
-                                egui::Layout::left_to_right(egui::Align::TOP)
-                            };
-                            ui.with_layout(layout, |ui| {
-                                ui.horizontal_wrapped(|ui| {
-                                    if outgoing {
-                                        ui.label(
-                                            RichText::new("✓")
-                                                .strong()
-                                                .color(Color32::from_rgb(126, 220, 142)),
-                                        )
-                                        .on_hover_text("Sent to the selected destination");
-                                    }
-                                    ui.label(&message.message);
-                                    if message.author == "SYSTEM" {
-                                        ui.label(
-                                            RichText::new("Notice")
-                                                .small()
-                                                .italics()
-                                                .color(theme_muted(ui)),
-                                        );
+                            }
+                            for message in &self.chat_messages {
+                                let outgoing = message.outgoing;
+                                let fill = if outgoing {
+                                    Color32::from_rgb(53, 43, 25)
+                                } else {
+                                    Color32::from_rgb(25, 49, 38)
+                                };
+                                egui::Frame::group(ui.style()).fill(fill).show(ui, |ui| {
+                                    let layout = if outgoing {
+                                        egui::Layout::right_to_left(egui::Align::TOP)
                                     } else {
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "[{}] {}",
-                                                message.source.label(),
-                                                message.author
-                                            ))
-                                            .strong()
-                                            .color(theme_accent(ui)),
-                                        );
-                                    }
-                                    ui.label(
-                                        RichText::new(&message.utc).small().color(theme_muted(ui)),
-                                    );
+                                        egui::Layout::left_to_right(egui::Align::TOP)
+                                    };
+                                    ui.with_layout(layout, |ui| {
+                                        ui.horizontal_wrapped(|ui| {
+                                            if outgoing {
+                                                ui.label(
+                                                    RichText::new("✓")
+                                                        .strong()
+                                                        .color(Color32::from_rgb(126, 220, 142)),
+                                                )
+                                                .on_hover_text("Sent to the selected destination");
+                                            }
+                                            ui.label(&message.message);
+                                            if message.author == "SYSTEM" {
+                                                ui.label(
+                                                    RichText::new("Notice")
+                                                        .small()
+                                                        .italics()
+                                                        .color(theme_muted(ui)),
+                                                );
+                                            } else {
+                                                ui.label(
+                                                    RichText::new(format!(
+                                                        "[{}] {}",
+                                                        message.source.label(),
+                                                        message.author
+                                                    ))
+                                                    .strong()
+                                                    .color(theme_accent(ui)),
+                                                );
+                                            }
+                                            ui.label(
+                                                RichText::new(&message.utc)
+                                                    .small()
+                                                    .color(theme_muted(ui)),
+                                            );
+                                        });
+                                    });
                                 });
-                            });
+                            }
                         });
-                    }
                 });
-        });
+            },
+        );
         ui.separator();
-        ui.horizontal(|ui| {
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.chat_compose)
-                    .desired_width(ui.available_width() - 75.0)
-                    .hint_text("Message or /lan CALLSIGN message /server ops message"),
-            );
-            if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter))
-                || ui.small_button("Send").clicked()
-            {
-                self.submit_chat_command();
-            }
-        });
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), composer_height),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.chat_compose)
+                        .desired_width((ui.available_width() - 75.0).max(0.0))
+                        .hint_text("Message or /lan CALLSIGN message /server ops message"),
+                );
+                if (response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)))
+                    || ui.small_button("Send").clicked()
+                {
+                    self.submit_chat_command();
+                }
+            },
+        );
     }
 
     fn submit_chat_command(&mut self) {

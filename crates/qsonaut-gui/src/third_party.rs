@@ -8,6 +8,7 @@ use qsonaut_n3fjp::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     net::{SocketAddr, UdpSocket},
     sync::mpsc::{self, Receiver, Sender},
     sync::{Arc, Mutex},
@@ -41,6 +42,16 @@ pub(crate) enum ThirdPartyChatEvent {
         source: ThirdPartyUserSource,
         users: Vec<String>,
     },
+    Station {
+        source: ThirdPartyUserSource,
+        callsign: String,
+        band: String,
+        mode: String,
+    },
+    Error {
+        source: ThirdPartyUserSource,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -53,6 +64,7 @@ pub(crate) enum ThirdPartyUserSource {
 pub(crate) enum ThirdPartyChatCommand {
     Send { to: String, text: String },
     SendLan { to: String, text: String },
+    UpdateStation { band: String, mode: String },
     SetLanTrust { callsign: String, trusted: bool },
     ClearLanTrust { callsign: String },
 }
@@ -76,6 +88,27 @@ pub(crate) struct ThirdPartyStatus {
     pub(crate) lan: String,
     pub(crate) published: u64,
     pub(crate) last_error: Option<String>,
+}
+
+pub(crate) fn n3fjp_station_fields(band: &str, mode: &str, data_mode: bool) -> (String, String) {
+    let band = band
+        .trim()
+        .strip_suffix('m')
+        .or_else(|| band.trim().strip_suffix('M'))
+        .unwrap_or(band.trim())
+        .to_string();
+    let mode = if data_mode {
+        "DIG"
+    } else {
+        match mode.trim().to_ascii_uppercase().as_str() {
+            "CW" => "CW",
+            "USB" | "LSB" | "AM" | "FM" | "SSB" | "VOICE" | "PH" => "PH",
+            "DIG" | "DATA" | "DIGITAL" | "USB-D" | "LSB-D" | "FT8" | "FT4" | "JS8" | "JT65"
+            | "JT9" | "JT4" | "Q65" | "MSK144" | "FST4" | "WSPR" => "DIG",
+            _ => mode.trim(),
+        }
+    };
+    (band, mode.to_string())
 }
 
 impl ThirdPartyBridge {
@@ -150,6 +183,13 @@ impl ThirdPartyBridge {
         }
     }
 
+    pub(crate) fn update_station_status(&self, band: impl Into<String>, mode: impl Into<String>) {
+        let _ = self.chat_tx.send(ThirdPartyChatCommand::UpdateStation {
+            band: band.into(),
+            mode: mode.into(),
+        });
+    }
+
     pub(crate) fn set_lan_trust(&self, callsign: impl Into<String>, trusted: bool) {
         let _ = self.chat_tx.send(ThirdPartyChatCommand::SetLanTrust {
             callsign: callsign.into(),
@@ -197,10 +237,13 @@ fn run_worker(
 ) {
     let udp = build_udp(&config);
     let (mut api, api_error) = connect_api(&config.n3fjp_api);
-    let (mut network, network_error) = connect_network(&config.station_network, &station_callsign);
+    let (mut network, network_error) = connect_network(&config.station_network);
     let lan = bind_lan(&config.lan_discovery);
     let mut trusted_lan = config.lan_discovery.trusted_callsigns.clone();
     let mut blocked_lan = config.lan_discovery.blocked_callsigns.clone();
+    let mut last_station_status: Option<(String, String)> = None;
+    let mut last_station_announcement: Option<Instant> = None;
+    let mut api_visible_fields = HashSet::new();
     set_status(&status, |current| {
         current.api = if api.is_some() {
             "CONNECTED".to_string()
@@ -237,6 +280,7 @@ fn run_worker(
     });
     let mut last_network_check = Instant::now();
     let mut last_lan_beacon = Instant::now() - Duration::from_secs(30);
+    let mut last_reconnect_attempt = Instant::now();
 
     loop {
         if stop_rx.try_recv().is_ok() {
@@ -251,8 +295,9 @@ fn run_worker(
 
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(WorkerCommand::Qso(record)) => {
+                let mut delivered = false;
                 if let Some(broadcaster) = udp.as_ref() {
-                    broadcast_udp(
+                    delivered |= broadcast_udp(
                         broadcaster,
                         &station_callsign,
                         &record,
@@ -260,21 +305,28 @@ fn run_worker(
                     );
                 }
                 if let Some(client) = api.as_mut() {
-                    submit_api(client, &record);
+                    delivered |= submit_api(client, &record, &api_visible_fields);
                 }
                 if let Some(client) = network.as_mut() {
-                    send_network(client, &station_callsign, &record);
+                    delivered |= send_network(client, &station_callsign, &record);
                 }
-                set_status(&status, |current| {
-                    current.published = current.published.saturating_add(1)
-                });
+                if delivered {
+                    set_status(&status, |current| {
+                        current.published = current.published.saturating_add(1)
+                    });
+                }
+                info!(
+                    callsign = %record.callsign,
+                    delivered,
+                    "Third-party QSO delivery attempt completed"
+                );
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
 
         if let Some(client) = api.as_mut() {
-            if let Err(error) = drain_api(client) {
+            if let Err(error) = drain_api(client, &mut api_visible_fields) {
                 warn!(error = %error, "N3FJP API polling failed; disconnecting");
                 set_status(&status, |current| {
                     current.last_error = Some(format!("N3FJP API polling failed: {error}"));
@@ -284,12 +336,53 @@ fn run_worker(
                 api = None;
             }
         }
+        if api.is_none()
+            && config.n3fjp_api.enabled
+            && last_reconnect_attempt.elapsed() >= Duration::from_secs(10)
+        {
+            last_reconnect_attempt = Instant::now();
+            let (new_api, error) = connect_api(&config.n3fjp_api);
+            if let Some(client) = new_api {
+                api = Some(client);
+                api_visible_fields.clear();
+                set_status(&status, |current| {
+                    current.api = "CONNECTED".to_string();
+                    current.last_error = None;
+                });
+            } else if let Some(error) = error {
+                set_status(&status, |current| {
+                    current.api = "DISCONNECTED".to_string();
+                    current.last_error = Some(error);
+                });
+            }
+        }
+        if network.is_none()
+            && config.station_network.enabled
+            && last_reconnect_attempt.elapsed() >= Duration::from_secs(10)
+        {
+            last_reconnect_attempt = Instant::now();
+            let (new_network, error) = connect_network(&config.station_network);
+            if let Some(client) = new_network {
+                network = Some(client);
+                last_station_status = None;
+                last_station_announcement = None;
+                set_status(&status, |current| {
+                    current.network = "CONNECTED".to_string();
+                    current.last_error = None;
+                });
+            } else if let Some(error) = error {
+                set_status(&status, |current| {
+                    current.network = "DISCONNECTED".to_string();
+                    current.last_error = Some(error);
+                });
+            }
+        }
         while let Ok(command) = chat_rx.try_recv() {
             match command {
                 ThirdPartyChatCommand::Send { to, text } => {
                     if let Some(client) = network.as_mut() {
                         if let Err(error) = client.send(&Message::Chat {
-                            to,
+                            to: n3fjp_recipient(&to),
                             from: station_callsign.clone(),
                             text,
                         }) {
@@ -298,7 +391,16 @@ fn run_worker(
                                 current.last_error =
                                     Some(format!("N3FJP chat send failed: {error}"));
                             });
+                            let _ = chat_event_tx.send(ThirdPartyChatEvent::Error {
+                                source: ThirdPartyUserSource::N3fjp,
+                                text: format!("N3FJP chat send failed: {error}"),
+                            });
                         }
+                    } else {
+                        let _ = chat_event_tx.send(ThirdPartyChatEvent::Error {
+                            source: ThirdPartyUserSource::N3fjp,
+                            text: "N3FJP station network is not connected".to_string(),
+                        });
                     }
                 }
                 ThirdPartyChatCommand::SendLan { to, text } => {
@@ -310,6 +412,37 @@ fn run_worker(
                             &text,
                             config.lan_discovery.port,
                         );
+                    }
+                }
+                ThirdPartyChatCommand::UpdateStation { band, mode } => {
+                    if band.is_empty() || mode.is_empty() {
+                        continue;
+                    }
+                    let station_status = n3fjp_station_fields(&band, &mode, false);
+                    if last_station_status.as_ref() == Some(&station_status)
+                        && last_station_announcement
+                            .is_some_and(|sent| sent.elapsed() < Duration::from_secs(2))
+                    {
+                        continue;
+                    }
+                    if let Some(client) = network.as_mut() {
+                        if let Err(error) = client.send(&Message::BandMode {
+                            station: station_callsign.clone(),
+                            band: station_status.0.clone(),
+                            mode: station_status.1.clone(),
+                        }) {
+                            warn!(error = %error, "N3FJP station status update failed");
+                            set_status(&status, |current| {
+                                current.last_error =
+                                    Some(format!("N3FJP station status update failed: {error}"));
+                                current.network = "DISCONNECTED".to_string();
+                            });
+                            client.disconnect();
+                            network = None;
+                        } else {
+                            last_station_status = Some(station_status);
+                            last_station_announcement = Some(Instant::now());
+                        }
                     }
                 }
                 ThirdPartyChatCommand::SetLanTrust { callsign, trusted } => {
@@ -374,6 +507,18 @@ fn run_worker(
                                         users,
                                     });
                                 }
+                                Message::BandMode {
+                                    station,
+                                    band,
+                                    mode,
+                                } => {
+                                    let _ = chat_event_tx.send(ThirdPartyChatEvent::Station {
+                                        source: ThirdPartyUserSource::N3fjp,
+                                        callsign: station,
+                                        band,
+                                        mode,
+                                    });
+                                }
                                 message => debug!(?message, "N3FJP station-network message"),
                             }
                         }
@@ -399,6 +544,14 @@ fn enabled_label(enabled: bool) -> String {
         "STARTING".to_string()
     } else {
         "DISABLED".to_string()
+    }
+}
+
+fn n3fjp_recipient(target: &str) -> String {
+    if target.trim() == "*" {
+        String::new()
+    } else {
+        target.trim().to_string()
     }
 }
 
@@ -562,6 +715,11 @@ fn connect_api(endpoint: &N3fjpEndpointConfig) -> (Option<ApiClient>, Option<Str
                     Some("N3FJP API version discovery timed out".to_string()),
                 );
             }
+            if let Err(error) = client.send(&Command::new(CommandKind::VisibleFields)) {
+                warn!(error = %error, "N3FJP visible-field discovery failed");
+            } else {
+                debug!("N3FJP visible-field discovery requested");
+            }
             info!(host = %endpoint.host, port = endpoint.port, "N3FJP API connected");
             (Some(client), None)
         }
@@ -579,16 +737,19 @@ fn connect_api(endpoint: &N3fjpEndpointConfig) -> (Option<ApiClient>, Option<Str
     }
 }
 
-fn connect_network(
-    endpoint: &N3fjpEndpointConfig,
-    station: &str,
-) -> (Option<NetworkClient>, Option<String>) {
+fn connect_network(endpoint: &N3fjpEndpointConfig) -> (Option<NetworkClient>, Option<String>) {
     if !endpoint.enabled {
         return (None, None);
     }
     match NetworkClient::connect(&protocol_config(endpoint, 1024 * 1024)) {
         Ok(Some(mut client)) => {
-            if let Err(error) = client.open_session(station, "", "") {
+            // BAMS requires real band/mode values. The radio snapshot arrives
+            // asynchronously, so announce it through UpdateStation instead of
+            // sending an invalid empty BAMS during the TCP handshake.
+            if let Err(error) = client
+                .send(&Message::Open)
+                .and_then(|_| client.send(&Message::Who(Vec::new())))
+            {
                 warn!(error = %error, "N3FJP station-network handshake failed");
                 return (
                     None,
@@ -650,15 +811,22 @@ fn broadcast_udp(
     station_callsign: &str,
     record: &QsoRecord,
     format: &str,
-) {
+) -> bool {
     let qso = udp_qso(station_callsign, record);
     let format = if format.eq_ignore_ascii_case("adif") {
         Format::Adif
     } else {
         Format::N1mmContactInfo
     };
-    if let Err(error) = broadcaster.broadcast(&qso, format) {
-        warn!(error = %error, callsign = %record.callsign, "UDP QSO broadcast failed");
+    match broadcaster.broadcast(&qso, format) {
+        Ok(_bytes_sent) => {
+            info!(callsign = %record.callsign, "UDP QSO broadcast sent");
+            true
+        }
+        Err(error) => {
+            warn!(error = %error, callsign = %record.callsign, "UDP QSO broadcast failed");
+            false
+        }
     }
 }
 
@@ -686,24 +854,62 @@ fn udp_qso(station_callsign: &str, record: &QsoRecord) -> UdpQso {
     }
 }
 
-fn submit_api(client: &mut ApiClient, record: &QsoRecord) {
+fn submit_api(
+    client: &mut ApiClient,
+    record: &QsoRecord,
+    visible_fields: &HashSet<String>,
+) -> bool {
     let entry = Entry {
         call: record.callsign.clone(),
         band: record.band.clone(),
         mode: record.mode.clone(),
         frequency_mhz: (record.frequency_hz > 0)
             .then(|| format!("{:.6}", record.frequency_hz as f64 / 1_000_000.0)),
-        controls: Vec::new(),
+        controls: n3fjp_api_controls(record, visible_fields),
     };
-    if let Err(error) = client.submit_entry(&entry) {
-        warn!(error = %error, callsign = %record.callsign, "N3FJP API QSO submission failed");
+    match client.submit_entry(&entry) {
+        Ok(()) => {
+            info!(
+                callsign = %record.callsign,
+                "N3FJP API ENTER sequence sent; awaiting ENTERRESPONSE"
+            );
+            true
+        }
+        Err(error) => {
+            warn!(error = %error, callsign = %record.callsign, "N3FJP API QSO submission failed");
+            false
+        }
     }
 }
 
-fn drain_api(client: &mut ApiClient) -> std::io::Result<()> {
+fn drain_api(client: &mut ApiClient, visible_fields: &mut HashSet<String>) -> std::io::Result<()> {
     for packet in client.poll()? {
         if packet.id() == "ENTERRESPONSE" {
-            debug!(?packet, "N3FJP API entry response");
+            match packet.entered_records() {
+                Ok(Some(entered_records)) if entered_records > 0 => {
+                    info!(entered_records, "N3FJP API accepted QSO entry");
+                }
+                Ok(Some(entered_records)) => {
+                    warn!(
+                        entered_records,
+                        "N3FJP API ENTER response reported no new records"
+                    );
+                }
+                Ok(None) => debug!(?packet, "N3FJP API entry response without count"),
+                Err(error) => warn!(error = %error, "N3FJP API ENTERRESPONSE was malformed"),
+            }
+        } else if packet.id() == "VISIBLEFIELDSRESPONSE" {
+            if let Some(control) = packet.value("CONTROL") {
+                let control = control.trim().to_ascii_uppercase();
+                if !control.is_empty() {
+                    visible_fields.insert(control.clone());
+                    info!(
+                        control,
+                        value = ?packet.value("VALUE"),
+                        "N3FJP visible entry field discovered"
+                    );
+                }
+            }
         } else {
             debug!(id = packet.id(), "N3FJP API event");
         }
@@ -711,7 +917,22 @@ fn drain_api(client: &mut ApiClient) -> std::io::Result<()> {
     Ok(())
 }
 
-fn send_network(client: &mut NetworkClient, station: &str, record: &QsoRecord) {
+fn n3fjp_api_controls(
+    record: &QsoRecord,
+    visible_fields: &HashSet<String>,
+) -> Vec<(String, String)> {
+    [
+        ("TXTENTRYRSTR", record.report_received.as_str()),
+        ("TXTENTRYGRID", record.grid.as_str()),
+        ("TXTENTRYCOMMENTS", record.notes.as_str()),
+    ]
+    .into_iter()
+    .filter(|(control, value)| visible_fields.contains(*control) && !value.trim().is_empty())
+    .map(|(control, value)| (control.to_string(), value.trim().to_string()))
+    .collect()
+}
+
+fn send_network(client: &mut NetworkClient, station: &str, record: &QsoRecord) -> bool {
     let fields = vec![
         ("CALL".to_string(), record.callsign.clone()),
         ("BAND".to_string(), record.band.clone()),
@@ -727,15 +948,26 @@ fn send_network(client: &mut NetworkClient, station: &str, record: &QsoRecord) {
         kind: Transaction::Add,
         fields,
     };
-    if let Err(error) = client.send(&message) {
-        warn!(error = %error, callsign = %record.callsign, "N3FJP station-network QSO send failed");
+    match client.send(&message) {
+        Ok(()) => {
+            info!(callsign = %record.callsign, "N3FJP station-network QSO sent");
+            true
+        }
+        Err(error) => {
+            warn!(error = %error, callsign = %record.callsign, "N3FJP station-network QSO send failed");
+            false
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{accepts_lan_chat, lan_chat_packet, udp_qso};
+    use super::{
+        accepts_lan_chat, lan_chat_packet, n3fjp_api_controls, n3fjp_recipient,
+        n3fjp_station_fields, udp_qso,
+    };
     use qsonaut_log::QsoRecord;
+    use std::collections::HashSet;
 
     #[test]
     fn maps_qso_record_to_udp_payload_model() {
@@ -776,5 +1008,45 @@ mod tests {
         let trusted = vec!["W1AW".to_string()];
         assert!(accepts_lan_chat(&packet, "N7UF", &trusted, &[]));
         assert!(!accepts_lan_chat(&packet, "K1ABC", &trusted, &[]));
+    }
+
+    #[test]
+    fn n3fjp_star_target_is_encoded_as_broadcast() {
+        assert_eq!(n3fjp_recipient("*"), "");
+        assert_eq!(n3fjp_recipient(" W1AW "), "W1AW");
+    }
+
+    #[test]
+    fn n3fjp_station_fields_use_wire_band_and_mode_values() {
+        assert_eq!(
+            n3fjp_station_fields("20m", "USB", false),
+            ("20".into(), "PH".into())
+        );
+        assert_eq!(
+            n3fjp_station_fields("40m", "FT8", false),
+            ("40".into(), "DIG".into())
+        );
+        assert_eq!(
+            n3fjp_station_fields("20m", "USB", true),
+            ("20".into(), "DIG".into())
+        );
+        assert_eq!(
+            n3fjp_station_fields("15", "CW", false),
+            ("15".into(), "CW".into())
+        );
+    }
+
+    #[test]
+    fn n3fjp_api_controls_require_advertised_fields() {
+        let mut record = QsoRecord::new("W1AW", "FT8", "20m", 14_074_000, 1, 2);
+        record.report_received = "-10".to_string();
+        record.grid = "FN31".to_string();
+        record.notes = "test contact".to_string();
+        let visible_fields = HashSet::from(["TXTENTRYRSTR".to_string()]);
+
+        assert_eq!(
+            n3fjp_api_controls(&record, &visible_fields),
+            vec![("TXTENTRYRSTR".to_string(), "-10".to_string())]
+        );
     }
 }

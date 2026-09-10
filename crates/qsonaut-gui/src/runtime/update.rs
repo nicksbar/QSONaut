@@ -412,6 +412,19 @@ impl QsonautGuiApp {
         }
 
         let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
+        if let (Some(bridge), Some(frequency_hz)) =
+            (self.third_party_bridge.as_ref(), snapshot.frequency_hz)
+        {
+            let band = band_for_frequency(frequency_hz);
+            if !band.is_empty() && !snapshot.mode.trim().is_empty() {
+                let (band, mode) = crate::third_party::n3fjp_station_fields(
+                    band,
+                    &snapshot.mode,
+                    snapshot.data_mode.unwrap_or(false),
+                );
+                bridge.update_station_status(band, mode);
+            }
+        }
         self.poll_third_party_chat();
         self.poll_server_chat();
         self.sync_js8_chat(&snapshot);
@@ -1582,6 +1595,8 @@ impl QsonautGuiApp {
                     ui.separator();
                     if self.signal_panel_tab == SignalPanelTab::AppLog {
                         self.draw_app_log_panel(ui);
+                    } else if self.signal_panel_tab == SignalPanelTab::Chat {
+                        self.draw_chat_panel(ui);
                     } else {
                         egui::ScrollArea::vertical()
                             .id_salt("signals_scroll")
@@ -1600,7 +1615,7 @@ impl QsonautGuiApp {
                                 SignalPanelTab::Ai => self.draw_ai_panel(ui),
                                 SignalPanelTab::Server => self.draw_server_panel(ui),
                                 SignalPanelTab::ThirdParty => self.draw_third_party_panel(ui),
-                                SignalPanelTab::Chat => self.draw_chat_panel(ui),
+                                SignalPanelTab::Chat => unreachable!("chat has its own layout"),
                                 SignalPanelTab::RadioTuning => {
                                     self.draw_radio_tuning_panel(ui, &snapshot)
                                 }

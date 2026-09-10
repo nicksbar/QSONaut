@@ -121,7 +121,7 @@ impl QsonautGuiApp {
             if let Some(bridge) = &self.third_party_bridge {
                 let status = bridge.status();
                 let label = format!(
-                    "🔌 EXT {} · {} · UDP {} · LAN {} · {} QSO{}",
+                    "🔌 EXT {} · {} · UDP {} · LAN {} · {} delivered QSO{}",
                     status.api,
                     status.network,
                     status.udp,
@@ -133,7 +133,7 @@ impl QsonautGuiApp {
                     .last_error
                     .map(|error| format!("Third-party integration error: {error}"))
                     .unwrap_or_else(|| {
-                        "Third-party integrations\nAPI: N3FJP application API\nNetwork: N3FJP station network\nUDP: external logging broadcasts\nQSOs are persisted locally before delivery.".to_string()
+                        "Third-party integrations\nAPI: N3FJP application API\nNetwork: N3FJP station network\nUDP: external logging broadcasts\nCount is successful external transport delivery; QSOs are persisted locally first.".to_string()
                     });
                 ui.label(RichText::new(label).color(Color32::LIGHT_GREEN))
                     .on_hover_text(detail);
