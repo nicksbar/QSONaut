@@ -1,5 +1,6 @@
 use std::{fs, path::PathBuf};
 
+use crate::activity::OperatingActivity;
 use anyhow::Result;
 use qsonaut_accelerate::ComputePreference;
 use qsonaut_core::{
@@ -258,6 +259,10 @@ pub(super) struct OperatorProfile {
     pub(super) server: Option<ServerConfig>,
     #[serde(default)]
     pub(super) contest_enabled: bool,
+    #[serde(default)]
+    pub(super) operating_activity: Option<OperatingActivity>,
+    #[serde(default)]
+    pub(super) contest_session_id: String,
     #[serde(default)]
     pub(super) contest_type: Option<String>,
     #[serde(default)]

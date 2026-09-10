@@ -196,6 +196,18 @@ pub struct QsoRecord {
     /// Operating/activity context, such as `General`, `Contest`, or `POTA`.
     #[serde(default)]
     pub operation_mode: String,
+    #[serde(default)]
+    pub operator_callsign: String,
+    #[serde(default)]
+    pub station_callsign: String,
+    #[serde(default)]
+    pub contest_template_id: String,
+    #[serde(default)]
+    pub contest_session_id: String,
+    #[serde(default)]
+    pub server_event_id: String,
+    #[serde(default)]
+    pub club_id: String,
     /// POTA role for this QSO, such as `Activator` or `Hunter`.
     #[serde(default)]
     pub pota_role: String,
@@ -254,6 +266,12 @@ impl QsoRecord {
             mode: mode.into().trim().to_ascii_uppercase(),
             frequency_hz,
             operation_mode: "General".to_string(),
+            operator_callsign: String::new(),
+            station_callsign: String::new(),
+            contest_template_id: String::new(),
+            contest_session_id: String::new(),
+            server_event_id: String::new(),
+            club_id: String::new(),
             pota_role: String::new(),
             pota_reference: String::new(),
             pota_name: String::new(),
@@ -639,6 +657,24 @@ impl QsoLog {
                     .get("QSONAUT_OPERATION_MODE")
                     .cloned()
                     .unwrap_or_else(|| "General".to_string()),
+                operator_callsign: fields.get("OPERATOR").cloned().unwrap_or_default(),
+                station_callsign: fields.get("STATION_CALLSIGN").cloned().unwrap_or_default(),
+                contest_template_id: fields
+                    .get("APP_QSONAUT_CONTEST_TEMPLATE_ID")
+                    .cloned()
+                    .unwrap_or_default(),
+                server_event_id: fields
+                    .get("APP_QSONAUT_EVENT_ID")
+                    .cloned()
+                    .unwrap_or_default(),
+                club_id: fields
+                    .get("APP_QSONAUT_CLUB_ID")
+                    .cloned()
+                    .unwrap_or_default(),
+                contest_session_id: fields
+                    .get("APP_QSONAUT_SESSION_ID")
+                    .cloned()
+                    .unwrap_or_default(),
                 pota_role: fields.get("QSONAUT_POTA_ROLE").cloned().unwrap_or_default(),
                 pota_reference: fields
                     .get("SIG_INFO")
@@ -761,6 +797,24 @@ impl QsoLog {
                 );
             }
             push_adif(&mut output, "RST_SENT", &contact.report_sent);
+            push_adif(
+                &mut output,
+                "APP_QSONAUT_SESSION_ID",
+                &contact.contest_session_id,
+            );
+            push_adif(&mut output, "OPERATOR", &contact.operator_callsign);
+            push_adif(&mut output, "STATION_CALLSIGN", &contact.station_callsign);
+            push_adif(
+                &mut output,
+                "APP_QSONAUT_CONTEST_TEMPLATE_ID",
+                &contact.contest_template_id,
+            );
+            push_adif(
+                &mut output,
+                "APP_QSONAUT_EVENT_ID",
+                &contact.server_event_id,
+            );
+            push_adif(&mut output, "APP_QSONAUT_CLUB_ID", &contact.club_id);
             push_adif(&mut output, "RST_RCVD", &contact.report_received);
             if let Some(serial) = contact.contest_serial_sent {
                 push_adif(&mut output, "STX", &serial.to_string());
@@ -1134,6 +1188,44 @@ mod tests {
             original.pota_references
         );
         assert_eq!(imported.contacts[0].notes, original.notes);
+    }
+
+    #[test]
+    fn operating_identity_and_event_survive_adif_and_legacy_toml() {
+        let mut record = QsoRecord::new("K1ABC", "CW", "20m", 14_050_000, 0, 1);
+        record.operator_callsign = "N1OP".into();
+        record.station_callsign = "W1CLUB".into();
+        record.contest_template_id = "template-1".into();
+        record.contest_session_id = "session-1".into();
+        record.server_event_id = "event-1".into();
+        record.club_id = "club-1".into();
+        let adif = QsoLog {
+            version: 1,
+            contacts: vec![record.clone()],
+        }
+        .to_adif();
+        let mut imported = QsoLog::default();
+        assert_eq!(imported.import_adif_from_str(&adif).imported, 1);
+        let restored = &imported.contacts[0];
+        assert_eq!(restored.operator_callsign, record.operator_callsign);
+        assert_eq!(restored.station_callsign, record.station_callsign);
+        assert_eq!(restored.contest_template_id, record.contest_template_id);
+        assert_eq!(restored.contest_session_id, record.contest_session_id);
+        assert_eq!(restored.server_event_id, record.server_event_id);
+        assert_eq!(restored.club_id, record.club_id);
+        let mut legacy = toml::Value::try_from(&record).unwrap();
+        for key in [
+            "operator_callsign",
+            "station_callsign",
+            "contest_template_id",
+            "server_event_id",
+            "club_id",
+        ] {
+            legacy.as_table_mut().unwrap().remove(key);
+        }
+        let restored: QsoRecord = legacy.try_into().unwrap();
+        assert!(restored.server_event_id.is_empty());
+        assert!(restored.station_callsign.is_empty());
     }
 
     #[test]

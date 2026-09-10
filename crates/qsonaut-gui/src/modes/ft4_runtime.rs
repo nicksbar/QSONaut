@@ -56,9 +56,6 @@ impl QsonautGuiApp {
             record.contest_exchange_received = record.report_received.clone();
             record.contest_fields_received =
                 self.contest_fields_received(&record.contest_exchange_received);
-            self.advance_contest_serial();
-            self.profile_dirty = true;
-            self.persist_profile("Auto-saved");
         }
         self.append_qso(record, "Auto-logged");
     }

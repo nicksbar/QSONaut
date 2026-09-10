@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::OnceLock;
 
+pub mod rules;
+
 pub const CATALOG_VERSION: u32 = 1;
 const CATALOG: &str = include_str!("../assets/contest-catalog.json");
 

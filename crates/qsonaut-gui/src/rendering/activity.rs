@@ -50,12 +50,33 @@ impl QsonautGuiApp {
                         );
                         if response.clicked() {
                             info!(activity = %activity.label(), "Operating activity changed");
+                            self.disarm_all_tx_with_persistence(
+                                "Operating activity changed",
+                                false,
+                            );
                             self.activity = activity;
+                            self.server_active_event = None;
+                            self.server_active_club = None;
+                            self.contest_enabled = matches!(
+                                activity,
+                                OperatingActivity::Contest | OperatingActivity::FieldDay
+                            );
+                            if activity == OperatingActivity::FieldDay {
+                                self.contest_type = "ARRL_FD".to_string();
+                            }
+                            self.contest_exchange_fields.clear();
+                            self.cw_qso_exchange_received.clear();
+                            self.profile_dirty = true;
+                            self.persist_profile("Operating activity saved");
                             ui.close();
                         }
                     }
                 });
                 if let Some(server_context) = &server_context {
+                    if server_context.state != ServerConnectionState::Connected {
+                        ui.label("Server activities unavailable while disconnected");
+                        return;
+                    }
                     if !server_context.clubs.is_empty() || !server_context.active_events.is_empty()
                     {
                         ui.separator();
@@ -79,6 +100,10 @@ impl QsonautGuiApp {
                                 if ui.selectable_label(selected, label).clicked() {
                                     self.server_active_club =
                                         Some((club.id.clone(), club.name.clone()));
+                                    self.disarm_all_tx_with_persistence(
+                                        "Club context changed",
+                                        false,
+                                    );
                                     self.server_active_event = None;
                                     ui.close();
                                 }
@@ -101,7 +126,14 @@ impl QsonautGuiApp {
                                 };
                                 ui.horizontal(|ui| {
                                     if ui.selectable_label(selected, label).clicked() {
+                                        self.disarm_all_tx_with_persistence(
+                                            "Server event changed",
+                                            false,
+                                        );
                                         self.activity = OperatingActivity::Contest;
+                                        self.contest_enabled = true;
+                                        self.contest_exchange_fields.clear();
+                                        self.cw_qso_exchange_received.clear();
                                         self.server_active_club = Some((
                                             contest.club_id.clone(),
                                             contest.club_name.clone(),
@@ -136,6 +168,7 @@ impl QsonautGuiApp {
                         {
                             self.server_active_club = None;
                             self.server_active_event = None;
+                            self.disarm_all_tx_with_persistence("Server context cleared", false);
                             ui.close();
                         }
                     }

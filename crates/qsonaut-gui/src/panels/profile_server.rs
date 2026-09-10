@@ -344,7 +344,6 @@ impl QsonautGuiApp {
                 .iter()
                 .position(|definition| definition.contest_type == self.contest_type)
                 .unwrap_or(0);
-            let selected_type = definitions[selected_index].contest_type.as_str();
             let mut contest_changed = false;
             ui.horizontal_wrapped(|ui| {
                 ui.label("Contest definition");
@@ -365,14 +364,20 @@ impl QsonautGuiApp {
                         }
                     });
                 if contest_changed {
+                    self.disarm_all_tx_with_persistence("Contest definition changed", false);
+                    self.contest_exchange_fields.clear();
+                    self.contest_field_values.clear();
+                    self.cw_qso_exchange_received.clear();
+                    self.server_active_event = None;
+                    self.server_active_club = None;
+                    self.contest_session_id = Uuid::new_v4().to_string();
                     self.contest_exchange_template.clear();
                     self.profile_dirty = true;
                     self.persist_profile("Contest definition saved");
                     self.emit_contest_profile_hooks();
                 }
             });
-            let definition = crate::contest_catalog::find(selected_type)
-                .or_else(|| crate::contest_catalog::find(&self.contest_type));
+            let definition = crate::contest_catalog::find(&self.contest_type);
             if let Some(definition) = definition {
                 ui.label(
                     RichText::new(definition.description.as_str())

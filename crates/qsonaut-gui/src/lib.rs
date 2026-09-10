@@ -215,6 +215,7 @@ use band_plan::{
     workspace_radio_preset_for_frequency, WorkspaceMode, WORKSPACE_MODES,
 };
 use chat::{ChatUser, UnifiedChatMessage};
+use contest::ContestExchangeField;
 use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
     DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, Ft8SyncState, OperatorCallHit, PendingFt8Decode,
@@ -236,7 +237,6 @@ use modes::exchange::{
 };
 pub(crate) use modes::ft8_types::{Ft8SeqState, Ft8TxQueuePolicy, PendingManualFt8Reply};
 use modes::js8::Js8Controls;
-use modes::voice::VoiceContestField;
 use profile::{
     active_operator_profile_name, default_contest_fake_split_offset_hz, default_cw_tone_hz,
     default_cw_wpm, default_max_attempts as default_ft8_max_attempts,
@@ -1419,13 +1419,14 @@ struct QsonautGuiApp {
     voice_contest_serial_sent: String,
     voice_contest_serial_received: String,
     voice_notes: String,
-    voice_contest_fields: Vec<VoiceContestField>,
+    contest_exchange_fields: Vec<ContestExchangeField>,
     voice_qso_started_at: Option<u64>,
     voice_lookup_requested: String,
     voice_lookup_status: String,
     voice_hamdb: Option<HamDbCacheEntry>,
     contest_enabled: bool,
     contest_type: String,
+    contest_session_id: String,
     contest_field_values: BTreeMap<String, String>,
     contest_operating_mode: ContestOperatingMode,
     contest_split_policy: SplitPolicy,

@@ -46,6 +46,42 @@ impl QsonautGuiApp {
     }
 
     pub(crate) fn append_qso(&mut self, mut record: QsoRecord, status: &str) {
+        record.operator_callsign = self.station_callsign.trim().to_ascii_uppercase();
+        record.station_callsign = record.operator_callsign.clone();
+        record.server_event_id = self
+            .server_active_event
+            .as_ref()
+            .map(|(id, _)| id.clone())
+            .unwrap_or_default();
+        record.club_id = self
+            .server_active_club
+            .as_ref()
+            .map(|(id, _)| id.clone())
+            .unwrap_or_default();
+        if self.contest_enabled {
+            record.operation_mode = if self.server_active_event.is_some() {
+                "Server Contest".to_string()
+            } else {
+                "Local Contest".to_string()
+            };
+            record.contest_session_id = self.contest_session_id.clone();
+            record.contest_template_id = crate::contest_catalog::find(&self.contest_type)
+                .filter(|_| self.server_active_event.is_none())
+                .map(|definition| definition.id.clone())
+                .unwrap_or_default();
+            for (key, value) in self.contest_fields_sent() {
+                record.contest_fields_sent.entry(key).or_insert(value);
+            }
+            for (key, value) in self.contest_fields_received(&record.contest_exchange_received) {
+                record.contest_fields_received.entry(key).or_insert(value);
+            }
+            record
+                .contest_serial_sent
+                .get_or_insert(self.contest_serial_current.max(1));
+            self.contest_serial_current = self
+                .contest_serial_current
+                .max(record.contest_serial_sent.unwrap_or_default());
+        }
         if record.contest_fields_sent.is_empty() {
             record.contest_fields_sent = parse_contest_fields(&record.contest_exchange_sent);
         }
@@ -89,6 +125,14 @@ impl QsonautGuiApp {
                 .saturating_add(1);
         }
         self.qso_log.contacts.push(record);
+        if self.contest_enabled {
+            self.advance_contest_serial();
+            self.profile_dirty = true;
+            self.persist_profile("Contest serial saved");
+            for field in &mut self.contest_exchange_fields {
+                field.received.clear();
+            }
+        }
         let published = self.qso_log.contacts.last().cloned();
         if let Some(last) = &published {
             self.app_events.publish(AppEvent::QsoLogged {

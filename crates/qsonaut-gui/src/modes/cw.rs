@@ -92,11 +92,6 @@ impl QsonautGuiApp {
             self.digital_tx_status = "CW QSO needs a valid callsign".to_string();
             return;
         };
-        if self.contest_enabled {
-            self.advance_contest_serial();
-            self.profile_dirty = true;
-            self.persist_profile("Auto-saved");
-        }
         self.append_qso(record, "CW QSO saved");
         self.cw_qso_callsign.clear();
         self.cw_qso_rst_sent = "599".to_string();

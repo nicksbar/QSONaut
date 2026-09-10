@@ -315,11 +315,11 @@ impl QsonautGuiApp {
             ui.label(
                 "Discovery is opt-in. It shows nearby stations here; approve peers before allowing LAN chat.",
             );
-            if self.config.third_party.lan_discovery != lan_before {
-                if ui.button("Apply LAN settings").clicked() {
-                    self.persist_profile("LAN settings saved to");
-                    self.restart_third_party_bridge();
-                }
+            if self.config.third_party.lan_discovery != lan_before
+                && ui.button("Apply LAN settings").clicked()
+            {
+                self.persist_profile("LAN settings saved to");
+                self.restart_third_party_bridge();
             }
         });
         ui.add_space(5.0);

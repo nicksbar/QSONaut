@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — 2026-09-10
+- Shared catalog setup and structured exchange editor across mode workspaces,
+  with setup/band/mode feedback and checks before application-controlled TX.
+- Persistent local contest occurrences, a new-session control, and catalog-based
+  duplicate scopes that group phone and digital modes appropriately.
+- Operator, station, contest template/session, club, and server event fields in
+  local logs and ADIF; historical uploads use their recorded event context.
+
+### Fixed
+- Activity/template/server changes disarm queued TX and clear selected context.
+- Voice no longer treats setup-only values such as power as received exchanges.
+- Serial advancement is shared by Voice, CW, FT8, and FT4 logging; received
+  exchange fields clear after logging.
+
 ## [0.4.1] - 2026-09-09
 
 ### Added

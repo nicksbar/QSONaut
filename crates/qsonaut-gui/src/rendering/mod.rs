@@ -1,6 +1,7 @@
 mod activity;
 mod banner;
 mod connection;
+mod contest_session;
 mod meter;
 mod meter_drawer;
 mod radio_controls;

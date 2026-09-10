@@ -134,6 +134,9 @@ impl QsonautGuiApp {
     }
 
     pub(super) fn reconnect_server(&mut self) {
+        self.disarm_all_tx_with_persistence("Server connection changed", false);
+        self.server_active_event = None;
+        self.server_active_club = None;
         let enabled = self.config.server.enabled;
         let url = self.config.server.url.trim();
         let token = self.config.server.device_token.trim();
@@ -176,7 +179,7 @@ impl QsonautGuiApp {
             return;
         };
         client.publish_log(serde_json::json!({
-            "event_id": self.server_active_event.as_ref().and_then(|(id, _)| Uuid::parse_str(id).ok()),
+            "event_id": Uuid::parse_str(&record.server_event_id).ok(),
             "idempotency_key": log_idempotency_key(record.id),
             "callsign": record.callsign,
             "band": record.band,
@@ -193,6 +196,10 @@ impl QsonautGuiApp {
                 "serial_sent": record.contest_serial_sent,
                 "serial_received": record.contest_serial_received,
                 "grid": record.grid,
+                "operator_callsign": record.operator_callsign,
+                "station_callsign": record.station_callsign,
+                "contest_template_id": record.contest_template_id,
+                "club_id": record.club_id,
             },
             "points": 0,
             "source": "qsonaut",

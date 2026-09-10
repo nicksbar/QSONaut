@@ -143,6 +143,8 @@ impl QsonautGuiApp {
             server_instance_id: self.server_instance_id.clone(),
             server: Some(self.config.server.clone()),
             contest_enabled: self.contest_enabled,
+            operating_activity: Some(self.activity),
+            contest_session_id: self.contest_session_id.clone(),
             contest_type: Some(self.contest_type.clone()),
             contest_field_values: self.contest_field_values.clone(),
             contest_operating_mode: self.contest_operating_mode,
@@ -223,6 +225,22 @@ impl QsonautGuiApp {
             state.recording_stream = self.recording_stream;
         }
         self.contest_enabled = profile.contest_enabled;
+        self.activity = profile
+            .operating_activity
+            .unwrap_or(if profile.contest_enabled {
+                OperatingActivity::Contest
+            } else {
+                OperatingActivity::General
+            });
+        self.contest_session_id = if profile.contest_session_id.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            profile.contest_session_id.clone()
+        };
+        self.server_active_event = None;
+        self.server_active_club = None;
+        self.contest_exchange_fields.clear();
+        self.cw_qso_exchange_received.clear();
         self.contest_type = profile
             .contest_type
             .clone()

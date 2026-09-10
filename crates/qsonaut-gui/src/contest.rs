@@ -1,5 +1,22 @@
 use super::*;
 
+#[derive(Debug, Clone)]
+pub(crate) struct ContestExchangeField {
+    pub(crate) name: String,
+    pub(crate) sent: String,
+    pub(crate) received: String,
+}
+
+impl ContestExchangeField {
+    pub(crate) fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            sent: String::new(),
+            received: String::new(),
+        }
+    }
+}
+
 fn contest_operating_mode_label(mode: ContestOperatingMode) -> &'static str {
     match mode {
         ContestOperatingMode::Run => "run",
@@ -104,6 +121,14 @@ impl QsonautGuiApp {
             .map(|(key, value)| (key.to_ascii_uppercase(), value.trim().to_string()))
             .collect::<BTreeMap<_, _>>();
         if self.contest_enabled {
+            for field in &self.contest_exchange_fields {
+                if !field.sent.trim().is_empty() {
+                    fields.insert(
+                        field.name.to_ascii_uppercase(),
+                        field.sent.trim().to_string(),
+                    );
+                }
+            }
             fields.insert(
                 "SERIAL".to_string(),
                 self.contest_serial_current.max(1).to_string(),
@@ -113,7 +138,19 @@ impl QsonautGuiApp {
     }
 
     pub(super) fn contest_fields_received(&self, exchange: &str) -> BTreeMap<String, String> {
-        parse_named_exchange(exchange)
+        let mut fields = self
+            .contest_exchange_fields
+            .iter()
+            .filter(|field| !field.received.trim().is_empty())
+            .map(|field| {
+                (
+                    field.name.to_ascii_uppercase(),
+                    field.received.trim().to_string(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        fields.extend(parse_named_exchange(exchange));
+        fields
     }
 
     pub(super) fn has_logged_contact_with(
@@ -122,7 +159,32 @@ impl QsonautGuiApp {
         mode: &str,
         band: &str,
     ) -> bool {
-        has_logged_contact(&self.qso_log.contacts, target_call, mode, band)
+        if !self.contest_enabled {
+            return has_logged_contact(&self.qso_log.contacts, target_call, mode, band);
+        }
+        let Some(definition) = crate::contest_catalog::find(&self.contest_type) else {
+            return false;
+        };
+        let Ok(rule) = qsonaut_contests::rules::DuplicateRule::parse(&definition.duplicate_rule)
+        else {
+            return false;
+        };
+        let event_id = self
+            .server_active_event
+            .as_ref()
+            .map(|(id, _)| id.as_str())
+            .unwrap_or("");
+        self.qso_log.contacts.iter().any(|contact| {
+            contact.contest_template_id == definition.id
+                && (!event_id.is_empty() || contact.contest_session_id == self.contest_session_id)
+                && contact.server_event_id == event_id
+                && callsign_eq(
+                    &contact.station_callsign,
+                    self.station_callsign_or_default(),
+                )
+                && callsign_eq(&contact.callsign, target_call)
+                && rule.matches(band, mode, &contact.band, &contact.mode)
+        })
     }
 
     pub(super) fn block_duplicate_tx_if_needed(
@@ -130,6 +192,36 @@ impl QsonautGuiApp {
         mode: WorkspaceMode,
         compose: &str,
     ) -> bool {
+        if self.server_active_event.is_some() {
+            let status = "Server contest TX unavailable until event rules and station authorization are synchronized".to_string();
+            self.ft8_seq_status = status.clone();
+            self.digital_tx_status = status;
+            return true;
+        }
+        if self.contest_enabled {
+            let frequency = self
+                .state
+                .lock()
+                .expect("ui state lock poisoned")
+                .frequency_hz;
+            let errors = match crate::contest_catalog::find(&self.contest_type) {
+                Some(definition) => {
+                    let mut errors = definition.validate_setup(&self.contest_field_values);
+                    errors.extend(definition.validate_band_mode(
+                        frequency.map(band_for_frequency).unwrap_or(""),
+                        mode.label(),
+                    ));
+                    errors
+                }
+                None => vec!["Unknown contest definition".to_string()],
+            };
+            if !errors.is_empty() {
+                let status = format!("Contest TX blocked: {}", errors.join("; "));
+                self.ft8_seq_status = status.clone();
+                self.digital_tx_status = status;
+                return true;
+            }
+        }
         if !self.contest_dupe_check {
             return false;
         }
@@ -394,5 +486,30 @@ mod tests {
         assert!(app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "K1ABC N0CALL 599"));
         assert_eq!(app.hunter_dupe_blocks, 1);
         assert!(!app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "K2ABC N0CALL 599"));
+        app.contest_enabled = true;
+        app.contest_type = "ARRL_FD".into();
+        assert!(!app.has_logged_contact_with("K1ABC", "CW", "20m"));
+        let mut contact = QsoRecord::new("K1ABC", "FT8", "20m", 14_074_000, 0, 1);
+        contact.contest_template_id = crate::contest_catalog::find("ARRL_FD").unwrap().id.clone();
+        contact.contest_session_id = app.contest_session_id.clone();
+        contact.station_callsign = app.station_callsign_or_default().to_string();
+        app.qso_log.contacts.push(contact);
+        assert!(app.has_logged_contact_with("K1ABC", "FT4", "20m"));
+        assert!(!app.has_logged_contact_with("K1ABC", "CW", "20m"));
+        app.contest_session_id = "another-occurrence".into();
+        assert!(!app.has_logged_contact_with("K1ABC", "FT4", "20m"));
+        app.contest_dupe_check = false;
+        app.contest_field_values.clear();
+        assert!(app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "CQ TEST"));
+        assert!(app.digital_tx_status.contains("Class is required"));
+        app.contest_field_values = std::collections::BTreeMap::from([
+            ("class".into(), "1A".into()),
+            ("section".into(), "WMA".into()),
+            ("power".into(), "LOW".into()),
+        ]);
+        assert!(!app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "CQ TEST"));
+        app.server_active_event = Some(("event-1".into(), "Server event".into()));
+        assert!(app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "CQ TEST"));
+        assert!(app.digital_tx_status.contains("station authorization"));
     }
 }

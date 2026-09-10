@@ -7,6 +7,13 @@ what remains experimental or planned.
 
 ## v0.4 maturity vocabulary
 
+Contesting development (2026-09-10): shared setup/exchange controls, local
+session persistence, catalog duplicate scopes, TX setup/band/mode guards, and
+identity/event ADIF preservation are implemented. Full server participation,
+managed station callsigns, logging exchange enforcement, and authoritative
+scoring remain incomplete. See [contest operation](contesting.md) and the
+[implementation plan](contesting-implementation-plan.md).
+
 The v0.4 consolidation uses four release-planning classifications. The
 implementation levels below remain useful detail, but they do not by
 themselves imply release support.

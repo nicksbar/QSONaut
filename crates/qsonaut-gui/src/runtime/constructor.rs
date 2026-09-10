@@ -418,6 +418,12 @@ impl QsonautGuiApp {
         let mut psk_max_pending = default_psk_max_pending();
         let mut server_instance_id = new_instance_id();
         let mut contest_enabled = config.contest.enabled;
+        let mut operating_activity = if contest_enabled {
+            OperatingActivity::Contest
+        } else {
+            OperatingActivity::General
+        };
+        let mut contest_session_id = Uuid::new_v4().to_string();
         let mut contest_type = config
             .contest
             .contest_type
@@ -511,6 +517,14 @@ impl QsonautGuiApp {
             }
             contest_enabled = p.contest_enabled;
             contest_type = p.contest_type.unwrap_or_else(|| "ARRL_FD".to_string());
+            operating_activity = p.operating_activity.unwrap_or(if contest_enabled {
+                OperatingActivity::Contest
+            } else {
+                OperatingActivity::General
+            });
+            if !p.contest_session_id.is_empty() {
+                contest_session_id = p.contest_session_id;
+            }
             contest_field_values = p.contest_field_values;
             contest_operating_mode = p.contest_operating_mode;
             contest_split_policy = p.contest_split_policy;
@@ -659,6 +673,8 @@ impl QsonautGuiApp {
                 contest_enabled,
                 contest_type: Some(contest_type.clone()),
                 contest_field_values: contest_field_values.clone(),
+                operating_activity: Some(operating_activity),
+                contest_session_id: contest_session_id.clone(),
                 contest_operating_mode,
                 contest_split_policy,
                 contest_fox_hound_role,
@@ -874,7 +890,7 @@ impl QsonautGuiApp {
             sstv_received_texture_revision: 0,
             sstv_reinterpret_prompt: String::new(),
             workspace_mode,
-            activity: OperatingActivity::General,
+            activity: operating_activity,
             fst4_submode: modes::fst4::Submode::default(),
             cw_auto_target_timeout_s: 3,
             js8_controls: Js8Controls::default(),
@@ -989,13 +1005,14 @@ impl QsonautGuiApp {
             voice_contest_serial_sent: String::new(),
             voice_contest_serial_received: String::new(),
             voice_notes: String::new(),
-            voice_contest_fields: Vec::new(),
+            contest_exchange_fields: Vec::new(),
             voice_qso_started_at: None,
             voice_lookup_requested: String::new(),
             voice_lookup_status: String::new(),
             voice_hamdb: None,
             contest_enabled,
             contest_type,
+            contest_session_id,
             contest_field_values,
             contest_operating_mode,
             contest_split_policy,
