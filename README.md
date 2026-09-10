@@ -78,7 +78,7 @@ operator alerts, safety boundaries, and current limitations. The checked-in
 [`achievements.example.toml`](achievements.example.toml) shows the catalog
 schema and built-in achievement definitions.
 
-The [project roadmap](docs/project-roadmap.md) is the current v0.4.0 through
+The [project roadmap](docs/project-roadmap.md) is the current v0.4.1 through
 v1 planning source across QSONaut and its sibling repositories.
 
 The [release acceptance checklist](docs/release-acceptance-checklist.md)

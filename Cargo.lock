@@ -3483,7 +3483,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3502,14 +3502,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-accelerate"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "qsonaut-audio"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "cpal",
@@ -3518,7 +3518,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-automation"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -3527,7 +3527,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "dotenvy",
@@ -3540,7 +3540,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-gui"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3581,7 +3581,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-hostbridge-client"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -3597,8 +3597,8 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-hostbridge-protocol"
-version = "0.1.4"
-source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?tag=v0.1.4#17f9c191a03a25b7a5a4e01ecef3efbfadfc41e0"
+version = "0.1.5"
+source = "git+https://github.com/nicksbar/QSONaut-HostBridge.git?tag=v0.1.5#493673e2387bed69476ee8dd1bee8e05ca5ba335"
 dependencies = [
  "rigwright",
  "serde",
@@ -3618,7 +3618,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-log"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -3647,14 +3647,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-pskreporter"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "qsonaut-server-client"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -4097,9 +4097,9 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rigwright"
-version = "0.1.28"
+version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59774c3c87f3a9ef70a0005e947cc8a04fcb376879cdf1b051a74ac31534ecd8"
+checksum = "3d4c5d3055d4f6f8928776ab30e6787119d451c9d3eda86663cfd6ff0e223b06"
 dependencies = [
  "anyhow",
  "async-trait",

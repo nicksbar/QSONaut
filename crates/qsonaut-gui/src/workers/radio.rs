@@ -955,6 +955,15 @@ pub(crate) fn spawn_radio_worker(
                         let _ = ack_tx.send(result);
                         poll_radio_core_state(&rt, &radio, &state, true);
                     }
+                    GuiCommand::RunRadioValidation {
+                        include_ptt,
+                        rf_power_level,
+                        ack_tx,
+                    } => {
+                        let result = run_radio_validation(&rt, &radio, include_ptt, rf_power_level);
+                        let _ = ack_tx.send(result);
+                        poll_radio_core_state(&rt, &radio, &state, true);
+                    }
                     GuiCommand::SetPower(target) => {
                         info!(power_on = target, "Radio power command requested");
                         match rt.block_on(radio.set_power(target)) {
@@ -1486,6 +1495,133 @@ pub(crate) fn spawn_radio_worker(
             }
         }
     })
+}
+
+fn run_radio_validation(
+    rt: &tokio::runtime::Runtime,
+    radio: &RadioHandle,
+    include_ptt: bool,
+    rf_power_level: u8,
+) -> Result<serde_json::Value, String> {
+    let rf_power_level = rf_power_level.clamp(1, 10);
+    let supported_controls = radio
+        .supported_controls()
+        .into_iter()
+        .map(|id| format!("{id:?}"))
+        .collect::<Vec<_>>();
+    let supported_meters = radio
+        .supported_meters()
+        .into_iter()
+        .map(|id| format!("{id:?}"))
+        .collect::<Vec<_>>();
+    let core = rt.block_on(radio.read_core_state());
+    let controls = radio
+        .supported_controls()
+        .into_iter()
+        .filter(|id| radio.supports_control_read(*id))
+        .map(|id| {
+            let value = rt
+                .block_on(radio.get_control(id))
+                .map(|value| serde_json::json!(value.map(|value| format!("{value:?}"))))
+                .unwrap_or_else(|error| serde_json::json!({"error": error.to_string()}));
+            (format!("{id:?}"), value)
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let meters = radio
+        .supported_meters()
+        .into_iter()
+        .map(|id| {
+            let value = rt
+                .block_on(radio.get_meter(id))
+                .map(|value| serde_json::json!(value))
+                .unwrap_or_else(|error| serde_json::json!({"error": error.to_string()}));
+            (format!("{id:?}"), value)
+        })
+        .collect::<serde_json::Map<_, _>>();
+
+    let mut ptt_test = serde_json::json!({
+        "requested": include_ptt,
+        "rf_power_level": rf_power_level,
+        "performed": false,
+    });
+    if include_ptt {
+        if !radio.capabilities().can_set_ptt {
+            return Err("Radio does not advertise PTT control".to_string());
+        }
+        if !radio.supports_control_read(ControlId::RfPower)
+            || !radio.supports_control_write(ControlId::RfPower)
+        {
+            return Err(
+                "Radio does not support readable and writable RF power control".to_string(),
+            );
+        }
+        let original_power = rt
+            .block_on(radio.get_control(ControlId::RfPower))
+            .map_err(|error| error.to_string())?;
+        let Some(original_power) = original_power else {
+            return Err("RF power readback returned no value; refusing PTT validation".to_string());
+        };
+        let mut test_error = None;
+        if let Err(error) =
+            rt.block_on(radio.set_control(ControlId::RfPower, ControlValue::U8(rf_power_level)))
+        {
+            test_error = Some(error.to_string());
+        } else if let Err(error) = rt.block_on(radio.set_ptt(true)) {
+            test_error = Some(error.to_string());
+        } else {
+            std::thread::sleep(Duration::from_millis(500));
+            let tx_meters = radio
+                .supported_meters()
+                .into_iter()
+                .map(|id| {
+                    let value = rt
+                        .block_on(radio.get_meter(id))
+                        .map(|value| serde_json::json!(value))
+                        .unwrap_or_else(|error| serde_json::json!({"error": error.to_string()}));
+                    (format!("{id:?}"), value)
+                })
+                .collect::<serde_json::Map<_, _>>();
+            ptt_test["meters"] = serde_json::Value::Object(tx_meters);
+        }
+        if let Err(error) = rt.block_on(radio.set_ptt(false)) {
+            test_error.get_or_insert_with(|| error.to_string());
+        }
+        if let Err(error) = rt.block_on(radio.set_control(ControlId::RfPower, original_power)) {
+            test_error.get_or_insert_with(|| format!("RF power restore failed: {error}"));
+        }
+        ptt_test["performed"] = serde_json::Value::Bool(test_error.is_none());
+        if let Some(error) = test_error {
+            ptt_test["error"] = serde_json::Value::String(error);
+        }
+    }
+
+    Ok(serde_json::json!({
+        "validation_mode": if include_ptt { "full_with_low_power_ptt" } else { "full_without_ptt" },
+        "core_state": match core {
+            Ok(core) => serde_json::json!({
+                "ok": true,
+                "frequency_hz": core.frequency_hz,
+                "mode": core.mode.map(|mode| format!("{mode:?}")),
+                "ptt": core.ptt,
+            }),
+            Err(error) => serde_json::json!({"ok": false, "error": error.to_string()}),
+        },
+        "capabilities": {
+            "can_get_frequency": radio.capabilities().can_get_frequency,
+            "can_set_frequency": radio.capabilities().can_set_frequency,
+            "can_get_mode": radio.capabilities().can_get_mode,
+            "can_set_mode": radio.capabilities().can_set_mode,
+            "can_get_ptt": radio.capabilities().can_get_ptt,
+            "can_set_ptt": radio.capabilities().can_set_ptt,
+            "can_set_power": radio.capabilities().can_set_power,
+        },
+        "supported_controls": supported_controls,
+        "supported_meters": supported_meters,
+        "controls": controls,
+        "meters": meters,
+        "link_health": format!("{:?}", radio.link_health()),
+        "ptt_test": ptt_test,
+    }))
 }
 
 fn poll_radio_core_state(

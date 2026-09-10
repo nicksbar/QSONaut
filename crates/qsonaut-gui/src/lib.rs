@@ -1010,6 +1010,11 @@ enum GuiCommand {
     ),
     SetPtt(bool),
     SetPttWithAck(bool, mpsc::Sender<std::result::Result<(), String>>),
+    RunRadioValidation {
+        include_ptt: bool,
+        rf_power_level: u8,
+        ack_tx: mpsc::Sender<std::result::Result<serde_json::Value, String>>,
+    },
     SetPower(bool),
     StartTuner,
     StartSwrSweep {
@@ -1222,6 +1227,12 @@ struct QsonautGuiApp {
     radio_init_rx: Option<mpsc::Receiver<Option<RadioHandle>>>,
     cat_test_rx: Option<mpsc::Receiver<Result<String, String>>>,
     cat_test_status: Option<Result<String, String>>,
+    radio_validation_rx: Option<mpsc::Receiver<Result<serde_json::Value, String>>>,
+    radio_validation_active: bool,
+    radio_validation_low_power: bool,
+    radio_validation_confirm_low_power: bool,
+    radio_validation_power_level: u8,
+    radio_validation_status: String,
     /// Whether to restart the radio worker after a CAT connection test. The
     /// test pauses the worker to release the exclusively-owned serial port.
     cat_test_restart_radio: bool,

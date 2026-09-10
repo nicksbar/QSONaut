@@ -1261,6 +1261,60 @@ impl QsonautGuiApp {
         ui.heading("Radio profile settings");
         ui.separator();
         self.draw_device_settings(ui, false);
+        self.draw_radio_validation_controls(ui);
+    }
+
+    fn draw_radio_validation_controls(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(10.0);
+        ui.separator();
+        ui.label(RichText::new("Full hardware validation").strong());
+        ui.label(
+            RichText::new(
+                "Exercises every supported radio control and meter read path. Choose whether the validation may also perform a bounded low-power PTT test.",
+            )
+            .small()
+            .color(Color32::GRAY),
+        );
+        ui.radio_value(
+            &mut self.radio_validation_low_power,
+            false,
+            "Full validation without PTT",
+        );
+        ui.radio_value(
+            &mut self.radio_validation_low_power,
+            true,
+            "Full validation with low-power PTT",
+        );
+        if self.radio_validation_low_power {
+            ui.horizontal(|ui| {
+                ui.label("Capped RF power level");
+                ui.add(egui::DragValue::new(&mut self.radio_validation_power_level).range(1..=10));
+            });
+            ui.checkbox(
+                &mut self.radio_validation_confirm_low_power,
+                "I understand this will key the transmitter briefly",
+            );
+        }
+        if ui
+            .add_enabled(
+                !self.radio_validation_active,
+                egui::Button::new(if self.radio_validation_active {
+                    "Validation running…"
+                } else {
+                    "Run full hardware validation"
+                }),
+            )
+            .clicked()
+        {
+            self.start_radio_validation();
+        }
+        if self.radio_validation_status != "Not run" {
+            ui.label(
+                RichText::new(&self.radio_validation_status)
+                    .small()
+                    .color(theme_muted(ui)),
+            );
+        }
     }
 
     pub(in super::super) fn draw_radio_profile_assignments(&mut self, ui: &mut egui::Ui) {
@@ -1761,6 +1815,7 @@ impl QsonautGuiApp {
     }
 
     pub(in super::super) fn draw_server_panel(&mut self, ui: &mut egui::Ui) {
+        self.poll_radio_validation();
         ui.heading("🌐 QSONaut Server");
         ui.separator();
         ui.label(RichText::new("Use http://localhost:8080 for local development, a LAN address when the server is on another machine, or the hosted HTTPS address. QSONaut selects WS/WSS automatically; reverse proxies require no specialty port.").small().color(Color32::GRAY));

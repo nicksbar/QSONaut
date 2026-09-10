@@ -34,6 +34,105 @@ fn redacted_diagnostic_log(raw: String, config: &AppConfig) -> String {
 }
 
 impl QsonautGuiApp {
+    pub(super) fn poll_radio_validation(&mut self) {
+        let Some(rx) = self.radio_validation_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(report)) => {
+                self.radio_validation_active = false;
+                self.radio_validation_status =
+                    "Validation complete; submitting report…".to_string();
+                self.publish_radio_validation_report(report);
+            }
+            Ok(Err(error)) => {
+                self.radio_validation_active = false;
+                self.radio_validation_status = format!("Validation failed: {error}");
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.radio_validation_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.radio_validation_active = false;
+                self.radio_validation_status = "Validation worker stopped unexpectedly".to_string();
+            }
+        }
+    }
+
+    pub(super) fn start_radio_validation(&mut self) {
+        if !self.config.server.enabled || !self.config.server.share_diagnostics {
+            self.radio_validation_status =
+                "Enable manual diagnostic snapshots before submitting validation reports"
+                    .to_string();
+            return;
+        }
+        let Some(client) = &self.server_client else {
+            self.radio_validation_status =
+                "Connect to QSONaut Server before submitting validation reports".to_string();
+            return;
+        };
+        if client.status().state != ServerConnectionState::Connected {
+            self.radio_validation_status = "Wait for QSONaut Server to show CONNECTED".to_string();
+            return;
+        }
+        if self.radio_validation_low_power && !self.radio_validation_confirm_low_power {
+            self.radio_validation_status =
+                "Confirm the low-power PTT safety check before starting".to_string();
+            return;
+        }
+        let Some(command_tx) = &self.command_tx else {
+            self.radio_validation_status = "Radio worker is not running".to_string();
+            return;
+        };
+        let (ack_tx, ack_rx) = mpsc::channel();
+        if command_tx
+            .send(GuiCommand::RunRadioValidation {
+                include_ptt: self.radio_validation_low_power,
+                rf_power_level: self.radio_validation_power_level,
+                ack_tx,
+            })
+            .is_err()
+        {
+            self.radio_validation_status = "Radio worker is unavailable".to_string();
+            return;
+        }
+        self.radio_validation_rx = Some(ack_rx);
+        self.radio_validation_active = true;
+        self.radio_validation_status = "Running full hardware validation…".to_string();
+    }
+
+    fn publish_radio_validation_report(&mut self, report: serde_json::Value) {
+        let Some(client) = &self.server_client else {
+            self.radio_validation_status =
+                "Validation complete, but Server is disconnected".to_string();
+            return;
+        };
+        let diagnostic = serde_json::json!({
+            "instance_id": self.server_instance_id,
+            "category": "radio_validation",
+            "summary": format!("{} radio validation report", self.config.radio.model),
+            "payload": {
+                "qsonaut": {
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "platform": format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+                },
+                "radio_config": {
+                    "backend": self.config.radio.backend,
+                    "model": self.config.radio.model,
+                    "baud_rate": self.config.radio.baud_rate,
+                    "civ_address": self.config.radio.civ_address,
+                    "controller_civ_address": self.config.radio.controller_civ_address,
+                    "serial_port_configured": self.config.radio.serial_port.is_some(),
+                },
+                "validation": report,
+            },
+        });
+        self.radio_validation_status = match client.publish_diagnostic(diagnostic) {
+            Ok(()) => "Validation report submitted; waiting for server acceptance".to_string(),
+            Err(error) => format!("Validation report could not be submitted: {error}"),
+        };
+    }
+
     pub(super) fn reconnect_server(&mut self) {
         let enabled = self.config.server.enabled;
         let url = self.config.server.url.trim();
@@ -208,6 +307,18 @@ impl QsonautGuiApp {
                     "ptt_on": snapshot.ptt_on,
                     "scope_enabled": snapshot.radio_spectrum_enabled,
                     "scope_status": snapshot.radio_waterfall_status,
+                    "radio_power_on": snapshot.radio_power_on,
+                    "radio_power_settling": snapshot.radio_power_settling,
+                    "supported_controls": snapshot
+                        .supported_controls
+                        .iter()
+                        .map(|id| format!("{id:?}"))
+                        .collect::<Vec<_>>(),
+                    "supported_meters": snapshot
+                        .supported_meters
+                        .iter()
+                        .map(|id| format!("{id:?}"))
+                        .collect::<Vec<_>>(),
                 },
                 "audio": {
                     "enabled": self.config.audio.enabled,
