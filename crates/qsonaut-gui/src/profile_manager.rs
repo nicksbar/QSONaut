@@ -339,6 +339,11 @@ impl QsonautGuiApp {
             settings.grid = grid;
         }
         settings.qth = Self::prefer_nonempty(&self.station_qth, &settings.qth);
+        settings.chat_route_lan = self.chat_route_lan;
+        settings.chat_route_server = self.chat_route_server;
+        settings.chat_route_n3fjp = self.chat_route_n3fjp;
+        settings.chat_lan_target = self.chat_lan_target.clone();
+        settings.chat_n3fjp_target = self.chat_n3fjp_target.clone();
         settings.station_rig = String::new();
         settings.station_antenna = String::new();
         settings.station_notes =

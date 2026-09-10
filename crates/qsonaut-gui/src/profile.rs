@@ -334,6 +334,20 @@ pub(super) struct GlobalSettings {
     pub(super) audio_monitor_volume: f32,
     #[serde(default)]
     pub(super) third_party: ThirdPartyConfig,
+    #[serde(default)]
+    pub(super) chat_route_lan: bool,
+    #[serde(default)]
+    pub(super) chat_route_server: bool,
+    #[serde(default)]
+    pub(super) chat_route_n3fjp: bool,
+    #[serde(default)]
+    pub(super) chat_lan_target: String,
+    #[serde(default = "default_chat_n3fjp_target")]
+    pub(super) chat_n3fjp_target: String,
+}
+
+fn default_chat_n3fjp_target() -> String {
+    "*".to_string()
 }
 
 fn global_settings_path() -> PathBuf {
@@ -374,6 +388,11 @@ pub(super) fn load_global_settings() -> GlobalSettings {
             audio_monitor_output_device: None,
             audio_monitor_volume: default_audio_monitor_volume(),
             third_party: ThirdPartyConfig::default(),
+            chat_route_lan: false,
+            chat_route_server: false,
+            chat_route_n3fjp: false,
+            chat_lan_target: String::new(),
+            chat_n3fjp_target: default_chat_n3fjp_target(),
         });
     let mut settings = settings;
     migrate_legacy_global_audio_settings(&mut settings, "");

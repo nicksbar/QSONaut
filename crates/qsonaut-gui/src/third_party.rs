@@ -54,6 +54,7 @@ pub(crate) enum ThirdPartyChatCommand {
     Send { to: String, text: String },
     SendLan { to: String, text: String },
     SetLanTrust { callsign: String, trusted: bool },
+    ClearLanTrust { callsign: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,6 +154,12 @@ impl ThirdPartyBridge {
         let _ = self.chat_tx.send(ThirdPartyChatCommand::SetLanTrust {
             callsign: callsign.into(),
             trusted,
+        });
+    }
+
+    pub(crate) fn clear_lan_trust(&self, callsign: impl Into<String>) {
+        let _ = self.chat_tx.send(ThirdPartyChatCommand::ClearLanTrust {
+            callsign: callsign.into(),
         });
     }
 
@@ -294,6 +301,10 @@ fn run_worker(
                         blocked_lan.push(callsign);
                     }
                 }
+                ThirdPartyChatCommand::ClearLanTrust { callsign } => {
+                    trusted_lan.retain(|peer| !peer.eq_ignore_ascii_case(&callsign));
+                    blocked_lan.retain(|peer| !peer.eq_ignore_ascii_case(&callsign));
+                }
             }
         }
 
@@ -386,21 +397,49 @@ fn broadcast_lan(socket: &UdpSocket, station: &str, port: u16) {
 }
 
 fn broadcast_lan_chat(socket: &UdpSocket, station: &str, to: &str, text: &str, port: u16) {
-    if text.len() > 1024 || to.len() > 32 {
+    let Some(packet) = lan_chat_packet(station, to, text) else {
         return;
-    }
-    let Ok(payload) = serde_json::to_vec(&LanPacket {
-        version: "QSONAUT/1".to_string(),
-        kind: "chat".to_string(),
-        from: station.to_string(),
-        to: to.to_string(),
-        text: text.to_string(),
-    }) else {
+    };
+    let Ok(payload) = serde_json::to_vec(&packet) else {
         return;
     };
     if let Err(error) = socket.send_to(&payload, ("255.255.255.255", port)) {
         debug!(%error, "LAN chat broadcast failed");
     }
+}
+
+fn lan_chat_packet(station: &str, to: &str, text: &str) -> Option<LanPacket> {
+    if text.len() > 1024 || to.len() > 32 {
+        return None;
+    }
+    Some(LanPacket {
+        version: "QSONAUT/1".to_string(),
+        kind: "chat".to_string(),
+        from: station.to_string(),
+        to: to.to_string(),
+        text: text.to_string(),
+    })
+}
+
+fn accepts_lan_chat(
+    payload: &LanPacket,
+    station: &str,
+    trusted_lan: &[String],
+    blocked_lan: &[String],
+) -> bool {
+    let callsign = payload.from.trim();
+    payload.version == "QSONAUT/1"
+        && payload.kind == "chat"
+        && !callsign.is_empty()
+        && callsign.len() <= 32
+        && !callsign.eq_ignore_ascii_case(station)
+        && (payload.to.is_empty() || payload.to.eq_ignore_ascii_case(station))
+        && trusted_lan
+            .iter()
+            .any(|trusted| trusted.eq_ignore_ascii_case(callsign))
+        && !blocked_lan
+            .iter()
+            .any(|blocked| blocked.eq_ignore_ascii_case(callsign))
 }
 
 fn poll_lan(
@@ -430,16 +469,7 @@ fn poll_lan(
                         users: vec![callsign.to_string()],
                     });
                 }
-                if payload.kind == "chat"
-                    && !callsign.eq_ignore_ascii_case(station)
-                    && (payload.to.is_empty() || payload.to.eq_ignore_ascii_case(station))
-                    && trusted_lan
-                        .iter()
-                        .any(|trusted| trusted.eq_ignore_ascii_case(callsign))
-                    && !blocked_lan
-                        .iter()
-                        .any(|blocked| blocked.eq_ignore_ascii_case(callsign))
-                {
+                if accepts_lan_chat(&payload, station, trusted_lan, blocked_lan) {
                     let _ = events.send(ThirdPartyChatEvent::Message {
                         source: ThirdPartyUserSource::Lan,
                         from: callsign.to_string(),
@@ -647,7 +677,7 @@ fn send_network(client: &mut NetworkClient, station: &str, record: &QsoRecord) {
 
 #[cfg(test)]
 mod tests {
-    use super::udp_qso;
+    use super::{accepts_lan_chat, lan_chat_packet, udp_qso};
     use qsonaut_log::QsoRecord;
 
     #[test]
@@ -659,5 +689,35 @@ mod tests {
         assert_eq!(qso.band, "20m");
         assert_eq!(qso.my_call, "K7TEST");
         assert_eq!(qso.id, record.id.to_string());
+    }
+
+    #[test]
+    fn empty_lan_recipient_creates_broadcast_packet() {
+        let packet = lan_chat_packet("N7UF", "", "hello").expect("valid packet");
+        assert_eq!(packet.kind, "chat");
+        assert!(packet.to.is_empty());
+        assert_eq!(packet.text, "hello");
+    }
+
+    #[test]
+    fn broadcast_is_accepted_only_from_trusted_unblocked_peer() {
+        let packet = lan_chat_packet("W1AW", "", "hello").expect("valid packet");
+        let trusted = vec!["w1aw".to_string()];
+        assert!(accepts_lan_chat(&packet, "N7UF", &trusted, &[]));
+        assert!(!accepts_lan_chat(
+            &packet,
+            "N7UF",
+            &trusted,
+            &["W1AW".to_string()]
+        ));
+        assert!(!accepts_lan_chat(&packet, "N7UF", &[], &[]));
+    }
+
+    #[test]
+    fn targeted_lan_packet_is_only_for_matching_station() {
+        let packet = lan_chat_packet("W1AW", "N7UF", "hello").expect("valid packet");
+        let trusted = vec!["W1AW".to_string()];
+        assert!(accepts_lan_chat(&packet, "N7UF", &trusted, &[]));
+        assert!(!accepts_lan_chat(&packet, "K1ABC", &trusted, &[]));
     }
 }

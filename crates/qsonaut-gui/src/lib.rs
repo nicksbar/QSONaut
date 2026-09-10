@@ -1075,9 +1075,9 @@ pub fn run_gui(config: AppConfig) -> Result<Option<GraphicsPreferences>> {
         .with_title("QSONaut — Amateur Radio Mission Control")
         .with_icon(app_icon.clone())
         .with_resizable(true)
-        // eframe also enforces this for WGPU, but keeping it explicit makes
-        // the startup visibility contract clear at the application boundary.
-        .with_visible(false);
+        // Keep the native window visible after winit applies restored geometry.
+        // The application does not issue a later viewport visibility command.
+        .with_visible(true);
     if let Some(geometry) = stored_geometry {
         viewport = geometry.apply(viewport);
     }
@@ -1346,6 +1346,13 @@ struct QsonautGuiApp {
     chat_seen_server: HashSet<String>,
     chat_unread: usize,
     chat_compose: String,
+    chat_help_open: bool,
+    chat_server_channel: String,
+    chat_route_lan: bool,
+    chat_route_server: bool,
+    chat_route_n3fjp: bool,
+    chat_lan_target: String,
+    chat_n3fjp_target: String,
     digital_queued_tx_message: Option<String>,
     digital_last_tx_message: Option<String>,
     digital_tx_status: String,
