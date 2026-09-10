@@ -1526,6 +1526,7 @@ struct QsonautGuiApp {
     server_client: Option<ServerClient>,
     server_active_club: Option<(String, String)>,
     server_active_event: Option<(String, String)>,
+    server_active_identity: Option<(String, String)>,
     server_instance_id: String,
     server_last_presence: Instant,
     brand_icon: TextureHandle,
@@ -1745,6 +1746,9 @@ impl QsonautGuiApp {
     }
 
     fn station_callsign_or_default(&self) -> &str {
+        if let Some((_, callsign)) = &self.server_active_identity {
+            return callsign;
+        }
         let v = self.station_callsign.trim();
         if v.is_empty() {
             "N0CALL"

@@ -7,7 +7,12 @@ impl QsonautGuiApp {
         let activity_button_label = self
             .server_active_event
             .as_ref()
-            .map(|(_, name)| format!("🏁 Contest · {name}"))
+            .map(|(_, name)| {
+                self.server_active_identity
+                    .as_ref()
+                    .map(|(_, callsign)| format!("🏁 {callsign} · {name}"))
+                    .unwrap_or_else(|| format!("🏁 Contest · {name}"))
+            })
             .or_else(|| {
                 self.server_active_club
                     .as_ref()
@@ -57,6 +62,7 @@ impl QsonautGuiApp {
                             self.activity = activity;
                             self.server_active_event = None;
                             self.server_active_club = None;
+                            self.server_active_identity = None;
                             self.contest_enabled = matches!(
                                 activity,
                                 OperatingActivity::Contest | OperatingActivity::FieldDay
@@ -140,6 +146,7 @@ impl QsonautGuiApp {
                                         ));
                                         self.server_active_event =
                                             Some((contest.id.clone(), contest.name.clone()));
+                                        self.server_active_identity = None;
                                         ui.close();
                                     }
                                     let starts = contest
@@ -163,11 +170,100 @@ impl QsonautGuiApp {
                                 });
                             }
                         }
+                        if self.server_active_event.is_none() {
+                            if let Some((club_id, _)) = &self.server_active_club {
+                                let identities = server_context
+                                    .identities
+                                    .iter()
+                                    .filter(|identity| {
+                                        identity.club_id.as_deref() == Some(club_id)
+                                            && identity.event_id.is_none()
+                                            && identity.status == "active"
+                                            && identity.verification_status == "verified"
+                                    })
+                                    .collect::<Vec<_>>();
+                                if !identities.is_empty() {
+                                    ui.label(RichText::new("OPERATING IDENTITY").small().strong());
+                                    for identity in identities {
+                                        let selected = self
+                                            .server_active_identity
+                                            .as_ref()
+                                            .is_some_and(|(id, _)| id == &identity.id);
+                                        if ui
+                                            .selectable_label(
+                                                selected,
+                                                format!(
+                                                    "{} · {}",
+                                                    identity.callsign, identity.identity_type
+                                                ),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.disarm_all_tx_with_persistence(
+                                                "Operating identity changed",
+                                                false,
+                                            );
+                                            self.server_active_identity = Some((
+                                                identity.id.clone(),
+                                                identity.callsign.clone(),
+                                            ));
+                                            ui.close();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if let Some((event_id, _)) = &self.server_active_event {
+                            ui.label(RichText::new("OPERATING IDENTITY").small().strong());
+                            let assignments = server_context
+                                .participants
+                                .iter()
+                                .filter(|participant| {
+                                    participant.event_id == *event_id
+                                        && participant.status == "active"
+                                })
+                                .collect::<Vec<_>>();
+                            if assignments.is_empty() {
+                                ui.colored_label(
+                                    theme_warning(ui),
+                                    "No active station assignment for this event",
+                                );
+                            } else {
+                                for participant in assignments {
+                                    let selected = self
+                                        .server_active_identity
+                                        .as_ref()
+                                        .is_some_and(|(id, _)| id == &participant.callsign_id);
+                                    if ui
+                                        .selectable_label(
+                                            selected,
+                                            format!(
+                                                "{} · operator {}",
+                                                participant.operating_callsign,
+                                                participant.operator_callsign
+                                            ),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.disarm_all_tx_with_persistence(
+                                            "Operating identity changed",
+                                            false,
+                                        );
+                                        self.server_active_identity = Some((
+                                            participant.callsign_id.clone(),
+                                            participant.operating_callsign.clone(),
+                                        ));
+                                        ui.close();
+                                    }
+                                }
+                            }
+                        }
                         if (self.server_active_club.is_some() || self.server_active_event.is_some())
                             && ui.small_button("✕ CLEAR SERVER ACTIVITY").clicked()
                         {
                             self.server_active_club = None;
                             self.server_active_event = None;
+                            self.server_active_identity = None;
                             self.disarm_all_tx_with_persistence("Server context cleared", false);
                             ui.close();
                         }

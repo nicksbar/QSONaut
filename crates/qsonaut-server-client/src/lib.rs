@@ -87,6 +87,9 @@ pub struct ConnectionStatus {
     pub last_error: Option<String>,
     pub clubs: Vec<ServerClub>,
     pub active_events: Vec<ServerEvent>,
+    pub identities: Vec<ServerIdentity>,
+    pub participants: Vec<ServerParticipant>,
+    pub event_scores: Vec<ServerEventScore>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -96,6 +99,31 @@ pub struct ServerClub {
     pub callsign: Option<String>,
     #[serde(default)]
     pub my_role: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ServerIdentity {
+    pub id: String,
+    pub callsign: String,
+    pub identity_type: String,
+    pub club_id: Option<String>,
+    #[serde(default)]
+    pub event_id: Option<String>,
+    pub status: String,
+    pub verification_status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ServerParticipant {
+    pub id: String,
+    pub event_id: String,
+    pub user_id: String,
+    pub callsign_id: String,
+    pub operator_callsign: String,
+    pub operating_callsign: String,
+    pub role: String,
+    pub status: String,
+    pub station_label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -109,6 +137,15 @@ pub struct ServerEvent {
     pub ends_at: String,
     pub club_name: String,
     pub participant_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ServerEventScore {
+    pub event_id: String,
+    pub total_points: i64,
+    pub qso_count: i64,
+    pub duplicate_count: i64,
+    pub multiplier_values: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -591,6 +628,9 @@ fn receive_with_channels(
             events,
             clubs,
             contest_templates,
+            identities,
+            participants,
+            event_scores,
             channel_messages,
         } => {
             let active_events = events
@@ -620,6 +660,9 @@ fn receive_with_channels(
             current.catalog_size = catalog_size;
             current.clubs = clubs;
             current.active_events = active_events.clone();
+            current.identities = identities;
+            current.participants = participants;
+            current.event_scores = event_scores;
             let club_count = current.clubs.len();
             drop(current);
             push_automation_event(
@@ -687,7 +730,61 @@ fn receive_with_channels(
                     .expect("server log queue lock poisoned")
                     .remove(&idempotency_key)?;
             }
-            drop(value);
+            if let Some(score) = value
+                .get("event_score")
+                .filter(|value| !value.is_null())
+                .and_then(|value| serde_json::from_value::<ServerEventScore>(value.clone()).ok())
+            {
+                let mut current = status.lock().expect("server status lock poisoned");
+                current
+                    .event_scores
+                    .retain(|existing| existing.event_id != score.event_id);
+                current.event_scores.push(score);
+            }
+            let receipt = value.get("qso").unwrap_or(&value);
+            push_automation_event(
+                automation_events,
+                "qso_log_accepted",
+                [
+                    (
+                        "id",
+                        receipt
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ),
+                    (
+                        "points",
+                        receipt
+                            .get("points")
+                            .map(Value::to_string)
+                            .unwrap_or_default(),
+                    ),
+                    (
+                        "is_duplicate",
+                        receipt
+                            .get("is_duplicate")
+                            .map(Value::to_string)
+                            .unwrap_or_default(),
+                    ),
+                    (
+                        "multipliers",
+                        receipt
+                            .get("multipliers")
+                            .map(Value::to_string)
+                            .unwrap_or_default(),
+                    ),
+                    (
+                        "scoring_explanation",
+                        receipt
+                            .get("scoring_explanation")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ),
+                ],
+            );
         }
         ServerMessage::Error { message } => {
             if inflight.remove(&envelope.event_id).is_some() {
@@ -820,6 +917,12 @@ enum ServerMessage {
         #[serde(default)]
         clubs: Vec<ServerClub>,
         contest_templates: Vec<Value>,
+        #[serde(default)]
+        identities: Vec<ServerIdentity>,
+        #[serde(default)]
+        participants: Vec<ServerParticipant>,
+        #[serde(default)]
+        event_scores: Vec<ServerEventScore>,
         channel_messages: Vec<ChannelMessage>,
     },
     PresenceAccepted(Value),
@@ -1290,6 +1393,49 @@ mod tests {
         assert!(inflight.is_empty());
         assert!(queue.lock().unwrap().entries.is_empty());
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn accepted_log_exposes_server_adjudication_receipt() {
+        let status = Arc::new(Mutex::new(ConnectionStatus::default()));
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let queue = Arc::new(Mutex::new(DurableLogQueue::load(&test_queue_path())));
+        let mut inflight = BTreeMap::new();
+        receive(
+            r#"{
+                "protocol_version":"v1",
+                "event_id":"00000000-0000-0000-0000-000000000000",
+                "type":"log_accepted",
+                "payload":{
+                    "qso": {
+                        "id":"3ecb975c-bd24-47fd-b230-5a79c0d5cad3",
+                        "points":2,
+                        "is_duplicate":false,
+                        "multipliers":{"section":"EMA"},
+                        "scoring_explanation":"2 points; section multiplier earned: EMA"
+                    },
+                    "event_score": {
+                        "event_id":"10000000-0000-4000-8000-000000000001",
+                        "total_points":2,
+                        "qso_count":1,
+                        "duplicate_count":0,
+                        "multiplier_values":[{"section":"EMA"}]
+                    }
+                }
+            }"#,
+            &status,
+            &events,
+            &queue,
+            &mut inflight,
+        )
+        .unwrap();
+        let event = events.lock().unwrap().pop_front().unwrap();
+        assert_eq!(event.kind, "qso_log_accepted");
+        assert_eq!(event.fields["points"], "2");
+        assert_eq!(event.fields["is_duplicate"], "false");
+        assert_eq!(event.fields["multipliers"], r#"{"section":"EMA"}"#);
+        assert!(event.fields["scoring_explanation"].contains("multiplier earned"));
+        assert_eq!(status.lock().unwrap().event_scores[0].total_points, 2);
     }
 
     #[tokio::test]

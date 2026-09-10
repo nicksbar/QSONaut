@@ -370,6 +370,7 @@ impl QsonautGuiApp {
                     self.cw_qso_exchange_received.clear();
                     self.server_active_event = None;
                     self.server_active_club = None;
+                    self.server_active_identity = None;
                     self.contest_session_id = Uuid::new_v4().to_string();
                     self.contest_exchange_template.clear();
                     self.profile_dirty = true;

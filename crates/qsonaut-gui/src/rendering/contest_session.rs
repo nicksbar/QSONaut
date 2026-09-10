@@ -7,9 +7,23 @@ impl QsonautGuiApp {
                 "Server Contest · {event_name} · {}",
                 self.station_callsign_or_default()
             ));
+            if let Some((event_id, _)) = &self.server_active_event {
+                if let Some(score) = self.server_client.as_ref().and_then(|client| {
+                    client
+                        .status()
+                        .event_scores
+                        .into_iter()
+                        .find(|score| score.event_id == *event_id)
+                }) {
+                    ui.label(format!(
+                        "Score: {} · {} QSOs · {} dupes",
+                        score.total_points, score.qso_count, score.duplicate_count
+                    ));
+                }
+            }
             ui.colored_label(
                 theme_warning(ui),
-                "TX unavailable: event rules and station authorization are not synchronized yet",
+                "Server scoring is authoritative; TX requires an active station assignment",
             );
             return;
         }

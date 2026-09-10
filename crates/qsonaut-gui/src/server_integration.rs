@@ -137,6 +137,7 @@ impl QsonautGuiApp {
         self.disarm_all_tx_with_persistence("Server connection changed", false);
         self.server_active_event = None;
         self.server_active_club = None;
+        self.server_active_identity = None;
         let enabled = self.config.server.enabled;
         let url = self.config.server.url.trim();
         let token = self.config.server.device_token.trim();
@@ -178,8 +179,21 @@ impl QsonautGuiApp {
         let Some(occurred_at) = qso_timestamp(record) else {
             return;
         };
+        let server_status = client.status();
+        let participant = server_status.participants.iter().find(|participant| {
+            record.server_event_id == participant.event_id
+                && record
+                    .station_callsign
+                    .eq_ignore_ascii_case(&participant.operating_callsign)
+                && record
+                    .operator_callsign
+                    .eq_ignore_ascii_case(&participant.operator_callsign)
+        });
         client.publish_log(serde_json::json!({
             "event_id": Uuid::parse_str(&record.server_event_id).ok(),
+            "operating_callsign": (!record.station_callsign.is_empty())
+                .then_some(record.station_callsign.as_str()),
+            "callsign_id": participant.and_then(|value| Uuid::parse_str(&value.callsign_id).ok()),
             "idempotency_key": log_idempotency_key(record.id),
             "callsign": record.callsign,
             "band": record.band,

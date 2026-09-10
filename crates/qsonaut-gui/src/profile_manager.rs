@@ -239,6 +239,7 @@ impl QsonautGuiApp {
         };
         self.server_active_event = None;
         self.server_active_club = None;
+        self.server_active_identity = None;
         self.contest_exchange_fields.clear();
         self.cw_qso_exchange_received.clear();
         self.contest_type = profile

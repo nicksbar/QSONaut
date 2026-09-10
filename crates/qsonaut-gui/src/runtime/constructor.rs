@@ -1112,6 +1112,7 @@ impl QsonautGuiApp {
             server_client,
             server_active_club: None,
             server_active_event: None,
+            server_active_identity: None,
             server_instance_id,
             server_last_presence: Instant::now() - Duration::from_secs(60),
             brand_icon,
