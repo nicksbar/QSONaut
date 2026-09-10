@@ -1132,14 +1132,12 @@ impl QsonautGuiApp {
             );
             ui.horizontal(|ui| {
                 ui.label("Host");
-                ui.add_enabled(
-                    self.config.third_party.n3fjp_api.enabled,
+                ui.add(
                     egui::TextEdit::singleline(&mut self.config.third_party.n3fjp_api.host)
                         .desired_width(180.0),
                 );
                 ui.label("Port");
-                ui.add_enabled(
-                    self.config.third_party.n3fjp_api.enabled,
+                ui.add(
                     egui::DragValue::new(&mut self.config.third_party.n3fjp_api.port)
                         .range(1..=u16::MAX),
                 );
@@ -1156,14 +1154,12 @@ impl QsonautGuiApp {
             );
             ui.horizontal(|ui| {
                 ui.label("Host");
-                ui.add_enabled(
-                    self.config.third_party.station_network.enabled,
+                ui.add(
                     egui::TextEdit::singleline(&mut self.config.third_party.station_network.host)
                         .desired_width(180.0),
                 );
                 ui.label("Port");
-                ui.add_enabled(
-                    self.config.third_party.station_network.enabled,
+                ui.add(
                     egui::DragValue::new(&mut self.config.third_party.station_network.port)
                         .range(1..=u16::MAX),
                 );
@@ -1240,18 +1236,54 @@ impl QsonautGuiApp {
         ui.add_space(8.0);
         let changed = before != self.config.third_party;
         if changed {
+            self.third_party_settings_dirty = true;
+            self.third_party_apply_status =
+                "Changes pending — nothing connects until Apply is pressed".to_string();
+        }
+        if self.third_party_settings_dirty {
             ui.colored_label(theme_warning(ui), "Unsaved integration changes");
         }
+        if let Some(bridge) = &self.third_party_bridge {
+            let status = bridge.status();
+            ui.separator();
+            ui.label(RichText::new("Live integration status").strong());
+            ui.label(format!(
+                "API: {} · Network: {} · UDP: {} · LAN: {}",
+                status.api, status.network, status.udp, status.lan
+            ));
+            if let Some(error) = status.last_error {
+                ui.colored_label(theme_warning(ui), format!("Last error: {error}"));
+            } else {
+                ui.small("No integration errors reported.");
+            }
+        }
+        ui.label(RichText::new(&self.third_party_apply_status).small());
         if ui
-            .add_enabled(changed, egui::Button::new("Apply and restart integrations"))
+            .add_enabled(
+                self.third_party_settings_dirty,
+                egui::Button::new("Apply and restart integrations"),
+            )
             .clicked()
         {
             self.persist_profile("Third-party settings saved to");
+            self.third_party_settings_dirty = false;
+            self.third_party_apply_status =
+                "Applied — attempting the configured connections".to_string();
             self.restart_third_party_bridge();
         }
+        ui.small("Editing these fields does not connect. Use Apply and restart integrations to test the saved endpoints.");
     }
 
     pub(crate) fn restart_third_party_bridge(&mut self) {
+        info!(
+            api_enabled = self.config.third_party.n3fjp_api.enabled,
+            api_host = %self.config.third_party.n3fjp_api.host,
+            api_port = self.config.third_party.n3fjp_api.port,
+            network_enabled = self.config.third_party.station_network.enabled,
+            network_host = %self.config.third_party.station_network.host,
+            network_port = self.config.third_party.station_network.port,
+            "Applying third-party integration settings and restarting worker"
+        );
         self.third_party_bridge = None;
         self.third_party_bridge =
             ThirdPartyBridge::spawn(&self.config.third_party, self.station_callsign.trim());

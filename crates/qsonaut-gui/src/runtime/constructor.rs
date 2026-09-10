@@ -1016,6 +1016,8 @@ impl QsonautGuiApp {
             available_profiles,
             profile_io_status,
             profile_dirty: false,
+            third_party_settings_dirty: false,
+            third_party_apply_status: "Not applied".to_string(),
             app_log_text: String::new(),
             app_log_status: String::new(),
             app_log_filter: String::new(),

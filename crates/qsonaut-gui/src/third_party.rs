@@ -196,8 +196,8 @@ fn run_worker(
     status: Arc<Mutex<ThirdPartyStatus>>,
 ) {
     let udp = build_udp(&config);
-    let mut api = connect_api(&config.n3fjp_api);
-    let mut network = connect_network(&config.station_network, &station_callsign);
+    let (mut api, api_error) = connect_api(&config.n3fjp_api);
+    let (mut network, network_error) = connect_network(&config.station_network, &station_callsign);
     let lan = bind_lan(&config.lan_discovery);
     let mut trusted_lan = config.lan_discovery.trusted_callsigns.clone();
     let mut blocked_lan = config.lan_discovery.blocked_callsigns.clone();
@@ -221,6 +221,18 @@ fn run_worker(
             "READY".to_string()
         } else {
             enabled_label(config.lan_discovery.enabled)
+        };
+        current.last_error = if api_error.is_some() {
+            api_error
+        } else if network_error.is_some() {
+            network_error
+        } else if config.lan_discovery.enabled && lan.is_none() {
+            Some(format!(
+                "Could not bind LAN discovery port {}",
+                config.lan_discovery.port
+            ))
+        } else {
+            None
         };
     });
     let mut last_network_check = Instant::now();
@@ -264,6 +276,10 @@ fn run_worker(
         if let Some(client) = api.as_mut() {
             if let Err(error) = drain_api(client) {
                 warn!(error = %error, "N3FJP API polling failed; disconnecting");
+                set_status(&status, |current| {
+                    current.last_error = Some(format!("N3FJP API polling failed: {error}"));
+                    current.api = "DISCONNECTED".to_string();
+                });
                 let _ = client.disconnect();
                 api = None;
             }
@@ -278,6 +294,10 @@ fn run_worker(
                             text,
                         }) {
                             warn!(error = %error, "N3FJP station-network chat send failed");
+                            set_status(&status, |current| {
+                                current.last_error =
+                                    Some(format!("N3FJP chat send failed: {error}"));
+                            });
                         }
                     }
                 }
@@ -326,6 +346,11 @@ fn run_worker(
             if last_network_check.elapsed() >= Duration::from_secs(30) {
                 if let Err(error) = client.heartbeat(Duration::from_secs(30)) {
                     warn!(error = %error, "N3FJP station-network heartbeat failed");
+                    set_status(&status, |current| {
+                        current.last_error =
+                            Some(format!("N3FJP station-network heartbeat failed: {error}"));
+                        current.network = "DISCONNECTED".to_string();
+                    });
                     client.disconnect();
                     network = None;
                 }
@@ -355,6 +380,11 @@ fn run_worker(
                     }
                     Err(error) => {
                         warn!(error = %error, "N3FJP station-network polling failed");
+                        set_status(&status, |current| {
+                            current.last_error =
+                                Some(format!("N3FJP station-network polling failed: {error}"));
+                            current.network = "DISCONNECTED".to_string();
+                        });
                         client.disconnect();
                         network = None;
                     }
@@ -502,15 +532,15 @@ fn protocol_config(endpoint: &N3fjpEndpointConfig, max_frame_bytes: usize) -> Pr
     }
 }
 
-fn connect_api(endpoint: &N3fjpEndpointConfig) -> Option<ApiClient> {
+fn connect_api(endpoint: &N3fjpEndpointConfig) -> (Option<ApiClient>, Option<String>) {
     if !endpoint.enabled {
-        return None;
+        return (None, None);
     }
     match ApiClient::connect(&protocol_config(endpoint, 1024 * 1024)) {
         Ok(Some(mut client)) => {
             if let Err(error) = client.send(&Command::new(CommandKind::Program)) {
                 warn!(error = %error, "N3FJP API discovery failed");
-                return None;
+                return (None, Some(format!("N3FJP API discovery failed: {error}")));
             }
             let deadline = Instant::now() + Duration::from_secs(5);
             while client.api_version().is_none() && Instant::now() < deadline {
@@ -518,42 +548,69 @@ fn connect_api(endpoint: &N3fjpEndpointConfig) -> Option<ApiClient> {
                     Ok(_) => {}
                     Err(error) => {
                         warn!(error = %error, "N3FJP API discovery polling failed");
-                        return None;
+                        return (
+                            None,
+                            Some(format!("N3FJP API discovery polling failed: {error}")),
+                        );
                     }
                 }
             }
             if client.api_version().is_none() {
                 warn!("N3FJP API version discovery timed out");
-                return None;
+                return (
+                    None,
+                    Some("N3FJP API version discovery timed out".to_string()),
+                );
             }
             info!(host = %endpoint.host, port = endpoint.port, "N3FJP API connected");
-            Some(client)
+            (Some(client), None)
         }
-        Ok(None) => None,
+        Ok(None) => (
+            None,
+            Some(format!(
+                "N3FJP API did not accept a connection at {}:{}",
+                endpoint.host, endpoint.port
+            )),
+        ),
         Err(error) => {
             warn!(error = %error, "N3FJP API connection failed");
-            None
+            (None, Some(format!("N3FJP API connection failed: {error}")))
         }
     }
 }
 
-fn connect_network(endpoint: &N3fjpEndpointConfig, station: &str) -> Option<NetworkClient> {
+fn connect_network(
+    endpoint: &N3fjpEndpointConfig,
+    station: &str,
+) -> (Option<NetworkClient>, Option<String>) {
     if !endpoint.enabled {
-        return None;
+        return (None, None);
     }
     match NetworkClient::connect(&protocol_config(endpoint, 1024 * 1024)) {
         Ok(Some(mut client)) => {
             if let Err(error) = client.open_session(station, "", "") {
                 warn!(error = %error, "N3FJP station-network handshake failed");
-                return None;
+                return (
+                    None,
+                    Some(format!("N3FJP station-network handshake failed: {error}")),
+                );
             }
             info!(host = %endpoint.host, port = endpoint.port, "N3FJP station network connected");
-            Some(client)
+            (Some(client), None)
         }
-        Ok(None) => None,
+        Ok(None) => (
+            None,
+            Some(format!(
+                "N3FJP station network did not accept a connection at {}:{}",
+                endpoint.host, endpoint.port
+            )),
+        ),
         Err(error) => {
             warn!(error = %error, "N3FJP station-network connection failed");
-            None
+            (
+                None,
+                Some(format!("N3FJP station-network connection failed: {error}")),
+            )
         }
     }
 }

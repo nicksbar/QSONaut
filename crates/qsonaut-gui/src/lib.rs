@@ -1457,6 +1457,8 @@ struct QsonautGuiApp {
     available_profiles: Vec<String>,
     profile_io_status: String,
     profile_dirty: bool,
+    third_party_settings_dirty: bool,
+    third_party_apply_status: String,
     app_log_text: String,
     app_log_status: String,
     app_log_filter: String,
