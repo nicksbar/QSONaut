@@ -73,8 +73,11 @@ impl QsonautGuiApp {
         record.report_received = self.cw_qso_rst_received.trim().to_ascii_uppercase();
         if self.contest_enabled {
             record.contest_serial_sent = Some(self.contest_serial_current.max(1));
+            record.contest_fields_sent = self.contest_fields_sent();
             record.contest_exchange_sent = self.contest_exchange_preview(&callsign);
             record.contest_exchange_received = self.cw_qso_exchange_received.trim().to_string();
+            record.contest_fields_received =
+                self.contest_fields_received(&record.contest_exchange_received);
         }
         record.notes = self.cw_qso_notes.trim().to_string();
         Some(record)

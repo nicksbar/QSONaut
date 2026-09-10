@@ -213,6 +213,10 @@ pub struct ContestProfile {
     pub fox_hound_role: FoxHoundRole,
     #[serde(default)]
     pub exchange_template: Option<String>,
+    #[serde(default)]
+    pub contest_type: Option<String>,
+    #[serde(default)]
+    pub field_values: std::collections::BTreeMap<String, String>,
     #[serde(default = "default_serial_start")]
     pub serial_start: u32,
     #[serde(default = "default_serial_step")]
@@ -229,6 +233,8 @@ impl Default for ContestProfile {
             split_policy: SplitPolicy::Off,
             fox_hound_role: FoxHoundRole::Disabled,
             exchange_template: None,
+            contest_type: None,
+            field_values: std::collections::BTreeMap::new(),
             serial_start: default_serial_start(),
             serial_step: default_serial_step(),
             dupe_check: default_dupe_check(),

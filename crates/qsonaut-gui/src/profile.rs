@@ -259,6 +259,10 @@ pub(super) struct OperatorProfile {
     #[serde(default)]
     pub(super) contest_enabled: bool,
     #[serde(default)]
+    pub(super) contest_type: Option<String>,
+    #[serde(default)]
+    pub(super) contest_field_values: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
     pub(super) contest_operating_mode: ContestOperatingMode,
     #[serde(default)]
     pub(super) contest_split_policy: SplitPolicy,

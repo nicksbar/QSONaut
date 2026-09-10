@@ -418,6 +418,12 @@ impl QsonautGuiApp {
         let mut psk_max_pending = default_psk_max_pending();
         let mut server_instance_id = new_instance_id();
         let mut contest_enabled = config.contest.enabled;
+        let mut contest_type = config
+            .contest
+            .contest_type
+            .clone()
+            .unwrap_or_else(|| "ARRL_FD".to_string());
+        let mut contest_field_values = config.contest.field_values.clone();
         let mut contest_operating_mode = config.contest.operating_mode;
         let mut contest_split_policy = config.contest.split_policy;
         let mut contest_fox_hound_role = config.contest.fox_hound_role;
@@ -504,6 +510,8 @@ impl QsonautGuiApp {
                 config.server = server;
             }
             contest_enabled = p.contest_enabled;
+            contest_type = p.contest_type.unwrap_or_else(|| "ARRL_FD".to_string());
+            contest_field_values = p.contest_field_values;
             contest_operating_mode = p.contest_operating_mode;
             contest_split_policy = p.contest_split_policy;
             contest_fox_hound_role = p.contest_fox_hound_role;
@@ -557,6 +565,8 @@ impl QsonautGuiApp {
                 } else {
                     Some(contest_exchange_template.trim().to_string())
                 },
+                contest_type: Some(contest_type.clone()),
+                field_values: contest_field_values.clone(),
                 serial_start: contest_serial_start,
                 serial_step: contest_serial_step,
                 dupe_check: contest_dupe_check,
@@ -647,6 +657,8 @@ impl QsonautGuiApp {
                 server_instance_id: server_instance_id.clone(),
                 server: Some(config.server.clone()),
                 contest_enabled,
+                contest_type: Some(contest_type.clone()),
+                contest_field_values: contest_field_values.clone(),
                 contest_operating_mode,
                 contest_split_policy,
                 contest_fox_hound_role,
@@ -983,6 +995,8 @@ impl QsonautGuiApp {
             voice_lookup_status: String::new(),
             voice_hamdb: None,
             contest_enabled,
+            contest_type,
+            contest_field_values,
             contest_operating_mode,
             contest_split_policy,
             contest_fox_hound_role,

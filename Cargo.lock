@@ -3526,6 +3526,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "qsonaut-contests"
+version = "0.4.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "qsonaut-core"
 version = "0.4.1"
 dependencies = [
@@ -3555,6 +3563,7 @@ dependencies = [
  "qsonaut-accelerate",
  "qsonaut-audio",
  "qsonaut-automation",
+ "qsonaut-contests",
  "qsonaut-core",
  "qsonaut-hostbridge-client",
  "qsonaut-hostbridge-protocol",

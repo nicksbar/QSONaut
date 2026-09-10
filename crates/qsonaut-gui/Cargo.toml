@@ -32,6 +32,7 @@ egui-file-dialog = { version = "=0.12.0", default-features = false }
 qsonaut-audio = { path = "../qsonaut-audio" }
 qsonaut-accelerate = { path = "../qsonaut-accelerate" }
 qsonaut-core = { path = "../qsonaut-core" }
+qsonaut-contests = { path = "../qsonaut-contests" }
 qsonaut-hostbridge-client = { path = "../qsonaut-hostbridge-client" }
 qsonaut-hostbridge-protocol = { git = "https://github.com/nicksbar/QSONaut-HostBridge.git", tag = "v0.1.5" }
 qsonaut-automation = { path = "../qsonaut-automation" }

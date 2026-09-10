@@ -35,6 +35,25 @@ impl VoiceContestField {
 
 impl QsonautGuiApp {
     pub(crate) fn draw_voice_workspace(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
+        if self.contest_enabled {
+            if let Some(definition) = crate::contest_catalog::find(&self.contest_type) {
+                for field in &definition.fields {
+                    if !self
+                        .voice_contest_fields
+                        .iter()
+                        .any(|value| value.name.eq_ignore_ascii_case(&field.key))
+                    {
+                        let mut value = VoiceContestField::new(&field.key);
+                        value.sent = self
+                            .contest_field_values
+                            .get(&field.key)
+                            .cloned()
+                            .unwrap_or_default();
+                        self.voice_contest_fields.push(value);
+                    }
+                }
+            }
+        }
         let frequency = snapshot
             .frequency_hz
             .map(|hz| format!("{:.6} MHz", hz as f64 / 1_000_000.0))
@@ -151,6 +170,32 @@ impl QsonautGuiApp {
                         .hint_text("Optional"),
                 );
             });
+            if self.contest_enabled {
+                if let Some(definition) = crate::contest_catalog::find(&self.contest_type) {
+                    ui.separator();
+                    ui.label(RichText::new(format!("{} exchange", definition.name)).strong());
+                    for field in &definition.fields {
+                        let contest_field = self
+                            .voice_contest_fields
+                            .iter_mut()
+                            .find(|value| value.name.eq_ignore_ascii_case(&field.key));
+                        let Some(contest_field) = contest_field else {
+                            continue;
+                        };
+                        ui.label(field.label.as_str());
+                        ui.add(
+                            egui::TextEdit::singleline(&mut contest_field.sent)
+                                .desired_width(76.0)
+                                .hint_text("Sent"),
+                        );
+                        ui.add(
+                            egui::TextEdit::singleline(&mut contest_field.received)
+                                .desired_width(86.0)
+                                .hint_text("Received"),
+                        );
+                    }
+                }
+            }
             if let Some(hamdb) = &self.voice_hamdb {
                 let operator_name = [
                     hamdb.first_name.as_str(),
@@ -190,7 +235,7 @@ impl QsonautGuiApp {
         ui.add_space(8.0);
         ui.columns(2, |columns| {
             columns[0].vertical(|ui| {
-                ui.heading("Exchange");
+                ui.heading("Additional exchange fields");
                 ui.label(
                     RichText::new("Contest, net, or event exchange fields")
                         .small()
@@ -204,7 +249,22 @@ impl QsonautGuiApp {
                     ui.label(RichText::new("Received").small().color(theme_muted(ui)));
                 });
                 let mut remove = None;
+                let defined_field_names = crate::contest_catalog::find(&self.contest_type)
+                    .map(|definition| {
+                        definition
+                            .fields
+                            .iter()
+                            .map(|field| field.key.as_str())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
                 for (index, field) in self.voice_contest_fields.iter_mut().enumerate() {
+                    if defined_field_names
+                        .iter()
+                        .any(|name| field.name.eq_ignore_ascii_case(name))
+                    {
+                        continue;
+                    }
                     ui.horizontal(|ui| {
                         ui.add(egui::TextEdit::singleline(&mut field.name).desired_width(90.0));
                         ui.add(egui::TextEdit::singleline(&mut field.sent).desired_width(82.0));
@@ -309,6 +369,28 @@ impl QsonautGuiApp {
         record.report_received = self.voice_rst_received.trim().to_string();
         record.contest_serial_sent = self.voice_contest_serial_sent.trim().parse().ok();
         record.contest_serial_received = self.voice_contest_serial_received.trim().parse().ok();
+        record.contest_fields_sent = self
+            .voice_contest_fields
+            .iter()
+            .filter(|field| !field.name.trim().is_empty() && !field.sent.trim().is_empty())
+            .map(|field| {
+                (
+                    field.name.trim().to_ascii_uppercase(),
+                    field.sent.trim().to_string(),
+                )
+            })
+            .collect();
+        record.contest_fields_received = self
+            .voice_contest_fields
+            .iter()
+            .filter(|field| !field.name.trim().is_empty() && !field.received.trim().is_empty())
+            .map(|field| {
+                (
+                    field.name.trim().to_ascii_uppercase(),
+                    field.received.trim().to_string(),
+                )
+            })
+            .collect();
         record.contest_exchange_sent = self
             .voice_contest_fields
             .iter()

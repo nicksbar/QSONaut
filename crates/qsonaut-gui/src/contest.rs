@@ -86,7 +86,36 @@ fn contest_guidance_text(split_policy: SplitPolicy, role: FoxHoundRole) -> Strin
     format!("{} · {}", split_hint, role_hint)
 }
 
+fn parse_named_exchange(exchange: &str) -> BTreeMap<String, String> {
+    exchange
+        .split_whitespace()
+        .filter_map(|item| item.split_once('='))
+        .filter(|(key, value)| !key.trim().is_empty() && !value.trim().is_empty())
+        .map(|(key, value)| (key.trim().to_ascii_uppercase(), value.trim().to_string()))
+        .collect()
+}
+
 impl QsonautGuiApp {
+    pub(super) fn contest_fields_sent(&self) -> BTreeMap<String, String> {
+        let mut fields = self
+            .contest_field_values
+            .iter()
+            .filter(|(_, value)| !value.trim().is_empty())
+            .map(|(key, value)| (key.to_ascii_uppercase(), value.trim().to_string()))
+            .collect::<BTreeMap<_, _>>();
+        if self.contest_enabled {
+            fields.insert(
+                "SERIAL".to_string(),
+                self.contest_serial_current.max(1).to_string(),
+            );
+        }
+        fields
+    }
+
+    pub(super) fn contest_fields_received(&self, exchange: &str) -> BTreeMap<String, String> {
+        parse_named_exchange(exchange)
+    }
+
     pub(super) fn has_logged_contact_with(
         &self,
         target_call: &str,

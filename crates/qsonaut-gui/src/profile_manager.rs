@@ -143,6 +143,8 @@ impl QsonautGuiApp {
             server_instance_id: self.server_instance_id.clone(),
             server: Some(self.config.server.clone()),
             contest_enabled: self.contest_enabled,
+            contest_type: Some(self.contest_type.clone()),
+            contest_field_values: self.contest_field_values.clone(),
             contest_operating_mode: self.contest_operating_mode,
             contest_split_policy: self.contest_split_policy,
             contest_fox_hound_role: self.contest_fox_hound_role,
@@ -221,6 +223,11 @@ impl QsonautGuiApp {
             state.recording_stream = self.recording_stream;
         }
         self.contest_enabled = profile.contest_enabled;
+        self.contest_type = profile
+            .contest_type
+            .clone()
+            .unwrap_or_else(|| "ARRL_FD".to_string());
+        self.contest_field_values = profile.contest_field_values.clone();
         self.contest_operating_mode = profile.contest_operating_mode;
         self.contest_split_policy = profile.contest_split_policy;
         self.contest_fox_hound_role = profile.contest_fox_hound_role;

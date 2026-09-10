@@ -46,6 +46,13 @@ impl QsonautGuiApp {
     }
 
     pub(crate) fn append_qso(&mut self, mut record: QsoRecord, status: &str) {
+        if record.contest_fields_sent.is_empty() {
+            record.contest_fields_sent = parse_contest_fields(&record.contest_exchange_sent);
+        }
+        if record.contest_fields_received.is_empty() {
+            record.contest_fields_received =
+                parse_contest_fields(&record.contest_exchange_received);
+        }
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs())
@@ -112,4 +119,13 @@ impl QsonautGuiApp {
             self.publish_qso_to_server(record);
         }
     }
+}
+
+fn parse_contest_fields(exchange: &str) -> std::collections::BTreeMap<String, String> {
+    exchange
+        .split_whitespace()
+        .filter_map(|item| item.split_once('='))
+        .filter(|(key, value)| !key.trim().is_empty() && !value.trim().is_empty())
+        .map(|(key, value)| (key.trim().to_ascii_uppercase(), value.trim().to_string()))
+        .collect()
 }

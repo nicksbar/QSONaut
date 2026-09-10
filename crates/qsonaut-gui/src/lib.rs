@@ -4,6 +4,7 @@ mod automation_integration;
 mod band_plan;
 mod chat;
 mod contest;
+mod contest_catalog;
 mod decode_model;
 mod font;
 mod graphics;
@@ -1424,6 +1425,8 @@ struct QsonautGuiApp {
     voice_lookup_status: String,
     voice_hamdb: Option<HamDbCacheEntry>,
     contest_enabled: bool,
+    contest_type: String,
+    contest_field_values: BTreeMap<String, String>,
     contest_operating_mode: ContestOperatingMode,
     contest_split_policy: SplitPolicy,
     contest_fox_hound_role: FoxHoundRole,

@@ -138,6 +138,7 @@ impl QsonautGuiApp {
         let url = self.config.server.url.trim();
         let token = self.config.server.device_token.trim();
         if enabled && (url.is_empty() || token.is_empty()) {
+            self.server_client = None;
             warn!("Server connection requires both endpoint and device token");
             self.profile_io_status =
                 "Server needs both an endpoint and device token before connecting".to_string();
@@ -187,6 +188,8 @@ impl QsonautGuiApp {
             "exchange": {
                 "sent": record.contest_exchange_sent,
                 "received": record.contest_exchange_received,
+                "fields_sent": record.contest_fields_sent,
+                "fields_received": record.contest_fields_received,
                 "serial_sent": record.contest_serial_sent,
                 "serial_received": record.contest_serial_received,
                 "grid": record.grid,

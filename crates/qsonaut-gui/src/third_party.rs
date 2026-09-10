@@ -921,15 +921,32 @@ fn n3fjp_api_controls(
     record: &QsoRecord,
     visible_fields: &HashSet<String>,
 ) -> Vec<(String, String)> {
-    [
-        ("TXTENTRYRSTR", record.report_received.as_str()),
-        ("TXTENTRYGRID", record.grid.as_str()),
-        ("TXTENTRYCOMMENTS", record.notes.as_str()),
-    ]
-    .into_iter()
-    .filter(|(control, value)| visible_fields.contains(*control) && !value.trim().is_empty())
-    .map(|(control, value)| (control.to_string(), value.trim().to_string()))
-    .collect()
+    let mut controls = record
+        .contest_fields_received
+        .iter()
+        .filter_map(|(name, value)| {
+            let control = format!("TXTENTRY{}", name.trim().to_ascii_uppercase());
+            let valid_name = control
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_');
+            (valid_name && visible_fields.contains(&control) && !value.trim().is_empty())
+                .then_some((control, value.trim().to_string()))
+        })
+        .collect::<Vec<_>>();
+
+    for (control, value) in [
+        ("TXTENTRYRSTR", record.report_received.trim()),
+        ("TXTENTRYGRID", record.grid.trim()),
+        ("TXTENTRYCOMMENTS", record.notes.trim()),
+    ] {
+        if visible_fields.contains(control)
+            && !value.is_empty()
+            && !controls.iter().any(|(name, _)| name == control)
+        {
+            controls.push((control.to_string(), value.to_string()));
+        }
+    }
+    controls
 }
 
 fn send_network(client: &mut NetworkClient, station: &str, record: &QsoRecord) -> bool {
@@ -1047,6 +1064,27 @@ mod tests {
         assert_eq!(
             n3fjp_api_controls(&record, &visible_fields),
             vec![("TXTENTRYRSTR".to_string(), "-10".to_string())]
+        );
+    }
+
+    #[test]
+    fn n3fjp_api_controls_map_named_field_day_exchange_values() {
+        let mut record = QsoRecord::new("W1AW", "USB", "20m", 14_300_000, 1, 2);
+        record
+            .contest_fields_received
+            .insert("SECTION".to_string(), "WMA".to_string());
+        record
+            .contest_fields_received
+            .insert("CLASS".to_string(), "2A".to_string());
+        let visible_fields =
+            HashSet::from(["TXTENTRYSECTION".to_string(), "TXTENTRYCLASS".to_string()]);
+
+        assert_eq!(
+            n3fjp_api_controls(&record, &visible_fields),
+            vec![
+                ("TXTENTRYCLASS".to_string(), "2A".to_string()),
+                ("TXTENTRYSECTION".to_string(), "WMA".to_string()),
+            ]
         );
     }
 }

@@ -216,6 +216,12 @@ pub struct QsoRecord {
     pub contest_exchange_sent: String,
     #[serde(default)]
     pub contest_exchange_received: String,
+    /// Named contest exchange values, such as SECTION=WMA and CLASS=2A.
+    /// The flattened exchange strings remain for compatibility and display.
+    #[serde(default)]
+    pub contest_fields_sent: BTreeMap<String, String>,
+    #[serde(default)]
+    pub contest_fields_received: BTreeMap<String, String>,
     #[serde(default)]
     pub contest_serial_sent: Option<u32>,
     #[serde(default)]
@@ -256,6 +262,8 @@ impl QsoRecord {
             report_received: String::new(),
             contest_exchange_sent: String::new(),
             contest_exchange_received: String::new(),
+            contest_fields_sent: BTreeMap::new(),
+            contest_fields_received: BTreeMap::new(),
             contest_serial_sent: None,
             contest_serial_received: None,
             notes: String::new(),
@@ -662,6 +670,16 @@ impl QsoLog {
                     .get("SRX_STRING")
                     .map(|value| value.trim().to_string())
                     .unwrap_or_default(),
+                contest_fields_sent: parse_contest_fields(
+                    fields
+                        .get("QSONAUT_CONTEST_FIELDS_SENT")
+                        .map(String::as_str),
+                ),
+                contest_fields_received: parse_contest_fields(
+                    fields
+                        .get("QSONAUT_CONTEST_FIELDS_RECEIVED")
+                        .map(String::as_str),
+                ),
                 contest_serial_sent: fields
                     .get("STX")
                     .and_then(|value| value.trim().parse::<u32>().ok()),
@@ -758,6 +776,16 @@ impl QsoLog {
             );
             push_adif(
                 &mut output,
+                "QSONAUT_CONTEST_FIELDS_SENT",
+                &format_contest_fields(&contact.contest_fields_sent),
+            );
+            push_adif(
+                &mut output,
+                "QSONAUT_CONTEST_FIELDS_RECEIVED",
+                &format_contest_fields(&contact.contest_fields_received),
+            );
+            push_adif(
+                &mut output,
                 "COMMENT",
                 &contact.notes.replace(['\r', '\n'], " "),
             );
@@ -765,6 +793,24 @@ impl QsoLog {
         }
         output
     }
+}
+
+fn format_contest_fields(fields: &BTreeMap<String, String>) -> String {
+    fields
+        .iter()
+        .map(|(key, value)| format!("{}={}", key.trim(), value.trim()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn parse_contest_fields(value: Option<&str>) -> BTreeMap<String, String> {
+    value
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter_map(|item| item.split_once('='))
+        .filter(|(key, value)| !key.trim().is_empty() && !value.trim().is_empty())
+        .map(|(key, value)| (key.trim().to_ascii_uppercase(), value.trim().to_string()))
+        .collect()
 }
 
 fn parse_adif_records(source: &str) -> Vec<BTreeMap<String, String>> {

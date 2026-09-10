@@ -6,6 +6,7 @@ members = [
     "crates/qsonaut-log",
     "crates/qsonaut-accelerate",
     "crates/qsonaut-automation",
+    "crates/qsonaut-contests",
     "crates/qsonaut-pskreporter",
     "crates/qsonaut-server-client",
     "crates/qsonaut-hostbridge-client",
