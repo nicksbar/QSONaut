@@ -35,10 +35,11 @@ and the limitation that explains each classification.
 The v0.4 reference station is Linux/WSL with an Icom IC-7300 using its USB
 CI-V/control and USB audio paths. The repeatable setup guidance is in the
 [IC-7300 guide](radios/models/ic-7300/guide.md) and the [audio monitoring
-guide](audio-monitoring.md). The IC-7300 native control/scope path is the
-current hardware-validated baseline; other radio profiles, serial families,
-and alternate platforms remain experimental until their own evidence is
-recorded.
+guide](audio-monitoring.md). The IC-7300 native control/scope path remains
+QSONaut's current end-to-end hardware-validated baseline. Rigwright 0.1.30
+also records direct hardware validation for the IC-756PROII CI-V control
+surface, but QSONaut's complete application workflow on that model remains
+unvalidated.
 
 Evidence in this document has two separate meanings:
 
@@ -65,7 +66,7 @@ tracked by the radio validation program in issue #41 and its model issues.
 | SSTV receive, transmit preparation, and explicit TX safety | Experimental but usable | Software round-trip coverage and operator-visible abort/disarm paths; end-to-end hardware validation remains open. |
 | JT9, JT65, Q65, FST4, and CW | Experimental but usable | Native or generated-audio paths exist, with uneven workflow completeness and validation. |
 | WSPR and MSK144 | Experimental but usable | Receive-only integration; transmit workflows are intentionally unavailable. |
-| Radio profiles other than the IC-7300 | Experimental but usable | Capability-gated implementations; physical validation is not implied by catalog presence. |
+| Radio profiles other than the IC-7300 | Experimental but usable | Capability-gated implementations; Rigwright-level evidence for the IC-756PROII does not imply QSONaut end-to-end validation. |
 | Contest workflow and automation actions | Experimental but usable | Software state/persistence/guard tests exist; complete contest and external-adapter workflows remain unvalidated. |
 | Local AI, PSK Reporter, and QSONaut Server integration | Experimental but usable | Optional paths with failure isolation and opt-in boundaries; external service and privacy validation remain open. |
 | Discord/IRC connectors and unattended operation | Concept only | Scaffolding or policy exists without a complete validated production workflow. |
@@ -120,13 +121,14 @@ can be advertised to the UI.
 | Icom IC-705 | Gated / Experimental | Profile-specific controls, tuner, normalized SWR, and scope geometry; no broad physical validation. |
 | Icom IC-7610 | Gated / Experimental | Profile-specific controls, main/sub metadata, tuner, normalized SWR, and dual-receiver scope geometry; no broad physical validation. |
 | Icom IC-9700 | Gated / Experimental | Profile-specific controls, external preamp, main/sub metadata, tuner, normalized SWR, and VHF/UHF scope ranges; no broad physical validation. |
-| Icom IC-756PRO, IC-756PROII, IC-756PROIII | Gated / Experimental | Rigwright 0.1.29 CI-V profiles with model-specific addresses and HF capability metadata; framework support only until physical evidence is recorded. |
+| Icom IC-756PRO, IC-756PROIII | Gated / Experimental | Rigwright 0.1.30 CI-V profiles with model-specific addresses and HF capability metadata; framework support only until physical evidence is recorded. |
+| Icom IC-756PROII | Gated / Experimental | Rigwright 0.1.30 CI-V profile with model-specific address and HF capability metadata; direct Rigwright hardware validation is recorded, while QSONaut end-to-end application validation remains pending. |
 | Modern Yaesu CAT generic | Gated / Experimental | Protocol-only profile; typed modern controls and meters require an exact model profile. |
 | FT-710, FTDX10, FTDX101D, FTDX101MP | Gated / Experimental | Frequency, mode, readable PTT, power, profile split, AGC, NR, NR level, and normalized signal/power/SWR/ALC/compression/current/voltage meters. |
 | FT-991A | Gated / Experimental | Same modern CAT meter/control family, with model-specific mode/range behavior and split not currently profiled as typed. |
 | Classic Yaesu CAT generic | Gated / Experimental | Protocol-only five-byte CAT profile; no model-specific split until an exact classic model is selected. |
 | FT-817ND, FT-818, FT-857D, FT-897D | Gated / Experimental | Frequency, mode, readable/writable PTT, status, and split through the legacy CAT family. Power, normalized meters, tuner, and modern controls are intentionally absent. |
-| FT-1000, FT-1000D | Gated / Experimental | Rigwright 0.1.29 legacy CAT profiles with model-specific serial settings and frequency/mode/PTT support; framework support only until physical evidence is recorded. |
+| FT-1000, FT-1000D | Gated / Experimental | Rigwright 0.1.30 legacy CAT profiles with model-specific serial settings and frequency/mode/PTT support; framework support only until physical evidence is recorded. |
 | Kenwood PC control generic | Gated / Experimental | Protocol-only profile; model-specific power, split, meter selector, range, and PTT behavior require an exact model. |
 | TS-590SG, TS-890S, TS-2000 | Gated / Experimental | Frequency, mode, power, split, model-specific PTT behavior, normalized signal/SWR, and interleaved Auto Information response handling. |
 
