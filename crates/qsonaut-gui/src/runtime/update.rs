@@ -12,7 +12,7 @@ fn migrate_hostbridge_radio_id(config: &mut RadioConfig, hello: &HostHello) -> b
     {
         return false;
     }
-    let Some((physical_id, _legacy_driver)) = saved_id.rsplit_once(':') else {
+    let Some(physical_id) = legacy_hostbridge_physical_id(&saved_id) else {
         return false;
     };
     if hello
@@ -27,6 +27,12 @@ fn migrate_hostbridge_radio_id(config: &mut RadioConfig, hello: &HostHello) -> b
     } else {
         false
     }
+}
+
+fn legacy_hostbridge_physical_id(saved_id: &str) -> Option<&str> {
+    saved_id
+        .rsplit_once(':')
+        .map(|(physical_id, _)| physical_id)
 }
 
 impl QsonautGuiApp {
@@ -1805,4 +1811,18 @@ impl QsonautGuiApp {
 
 pub(crate) fn update(app: &mut QsonautGuiApp, ctx: &egui::Context, frame: &mut eframe::Frame) {
     app.update_impl(ctx, frame);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::legacy_hostbridge_physical_id;
+
+    #[test]
+    fn legacy_hostbridge_physical_id_strips_driver_suffix() {
+        assert_eq!(
+            legacy_hostbridge_physical_id("radio-123:rigwright"),
+            Some("radio-123")
+        );
+        assert_eq!(legacy_hostbridge_physical_id("radio-123"), None);
+    }
 }

@@ -1,5 +1,13 @@
 use super::super::*;
 
+fn radio_connection_label(connected: bool) -> &'static str {
+    if connected {
+        "Radio CONNECTED"
+    } else {
+        "Radio OFFLINE"
+    }
+}
+
 impl QsonautGuiApp {
     pub(crate) fn draw_header_identity_and_activity(&self, ui: &mut egui::Ui) {
         ui.spacing_mut().item_spacing.x = 6.0;
@@ -89,11 +97,7 @@ impl QsonautGuiApp {
             ui.label(RichText::new("Connections").strong());
             ui.separator();
             ui.label(
-                RichText::new(if snapshot.frequency_hz.is_some() {
-                    "Radio CONNECTED"
-                } else {
-                    "Radio OFFLINE"
-                })
+                RichText::new(radio_connection_label(snapshot.frequency_hz.is_some()))
                 .color(if snapshot.frequency_hz.is_some() {
                     Color32::LIGHT_GREEN
                 } else {
@@ -214,5 +218,16 @@ impl QsonautGuiApp {
                 self.draw_about_button(ui);
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::radio_connection_label;
+
+    #[test]
+    fn radio_connection_label_reflects_frequency_presence() {
+        assert_eq!(radio_connection_label(true), "Radio CONNECTED");
+        assert_eq!(radio_connection_label(false), "Radio OFFLINE");
     }
 }

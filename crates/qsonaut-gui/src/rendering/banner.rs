@@ -1,6 +1,17 @@
 use super::super::*;
 use crate::ui_widgets::{operating_mode_button, OperatingModeIcon};
 
+fn tuning_step_hz(step: Option<u8>) -> u64 {
+    match step.unwrap_or(5) {
+        0 => 1,
+        1 => 5,
+        2 => 10,
+        3 => 50,
+        4 => 100,
+        _ => 1_000,
+    }
+}
+
 impl QsonautGuiApp {
     pub(crate) fn draw_header_branding(&mut self, ui: &mut egui::Ui) {
         let spin_angle = self.logo_spin_until.map_or(0.0, |until| {
@@ -62,14 +73,7 @@ impl QsonautGuiApp {
 impl QsonautGuiApp {
     pub(crate) fn draw_banner_radio_controls(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         let supports_levels = snapshot.supported_controls.contains(&ControlId::AfGain);
-        let tuning_step_hz = match snapshot.tuning_step.unwrap_or(5) {
-            0 => 1,
-            1 => 5,
-            2 => 10,
-            3 => 50,
-            4 => 100,
-            _ => 1_000,
-        };
+        let tuning_step_hz = tuning_step_hz(snapshot.tuning_step);
         ui.horizontal(|ui| {
             ui.scope(|ui| {
                 ui.spacing_mut().item_spacing.x = 7.0;
@@ -218,5 +222,18 @@ impl QsonautGuiApp {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tuning_step_hz;
+
+    #[test]
+    fn tuning_step_hz_maps_profile_indices_and_defaults() {
+        assert_eq!(tuning_step_hz(None), 1_000);
+        assert_eq!(tuning_step_hz(Some(0)), 1);
+        assert_eq!(tuning_step_hz(Some(3)), 50);
+        assert_eq!(tuning_step_hz(Some(99)), 1_000);
     }
 }

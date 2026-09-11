@@ -1,5 +1,9 @@
 use super::super::*;
 
+fn default_activity_button_label(activity: OperatingActivity) -> String {
+    format!("📻 {}", activity.label())
+}
+
 impl QsonautGuiApp {
     pub(crate) fn draw_activity_selector(&mut self, ui: &mut egui::Ui) {
         let selected_activity = self.activity;
@@ -18,7 +22,7 @@ impl QsonautGuiApp {
                     .as_ref()
                     .map(|(_, name)| format!("🌐 {} · {name}", selected_activity.label()))
             })
-            .unwrap_or_else(|| format!("📻 {}", selected_activity.label()));
+            .unwrap_or_else(|| default_activity_button_label(selected_activity));
         let previous_interact_height = ui.spacing().interact_size.y;
         ui.spacing_mut().interact_size.y = 28.0;
         let activity_menu = ui.menu_button(
@@ -339,5 +343,19 @@ impl QsonautGuiApp {
             .response
             .on_hover_text("Choose the operating activity and any active server event");
         ui.spacing_mut().interact_size.y = previous_interact_height;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_activity_button_label;
+    use crate::OperatingActivity;
+
+    #[test]
+    fn default_activity_button_label_includes_activity_name() {
+        assert_eq!(
+            default_activity_button_label(OperatingActivity::General),
+            "📻 General"
+        );
     }
 }
