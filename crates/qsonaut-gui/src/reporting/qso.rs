@@ -46,8 +46,29 @@ impl QsonautGuiApp {
     }
 
     pub(crate) fn append_qso(&mut self, mut record: QsoRecord, status: &str) {
-        record.operator_callsign = self.station_callsign.trim().to_ascii_uppercase();
-        record.station_callsign = record.operator_callsign.clone();
+        let assigned_operator = self
+            .server_active_event
+            .as_ref()
+            .zip(self.server_active_identity.as_ref())
+            .and_then(|((event_id, _), (identity_id, _))| {
+                self.server_client
+                    .as_ref()
+                    .map(ServerClient::status)
+                    .and_then(|status| {
+                        status.participants.into_iter().find(|participant| {
+                            participant.event_id == *event_id
+                                && participant.callsign_id == *identity_id
+                                && participant.status == "active"
+                        })
+                    })
+                    .map(|participant| participant.operator_callsign)
+            })
+            .unwrap_or_else(|| self.station_callsign.clone());
+        apply_operating_identity(
+            &mut record,
+            &assigned_operator,
+            self.server_active_identity.as_ref(),
+        );
         record.server_event_id = self
             .server_active_event
             .as_ref()
@@ -65,10 +86,23 @@ impl QsonautGuiApp {
                 "Local Contest".to_string()
             };
             record.contest_session_id = self.contest_session_id.clone();
-            record.contest_template_id = crate::contest_catalog::find(&self.contest_type)
-                .filter(|_| self.server_active_event.is_none())
-                .map(|definition| definition.id.clone())
-                .unwrap_or_default();
+            record.contest_template_id = if let Some((event_id, _)) = &self.server_active_event {
+                self.server_client
+                    .as_ref()
+                    .map(ServerClient::status)
+                    .and_then(|status| {
+                        status
+                            .active_events
+                            .into_iter()
+                            .find(|event| event.id == *event_id)
+                    })
+                    .and_then(|event| event.contest_template_id)
+                    .unwrap_or_default()
+            } else {
+                crate::contest_catalog::find(&self.contest_type)
+                    .map(|definition| definition.id.clone())
+                    .unwrap_or_default()
+            };
             for (key, value) in self.contest_fields_sent() {
                 record.contest_fields_sent.entry(key).or_insert(value);
             }
@@ -165,6 +199,23 @@ impl QsonautGuiApp {
     }
 }
 
+fn apply_operating_identity(
+    record: &mut QsoRecord,
+    operator_callsign: &str,
+    selected_identity: Option<&(String, String)>,
+) {
+    record.operator_callsign = operator_callsign.trim().to_ascii_uppercase();
+    if let Some((identity_id, callsign)) = selected_identity {
+        record.station_callsign = callsign.trim().to_ascii_uppercase();
+        record.managed_callsign_id = identity_id.clone();
+    } else {
+        record
+            .station_callsign
+            .clone_from(&record.operator_callsign);
+        record.managed_callsign_id.clear();
+    }
+}
+
 fn parse_contest_fields(exchange: &str) -> std::collections::BTreeMap<String, String> {
     exchange
         .split_whitespace()
@@ -172,4 +223,24 @@ fn parse_contest_fields(exchange: &str) -> std::collections::BTreeMap<String, St
         .filter(|(key, value)| !key.trim().is_empty() && !value.trim().is_empty())
         .map(|(key, value)| (key.trim().to_ascii_uppercase(), value.trim().to_string()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operating_identity_keeps_operator_and_station_distinct() {
+        let mut record = QsoRecord::new("K1ABC", "CW", "20m", 14_050_000, 0, 1);
+        let identity = ("identity-1".to_owned(), "w1club".to_owned());
+        apply_operating_identity(&mut record, " n1op ", Some(&identity));
+        assert_eq!(record.operator_callsign, "N1OP");
+        assert_eq!(record.station_callsign, "W1CLUB");
+        assert_eq!(record.managed_callsign_id, "identity-1");
+
+        apply_operating_identity(&mut record, "n1op", None);
+        assert_eq!(record.operator_callsign, "N1OP");
+        assert_eq!(record.station_callsign, "N1OP");
+        assert!(record.managed_callsign_id.is_empty());
+    }
 }

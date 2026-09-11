@@ -111,6 +111,10 @@ pub struct ServerIdentity {
     pub event_id: Option<String>,
     pub status: String,
     pub verification_status: String,
+    #[serde(default)]
+    pub effective_from: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -124,6 +128,14 @@ pub struct ServerParticipant {
     pub role: String,
     pub status: String,
     pub station_label: String,
+    #[serde(default)]
+    pub starts_at: Option<String>,
+    #[serde(default)]
+    pub ends_at: Option<String>,
+    #[serde(default)]
+    pub band: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -135,6 +147,9 @@ pub struct ServerEvent {
     pub status: String,
     pub starts_at: String,
     pub ends_at: String,
+    pub contest_template_id: Option<String>,
+    pub contest_definition_version: Option<i32>,
+    pub contest_config: Value,
     pub club_name: String,
     pub participant_count: i64,
 }
@@ -644,6 +659,9 @@ fn receive_with_channels(
                     status: event.status.clone(),
                     starts_at: event.starts_at.clone(),
                     ends_at: event.ends_at.clone(),
+                    contest_template_id: event.contest_template_id.clone(),
+                    contest_definition_version: event.contest_definition_version,
+                    contest_config: event.contest_config.clone(),
                     club_name: clubs
                         .iter()
                         .find(|club| club.id == event.club_id)
@@ -972,6 +990,12 @@ struct Event {
     status: String,
     starts_at: String,
     ends_at: String,
+    #[serde(default)]
+    contest_template_id: Option<String>,
+    #[serde(default)]
+    contest_definition_version: Option<i32>,
+    #[serde(default)]
+    contest_config: Value,
     participant_count: i64,
 }
 
@@ -1304,6 +1328,9 @@ mod tests {
                         "id":"event-1","club_id":"club-1","name":"Field Day",
                         "contest_name":"ARRL Field Day","status":"active",
                         "starts_at":"2026-06-27T18:00:00Z","ends_at":"2026-06-28T21:00:00Z",
+                        "contest_template_id":"10000000-0000-4000-8000-000000000001",
+                        "contest_definition_version":1,
+                        "contest_config":{"class":"1A","section":"WMA","power":"LOW"},
                         "participant_count":4
                     }],
                     "clubs":[{"id":"club-1","name":"Radio Club","callsign":"W1AW"}],
@@ -1325,6 +1352,11 @@ mod tests {
         assert_eq!(current.catalog_size, 1);
         assert_eq!(current.clubs[0].name, "Radio Club");
         assert_eq!(current.active_events[0].club_name, "Radio Club");
+        assert_eq!(
+            current.active_events[0].contest_template_id.as_deref(),
+            Some("10000000-0000-4000-8000-000000000001")
+        );
+        assert_eq!(current.active_events[0].contest_config["class"], "1A");
         drop(current);
         let events = events.lock().unwrap();
         assert_eq!(events.front().unwrap().kind, "snapshot");

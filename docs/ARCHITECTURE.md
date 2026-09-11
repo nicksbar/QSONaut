@@ -33,7 +33,7 @@ graph TB
     subgraph External["External Services"]
         Q[qsonaut-third-party<br/>Pinned modem adapters]
         U[qsonaut-modems<br/>Consumer-neutral contracts]
-        R[rigwright v0.1.29<br/>Radio HAL and drivers]
+        R[rigwright v0.1.30<br/>Radio HAL and drivers]
         S[PSK Reporter<br/>UDP]
         T[Discord/IRC<br/>Automation]
     end

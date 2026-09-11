@@ -2,35 +2,79 @@ use super::super::*;
 
 impl QsonautGuiApp {
     pub(crate) fn draw_contest_session(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
-        if let Some((_, event_name)) = &self.server_active_event {
+        let selected_server_event = self.server_active_event.as_ref().and_then(|(event_id, _)| {
+            self.server_client
+                .as_ref()
+                .map(ServerClient::status)
+                .and_then(|status| {
+                    status
+                        .active_events
+                        .into_iter()
+                        .find(|event| event.id == *event_id)
+                })
+        });
+        if let Some((event_id, event_name)) = &self.server_active_event {
             ui.strong(format!(
                 "Server Contest · {event_name} · {}",
                 self.station_callsign_or_default()
             ));
-            if let Some((event_id, _)) = &self.server_active_event {
-                if let Some(score) = self.server_client.as_ref().and_then(|client| {
-                    client
-                        .status()
-                        .event_scores
-                        .into_iter()
-                        .find(|score| score.event_id == *event_id)
-                }) {
-                    ui.label(format!(
-                        "Score: {} · {} QSOs · {} dupes",
-                        score.total_points, score.qso_count, score.duplicate_count
-                    ));
-                }
+            if let Some(score) = self.server_client.as_ref().and_then(|client| {
+                client
+                    .status()
+                    .event_scores
+                    .into_iter()
+                    .find(|score| score.event_id == *event_id)
+            }) {
+                ui.label(format!(
+                    "Score: {} · {} QSOs · {} dupes",
+                    score.total_points, score.qso_count, score.duplicate_count
+                ));
             }
-            ui.colored_label(
-                theme_warning(ui),
-                "Server scoring is authoritative; TX requires an active station assignment",
-            );
-            return;
+            if self.server_active_identity.is_some() {
+                ui.colored_label(
+                    theme_success(ui),
+                    "Server scoring is authoritative · active station identity selected",
+                );
+            } else {
+                ui.colored_label(
+                    theme_warning(ui),
+                    "Select an active station assignment before transmitting or logging",
+                );
+            }
         }
         if !self.contest_enabled {
             return;
         }
-        let Some(definition) = crate::contest_catalog::find(&self.contest_type) else {
+        let definition = if self.server_active_event.is_some() {
+            let Some(event) = selected_server_event.as_ref() else {
+                ui.colored_label(
+                    theme_warning(ui),
+                    "Server event is no longer active or the synchronized context is unavailable",
+                );
+                return;
+            };
+            if event.contest_definition_version != Some(qsonaut_contests::CATALOG_VERSION as i32) {
+                ui.colored_label(
+                    theme_warning(ui),
+                    "Server contest definition is incompatible with this QSONaut catalog",
+                );
+                return;
+            }
+            let Some(definition) = event
+                .contest_template_id
+                .as_deref()
+                .and_then(qsonaut_contests::find_by_id)
+            else {
+                ui.colored_label(
+                    theme_warning(ui),
+                    "Server contest template is unavailable in this QSONaut catalog",
+                );
+                return;
+            };
+            definition
+        } else if let Some(definition) = crate::contest_catalog::find(&self.contest_type) {
+            definition
+        } else {
             ui.colored_label(
                 theme_warning(ui),
                 "Unknown contest definition; choose a contest in Station Settings",
@@ -40,7 +84,7 @@ impl QsonautGuiApp {
         let mut changed = false;
         ui.horizontal_wrapped(|ui| {
             ui.strong(format!("{} · {}", definition.name, self.station_callsign_or_default()));
-            ui.label(if self.server_active_event.is_some() { "Server event selected" } else { "Local session · scoring not yet calculated" });
+            ui.label(if self.server_active_event.is_some() { "Server-authoritative event" } else { "Local session · scoring not yet calculated" });
             if ui.small_button("New local session").on_hover_text("Start a new contest occurrence with a fresh duplicate history and serial counter").clicked()
                 && self.server_active_event.is_none() {
                 self.disarm_all_tx_with_persistence("New contest session", false);

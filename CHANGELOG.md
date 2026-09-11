@@ -15,6 +15,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Operator, station, contest template/session, club, and server event fields in
   local logs and ADIF; historical uploads use their recorded event context.
 
+### Changed
+- Updated native radio consumers to Rigwright `0.1.30`, including the
+  hardware-validated IC-756PROII capability correction and write-only Split
+  handling.
+
 ### Fixed
 - Activity/template/server changes disarm queued TX and clear selected context.
 - Voice no longer treats setup-only values such as power as received exchanges.
@@ -42,7 +47,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   represented separately from the unified operator chat route.
 - Preserved global station identity settings when switching or managing radio
   profiles.
-- Updated native radio consumers to Rigwright `0.1.29`.
 - Updated the HostBridge protocol client to `0.1.5`.
 - Added guaranteed low-power PTT cleanup requirements: unkeying and RF-power
   restoration are part of the validation result.

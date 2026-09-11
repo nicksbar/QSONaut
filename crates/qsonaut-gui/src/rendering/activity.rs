@@ -111,6 +111,7 @@ impl QsonautGuiApp {
                                         false,
                                     );
                                     self.server_active_event = None;
+                                    self.server_active_identity = None;
                                     ui.close();
                                 }
                             }
@@ -147,6 +148,31 @@ impl QsonautGuiApp {
                                         self.server_active_event =
                                             Some((contest.id.clone(), contest.name.clone()));
                                         self.server_active_identity = None;
+                                        self.contest_field_values = contest
+                                            .contest_config
+                                            .as_object()
+                                            .map(|config| {
+                                                config
+                                                    .iter()
+                                                    .filter_map(|(key, value)| {
+                                                        value.as_str().map(|value| {
+                                                            (key.clone(), value.to_owned())
+                                                        })
+                                                    })
+                                                    .collect()
+                                            })
+                                            .unwrap_or_default();
+                                        if contest.contest_definition_version
+                                            == Some(qsonaut_contests::CATALOG_VERSION as i32)
+                                        {
+                                            if let Some(definition) = contest
+                                                .contest_template_id
+                                                .as_deref()
+                                                .and_then(qsonaut_contests::find_by_id)
+                                            {
+                                                self.contest_type = definition.contest_type.clone();
+                                            }
+                                        }
                                         ui.close();
                                     }
                                     let starts = contest
@@ -221,6 +247,18 @@ impl QsonautGuiApp {
                                 .filter(|participant| {
                                     participant.event_id == *event_id
                                         && participant.status == "active"
+                                        && matches!(
+                                            participant.role.as_str(),
+                                            "operator" | "coordinator" | "logger"
+                                        )
+                                        && server_context.identities.iter().any(|identity| {
+                                            identity.id == participant.callsign_id
+                                                && identity.status == "active"
+                                                && identity.verification_status == "verified"
+                                                && identity.event_id.as_deref().is_none_or(
+                                                    |identity_event| identity_event == event_id,
+                                                )
+                                        })
                                 })
                                 .collect::<Vec<_>>();
                             if assignments.is_empty() {

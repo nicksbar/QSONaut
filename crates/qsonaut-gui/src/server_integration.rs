@@ -34,6 +34,100 @@ fn redacted_diagnostic_log(raw: String, config: &AppConfig) -> String {
 }
 
 impl QsonautGuiApp {
+    pub(super) fn reconcile_server_activity_context(&mut self) {
+        let Some(client) = &self.server_client else {
+            return;
+        };
+        let status = client.status();
+        if let Some((event_id, _)) = &self.server_active_event {
+            let now = time::OffsetDateTime::now_utc();
+            if status.state != ServerConnectionState::Connected
+                || !status.active_events.iter().any(|event| {
+                    event.id == *event_id
+                        && time::OffsetDateTime::parse(
+                            &event.starts_at,
+                            &time::format_description::well_known::Rfc3339,
+                        )
+                        .is_ok_and(|starts| now >= starts)
+                        && time::OffsetDateTime::parse(
+                            &event.ends_at,
+                            &time::format_description::well_known::Rfc3339,
+                        )
+                        .is_ok_and(|ends| now < ends)
+                })
+            {
+                self.disarm_all_tx_with_persistence("Server event authorization expired", false);
+                self.server_active_event = None;
+                self.server_active_club = None;
+                self.server_active_identity = None;
+                return;
+            }
+        }
+        let Some((identity_id, callsign)) = &self.server_active_identity else {
+            return;
+        };
+        let identity_valid = status.identities.iter().any(|identity| {
+            identity.id == *identity_id
+                && identity.callsign.eq_ignore_ascii_case(callsign)
+                && identity.status == "active"
+                && identity.verification_status == "verified"
+                && identity.event_id.as_deref().is_none_or(|identity_event| {
+                    self.server_active_event
+                        .as_ref()
+                        .is_some_and(|(event_id, _)| event_id == identity_event)
+                })
+                && identity.effective_from.as_deref().is_none_or(|value| {
+                    time::OffsetDateTime::parse(
+                        value,
+                        &time::format_description::well_known::Rfc3339,
+                    )
+                    .is_ok_and(|effective| time::OffsetDateTime::now_utc() >= effective)
+                })
+                && identity.expires_at.as_deref().is_none_or(|value| {
+                    time::OffsetDateTime::parse(
+                        value,
+                        &time::format_description::well_known::Rfc3339,
+                    )
+                    .is_ok_and(|expires| time::OffsetDateTime::now_utc() < expires)
+                })
+        });
+        let assignment_valid = self
+            .server_active_event
+            .as_ref()
+            .is_none_or(|(event_id, _)| {
+                status.participants.iter().any(|participant| {
+                    participant.event_id == *event_id
+                        && participant.callsign_id == *identity_id
+                        && participant.status == "active"
+                        && matches!(
+                            participant.role.as_str(),
+                            "operator" | "coordinator" | "logger"
+                        )
+                        && status.operator_callsign.as_deref().is_some_and(|operator| {
+                            operator.eq_ignore_ascii_case(&participant.operator_callsign)
+                        })
+                        && participant.starts_at.as_deref().is_none_or(|value| {
+                            time::OffsetDateTime::parse(
+                                value,
+                                &time::format_description::well_known::Rfc3339,
+                            )
+                            .is_ok_and(|starts| time::OffsetDateTime::now_utc() >= starts)
+                        })
+                        && participant.ends_at.as_deref().is_none_or(|value| {
+                            time::OffsetDateTime::parse(
+                                value,
+                                &time::format_description::well_known::Rfc3339,
+                            )
+                            .is_ok_and(|ends| time::OffsetDateTime::now_utc() < ends)
+                        })
+                })
+            });
+        if !identity_valid || !assignment_valid {
+            self.disarm_all_tx_with_persistence("Operating identity authorization expired", false);
+            self.server_active_identity = None;
+        }
+    }
+
     pub(super) fn poll_radio_validation(&mut self) {
         let Some(rx) = self.radio_validation_rx.take() else {
             return;
@@ -179,21 +273,13 @@ impl QsonautGuiApp {
         let Some(occurred_at) = qso_timestamp(record) else {
             return;
         };
-        let server_status = client.status();
-        let participant = server_status.participants.iter().find(|participant| {
-            record.server_event_id == participant.event_id
-                && record
-                    .station_callsign
-                    .eq_ignore_ascii_case(&participant.operating_callsign)
-                && record
-                    .operator_callsign
-                    .eq_ignore_ascii_case(&participant.operator_callsign)
-        });
+        let callsign_id = Uuid::parse_str(&record.managed_callsign_id).ok();
+        let operating_callsign = (callsign_id.is_some() || !record.server_event_id.is_empty())
+            .then_some(record.station_callsign.as_str());
         client.publish_log(serde_json::json!({
             "event_id": Uuid::parse_str(&record.server_event_id).ok(),
-            "operating_callsign": (!record.station_callsign.is_empty())
-                .then_some(record.station_callsign.as_str()),
-            "callsign_id": participant.and_then(|value| Uuid::parse_str(&value.callsign_id).ok()),
+            "operating_callsign": operating_callsign,
+            "callsign_id": callsign_id,
             "idempotency_key": log_idempotency_key(record.id),
             "callsign": record.callsign,
             "band": record.band,

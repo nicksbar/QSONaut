@@ -3581,6 +3581,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "time",
  "tokio",
  "toml 0.8.23",
  "tracing",
@@ -4106,9 +4107,9 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rigwright"
-version = "0.1.29"
+version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d4c5d3055d4f6f8928776ab30e6787119d451c9d3eda86663cfd6ff0e223b06"
+checksum = "cdf9edcda6183148cc5ff8b375ca6c9103e32cad6f05096b9e7bff80ce06422e"
 dependencies = [
  "anyhow",
  "async-trait",

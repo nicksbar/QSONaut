@@ -201,6 +201,8 @@ pub struct QsoRecord {
     #[serde(default)]
     pub station_callsign: String,
     #[serde(default)]
+    pub managed_callsign_id: String,
+    #[serde(default)]
     pub contest_template_id: String,
     #[serde(default)]
     pub contest_session_id: String,
@@ -268,6 +270,7 @@ impl QsoRecord {
             operation_mode: "General".to_string(),
             operator_callsign: String::new(),
             station_callsign: String::new(),
+            managed_callsign_id: String::new(),
             contest_template_id: String::new(),
             contest_session_id: String::new(),
             server_event_id: String::new(),
@@ -659,6 +662,10 @@ impl QsoLog {
                     .unwrap_or_else(|| "General".to_string()),
                 operator_callsign: fields.get("OPERATOR").cloned().unwrap_or_default(),
                 station_callsign: fields.get("STATION_CALLSIGN").cloned().unwrap_or_default(),
+                managed_callsign_id: fields
+                    .get("APP_QSONAUT_CALLSIGN_ID")
+                    .cloned()
+                    .unwrap_or_default(),
                 contest_template_id: fields
                     .get("APP_QSONAUT_CONTEST_TEMPLATE_ID")
                     .cloned()
@@ -804,6 +811,11 @@ impl QsoLog {
             );
             push_adif(&mut output, "OPERATOR", &contact.operator_callsign);
             push_adif(&mut output, "STATION_CALLSIGN", &contact.station_callsign);
+            push_adif(
+                &mut output,
+                "APP_QSONAUT_CALLSIGN_ID",
+                &contact.managed_callsign_id,
+            );
             push_adif(
                 &mut output,
                 "APP_QSONAUT_CONTEST_TEMPLATE_ID",
@@ -1195,6 +1207,7 @@ mod tests {
         let mut record = QsoRecord::new("K1ABC", "CW", "20m", 14_050_000, 0, 1);
         record.operator_callsign = "N1OP".into();
         record.station_callsign = "W1CLUB".into();
+        record.managed_callsign_id = "callsign-1".into();
         record.contest_template_id = "template-1".into();
         record.contest_session_id = "session-1".into();
         record.server_event_id = "event-1".into();
@@ -1209,6 +1222,7 @@ mod tests {
         let restored = &imported.contacts[0];
         assert_eq!(restored.operator_callsign, record.operator_callsign);
         assert_eq!(restored.station_callsign, record.station_callsign);
+        assert_eq!(restored.managed_callsign_id, record.managed_callsign_id);
         assert_eq!(restored.contest_template_id, record.contest_template_id);
         assert_eq!(restored.contest_session_id, record.contest_session_id);
         assert_eq!(restored.server_event_id, record.server_event_id);
@@ -1217,6 +1231,7 @@ mod tests {
         for key in [
             "operator_callsign",
             "station_callsign",
+            "managed_callsign_id",
             "contest_template_id",
             "server_event_id",
             "club_id",
@@ -1226,6 +1241,7 @@ mod tests {
         let restored: QsoRecord = legacy.try_into().unwrap();
         assert!(restored.server_event_id.is_empty());
         assert!(restored.station_callsign.is_empty());
+        assert!(restored.managed_callsign_id.is_empty());
     }
 
     #[test]

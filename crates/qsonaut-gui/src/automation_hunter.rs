@@ -1010,6 +1010,7 @@ impl QsonautGuiApp {
                 fields: event.fields,
             });
         }
+        self.reconcile_server_activity_context();
     }
 
     fn execute_automation_radio_command(&mut self, command: &str, value: &str) -> String {

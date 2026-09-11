@@ -78,6 +78,13 @@ pub fn find(contest_type: &str) -> Option<&'static ContestDefinition> {
 }
 
 #[must_use]
+pub fn find_by_id(id: &str) -> Option<&'static ContestDefinition> {
+    builtin_definitions()
+        .iter()
+        .find(|definition| definition.id.eq_ignore_ascii_case(id))
+}
+
+#[must_use]
 pub fn as_json(definition: &ContestDefinition) -> Value {
     serde_json::to_value(definition).expect("contest definition is serializable")
 }
@@ -112,6 +119,7 @@ mod tests {
     #[test]
     fn field_day_definition_contains_rules_and_exchange() {
         let field_day = find("ARRL_FD").unwrap();
+        assert_eq!(find_by_id(&field_day.id), Some(field_day));
         assert!(field_day.rules_url.starts_with("https://"));
         assert_eq!(field_day.duplicate_rule, "band-mode");
         assert_eq!(field_day.exchange, ["class", "section"]);
