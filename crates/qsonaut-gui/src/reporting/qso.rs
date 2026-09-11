@@ -46,6 +46,83 @@ impl QsonautGuiApp {
     }
 
     pub(crate) fn append_qso(&mut self, mut record: QsoRecord, status: &str) {
+        let assigned_operator = self
+            .server_active_event
+            .as_ref()
+            .zip(self.server_active_identity.as_ref())
+            .and_then(|((event_id, _), (identity_id, _))| {
+                self.server_client
+                    .as_ref()
+                    .map(ServerClient::status)
+                    .and_then(|status| {
+                        status.participants.into_iter().find(|participant| {
+                            participant.event_id == *event_id
+                                && participant.callsign_id == *identity_id
+                                && participant.status == "active"
+                        })
+                    })
+                    .map(|participant| participant.operator_callsign)
+            })
+            .unwrap_or_else(|| self.station_callsign.clone());
+        apply_operating_identity(
+            &mut record,
+            &assigned_operator,
+            self.server_active_identity.as_ref(),
+        );
+        record.server_event_id = self
+            .server_active_event
+            .as_ref()
+            .map(|(id, _)| id.clone())
+            .unwrap_or_default();
+        record.club_id = self
+            .server_active_club
+            .as_ref()
+            .map(|(id, _)| id.clone())
+            .unwrap_or_default();
+        if self.contest_enabled {
+            record.operation_mode = if self.server_active_event.is_some() {
+                "Server Contest".to_string()
+            } else {
+                "Local Contest".to_string()
+            };
+            record.contest_session_id = self.contest_session_id.clone();
+            record.contest_template_id = if let Some((event_id, _)) = &self.server_active_event {
+                self.server_client
+                    .as_ref()
+                    .map(ServerClient::status)
+                    .and_then(|status| {
+                        status
+                            .active_events
+                            .into_iter()
+                            .find(|event| event.id == *event_id)
+                    })
+                    .and_then(|event| event.contest_template_id)
+                    .unwrap_or_default()
+            } else {
+                crate::contest_catalog::find(&self.contest_type)
+                    .map(|definition| definition.id.clone())
+                    .unwrap_or_default()
+            };
+            for (key, value) in self.contest_fields_sent() {
+                record.contest_fields_sent.entry(key).or_insert(value);
+            }
+            for (key, value) in self.contest_fields_received(&record.contest_exchange_received) {
+                record.contest_fields_received.entry(key).or_insert(value);
+            }
+            record
+                .contest_serial_sent
+                .get_or_insert(self.contest_serial_current.max(1));
+            self.contest_serial_current = self
+                .contest_serial_current
+                .max(record.contest_serial_sent.unwrap_or_default());
+        }
+        if record.contest_fields_sent.is_empty() {
+            record.contest_fields_sent = parse_contest_fields(&record.contest_exchange_sent);
+        }
+        if record.contest_fields_received.is_empty() {
+            record.contest_fields_received =
+                parse_contest_fields(&record.contest_exchange_received);
+        }
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs())
@@ -82,6 +159,14 @@ impl QsonautGuiApp {
                 .saturating_add(1);
         }
         self.qso_log.contacts.push(record);
+        if self.contest_enabled {
+            self.advance_contest_serial();
+            self.profile_dirty = true;
+            self.persist_profile("Contest serial saved");
+            for field in &mut self.contest_exchange_fields {
+                field.received.clear();
+            }
+        }
         let published = self.qso_log.contacts.last().cloned();
         if let Some(last) = &published {
             self.app_events.publish(AppEvent::QsoLogged {
@@ -106,7 +191,56 @@ impl QsonautGuiApp {
         self.qso_log_dirty = true;
         self.persist_qso_log(status);
         if let Some(record) = &published {
+            if let Some(bridge) = &self.third_party_bridge {
+                bridge.publish(record.clone());
+            }
             self.publish_qso_to_server(record);
         }
+    }
+}
+
+fn apply_operating_identity(
+    record: &mut QsoRecord,
+    operator_callsign: &str,
+    selected_identity: Option<&(String, String)>,
+) {
+    record.operator_callsign = operator_callsign.trim().to_ascii_uppercase();
+    if let Some((identity_id, callsign)) = selected_identity {
+        record.station_callsign = callsign.trim().to_ascii_uppercase();
+        record.managed_callsign_id = identity_id.clone();
+    } else {
+        record
+            .station_callsign
+            .clone_from(&record.operator_callsign);
+        record.managed_callsign_id.clear();
+    }
+}
+
+fn parse_contest_fields(exchange: &str) -> std::collections::BTreeMap<String, String> {
+    exchange
+        .split_whitespace()
+        .filter_map(|item| item.split_once('='))
+        .filter(|(key, value)| !key.trim().is_empty() && !value.trim().is_empty())
+        .map(|(key, value)| (key.trim().to_ascii_uppercase(), value.trim().to_string()))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operating_identity_keeps_operator_and_station_distinct() {
+        let mut record = QsoRecord::new("K1ABC", "CW", "20m", 14_050_000, 0, 1);
+        let identity = ("identity-1".to_owned(), "w1club".to_owned());
+        apply_operating_identity(&mut record, " n1op ", Some(&identity));
+        assert_eq!(record.operator_callsign, "N1OP");
+        assert_eq!(record.station_callsign, "W1CLUB");
+        assert_eq!(record.managed_callsign_id, "identity-1");
+
+        apply_operating_identity(&mut record, "n1op", None);
+        assert_eq!(record.operator_callsign, "N1OP");
+        assert_eq!(record.station_callsign, "N1OP");
+        assert!(record.managed_callsign_id.is_empty());
     }
 }

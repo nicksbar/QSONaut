@@ -16,23 +16,6 @@ pub(crate) const BAND_PLAN: &[(&str, u64)] = &[
     ("70cm", 446_000_000),
 ];
 
-#[derive(Debug, Clone)]
-pub(crate) struct VoiceContestField {
-    pub(crate) name: String,
-    pub(crate) sent: String,
-    pub(crate) received: String,
-}
-
-impl VoiceContestField {
-    pub(crate) fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            sent: String::new(),
-            received: String::new(),
-        }
-    }
-}
-
 impl QsonautGuiApp {
     pub(crate) fn draw_voice_workspace(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         let frequency = snapshot
@@ -190,7 +173,7 @@ impl QsonautGuiApp {
         ui.add_space(8.0);
         ui.columns(2, |columns| {
             columns[0].vertical(|ui| {
-                ui.heading("Exchange");
+                ui.heading("Additional exchange fields");
                 ui.label(
                     RichText::new("Contest, net, or event exchange fields")
                         .small()
@@ -204,7 +187,22 @@ impl QsonautGuiApp {
                     ui.label(RichText::new("Received").small().color(theme_muted(ui)));
                 });
                 let mut remove = None;
-                for (index, field) in self.voice_contest_fields.iter_mut().enumerate() {
+                let defined_field_names = crate::contest_catalog::find(&self.contest_type)
+                    .map(|definition| {
+                        definition
+                            .exchange
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                for (index, field) in self.contest_exchange_fields.iter_mut().enumerate() {
+                    if defined_field_names
+                        .iter()
+                        .any(|name| field.name.eq_ignore_ascii_case(name))
+                    {
+                        continue;
+                    }
                     ui.horizontal(|ui| {
                         ui.add(egui::TextEdit::singleline(&mut field.name).desired_width(90.0));
                         ui.add(egui::TextEdit::singleline(&mut field.sent).desired_width(82.0));
@@ -219,11 +217,11 @@ impl QsonautGuiApp {
                     });
                 }
                 if let Some(index) = remove {
-                    self.voice_contest_fields.remove(index);
+                    self.contest_exchange_fields.remove(index);
                 }
                 if ui.small_button("+ Add exchange field").clicked() {
-                    self.voice_contest_fields
-                        .push(VoiceContestField::new("Field"));
+                    self.contest_exchange_fields
+                        .push(ContestExchangeField::new("Field"));
                 }
             });
             columns[1].vertical(|ui| {
@@ -309,15 +307,37 @@ impl QsonautGuiApp {
         record.report_received = self.voice_rst_received.trim().to_string();
         record.contest_serial_sent = self.voice_contest_serial_sent.trim().parse().ok();
         record.contest_serial_received = self.voice_contest_serial_received.trim().parse().ok();
+        record.contest_fields_sent = self
+            .contest_exchange_fields
+            .iter()
+            .filter(|field| !field.name.trim().is_empty() && !field.sent.trim().is_empty())
+            .map(|field| {
+                (
+                    field.name.trim().to_ascii_uppercase(),
+                    field.sent.trim().to_string(),
+                )
+            })
+            .collect();
+        record.contest_fields_received = self
+            .contest_exchange_fields
+            .iter()
+            .filter(|field| !field.name.trim().is_empty() && !field.received.trim().is_empty())
+            .map(|field| {
+                (
+                    field.name.trim().to_ascii_uppercase(),
+                    field.received.trim().to_string(),
+                )
+            })
+            .collect();
         record.contest_exchange_sent = self
-            .voice_contest_fields
+            .contest_exchange_fields
             .iter()
             .filter(|field| !field.sent.trim().is_empty())
             .map(|field| format!("{}={}", field.name.trim(), field.sent.trim()))
             .collect::<Vec<_>>()
             .join(" ");
         record.contest_exchange_received = self
-            .voice_contest_fields
+            .contest_exchange_fields
             .iter()
             .filter(|field| !field.received.trim().is_empty())
             .map(|field| format!("{}={}", field.name.trim(), field.received.trim()))
@@ -351,16 +371,16 @@ fn unix_now() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{unix_now, VoiceContestField, BAND_PLAN};
+    use super::{unix_now, ContestExchangeField, BAND_PLAN};
 
     #[test]
-    fn initializes_voice_contest_fields_for_editing() {
-        let field = VoiceContestField::new("Section");
+    fn initializes_contest_exchange_fields_for_editing() {
+        let field = ContestExchangeField::new("Section");
         assert_eq!(field.name, "Section");
         assert!(field.sent.is_empty());
         assert!(field.received.is_empty());
 
-        let owned_name = VoiceContestField::new(String::from("Class"));
+        let owned_name = ContestExchangeField::new(String::from("Class"));
         assert_eq!(owned_name.name, "Class");
     }
 

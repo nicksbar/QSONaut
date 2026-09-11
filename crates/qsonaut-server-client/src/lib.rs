@@ -87,6 +87,9 @@ pub struct ConnectionStatus {
     pub last_error: Option<String>,
     pub clubs: Vec<ServerClub>,
     pub active_events: Vec<ServerEvent>,
+    pub identities: Vec<ServerIdentity>,
+    pub participants: Vec<ServerParticipant>,
+    pub event_scores: Vec<ServerEventScore>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -99,6 +102,43 @@ pub struct ServerClub {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ServerIdentity {
+    pub id: String,
+    pub callsign: String,
+    pub identity_type: String,
+    pub club_id: Option<String>,
+    #[serde(default)]
+    pub event_id: Option<String>,
+    pub status: String,
+    pub verification_status: String,
+    #[serde(default)]
+    pub effective_from: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ServerParticipant {
+    pub id: String,
+    pub event_id: String,
+    pub user_id: String,
+    pub callsign_id: String,
+    pub operator_callsign: String,
+    pub operating_callsign: String,
+    pub role: String,
+    pub status: String,
+    pub station_label: String,
+    #[serde(default)]
+    pub starts_at: Option<String>,
+    #[serde(default)]
+    pub ends_at: Option<String>,
+    #[serde(default)]
+    pub band: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ServerEvent {
     pub id: String,
     pub club_id: String,
@@ -107,14 +147,35 @@ pub struct ServerEvent {
     pub status: String,
     pub starts_at: String,
     pub ends_at: String,
+    pub contest_template_id: Option<String>,
+    pub contest_definition_version: Option<i32>,
+    pub contest_config: Value,
     pub club_name: String,
     pub participant_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ServerEventScore {
+    pub event_id: String,
+    pub total_points: i64,
+    pub qso_count: i64,
+    pub duplicate_count: i64,
+    pub multiplier_values: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerAutomationEvent {
     pub kind: String,
     pub fields: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerChannelMessage {
+    pub id: String,
+    pub author_callsign: String,
+    pub channel: String,
+    pub message: String,
+    pub created_at: String,
 }
 
 #[derive(Debug)]
@@ -131,6 +192,7 @@ pub struct ServerClient {
     commands: mpsc::UnboundedSender<Command>,
     status: Arc<Mutex<ConnectionStatus>>,
     automation_events: Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    channel_messages: Arc<Mutex<VecDeque<ServerChannelMessage>>>,
     log_queue: Arc<Mutex<DurableLogQueue>>,
     stop: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
@@ -221,6 +283,8 @@ impl ServerClient {
         let worker_status = Arc::clone(&status);
         let automation_events = Arc::new(Mutex::new(VecDeque::with_capacity(256)));
         let worker_events = Arc::clone(&automation_events);
+        let channel_messages = Arc::new(Mutex::new(VecDeque::with_capacity(256)));
+        let worker_channel_messages = Arc::clone(&channel_messages);
         let worker_queue = Arc::clone(&log_queue);
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
@@ -234,6 +298,7 @@ impl ServerClient {
                     receiver,
                     worker_status,
                     worker_events,
+                    worker_channel_messages,
                     worker_queue,
                     worker_stop,
                 )),
@@ -246,6 +311,7 @@ impl ServerClient {
             commands,
             status,
             automation_events,
+            channel_messages,
             log_queue,
             stop,
             worker: Some(worker),
@@ -296,6 +362,15 @@ impl ServerClient {
     }
 
     #[must_use]
+    pub fn drain_channel_messages(&self) -> Vec<ServerChannelMessage> {
+        self.channel_messages
+            .lock()
+            .expect("server channel message lock poisoned")
+            .drain(..)
+            .collect()
+    }
+
+    #[must_use]
     pub fn status(&self) -> ConnectionStatus {
         self.status
             .lock()
@@ -326,6 +401,7 @@ async fn run(
     mut commands: mpsc::UnboundedReceiver<Command>,
     status: Arc<Mutex<ConnectionStatus>>,
     automation_events: Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    channel_messages: Arc<Mutex<VecDeque<ServerChannelMessage>>>,
     log_queue: Arc<Mutex<DurableLogQueue>>,
     stop: Arc<AtomicBool>,
 ) {
@@ -341,6 +417,7 @@ async fn run(
             &mut commands,
             &status,
             &automation_events,
+            &channel_messages,
             &log_queue,
         )
         .await
@@ -380,6 +457,7 @@ async fn connect(
     commands: &mut mpsc::UnboundedReceiver<Command>,
     status: &Arc<Mutex<ConnectionStatus>>,
     automation_events: &Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    channel_messages: &Arc<Mutex<VecDeque<ServerChannelMessage>>>,
     log_queue: &Arc<Mutex<DurableLogQueue>>,
 ) -> Result<ConnectionEnd> {
     let socket_url = websocket_url(&config.server_url)?;
@@ -454,7 +532,7 @@ async fn connect(
                 }
             },
             message = reader.next() => match message {
-                Some(Ok(Message::Text(text))) => receive(&text, status, automation_events, log_queue, &mut inflight)?,
+                Some(Ok(Message::Text(text))) => receive_with_channels(&text, status, automation_events, channel_messages, log_queue, &mut inflight)?,
                 Some(Ok(Message::Close(_))) | None => return Ok(ConnectionEnd::Disconnected),
                 Some(Err(error)) => return Err(error).context("WebSocket receive failed"),
                 _ => {}
@@ -518,10 +596,30 @@ where
     Ok(())
 }
 
+#[cfg(test)]
 fn receive(
     text: &str,
     status: &Arc<Mutex<ConnectionStatus>>,
     automation_events: &Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    log_queue: &Arc<Mutex<DurableLogQueue>>,
+    inflight: &mut BTreeMap<Uuid, String>,
+) -> Result<()> {
+    let channel_messages = Arc::new(Mutex::new(VecDeque::new()));
+    receive_with_channels(
+        text,
+        status,
+        automation_events,
+        &channel_messages,
+        log_queue,
+        inflight,
+    )
+}
+
+fn receive_with_channels(
+    text: &str,
+    status: &Arc<Mutex<ConnectionStatus>>,
+    automation_events: &Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
+    server_channel_messages: &Arc<Mutex<VecDeque<ServerChannelMessage>>>,
     log_queue: &Arc<Mutex<DurableLogQueue>>,
     inflight: &mut BTreeMap<Uuid, String>,
 ) -> Result<()> {
@@ -545,6 +643,9 @@ fn receive(
             events,
             clubs,
             contest_templates,
+            identities,
+            participants,
+            event_scores,
             channel_messages,
         } => {
             let active_events = events
@@ -558,6 +659,9 @@ fn receive(
                     status: event.status.clone(),
                     starts_at: event.starts_at.clone(),
                     ends_at: event.ends_at.clone(),
+                    contest_template_id: event.contest_template_id.clone(),
+                    contest_definition_version: event.contest_definition_version,
+                    contest_config: event.contest_config.clone(),
                     club_name: clubs
                         .iter()
                         .find(|club| club.id == event.club_id)
@@ -574,6 +678,9 @@ fn receive(
             current.catalog_size = catalog_size;
             current.clubs = clubs;
             current.active_events = active_events.clone();
+            current.identities = identities;
+            current.participants = participants;
+            current.event_scores = event_scores;
             let club_count = current.clubs.len();
             drop(current);
             push_automation_event(
@@ -587,14 +694,17 @@ fn receive(
                 ],
             );
             for message in channel_messages {
-                push_channel_event(automation_events, "channel_history", message);
+                push_channel_event(automation_events, "channel_history", &message);
+                push_channel_message(server_channel_messages, message);
             }
         }
         ServerMessage::ChannelMessagePublished(message) => {
-            push_channel_event(automation_events, "channel_message", message);
+            push_channel_event(automation_events, "channel_message", &message);
+            push_channel_message(server_channel_messages, message);
         }
         ServerMessage::ChannelMessageAccepted(message) => {
-            push_channel_event(automation_events, "message_accepted", message);
+            push_channel_event(automation_events, "message_accepted", &message);
+            push_channel_message(server_channel_messages, message);
         }
         ServerMessage::DiagnosticAccepted(value) => {
             push_automation_event(
@@ -638,7 +748,61 @@ fn receive(
                     .expect("server log queue lock poisoned")
                     .remove(&idempotency_key)?;
             }
-            drop(value);
+            if let Some(score) = value
+                .get("event_score")
+                .filter(|value| !value.is_null())
+                .and_then(|value| serde_json::from_value::<ServerEventScore>(value.clone()).ok())
+            {
+                let mut current = status.lock().expect("server status lock poisoned");
+                current
+                    .event_scores
+                    .retain(|existing| existing.event_id != score.event_id);
+                current.event_scores.push(score);
+            }
+            let receipt = value.get("qso").unwrap_or(&value);
+            push_automation_event(
+                automation_events,
+                "qso_log_accepted",
+                [
+                    (
+                        "id",
+                        receipt
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ),
+                    (
+                        "points",
+                        receipt
+                            .get("points")
+                            .map(Value::to_string)
+                            .unwrap_or_default(),
+                    ),
+                    (
+                        "is_duplicate",
+                        receipt
+                            .get("is_duplicate")
+                            .map(Value::to_string)
+                            .unwrap_or_default(),
+                    ),
+                    (
+                        "multipliers",
+                        receipt
+                            .get("multipliers")
+                            .map(Value::to_string)
+                            .unwrap_or_default(),
+                    ),
+                    (
+                        "scoring_explanation",
+                        receipt
+                            .get("scoring_explanation")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ),
+                ],
+            );
         }
         ServerMessage::Error { message } => {
             if inflight.remove(&envelope.event_id).is_some() {
@@ -658,19 +822,32 @@ fn receive(
 fn push_channel_event(
     events: &Arc<Mutex<VecDeque<ServerAutomationEvent>>>,
     kind: &str,
-    message: ChannelMessage,
+    message: &ChannelMessage,
 ) {
     push_automation_event(
         events,
         kind,
         [
-            ("id", message.id),
-            ("author", message.author_callsign),
-            ("channel", message.channel),
-            ("message", message.message),
-            ("created_at", message.created_at),
+            ("id", message.id.clone()),
+            ("author", message.author_callsign.clone()),
+            ("channel", message.channel.clone()),
+            ("message", message.message.clone()),
+            ("created_at", message.created_at.clone()),
         ],
     );
+}
+
+fn push_channel_message(
+    messages: &Arc<Mutex<VecDeque<ServerChannelMessage>>>,
+    message: ChannelMessage,
+) {
+    let mut queue = messages
+        .lock()
+        .expect("server channel message lock poisoned");
+    if queue.len() == 256 {
+        queue.pop_front();
+    }
+    queue.push_back(message.into());
 }
 
 fn push_automation_event<const N: usize>(
@@ -758,6 +935,12 @@ enum ServerMessage {
         #[serde(default)]
         clubs: Vec<ServerClub>,
         contest_templates: Vec<Value>,
+        #[serde(default)]
+        identities: Vec<ServerIdentity>,
+        #[serde(default)]
+        participants: Vec<ServerParticipant>,
+        #[serde(default)]
+        event_scores: Vec<ServerEventScore>,
         channel_messages: Vec<ChannelMessage>,
     },
     PresenceAccepted(Value),
@@ -781,6 +964,18 @@ struct ChannelMessage {
     created_at: String,
 }
 
+impl From<ChannelMessage> for ServerChannelMessage {
+    fn from(message: ChannelMessage) -> Self {
+        Self {
+            id: message.id,
+            author_callsign: message.author_callsign,
+            channel: message.channel,
+            message: message.message,
+            created_at: message.created_at,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct User {
     callsign: String,
@@ -795,6 +990,12 @@ struct Event {
     status: String,
     starts_at: String,
     ends_at: String,
+    #[serde(default)]
+    contest_template_id: Option<String>,
+    #[serde(default)]
+    contest_definition_version: Option<i32>,
+    #[serde(default)]
+    contest_config: Value,
     participant_count: i64,
 }
 
@@ -935,6 +1136,36 @@ mod tests {
         assert_eq!(event.kind, "channel_message");
         assert_eq!(event.fields["author"], "W1AW");
         assert_eq!(event.fields["channel"], "ops");
+    }
+
+    #[test]
+    fn published_channel_message_enters_the_gui_queue() {
+        let status = Arc::new(Mutex::new(ConnectionStatus::default()));
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let messages = Arc::new(Mutex::new(VecDeque::new()));
+        let queue = Arc::new(Mutex::new(DurableLogQueue::load(&test_queue_path())));
+        let mut inflight = BTreeMap::new();
+        receive_with_channels(
+            r#"{
+                "protocol_version":"v1",
+                "event_id":"00000000-0000-0000-0000-000000000000",
+                "type":"channel_message_published",
+                "payload":{
+                    "id":"message-1","author_callsign":"W1AW","channel":"ops",
+                    "message":"Hello UTF-8 🌍","created_at":"2026-08-14T12:00:00Z"
+                }
+            }"#,
+            &status,
+            &events,
+            &messages,
+            &queue,
+            &mut inflight,
+        )
+        .unwrap();
+        let message = messages.lock().unwrap().pop_front().unwrap();
+        assert_eq!(message.id, "message-1");
+        assert_eq!(message.message, "Hello UTF-8 🌍");
+        assert_eq!(message.channel, "ops");
     }
 
     #[test]
@@ -1097,6 +1328,9 @@ mod tests {
                         "id":"event-1","club_id":"club-1","name":"Field Day",
                         "contest_name":"ARRL Field Day","status":"active",
                         "starts_at":"2026-06-27T18:00:00Z","ends_at":"2026-06-28T21:00:00Z",
+                        "contest_template_id":"10000000-0000-4000-8000-000000000001",
+                        "contest_definition_version":1,
+                        "contest_config":{"class":"1A","section":"WMA","power":"LOW"},
                         "participant_count":4
                     }],
                     "clubs":[{"id":"club-1","name":"Radio Club","callsign":"W1AW"}],
@@ -1118,6 +1352,11 @@ mod tests {
         assert_eq!(current.catalog_size, 1);
         assert_eq!(current.clubs[0].name, "Radio Club");
         assert_eq!(current.active_events[0].club_name, "Radio Club");
+        assert_eq!(
+            current.active_events[0].contest_template_id.as_deref(),
+            Some("10000000-0000-4000-8000-000000000001")
+        );
+        assert_eq!(current.active_events[0].contest_config["class"], "1A");
         drop(current);
         let events = events.lock().unwrap();
         assert_eq!(events.front().unwrap().kind, "snapshot");
@@ -1186,6 +1425,49 @@ mod tests {
         assert!(inflight.is_empty());
         assert!(queue.lock().unwrap().entries.is_empty());
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn accepted_log_exposes_server_adjudication_receipt() {
+        let status = Arc::new(Mutex::new(ConnectionStatus::default()));
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let queue = Arc::new(Mutex::new(DurableLogQueue::load(&test_queue_path())));
+        let mut inflight = BTreeMap::new();
+        receive(
+            r#"{
+                "protocol_version":"v1",
+                "event_id":"00000000-0000-0000-0000-000000000000",
+                "type":"log_accepted",
+                "payload":{
+                    "qso": {
+                        "id":"3ecb975c-bd24-47fd-b230-5a79c0d5cad3",
+                        "points":2,
+                        "is_duplicate":false,
+                        "multipliers":{"section":"EMA"},
+                        "scoring_explanation":"2 points; section multiplier earned: EMA"
+                    },
+                    "event_score": {
+                        "event_id":"10000000-0000-4000-8000-000000000001",
+                        "total_points":2,
+                        "qso_count":1,
+                        "duplicate_count":0,
+                        "multiplier_values":[{"section":"EMA"}]
+                    }
+                }
+            }"#,
+            &status,
+            &events,
+            &queue,
+            &mut inflight,
+        )
+        .unwrap();
+        let event = events.lock().unwrap().pop_front().unwrap();
+        assert_eq!(event.kind, "qso_log_accepted");
+        assert_eq!(event.fields["points"], "2");
+        assert_eq!(event.fields["is_duplicate"], "false");
+        assert_eq!(event.fields["multipliers"], r#"{"section":"EMA"}"#);
+        assert!(event.fields["scoring_explanation"].contains("multiplier earned"));
+        assert_eq!(status.lock().unwrap().event_scores[0].total_points, 2);
     }
 
     #[tokio::test]

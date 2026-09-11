@@ -27,6 +27,21 @@ share_presence = false
 share_radio_details = false
 share_logs = false
 
+[third_party.n3fjp_api]
+enabled = false
+host = "127.0.0.1"
+port = 1100
+
+[third_party.station_network]
+enabled = false
+host = "127.0.0.1"
+port = 1000
+
+[third_party.udp_logging]
+enabled = false
+destinations = ["127.0.0.1:2237"]
+format = "n1mm_contact_info" # n1mm_contact_info | adif
+
 [contest]
 enabled = false
 operating_mode = "Run" # Run | SearchAndPounce

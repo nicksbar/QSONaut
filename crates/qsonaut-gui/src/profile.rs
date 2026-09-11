@@ -1,8 +1,11 @@
 use std::{fs, path::PathBuf};
 
+use crate::activity::OperatingActivity;
 use anyhow::Result;
 use qsonaut_accelerate::ComputePreference;
-use qsonaut_core::{ContestOperatingMode, FoxHoundRole, ServerConfig, SplitPolicy};
+use qsonaut_core::{
+    ContestOperatingMode, FoxHoundRole, ServerConfig, SplitPolicy, ThirdPartyConfig,
+};
 use qsonaut_log::app_config_dir;
 use serde::{Deserialize, Serialize};
 
@@ -257,6 +260,14 @@ pub(super) struct OperatorProfile {
     #[serde(default)]
     pub(super) contest_enabled: bool,
     #[serde(default)]
+    pub(super) operating_activity: Option<OperatingActivity>,
+    #[serde(default)]
+    pub(super) contest_session_id: String,
+    #[serde(default)]
+    pub(super) contest_type: Option<String>,
+    #[serde(default)]
+    pub(super) contest_field_values: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
     pub(super) contest_operating_mode: ContestOperatingMode,
     #[serde(default)]
     pub(super) contest_split_policy: SplitPolicy,
@@ -330,6 +341,22 @@ pub(super) struct GlobalSettings {
     pub(super) audio_monitor_output_device: Option<String>,
     #[serde(default = "default_audio_monitor_volume")]
     pub(super) audio_monitor_volume: f32,
+    #[serde(default)]
+    pub(super) third_party: ThirdPartyConfig,
+    #[serde(default)]
+    pub(super) chat_route_lan: bool,
+    #[serde(default)]
+    pub(super) chat_route_server: bool,
+    #[serde(default)]
+    pub(super) chat_route_n3fjp: bool,
+    #[serde(default)]
+    pub(super) chat_lan_target: String,
+    #[serde(default = "default_chat_n3fjp_target")]
+    pub(super) chat_n3fjp_target: String,
+}
+
+fn default_chat_n3fjp_target() -> String {
+    "*".to_string()
 }
 
 fn global_settings_path() -> PathBuf {
@@ -369,6 +396,12 @@ pub(super) fn load_global_settings() -> GlobalSettings {
             audio_monitor_enabled: false,
             audio_monitor_output_device: None,
             audio_monitor_volume: default_audio_monitor_volume(),
+            third_party: ThirdPartyConfig::default(),
+            chat_route_lan: false,
+            chat_route_server: false,
+            chat_route_n3fjp: false,
+            chat_lan_target: String::new(),
+            chat_n3fjp_target: default_chat_n3fjp_target(),
         });
     let mut settings = settings;
     migrate_legacy_global_audio_settings(&mut settings, "");

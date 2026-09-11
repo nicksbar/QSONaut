@@ -19,6 +19,7 @@ rustfft.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+time.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true
 toml.workspace = true
@@ -32,13 +33,15 @@ egui-file-dialog = { version = "=0.12.0", default-features = false }
 qsonaut-audio = { path = "../qsonaut-audio" }
 qsonaut-accelerate = { path = "../qsonaut-accelerate" }
 qsonaut-core = { path = "../qsonaut-core" }
+qsonaut-contests = { path = "../qsonaut-contests" }
 qsonaut-hostbridge-client = { path = "../qsonaut-hostbridge-client" }
-qsonaut-hostbridge-protocol = { git = "https://github.com/nicksbar/QSONaut-HostBridge.git", tag = "v0.1.4" }
+qsonaut-hostbridge-protocol = { git = "https://github.com/nicksbar/QSONaut-HostBridge.git", tag = "v0.1.5" }
 qsonaut-automation = { path = "../qsonaut-automation" }
 qsonaut-log = { path = "../qsonaut-log" }
-qsonaut-radio = { package = "rigwright", version = "0.1.28" }
+qsonaut-radio = { package = "rigwright", version = "0.1.30" }
 qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }
 qsonaut-server-client = { path = "../qsonaut-server-client" }
 qsonaut-modems = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "c93660a34b9ed65ea1eb46df57ffc856eb68e797" }
 qsonaut-js8 = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "c93660a34b9ed65ea1eb46df57ffc856eb68e797" }
 qsonaut-third-party = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "5d2c4c7b618a523ff93824602ab98217d2623c66" }
+qsonaut-n3fjp = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "26abb027feded0df17948beb765619273cda83df", package = "qsonaut-n3fjp" }

@@ -7,6 +7,7 @@ impl QsonautGuiApp {
         ctx: &egui::Context,
         snapshot: &GuiState,
     ) {
+        self.draw_contest_session(ui, snapshot);
         match self.workspace_mode {
             WorkspaceMode::Ft8 => self.draw_ft8_workspace(ui, ctx, snapshot),
             WorkspaceMode::Ft4 => self.draw_ft4_workspace(ui, snapshot),

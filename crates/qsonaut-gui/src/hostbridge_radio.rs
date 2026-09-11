@@ -338,6 +338,18 @@ impl RadioHandle {
             Self::Test(radio) => radio.supports_control_write(id),
         }
     }
+    pub(crate) fn supports_control_read(&self, id: ControlId) -> bool {
+        match self {
+            Self::Local(radio) => radio.supports_control_read(id),
+            Self::Remote(radio) => radio
+                .capabilities_snapshot()
+                .controls
+                .iter()
+                .any(|capability| capability.id == control_id_key(id) && capability.readable),
+            #[cfg(test)]
+            Self::Test(radio) => radio.supports_control_read(id),
+        }
+    }
     pub(crate) fn filter_bandwidth_hz(&self, mode: Mode, filter: u8) -> Option<u32> {
         match self {
             Self::Local(radio) => radio.filter_bandwidth_hz(mode, filter),

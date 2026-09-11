@@ -1,5 +1,22 @@
 use super::*;
 
+#[derive(Debug, Clone)]
+pub(crate) struct ContestExchangeField {
+    pub(crate) name: String,
+    pub(crate) sent: String,
+    pub(crate) received: String,
+}
+
+impl ContestExchangeField {
+    pub(crate) fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            sent: String::new(),
+            received: String::new(),
+        }
+    }
+}
+
 fn contest_operating_mode_label(mode: ContestOperatingMode) -> &'static str {
     match mode {
         ContestOperatingMode::Run => "run",
@@ -68,6 +85,113 @@ fn contest_exchange_preview(
         .replace("${grid}", my_grid)
 }
 
+fn server_contest_context_error(
+    status: Option<&qsonaut_server_client::ConnectionStatus>,
+    event_id: &str,
+    selected_identity: Option<&(String, String)>,
+    band: &str,
+    mode: &str,
+) -> Option<String> {
+    let now = time::OffsetDateTime::now_utc();
+    let Some(status) = status else {
+        return Some("QSONaut Server connection is unavailable".to_owned());
+    };
+    if status.state != ServerConnectionState::Connected {
+        return Some("QSONaut Server is disconnected".to_owned());
+    }
+    let Some(event) = status
+        .active_events
+        .iter()
+        .find(|event| event.id == event_id)
+    else {
+        return Some("selected event is no longer active".to_owned());
+    };
+    let event_starts = time::OffsetDateTime::parse(
+        &event.starts_at,
+        &time::format_description::well_known::Rfc3339,
+    )
+    .ok();
+    let event_ends = time::OffsetDateTime::parse(
+        &event.ends_at,
+        &time::format_description::well_known::Rfc3339,
+    )
+    .ok();
+    if event_starts.is_none_or(|starts| now < starts) || event_ends.is_none_or(|ends| now >= ends) {
+        return Some("selected event is outside its operating window".to_owned());
+    }
+    if event.contest_definition_version != Some(qsonaut_contests::CATALOG_VERSION as i32)
+        || event
+            .contest_template_id
+            .as_deref()
+            .and_then(qsonaut_contests::find_by_id)
+            .is_none()
+    {
+        return Some("server contest definition is incompatible with this client".to_owned());
+    }
+    let Some((identity_id, operating_callsign)) = selected_identity else {
+        return Some("select an active station assignment".to_owned());
+    };
+    let Some(identity) = status.identities.iter().find(|identity| {
+        identity.id == *identity_id
+            && identity.callsign.eq_ignore_ascii_case(operating_callsign)
+            && identity.status == "active"
+            && identity.verification_status == "verified"
+            && identity.effective_from.as_deref().is_none_or(|value| {
+                time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                    .is_ok_and(|effective| now >= effective)
+            })
+            && identity.expires_at.as_deref().is_none_or(|value| {
+                time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                    .is_ok_and(|expires| now < expires)
+            })
+            && identity
+                .event_id
+                .as_deref()
+                .is_none_or(|identity_event| identity_event == event_id)
+    }) else {
+        return Some("selected operating identity is no longer authorized".to_owned());
+    };
+    let Some(participant) = status.participants.iter().find(|participant| {
+        participant.event_id == event_id
+            && participant.callsign_id == identity.id
+            && participant
+                .operating_callsign
+                .eq_ignore_ascii_case(&identity.callsign)
+            && matches!(
+                participant.role.as_str(),
+                "operator" | "coordinator" | "logger"
+            )
+            && participant.status == "active"
+            && status.operator_callsign.as_deref().is_some_and(|operator| {
+                operator.eq_ignore_ascii_case(&participant.operator_callsign)
+            })
+            && participant.starts_at.as_deref().is_none_or(|value| {
+                time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                    .is_ok_and(|starts| now >= starts)
+            })
+            && participant.ends_at.as_deref().is_none_or(|value| {
+                time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                    .is_ok_and(|ends| now < ends)
+            })
+    }) else {
+        return Some("active station assignment is unavailable".to_owned());
+    };
+    if participant.band.as_deref().is_some_and(|assigned| {
+        qsonaut_contests::rules::normalized_band(assigned)
+            != qsonaut_contests::rules::normalized_band(band)
+    }) {
+        return Some("station assignment does not authorize the current band".to_owned());
+    }
+    if participant.mode.as_deref().is_some_and(|assigned| {
+        !assigned.eq_ignore_ascii_case(mode)
+            && qsonaut_contests::rules::mode_category(assigned)
+                != qsonaut_contests::rules::mode_category(mode)
+    }) {
+        return Some("station assignment does not authorize the current mode".to_owned());
+    }
+    None
+}
+
 fn advance_contest_serial(current: u32, start: u32, step: u32) -> u32 {
     current.max(start.max(1)).saturating_add(step.max(1))
 }
@@ -86,14 +210,88 @@ fn contest_guidance_text(split_policy: SplitPolicy, role: FoxHoundRole) -> Strin
     format!("{} · {}", split_hint, role_hint)
 }
 
+fn parse_named_exchange(exchange: &str) -> BTreeMap<String, String> {
+    exchange
+        .split_whitespace()
+        .filter_map(|item| item.split_once('='))
+        .filter(|(key, value)| !key.trim().is_empty() && !value.trim().is_empty())
+        .map(|(key, value)| (key.trim().to_ascii_uppercase(), value.trim().to_string()))
+        .collect()
+}
+
 impl QsonautGuiApp {
+    pub(super) fn contest_fields_sent(&self) -> BTreeMap<String, String> {
+        let mut fields = self
+            .contest_field_values
+            .iter()
+            .filter(|(_, value)| !value.trim().is_empty())
+            .map(|(key, value)| (key.to_ascii_uppercase(), value.trim().to_string()))
+            .collect::<BTreeMap<_, _>>();
+        if self.contest_enabled {
+            for field in &self.contest_exchange_fields {
+                if !field.sent.trim().is_empty() {
+                    fields.insert(
+                        field.name.to_ascii_uppercase(),
+                        field.sent.trim().to_string(),
+                    );
+                }
+            }
+            fields.insert(
+                "SERIAL".to_string(),
+                self.contest_serial_current.max(1).to_string(),
+            );
+        }
+        fields
+    }
+
+    pub(super) fn contest_fields_received(&self, exchange: &str) -> BTreeMap<String, String> {
+        let mut fields = self
+            .contest_exchange_fields
+            .iter()
+            .filter(|field| !field.received.trim().is_empty())
+            .map(|field| {
+                (
+                    field.name.to_ascii_uppercase(),
+                    field.received.trim().to_string(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        fields.extend(parse_named_exchange(exchange));
+        fields
+    }
+
     pub(super) fn has_logged_contact_with(
         &self,
         target_call: &str,
         mode: &str,
         band: &str,
     ) -> bool {
-        has_logged_contact(&self.qso_log.contacts, target_call, mode, band)
+        if !self.contest_enabled {
+            return has_logged_contact(&self.qso_log.contacts, target_call, mode, band);
+        }
+        let Some(definition) = crate::contest_catalog::find(&self.contest_type) else {
+            return false;
+        };
+        let Ok(rule) = qsonaut_contests::rules::DuplicateRule::parse(&definition.duplicate_rule)
+        else {
+            return false;
+        };
+        let event_id = self
+            .server_active_event
+            .as_ref()
+            .map(|(id, _)| id.as_str())
+            .unwrap_or("");
+        self.qso_log.contacts.iter().any(|contact| {
+            contact.contest_template_id == definition.id
+                && (!event_id.is_empty() || contact.contest_session_id == self.contest_session_id)
+                && contact.server_event_id == event_id
+                && callsign_eq(
+                    &contact.station_callsign,
+                    self.station_callsign_or_default(),
+                )
+                && callsign_eq(&contact.callsign, target_call)
+                && rule.matches(band, mode, &contact.band, &contact.mode)
+        })
     }
 
     pub(super) fn block_duplicate_tx_if_needed(
@@ -101,6 +299,53 @@ impl QsonautGuiApp {
         mode: WorkspaceMode,
         compose: &str,
     ) -> bool {
+        if let Some((event_id, _)) = &self.server_active_event {
+            let frequency = self
+                .state
+                .lock()
+                .expect("ui state lock poisoned")
+                .frequency_hz;
+            let band = frequency.map(band_for_frequency).unwrap_or("");
+            let server_status = self.server_client.as_ref().map(ServerClient::status);
+            if let Some(error) = server_contest_context_error(
+                server_status.as_ref(),
+                event_id,
+                self.server_active_identity.as_ref(),
+                band,
+                mode.label(),
+            ) {
+                let status = format!("Server contest TX blocked: {error}");
+                self.ft8_seq_status = status.clone();
+                self.digital_tx_status = status;
+                return true;
+            }
+        }
+        if self.contest_enabled {
+            let frequency = self
+                .state
+                .lock()
+                .expect("ui state lock poisoned")
+                .frequency_hz;
+            let errors = match crate::contest_catalog::find(&self.contest_type) {
+                Some(definition) => {
+                    let mut errors = definition.validate_setup(&self.contest_field_values);
+                    errors
+                        .extend(definition.validate_exchange(&self.contest_fields_sent(), "Sent"));
+                    errors.extend(definition.validate_band_mode(
+                        frequency.map(band_for_frequency).unwrap_or(""),
+                        mode.label(),
+                    ));
+                    errors
+                }
+                None => vec!["Unknown contest definition".to_string()],
+            };
+            if !errors.is_empty() {
+                let status = format!("Contest TX blocked: {}", errors.join("; "));
+                self.ft8_seq_status = status.clone();
+                self.digital_tx_status = status;
+                return true;
+            }
+        }
         if !self.contest_dupe_check {
             return false;
         }
@@ -233,9 +478,113 @@ mod tests {
     use super::{
         advance_contest_serial, contest_effective_tx_tone, contest_exchange_preview,
         contest_guidance_text, contest_operating_mode_label, fox_hound_role_label,
-        has_logged_contact, split_policy_label,
+        has_logged_contact, server_contest_context_error, split_policy_label,
     };
-    use crate::{ContestOperatingMode, FoxHoundRole, QsoRecord, SplitPolicy};
+    use crate::{
+        ContestOperatingMode, FoxHoundRole, QsoRecord, ServerConnectionState, SplitPolicy,
+    };
+
+    fn valid_server_contest_status() -> qsonaut_server_client::ConnectionStatus {
+        let now = time::OffsetDateTime::now_utc();
+        let stamp = |value: time::OffsetDateTime| {
+            value
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap()
+        };
+        qsonaut_server_client::ConnectionStatus {
+            state: ServerConnectionState::Connected,
+            operator_callsign: Some("N1OP".into()),
+            active_events: vec![qsonaut_server_client::ServerEvent {
+                id: "event-1".into(),
+                club_id: "club-1".into(),
+                name: "Field Day".into(),
+                contest_name: "ARRL Field Day".into(),
+                status: "active".into(),
+                starts_at: stamp(now - time::Duration::hours(1)),
+                ends_at: stamp(now + time::Duration::hours(1)),
+                contest_template_id: Some("10000000-0000-4000-8000-000000000001".into()),
+                contest_definition_version: Some(1),
+                contest_config: serde_json::json!({
+                    "class": "1A",
+                    "section": "WMA",
+                    "power": "LOW"
+                }),
+                club_name: "Radio Club".into(),
+                participant_count: 1,
+            }],
+            identities: vec![qsonaut_server_client::ServerIdentity {
+                id: "identity-1".into(),
+                callsign: "W1CLUB".into(),
+                identity_type: "club".into(),
+                club_id: Some("club-1".into()),
+                event_id: None,
+                status: "active".into(),
+                verification_status: "verified".into(),
+                effective_from: Some(stamp(now - time::Duration::hours(2))),
+                expires_at: Some(stamp(now + time::Duration::hours(2))),
+            }],
+            participants: vec![qsonaut_server_client::ServerParticipant {
+                id: "participant-1".into(),
+                event_id: "event-1".into(),
+                user_id: "user-1".into(),
+                callsign_id: "identity-1".into(),
+                operator_callsign: "N1OP".into(),
+                operating_callsign: "W1CLUB".into(),
+                role: "operator".into(),
+                status: "active".into(),
+                station_label: "Radio 1".into(),
+                starts_at: None,
+                ends_at: None,
+                band: Some("20".into()),
+                mode: Some("DIGITAL".into()),
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn server_contest_context_requires_live_compatible_assignment() {
+        let identity = ("identity-1".to_owned(), "W1CLUB".to_owned());
+        let mut status = valid_server_contest_status();
+        assert_eq!(
+            server_contest_context_error(Some(&status), "event-1", Some(&identity), "20m", "FT8"),
+            None
+        );
+        assert!(server_contest_context_error(
+            Some(&status),
+            "event-1",
+            Some(&identity),
+            "40m",
+            "FT8"
+        )
+        .unwrap()
+        .contains("band"));
+        status.identities[0].status = "suspended".into();
+        assert!(server_contest_context_error(
+            Some(&status),
+            "event-1",
+            Some(&identity),
+            "20m",
+            "FT8"
+        )
+        .unwrap()
+        .contains("no longer authorized"));
+        status.identities[0].status = "active".into();
+        status.participants[0].ends_at = Some(
+            (time::OffsetDateTime::now_utc() - time::Duration::minutes(1))
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap(),
+        );
+        assert!(server_contest_context_error(
+            Some(&status),
+            "event-1",
+            Some(&identity),
+            "20m",
+            "FT8"
+        )
+        .unwrap()
+        .contains("assignment"));
+    }
 
     #[test]
     fn labels_all_contest_operating_modes() {
@@ -365,5 +714,30 @@ mod tests {
         assert!(app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "K1ABC N0CALL 599"));
         assert_eq!(app.hunter_dupe_blocks, 1);
         assert!(!app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "K2ABC N0CALL 599"));
+        app.contest_enabled = true;
+        app.contest_type = "ARRL_FD".into();
+        assert!(!app.has_logged_contact_with("K1ABC", "CW", "20m"));
+        let mut contact = QsoRecord::new("K1ABC", "FT8", "20m", 14_074_000, 0, 1);
+        contact.contest_template_id = crate::contest_catalog::find("ARRL_FD").unwrap().id.clone();
+        contact.contest_session_id = app.contest_session_id.clone();
+        contact.station_callsign = app.station_callsign_or_default().to_string();
+        app.qso_log.contacts.push(contact);
+        assert!(app.has_logged_contact_with("K1ABC", "FT4", "20m"));
+        assert!(!app.has_logged_contact_with("K1ABC", "CW", "20m"));
+        app.contest_session_id = "another-occurrence".into();
+        assert!(!app.has_logged_contact_with("K1ABC", "FT4", "20m"));
+        app.contest_dupe_check = false;
+        app.contest_field_values.clear();
+        assert!(app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "CQ TEST"));
+        assert!(app.digital_tx_status.contains("Class is required"));
+        app.contest_field_values = std::collections::BTreeMap::from([
+            ("class".into(), "1A".into()),
+            ("section".into(), "WMA".into()),
+            ("power".into(), "LOW".into()),
+        ]);
+        assert!(!app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "CQ TEST"));
+        app.server_active_event = Some(("event-1".into(), "Server event".into()));
+        assert!(app.block_duplicate_tx_if_needed(crate::WorkspaceMode::Cw, "CQ TEST"));
+        assert!(app.digital_tx_status.contains("Server contest TX blocked"));
     }
 }

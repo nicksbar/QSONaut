@@ -6,6 +6,7 @@ members = [
     "crates/qsonaut-log",
     "crates/qsonaut-accelerate",
     "crates/qsonaut-automation",
+    "crates/qsonaut-contests",
     "crates/qsonaut-pskreporter",
     "crates/qsonaut-server-client",
     "crates/qsonaut-hostbridge-client",
@@ -20,6 +21,9 @@ resolver = "2"
 opt-level = 2
 
 [profile.dev.package.qsonaut-third-party]
+opt-level = 2
+
+[profile.dev.package.qsonaut-n3fjp]
 opt-level = 2
 
 [profile.dev.package.qsonaut-modems]
@@ -40,6 +44,9 @@ opt-level = 0
 [profile.modem-debug.package.qsonaut-third-party]
 opt-level = 0
 
+[profile.modem-debug.package.qsonaut-n3fjp]
+opt-level = 0
+
 [profile.modem-debug.package.qsonaut-modems]
 opt-level = 0
 
@@ -47,7 +54,7 @@ opt-level = 0
 opt-level = 0
 
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 license = "MIT"
 authors = ["QSONaut Contributors"]
@@ -80,5 +87,6 @@ url = "2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["serde", "v4"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

@@ -1,5 +1,9 @@
 use super::super::*;
 
+fn default_activity_button_label(activity: OperatingActivity) -> String {
+    format!("📻 {}", activity.label())
+}
+
 impl QsonautGuiApp {
     pub(crate) fn draw_activity_selector(&mut self, ui: &mut egui::Ui) {
         let selected_activity = self.activity;
@@ -7,13 +11,18 @@ impl QsonautGuiApp {
         let activity_button_label = self
             .server_active_event
             .as_ref()
-            .map(|(_, name)| format!("🏁 Contest · {name}"))
+            .map(|(_, name)| {
+                self.server_active_identity
+                    .as_ref()
+                    .map(|(_, callsign)| format!("🏁 {callsign} · {name}"))
+                    .unwrap_or_else(|| format!("🏁 Contest · {name}"))
+            })
             .or_else(|| {
                 self.server_active_club
                     .as_ref()
                     .map(|(_, name)| format!("🌐 {} · {name}", selected_activity.label()))
             })
-            .unwrap_or_else(|| format!("📻 {}", selected_activity.label()));
+            .unwrap_or_else(|| default_activity_button_label(selected_activity));
         let previous_interact_height = ui.spacing().interact_size.y;
         ui.spacing_mut().interact_size.y = 28.0;
         let activity_menu = ui.menu_button(
@@ -50,12 +59,34 @@ impl QsonautGuiApp {
                         );
                         if response.clicked() {
                             info!(activity = %activity.label(), "Operating activity changed");
+                            self.disarm_all_tx_with_persistence(
+                                "Operating activity changed",
+                                false,
+                            );
                             self.activity = activity;
+                            self.server_active_event = None;
+                            self.server_active_club = None;
+                            self.server_active_identity = None;
+                            self.contest_enabled = matches!(
+                                activity,
+                                OperatingActivity::Contest | OperatingActivity::FieldDay
+                            );
+                            if activity == OperatingActivity::FieldDay {
+                                self.contest_type = "ARRL_FD".to_string();
+                            }
+                            self.contest_exchange_fields.clear();
+                            self.cw_qso_exchange_received.clear();
+                            self.profile_dirty = true;
+                            self.persist_profile("Operating activity saved");
                             ui.close();
                         }
                     }
                 });
                 if let Some(server_context) = &server_context {
+                    if server_context.state != ServerConnectionState::Connected {
+                        ui.label("Server activities unavailable while disconnected");
+                        return;
+                    }
                     if !server_context.clubs.is_empty() || !server_context.active_events.is_empty()
                     {
                         ui.separator();
@@ -79,7 +110,12 @@ impl QsonautGuiApp {
                                 if ui.selectable_label(selected, label).clicked() {
                                     self.server_active_club =
                                         Some((club.id.clone(), club.name.clone()));
+                                    self.disarm_all_tx_with_persistence(
+                                        "Club context changed",
+                                        false,
+                                    );
                                     self.server_active_event = None;
+                                    self.server_active_identity = None;
                                     ui.close();
                                 }
                             }
@@ -101,13 +137,46 @@ impl QsonautGuiApp {
                                 };
                                 ui.horizontal(|ui| {
                                     if ui.selectable_label(selected, label).clicked() {
+                                        self.disarm_all_tx_with_persistence(
+                                            "Server event changed",
+                                            false,
+                                        );
                                         self.activity = OperatingActivity::Contest;
+                                        self.contest_enabled = true;
+                                        self.contest_exchange_fields.clear();
+                                        self.cw_qso_exchange_received.clear();
                                         self.server_active_club = Some((
                                             contest.club_id.clone(),
                                             contest.club_name.clone(),
                                         ));
                                         self.server_active_event =
                                             Some((contest.id.clone(), contest.name.clone()));
+                                        self.server_active_identity = None;
+                                        self.contest_field_values = contest
+                                            .contest_config
+                                            .as_object()
+                                            .map(|config| {
+                                                config
+                                                    .iter()
+                                                    .filter_map(|(key, value)| {
+                                                        value.as_str().map(|value| {
+                                                            (key.clone(), value.to_owned())
+                                                        })
+                                                    })
+                                                    .collect()
+                                            })
+                                            .unwrap_or_default();
+                                        if contest.contest_definition_version
+                                            == Some(qsonaut_contests::CATALOG_VERSION as i32)
+                                        {
+                                            if let Some(definition) = contest
+                                                .contest_template_id
+                                                .as_deref()
+                                                .and_then(qsonaut_contests::find_by_id)
+                                            {
+                                                self.contest_type = definition.contest_type.clone();
+                                            }
+                                        }
                                         ui.close();
                                     }
                                     let starts = contest
@@ -131,11 +200,113 @@ impl QsonautGuiApp {
                                 });
                             }
                         }
+                        if self.server_active_event.is_none() {
+                            if let Some((club_id, _)) = &self.server_active_club {
+                                let identities = server_context
+                                    .identities
+                                    .iter()
+                                    .filter(|identity| {
+                                        identity.club_id.as_deref() == Some(club_id)
+                                            && identity.event_id.is_none()
+                                            && identity.status == "active"
+                                            && identity.verification_status == "verified"
+                                    })
+                                    .collect::<Vec<_>>();
+                                if !identities.is_empty() {
+                                    ui.label(RichText::new("OPERATING IDENTITY").small().strong());
+                                    for identity in identities {
+                                        let selected = self
+                                            .server_active_identity
+                                            .as_ref()
+                                            .is_some_and(|(id, _)| id == &identity.id);
+                                        if ui
+                                            .selectable_label(
+                                                selected,
+                                                format!(
+                                                    "{} · {}",
+                                                    identity.callsign, identity.identity_type
+                                                ),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.disarm_all_tx_with_persistence(
+                                                "Operating identity changed",
+                                                false,
+                                            );
+                                            self.server_active_identity = Some((
+                                                identity.id.clone(),
+                                                identity.callsign.clone(),
+                                            ));
+                                            ui.close();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if let Some((event_id, _)) = &self.server_active_event {
+                            ui.label(RichText::new("OPERATING IDENTITY").small().strong());
+                            let assignments = server_context
+                                .participants
+                                .iter()
+                                .filter(|participant| {
+                                    participant.event_id == *event_id
+                                        && participant.status == "active"
+                                        && matches!(
+                                            participant.role.as_str(),
+                                            "operator" | "coordinator" | "logger"
+                                        )
+                                        && server_context.identities.iter().any(|identity| {
+                                            identity.id == participant.callsign_id
+                                                && identity.status == "active"
+                                                && identity.verification_status == "verified"
+                                                && identity.event_id.as_deref().is_none_or(
+                                                    |identity_event| identity_event == event_id,
+                                                )
+                                        })
+                                })
+                                .collect::<Vec<_>>();
+                            if assignments.is_empty() {
+                                ui.colored_label(
+                                    theme_warning(ui),
+                                    "No active station assignment for this event",
+                                );
+                            } else {
+                                for participant in assignments {
+                                    let selected = self
+                                        .server_active_identity
+                                        .as_ref()
+                                        .is_some_and(|(id, _)| id == &participant.callsign_id);
+                                    if ui
+                                        .selectable_label(
+                                            selected,
+                                            format!(
+                                                "{} · operator {}",
+                                                participant.operating_callsign,
+                                                participant.operator_callsign
+                                            ),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.disarm_all_tx_with_persistence(
+                                            "Operating identity changed",
+                                            false,
+                                        );
+                                        self.server_active_identity = Some((
+                                            participant.callsign_id.clone(),
+                                            participant.operating_callsign.clone(),
+                                        ));
+                                        ui.close();
+                                    }
+                                }
+                            }
+                        }
                         if (self.server_active_club.is_some() || self.server_active_event.is_some())
                             && ui.small_button("✕ CLEAR SERVER ACTIVITY").clicked()
                         {
                             self.server_active_club = None;
                             self.server_active_event = None;
+                            self.server_active_identity = None;
+                            self.disarm_all_tx_with_persistence("Server context cleared", false);
                             ui.close();
                         }
                     }
@@ -172,5 +343,19 @@ impl QsonautGuiApp {
             .response
             .on_hover_text("Choose the operating activity and any active server event");
         ui.spacing_mut().interact_size.y = previous_interact_height;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_activity_button_label;
+    use crate::OperatingActivity;
+
+    #[test]
+    fn default_activity_button_label_includes_activity_name() {
+        assert_eq!(
+            default_activity_button_label(OperatingActivity::General),
+            "📻 General"
+        );
     }
 }

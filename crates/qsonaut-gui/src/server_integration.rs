@@ -34,11 +34,209 @@ fn redacted_diagnostic_log(raw: String, config: &AppConfig) -> String {
 }
 
 impl QsonautGuiApp {
+    pub(super) fn reconcile_server_activity_context(&mut self) {
+        let Some(client) = &self.server_client else {
+            return;
+        };
+        let status = client.status();
+        if let Some((event_id, _)) = &self.server_active_event {
+            let now = time::OffsetDateTime::now_utc();
+            if status.state != ServerConnectionState::Connected
+                || !status.active_events.iter().any(|event| {
+                    event.id == *event_id
+                        && time::OffsetDateTime::parse(
+                            &event.starts_at,
+                            &time::format_description::well_known::Rfc3339,
+                        )
+                        .is_ok_and(|starts| now >= starts)
+                        && time::OffsetDateTime::parse(
+                            &event.ends_at,
+                            &time::format_description::well_known::Rfc3339,
+                        )
+                        .is_ok_and(|ends| now < ends)
+                })
+            {
+                self.disarm_all_tx_with_persistence("Server event authorization expired", false);
+                self.server_active_event = None;
+                self.server_active_club = None;
+                self.server_active_identity = None;
+                return;
+            }
+        }
+        let Some((identity_id, callsign)) = &self.server_active_identity else {
+            return;
+        };
+        let identity_valid = status.identities.iter().any(|identity| {
+            identity.id == *identity_id
+                && identity.callsign.eq_ignore_ascii_case(callsign)
+                && identity.status == "active"
+                && identity.verification_status == "verified"
+                && identity.event_id.as_deref().is_none_or(|identity_event| {
+                    self.server_active_event
+                        .as_ref()
+                        .is_some_and(|(event_id, _)| event_id == identity_event)
+                })
+                && identity.effective_from.as_deref().is_none_or(|value| {
+                    time::OffsetDateTime::parse(
+                        value,
+                        &time::format_description::well_known::Rfc3339,
+                    )
+                    .is_ok_and(|effective| time::OffsetDateTime::now_utc() >= effective)
+                })
+                && identity.expires_at.as_deref().is_none_or(|value| {
+                    time::OffsetDateTime::parse(
+                        value,
+                        &time::format_description::well_known::Rfc3339,
+                    )
+                    .is_ok_and(|expires| time::OffsetDateTime::now_utc() < expires)
+                })
+        });
+        let assignment_valid = self
+            .server_active_event
+            .as_ref()
+            .is_none_or(|(event_id, _)| {
+                status.participants.iter().any(|participant| {
+                    participant.event_id == *event_id
+                        && participant.callsign_id == *identity_id
+                        && participant.status == "active"
+                        && matches!(
+                            participant.role.as_str(),
+                            "operator" | "coordinator" | "logger"
+                        )
+                        && status.operator_callsign.as_deref().is_some_and(|operator| {
+                            operator.eq_ignore_ascii_case(&participant.operator_callsign)
+                        })
+                        && participant.starts_at.as_deref().is_none_or(|value| {
+                            time::OffsetDateTime::parse(
+                                value,
+                                &time::format_description::well_known::Rfc3339,
+                            )
+                            .is_ok_and(|starts| time::OffsetDateTime::now_utc() >= starts)
+                        })
+                        && participant.ends_at.as_deref().is_none_or(|value| {
+                            time::OffsetDateTime::parse(
+                                value,
+                                &time::format_description::well_known::Rfc3339,
+                            )
+                            .is_ok_and(|ends| time::OffsetDateTime::now_utc() < ends)
+                        })
+                })
+            });
+        if !identity_valid || !assignment_valid {
+            self.disarm_all_tx_with_persistence("Operating identity authorization expired", false);
+            self.server_active_identity = None;
+        }
+    }
+
+    pub(super) fn poll_radio_validation(&mut self) {
+        let Some(rx) = self.radio_validation_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(report)) => {
+                self.radio_validation_active = false;
+                self.radio_validation_status =
+                    "Validation complete; submitting report…".to_string();
+                self.publish_radio_validation_report(report);
+            }
+            Ok(Err(error)) => {
+                self.radio_validation_active = false;
+                self.radio_validation_status = format!("Validation failed: {error}");
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.radio_validation_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.radio_validation_active = false;
+                self.radio_validation_status = "Validation worker stopped unexpectedly".to_string();
+            }
+        }
+    }
+
+    pub(super) fn start_radio_validation(&mut self) {
+        if !self.config.server.enabled || !self.config.server.share_diagnostics {
+            self.radio_validation_status =
+                "Enable manual diagnostic snapshots before submitting validation reports"
+                    .to_string();
+            return;
+        }
+        let Some(client) = &self.server_client else {
+            self.radio_validation_status =
+                "Connect to QSONaut Server before submitting validation reports".to_string();
+            return;
+        };
+        if client.status().state != ServerConnectionState::Connected {
+            self.radio_validation_status = "Wait for QSONaut Server to show CONNECTED".to_string();
+            return;
+        }
+        if self.radio_validation_low_power && !self.radio_validation_confirm_low_power {
+            self.radio_validation_status =
+                "Confirm the low-power PTT safety check before starting".to_string();
+            return;
+        }
+        let Some(command_tx) = &self.command_tx else {
+            self.radio_validation_status = "Radio worker is not running".to_string();
+            return;
+        };
+        let (ack_tx, ack_rx) = mpsc::channel();
+        if command_tx
+            .send(GuiCommand::RunRadioValidation {
+                include_ptt: self.radio_validation_low_power,
+                rf_power_level: self.radio_validation_power_level,
+                ack_tx,
+            })
+            .is_err()
+        {
+            self.radio_validation_status = "Radio worker is unavailable".to_string();
+            return;
+        }
+        self.radio_validation_rx = Some(ack_rx);
+        self.radio_validation_active = true;
+        self.radio_validation_status = "Running full hardware validation…".to_string();
+    }
+
+    fn publish_radio_validation_report(&mut self, report: serde_json::Value) {
+        let Some(client) = &self.server_client else {
+            self.radio_validation_status =
+                "Validation complete, but Server is disconnected".to_string();
+            return;
+        };
+        let diagnostic = serde_json::json!({
+            "instance_id": self.server_instance_id,
+            "category": "radio_validation",
+            "summary": format!("{} radio validation report", self.config.radio.model),
+            "payload": {
+                "qsonaut": {
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "platform": format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+                },
+                "radio_config": {
+                    "backend": self.config.radio.backend,
+                    "model": self.config.radio.model,
+                    "baud_rate": self.config.radio.baud_rate,
+                    "civ_address": self.config.radio.civ_address,
+                    "controller_civ_address": self.config.radio.controller_civ_address,
+                    "serial_port_configured": self.config.radio.serial_port.is_some(),
+                },
+                "validation": report,
+            },
+        });
+        self.radio_validation_status = match client.publish_diagnostic(diagnostic) {
+            Ok(()) => "Validation report submitted; waiting for server acceptance".to_string(),
+            Err(error) => format!("Validation report could not be submitted: {error}"),
+        };
+    }
+
     pub(super) fn reconnect_server(&mut self) {
+        self.disarm_all_tx_with_persistence("Server connection changed", false);
+        self.server_active_event = None;
+        self.server_active_club = None;
+        self.server_active_identity = None;
         let enabled = self.config.server.enabled;
         let url = self.config.server.url.trim();
         let token = self.config.server.device_token.trim();
         if enabled && (url.is_empty() || token.is_empty()) {
+            self.server_client = None;
             warn!("Server connection requires both endpoint and device token");
             self.profile_io_status =
                 "Server needs both an endpoint and device token before connecting".to_string();
@@ -75,8 +273,13 @@ impl QsonautGuiApp {
         let Some(occurred_at) = qso_timestamp(record) else {
             return;
         };
+        let callsign_id = Uuid::parse_str(&record.managed_callsign_id).ok();
+        let operating_callsign = (callsign_id.is_some() || !record.server_event_id.is_empty())
+            .then_some(record.station_callsign.as_str());
         client.publish_log(serde_json::json!({
-            "event_id": self.server_active_event.as_ref().and_then(|(id, _)| Uuid::parse_str(id).ok()),
+            "event_id": Uuid::parse_str(&record.server_event_id).ok(),
+            "operating_callsign": operating_callsign,
+            "callsign_id": callsign_id,
             "idempotency_key": log_idempotency_key(record.id),
             "callsign": record.callsign,
             "band": record.band,
@@ -88,9 +291,15 @@ impl QsonautGuiApp {
             "exchange": {
                 "sent": record.contest_exchange_sent,
                 "received": record.contest_exchange_received,
+                "fields_sent": record.contest_fields_sent,
+                "fields_received": record.contest_fields_received,
                 "serial_sent": record.contest_serial_sent,
                 "serial_received": record.contest_serial_received,
                 "grid": record.grid,
+                "operator_callsign": record.operator_callsign,
+                "station_callsign": record.station_callsign,
+                "contest_template_id": record.contest_template_id,
+                "club_id": record.club_id,
             },
             "points": 0,
             "source": "qsonaut",
@@ -208,6 +417,18 @@ impl QsonautGuiApp {
                     "ptt_on": snapshot.ptt_on,
                     "scope_enabled": snapshot.radio_spectrum_enabled,
                     "scope_status": snapshot.radio_waterfall_status,
+                    "radio_power_on": snapshot.radio_power_on,
+                    "radio_power_settling": snapshot.radio_power_settling,
+                    "supported_controls": snapshot
+                        .supported_controls
+                        .iter()
+                        .map(|id| format!("{id:?}"))
+                        .collect::<Vec<_>>(),
+                    "supported_meters": snapshot
+                        .supported_meters
+                        .iter()
+                        .map(|id| format!("{id:?}"))
+                        .collect::<Vec<_>>(),
                 },
                 "audio": {
                     "enabled": self.config.audio.enabled,

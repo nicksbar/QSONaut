@@ -51,11 +51,11 @@ impl QsonautGuiApp {
             .unwrap_or_default();
         if self.contest_enabled {
             record.contest_serial_sent = Some(self.contest_serial_current.max(1));
+            record.contest_fields_sent = self.contest_fields_sent();
             record.contest_exchange_sent = self.contest_exchange_preview(&session.target);
             record.contest_exchange_received = record.report_received.clone();
-            self.advance_contest_serial();
-            self.profile_dirty = true;
-            self.persist_profile("Auto-saved");
+            record.contest_fields_received =
+                self.contest_fields_received(&record.contest_exchange_received);
         }
         self.append_qso(record, "Auto-logged");
     }

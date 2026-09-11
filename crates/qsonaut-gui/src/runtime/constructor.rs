@@ -173,6 +173,7 @@ impl QsonautGuiApp {
         config.audio.monitor_enabled = global_settings.audio_monitor_enabled;
         config.audio.monitor_output_device = global_settings.audio_monitor_output_device.clone();
         config.audio.monitor_volume = global_settings.audio_monitor_volume.clamp(0.0, 2.0);
+        config.third_party = global_settings.third_party.clone();
 
         info!(
             profile = %selected_profile_name,
@@ -417,6 +418,18 @@ impl QsonautGuiApp {
         let mut psk_max_pending = default_psk_max_pending();
         let mut server_instance_id = new_instance_id();
         let mut contest_enabled = config.contest.enabled;
+        let mut operating_activity = if contest_enabled {
+            OperatingActivity::Contest
+        } else {
+            OperatingActivity::General
+        };
+        let mut contest_session_id = Uuid::new_v4().to_string();
+        let mut contest_type = config
+            .contest
+            .contest_type
+            .clone()
+            .unwrap_or_else(|| "ARRL_FD".to_string());
+        let mut contest_field_values = config.contest.field_values.clone();
         let mut contest_operating_mode = config.contest.operating_mode;
         let mut contest_split_policy = config.contest.split_policy;
         let mut contest_fox_hound_role = config.contest.fox_hound_role;
@@ -503,6 +516,16 @@ impl QsonautGuiApp {
                 config.server = server;
             }
             contest_enabled = p.contest_enabled;
+            contest_type = p.contest_type.unwrap_or_else(|| "ARRL_FD".to_string());
+            operating_activity = p.operating_activity.unwrap_or(if contest_enabled {
+                OperatingActivity::Contest
+            } else {
+                OperatingActivity::General
+            });
+            if !p.contest_session_id.is_empty() {
+                contest_session_id = p.contest_session_id;
+            }
+            contest_field_values = p.contest_field_values;
             contest_operating_mode = p.contest_operating_mode;
             contest_split_policy = p.contest_split_policy;
             contest_fox_hound_role = p.contest_fox_hound_role;
@@ -556,6 +579,8 @@ impl QsonautGuiApp {
                 } else {
                     Some(contest_exchange_template.trim().to_string())
                 },
+                contest_type: Some(contest_type.clone()),
+                field_values: contest_field_values.clone(),
                 serial_start: contest_serial_start,
                 serial_step: contest_serial_step,
                 dupe_check: contest_dupe_check,
@@ -646,6 +671,10 @@ impl QsonautGuiApp {
                 server_instance_id: server_instance_id.clone(),
                 server: Some(config.server.clone()),
                 contest_enabled,
+                contest_type: Some(contest_type.clone()),
+                contest_field_values: contest_field_values.clone(),
+                operating_activity: Some(operating_activity),
+                contest_session_id: contest_session_id.clone(),
                 contest_operating_mode,
                 contest_split_policy,
                 contest_fox_hound_role,
@@ -731,6 +760,8 @@ impl QsonautGuiApp {
             },
             &state,
         );
+        let third_party_bridge =
+            ThirdPartyBridge::spawn(&config.third_party, station_callsign.trim());
         let psk_sender = psk_reporter.as_ref().map(Reporter::sender);
         for session in parked_radio_sessions.values() {
             if let Ok(mut session_state) = session.state.lock() {
@@ -745,6 +776,7 @@ impl QsonautGuiApp {
 
         Self {
             config,
+            global_settings_snapshot: global_settings.clone(),
             app_events,
             automation_event_rx,
             automation_host,
@@ -785,6 +817,12 @@ impl QsonautGuiApp {
             radio_init_rx,
             cat_test_rx: None,
             cat_test_status: None,
+            radio_validation_rx: None,
+            radio_validation_active: false,
+            radio_validation_low_power: false,
+            radio_validation_confirm_low_power: false,
+            radio_validation_power_level: 5,
+            radio_validation_status: "Not run".to_string(),
             cat_test_restart_radio: false,
             hamdb_lookup_rx: None,
             hamdb_profile_lookup_rx: None,
@@ -852,7 +890,7 @@ impl QsonautGuiApp {
             sstv_received_texture_revision: 0,
             sstv_reinterpret_prompt: String::new(),
             workspace_mode,
-            activity: OperatingActivity::General,
+            activity: operating_activity,
             fst4_submode: modes::fst4::Submode::default(),
             cw_auto_target_timeout_s: 3,
             js8_controls: Js8Controls::default(),
@@ -900,6 +938,19 @@ impl QsonautGuiApp {
             ft4_session: None,
             ft4_seen_decodes: HashSet::new(),
             digital_tx_chat: VecDeque::new(),
+            chat_messages: VecDeque::new(),
+            chat_users: BTreeMap::new(),
+            chat_seen_js8: HashSet::new(),
+            chat_seen_server: HashSet::new(),
+            chat_unread: 0,
+            chat_compose: String::new(),
+            chat_help_open: false,
+            chat_server_channel: "general".to_string(),
+            chat_route_lan: global_settings.chat_route_lan,
+            chat_route_server: global_settings.chat_route_server,
+            chat_route_n3fjp: global_settings.chat_route_n3fjp,
+            chat_lan_target: global_settings.chat_lan_target.clone(),
+            chat_n3fjp_target: global_settings.chat_n3fjp_target.clone(),
             digital_queued_tx_message: None,
             digital_last_tx_message: None,
             digital_tx_status: "🌊 RX deck ready · listening for signals".to_string(),
@@ -954,12 +1005,15 @@ impl QsonautGuiApp {
             voice_contest_serial_sent: String::new(),
             voice_contest_serial_received: String::new(),
             voice_notes: String::new(),
-            voice_contest_fields: Vec::new(),
+            contest_exchange_fields: Vec::new(),
             voice_qso_started_at: None,
             voice_lookup_requested: String::new(),
             voice_lookup_status: String::new(),
             voice_hamdb: None,
             contest_enabled,
+            contest_type,
+            contest_session_id,
+            contest_field_values,
             contest_operating_mode,
             contest_split_policy,
             contest_fox_hound_role,
@@ -993,6 +1047,8 @@ impl QsonautGuiApp {
             available_profiles,
             profile_io_status,
             profile_dirty: false,
+            third_party_settings_dirty: false,
+            third_party_apply_status: "Not applied".to_string(),
             app_log_text: String::new(),
             app_log_status: String::new(),
             app_log_filter: String::new(),
@@ -1052,9 +1108,11 @@ impl QsonautGuiApp {
             psk_repeat_cache_secs,
             psk_max_pending,
             psk_reporter,
+            third_party_bridge,
             server_client,
             server_active_club: None,
             server_active_event: None,
+            server_active_identity: None,
             server_instance_id,
             server_last_presence: Instant::now() - Duration::from_secs(60),
             brand_icon,

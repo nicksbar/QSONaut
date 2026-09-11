@@ -1,5 +1,13 @@
 use super::super::*;
 
+fn radio_connection_label(connected: bool) -> &'static str {
+    if connected {
+        "Radio CONNECTED"
+    } else {
+        "Radio OFFLINE"
+    }
+}
+
 impl QsonautGuiApp {
     pub(crate) fn draw_header_identity_and_activity(&self, ui: &mut egui::Ui) {
         ui.spacing_mut().item_spacing.x = 6.0;
@@ -89,11 +97,7 @@ impl QsonautGuiApp {
             ui.label(RichText::new("Connections").strong());
             ui.separator();
             ui.label(
-                RichText::new(if snapshot.frequency_hz.is_some() {
-                    "Radio CONNECTED"
-                } else {
-                    "Radio OFFLINE"
-                })
+                RichText::new(radio_connection_label(snapshot.frequency_hz.is_some()))
                 .color(if snapshot.frequency_hz.is_some() {
                     Color32::LIGHT_GREEN
                 } else {
@@ -117,6 +121,30 @@ impl QsonautGuiApp {
                 .unwrap_or(("QSONaut Server DISABLED", Color32::GRAY));
             ui.separator();
             ui.label(RichText::new(server_label).color(server_color));
+            ui.separator();
+            if let Some(bridge) = &self.third_party_bridge {
+                let status = bridge.status();
+                let label = format!(
+                    "🔌 EXT {} · {} · UDP {} · LAN {} · {} delivered QSO{}",
+                    status.api,
+                    status.network,
+                    status.udp,
+                    status.lan,
+                    status.published,
+                    if status.published == 1 { "" } else { "s" }
+                );
+                let detail = status
+                    .last_error
+                    .map(|error| format!("Third-party integration error: {error}"))
+                    .unwrap_or_else(|| {
+                        "Third-party integrations\nAPI: N3FJP application API\nNetwork: N3FJP station network\nUDP: external logging broadcasts\nCount is successful external transport delivery; QSOs are persisted locally first.".to_string()
+                    });
+                ui.label(RichText::new(label).color(Color32::LIGHT_GREEN))
+                    .on_hover_text(detail);
+            } else {
+                ui.label(RichText::new("🔌 EXT OFF").color(Color32::GRAY))
+                    .on_hover_text("Third-party integrations are disabled. Configure them in the THIRD-PARTY panel.");
+            }
             ui.separator();
             let pota_activators = self
                 .pota_spots
@@ -190,5 +218,16 @@ impl QsonautGuiApp {
                 self.draw_about_button(ui);
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::radio_connection_label;
+
+    #[test]
+    fn radio_connection_label_reflects_frequency_presence() {
+        assert_eq!(radio_connection_label(true), "Radio CONNECTED");
+        assert_eq!(radio_connection_label(false), "Radio OFFLINE");
     }
 }

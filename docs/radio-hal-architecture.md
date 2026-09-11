@@ -51,7 +51,9 @@ This supports many commands without hardcoding every one into the trait.
 
 1. Keep typed core controls first (freq/mode/PTT + common knobs).
 2. Add CI-V command registry for advanced feature parity.
-3. Grow and validate Rigwright's per-radio capability profiles (IC-7300 first).
+3. Grow and validate Rigwright's per-radio capability profiles, starting with
+   the QSONaut IC-7300 baseline and extending with the hardware-validated
+   IC-756PROII CI-V profile.
 4. Add integration tests with captured byte frames.
 5. Add optional rigctl parity checks as diagnostics, not primary driver path.
 
@@ -94,9 +96,13 @@ This supports many commands without hardcoding every one into the trait.
 
 ## Known gaps
 
-1. IC-7300 is the only radio used regularly during development.
+1. IC-7300 is the only radio used regularly for QSONaut end-to-end development;
+   Rigwright also has direct hardware evidence for the IC-756PROII CI-V
+   control surface.
 2. Captured-frame coverage is incomplete for the wider control registry.
 3. Unsupported controls still need stronger per-radio capability gating.
 4. USB reconnect and radio reboot behavior needs broader hardware testing.
-5. Non-IC-7300 profiles and the Yaesu/Kenwood serial drivers are experimental until tested against physical radios.
+5. Non-IC-7300 QSONaut workflows and the Yaesu/Kenwood serial drivers remain
+   experimental until tested against physical radios; Rigwright's IC-756PROII
+   evidence does not substitute for QSONaut application validation.
 6. Icom-only spectrum and advanced CI-V controls stay disabled for radios that do not expose them.

@@ -1,6 +1,17 @@
 use super::super::*;
 use crate::ui_widgets::{operating_mode_button, OperatingModeIcon};
 
+fn tuning_step_hz(step: Option<u8>) -> u64 {
+    match step.unwrap_or(5) {
+        0 => 1,
+        1 => 5,
+        2 => 10,
+        3 => 50,
+        4 => 100,
+        _ => 1_000,
+    }
+}
+
 impl QsonautGuiApp {
     pub(crate) fn draw_header_branding(&mut self, ui: &mut egui::Ui) {
         let spin_angle = self.logo_spin_until.map_or(0.0, |until| {
@@ -39,21 +50,30 @@ impl QsonautGuiApp {
                     .color(Color32::from_rgb(255, 137, 108)),
             );
         });
-        self.draw_activity_selector(ui);
+        ui.vertical(|ui| {
+            self.draw_activity_selector(ui);
+            let unread = self.chat_unread;
+            let label = if unread == 0 {
+                "💬 Chat".to_string()
+            } else {
+                format!("💬 Chat · {unread}")
+            };
+            if ui
+                .small_button(label)
+                .on_hover_text("Open unified JS8/N3FJP/LAN chat")
+                .clicked()
+            {
+                self.signal_panel_tab = SignalPanelTab::Chat;
+                self.chat_unread = 0;
+            }
+        });
     }
 }
 
 impl QsonautGuiApp {
     pub(crate) fn draw_banner_radio_controls(&mut self, ui: &mut egui::Ui, snapshot: &GuiState) {
         let supports_levels = snapshot.supported_controls.contains(&ControlId::AfGain);
-        let tuning_step_hz = match snapshot.tuning_step.unwrap_or(5) {
-            0 => 1,
-            1 => 5,
-            2 => 10,
-            3 => 50,
-            4 => 100,
-            _ => 1_000,
-        };
+        let tuning_step_hz = tuning_step_hz(snapshot.tuning_step);
         ui.horizontal(|ui| {
             ui.scope(|ui| {
                 ui.spacing_mut().item_spacing.x = 7.0;
@@ -201,6 +221,47 @@ impl QsonautGuiApp {
                     self.send_command(GuiCommand::ApplyWorkspace { mode, frequency_hz });
                 }
             }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tuning_step_hz_maps_profile_indices_and_defaults() {
+        assert_eq!(tuning_step_hz(None), 1_000);
+        assert_eq!(tuning_step_hz(Some(0)), 1);
+        assert_eq!(tuning_step_hz(Some(3)), 50);
+        assert_eq!(tuning_step_hz(Some(99)), 1_000);
+    }
+
+    #[test]
+    fn banner_controls_render_with_default_offline_state() {
+        let context = egui::Context::default();
+        let icon = eframe::icon_data::from_png_bytes(crate::QSONAUT_ICON_PNG).unwrap();
+        let mut app = QsonautGuiApp::new_with_context(
+            AppConfig::default(),
+            false,
+            false,
+            &context,
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+        let snapshot = app.state.lock().unwrap().clone();
+
+        let _ = context.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                app.draw_header_branding(ui);
+                app.draw_banner_radio_controls(ui, &snapshot);
+                app.draw_banner_op_modes(ui, &snapshot);
+            });
         });
     }
 }

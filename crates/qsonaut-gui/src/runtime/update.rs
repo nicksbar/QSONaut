@@ -12,7 +12,7 @@ fn migrate_hostbridge_radio_id(config: &mut RadioConfig, hello: &HostHello) -> b
     {
         return false;
     }
-    let Some((physical_id, _legacy_driver)) = saved_id.rsplit_once(':') else {
+    let Some(physical_id) = legacy_hostbridge_physical_id(&saved_id) else {
         return false;
     };
     if hello
@@ -27,6 +27,12 @@ fn migrate_hostbridge_radio_id(config: &mut RadioConfig, hello: &HostHello) -> b
     } else {
         false
     }
+}
+
+fn legacy_hostbridge_physical_id(saved_id: &str) -> Option<&str> {
+    saved_id
+        .rsplit_once(':')
+        .map(|(physical_id, _)| physical_id)
 }
 
 impl QsonautGuiApp {
@@ -412,6 +418,22 @@ impl QsonautGuiApp {
         }
 
         let snapshot = self.state.lock().expect("ui state lock poisoned").clone();
+        if let (Some(bridge), Some(frequency_hz)) =
+            (self.third_party_bridge.as_ref(), snapshot.frequency_hz)
+        {
+            let band = band_for_frequency(frequency_hz);
+            if !band.is_empty() && !snapshot.mode.trim().is_empty() {
+                let (band, mode) = crate::third_party::n3fjp_station_fields(
+                    band,
+                    &snapshot.mode,
+                    snapshot.data_mode.unwrap_or(false),
+                );
+                bridge.update_station_status(band, mode);
+            }
+        }
+        self.poll_third_party_chat();
+        self.poll_server_chat();
+        self.sync_js8_chat(&snapshot);
         self.emit_radio_state_hook_if_changed(&snapshot);
         self.publish_server_presence(&snapshot);
 
@@ -1513,6 +1535,18 @@ impl QsonautGuiApp {
                                 Color32::from_rgb(110, 220, 255),
                             ),
                             (
+                                SignalPanelTab::ThirdParty,
+                                "🔌",
+                                "THIRD-PARTY",
+                                Color32::from_rgb(255, 190, 105),
+                            ),
+                            (
+                                SignalPanelTab::Chat,
+                                "💬",
+                                "CHAT",
+                                Color32::from_rgb(125, 225, 150),
+                            ),
+                            (
                                 SignalPanelTab::RadioTuning,
                                 "📻",
                                 "RADIO TUNING",
@@ -1567,6 +1601,8 @@ impl QsonautGuiApp {
                     ui.separator();
                     if self.signal_panel_tab == SignalPanelTab::AppLog {
                         self.draw_app_log_panel(ui);
+                    } else if self.signal_panel_tab == SignalPanelTab::Chat {
+                        self.draw_chat_panel(ui);
                     } else {
                         egui::ScrollArea::vertical()
                             .id_salt("signals_scroll")
@@ -1584,6 +1620,8 @@ impl QsonautGuiApp {
                                 }
                                 SignalPanelTab::Ai => self.draw_ai_panel(ui),
                                 SignalPanelTab::Server => self.draw_server_panel(ui),
+                                SignalPanelTab::ThirdParty => self.draw_third_party_panel(ui),
+                                SignalPanelTab::Chat => unreachable!("chat has its own layout"),
                                 SignalPanelTab::RadioTuning => {
                                     self.draw_radio_tuning_panel(ui, &snapshot)
                                 }
@@ -1773,4 +1811,18 @@ impl QsonautGuiApp {
 
 pub(crate) fn update(app: &mut QsonautGuiApp, ctx: &egui::Context, frame: &mut eframe::Frame) {
     app.update_impl(ctx, frame);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::legacy_hostbridge_physical_id;
+
+    #[test]
+    fn legacy_hostbridge_physical_id_strips_driver_suffix() {
+        assert_eq!(
+            legacy_hostbridge_physical_id("radio-123:rigwright"),
+            Some("radio-123")
+        );
+        assert_eq!(legacy_hostbridge_physical_id("radio-123"), None);
+    }
 }

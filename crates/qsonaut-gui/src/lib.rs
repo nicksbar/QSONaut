@@ -2,7 +2,9 @@ mod activity;
 mod automation_hunter;
 mod automation_integration;
 mod band_plan;
+mod chat;
 mod contest;
+mod contest_catalog;
 mod decode_model;
 mod font;
 mod graphics;
@@ -18,6 +20,7 @@ mod rendering;
 mod reporting;
 mod runtime;
 mod server_integration;
+mod third_party;
 mod tx_audio;
 mod ui_format;
 mod ui_widgets;
@@ -211,6 +214,8 @@ use band_plan::{
     band_for_frequency, band_picker_plan, workspace_radio_preset,
     workspace_radio_preset_for_frequency, WorkspaceMode, WORKSPACE_MODES,
 };
+use chat::{ChatUser, UnifiedChatMessage};
+use contest::ContestExchangeField;
 use decode_model::{
     digital_activity_stats, ft8_activity_stats, operator_call_hit, DigitalDecodeEntry,
     DigitalSlotGate, Ft8DecodeEntry, Ft8SlotGate, Ft8SyncState, OperatorCallHit, PendingFt8Decode,
@@ -232,7 +237,6 @@ use modes::exchange::{
 };
 pub(crate) use modes::ft8_types::{Ft8SeqState, Ft8TxQueuePolicy, PendingManualFt8Reply};
 use modes::js8::Js8Controls;
-use modes::voice::VoiceContestField;
 use profile::{
     active_operator_profile_name, default_contest_fake_split_offset_hz, default_cw_tone_hz,
     default_cw_wpm, default_max_attempts as default_ft8_max_attempts,
@@ -241,7 +245,7 @@ use profile::{
     default_waterfall_deck_height, list_operator_profiles, load_global_settings,
     load_operator_profile, load_operator_profile_named, load_radio_profile_library,
     save_operator_profile, save_operator_profile_named, save_radio_profile_library,
-    select_operator_profile, OperatorProfile, RadioProfile, OPERATOR_PROFILE_FILE,
+    select_operator_profile, GlobalSettings, OperatorProfile, RadioProfile, OPERATOR_PROFILE_FILE,
     OPERATOR_PROFILE_VERSION,
 };
 use radio_faq::{help_for_model, render_document};
@@ -270,6 +274,7 @@ pub(crate) use runtime::constructor::{
     audio_config_from_operator_profile, configure_unix_gui_environment, spawn_acceleration_probe,
     spawn_device_scan,
 };
+use third_party::ThirdPartyBridge;
 #[cfg(test)]
 use tx_audio::FT8_TX_AUDIO_START_S;
 use tx_audio::{
@@ -335,6 +340,8 @@ enum SignalPanelTab {
     Settings,
     Ai,
     Server,
+    ThirdParty,
+    Chat,
     RadioTuning,
     AppLog,
 }
@@ -1004,6 +1011,11 @@ enum GuiCommand {
     ),
     SetPtt(bool),
     SetPttWithAck(bool, mpsc::Sender<std::result::Result<(), String>>),
+    RunRadioValidation {
+        include_ptt: bool,
+        rf_power_level: u8,
+        ack_tx: mpsc::Sender<std::result::Result<serde_json::Value, String>>,
+    },
     SetPower(bool),
     StartTuner,
     StartSwrSweep {
@@ -1069,9 +1081,9 @@ pub fn run_gui(config: AppConfig) -> Result<Option<GraphicsPreferences>> {
         .with_title("QSONaut — Amateur Radio Mission Control")
         .with_icon(app_icon.clone())
         .with_resizable(true)
-        // eframe also enforces this for WGPU, but keeping it explicit makes
-        // the startup visibility contract clear at the application boundary.
-        .with_visible(false);
+        // Keep the native window visible after winit applies restored geometry.
+        // The application does not issue a later viewport visibility command.
+        .with_visible(true);
     if let Some(geometry) = stored_geometry {
         viewport = geometry.apply(viewport);
     }
@@ -1175,6 +1187,7 @@ fn preferred_renderer() -> eframe::Renderer {
 
 struct QsonautGuiApp {
     config: AppConfig,
+    global_settings_snapshot: GlobalSettings,
     app_events: AppEventBus,
     automation_event_rx: tokio::sync::broadcast::Receiver<AppEvent>,
     automation_host: AutomationHost,
@@ -1215,6 +1228,12 @@ struct QsonautGuiApp {
     radio_init_rx: Option<mpsc::Receiver<Option<RadioHandle>>>,
     cat_test_rx: Option<mpsc::Receiver<Result<String, String>>>,
     cat_test_status: Option<Result<String, String>>,
+    radio_validation_rx: Option<mpsc::Receiver<Result<serde_json::Value, String>>>,
+    radio_validation_active: bool,
+    radio_validation_low_power: bool,
+    radio_validation_confirm_low_power: bool,
+    radio_validation_power_level: u8,
+    radio_validation_status: String,
     /// Whether to restart the radio worker after a CAT connection test. The
     /// test pauses the worker to release the exclusively-owned serial port.
     cat_test_restart_radio: bool,
@@ -1333,6 +1352,19 @@ struct QsonautGuiApp {
     ft4_session: Option<QsoSession>,
     ft4_seen_decodes: HashSet<(u64, u32, String)>,
     digital_tx_chat: VecDeque<DigitalTxChatEntry>,
+    chat_messages: VecDeque<UnifiedChatMessage>,
+    chat_users: BTreeMap<String, ChatUser>,
+    chat_seen_js8: HashSet<(u64, String)>,
+    chat_seen_server: HashSet<String>,
+    chat_unread: usize,
+    chat_compose: String,
+    chat_help_open: bool,
+    chat_server_channel: String,
+    chat_route_lan: bool,
+    chat_route_server: bool,
+    chat_route_n3fjp: bool,
+    chat_lan_target: String,
+    chat_n3fjp_target: String,
     digital_queued_tx_message: Option<String>,
     digital_last_tx_message: Option<String>,
     digital_tx_status: String,
@@ -1387,12 +1419,15 @@ struct QsonautGuiApp {
     voice_contest_serial_sent: String,
     voice_contest_serial_received: String,
     voice_notes: String,
-    voice_contest_fields: Vec<VoiceContestField>,
+    contest_exchange_fields: Vec<ContestExchangeField>,
     voice_qso_started_at: Option<u64>,
     voice_lookup_requested: String,
     voice_lookup_status: String,
     voice_hamdb: Option<HamDbCacheEntry>,
     contest_enabled: bool,
+    contest_type: String,
+    contest_session_id: String,
+    contest_field_values: BTreeMap<String, String>,
     contest_operating_mode: ContestOperatingMode,
     contest_split_policy: SplitPolicy,
     contest_fox_hound_role: FoxHoundRole,
@@ -1426,6 +1461,8 @@ struct QsonautGuiApp {
     available_profiles: Vec<String>,
     profile_io_status: String,
     profile_dirty: bool,
+    third_party_settings_dirty: bool,
+    third_party_apply_status: String,
     app_log_text: String,
     app_log_status: String,
     app_log_filter: String,
@@ -1485,9 +1522,11 @@ struct QsonautGuiApp {
     psk_repeat_cache_secs: u64,
     psk_max_pending: usize,
     psk_reporter: Option<Reporter>,
+    third_party_bridge: Option<ThirdPartyBridge>,
     server_client: Option<ServerClient>,
     server_active_club: Option<(String, String)>,
     server_active_event: Option<(String, String)>,
+    server_active_identity: Option<(String, String)>,
     server_instance_id: String,
     server_last_presence: Instant,
     brand_icon: TextureHandle,
@@ -1707,6 +1746,9 @@ impl QsonautGuiApp {
     }
 
     fn station_callsign_or_default(&self) -> &str {
+        if let Some((_, callsign)) = &self.server_active_identity {
+            return callsign;
+        }
         let v = self.station_callsign.trim();
         if v.is_empty() {
             "N0CALL"

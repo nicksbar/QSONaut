@@ -21,4 +21,5 @@ crates/qsonaut-gui/src/panels/mod.rs
 crates/qsonaut-gui/src/rendering/mod.rs
 crates/qsonaut-gui/src/reporting/mod.rs
 crates/qsonaut-gui/src/runtime/mod.rs
+crates/qsonaut-gui/src/contest_catalog.rs
 crates/qsonaut-hostbridge-client/examples/hostbridge_smoke.rs

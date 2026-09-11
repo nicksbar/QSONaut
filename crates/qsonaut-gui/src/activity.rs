@@ -6,7 +6,7 @@ use eframe::egui::{self, Color32, Pos2, Stroke};
 
 /// The user-facing operating context. Profiles describe intent and defaults;
 /// individual mode panels remain responsible for the actual radio behavior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) enum OperatingActivity {
     General,
     Pota,
@@ -35,7 +35,7 @@ impl OperatingActivity {
             Self::General => "General",
             Self::Pota => "POTA",
             Self::Sota => "SOTA",
-            Self::Contest => "Contest",
+            Self::Contest => "Local Contest",
             Self::FieldDay => "Field Day",
             Self::Dx => "DX",
             Self::Satellite => "Satellite",
@@ -297,7 +297,7 @@ mod tests {
             (OperatingActivity::General, "General", "CQ"),
             (OperatingActivity::Pota, "POTA", "CQ POTA"),
             (OperatingActivity::Sota, "SOTA", "CQ SOTA"),
-            (OperatingActivity::Contest, "Contest", "CQ TEST"),
+            (OperatingActivity::Contest, "Local Contest", "CQ TEST"),
             (OperatingActivity::FieldDay, "Field Day", "CQ FD"),
             (OperatingActivity::Dx, "DX", "CQ DX"),
             (OperatingActivity::Satellite, "Satellite", "CQ SAT"),

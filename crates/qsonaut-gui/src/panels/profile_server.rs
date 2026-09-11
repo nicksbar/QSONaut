@@ -339,6 +339,108 @@ impl QsonautGuiApp {
     pub(in super::super) fn draw_contest_panel(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.heading("🏁 Contest profile");
+            let definitions = crate::contest_catalog::builtin_definitions();
+            let selected_index = definitions
+                .iter()
+                .position(|definition| definition.contest_type == self.contest_type)
+                .unwrap_or(0);
+            let mut contest_changed = false;
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Contest definition");
+                egui::ComboBox::from_id_salt("contest_definition")
+                    .selected_text(format!(
+                        "{} {}",
+                        definitions[selected_index].icon, definitions[selected_index].name
+                    ))
+                    .show_ui(ui, |ui| {
+                        for definition in definitions {
+                            contest_changed |= ui
+                                .selectable_value(
+                                    &mut self.contest_type,
+                                    definition.contest_type.to_string(),
+                                    format!("{} {}", definition.icon, definition.name),
+                                )
+                                .changed();
+                        }
+                    });
+                if contest_changed {
+                    self.disarm_all_tx_with_persistence("Contest definition changed", false);
+                    self.contest_exchange_fields.clear();
+                    self.contest_field_values.clear();
+                    self.cw_qso_exchange_received.clear();
+                    self.server_active_event = None;
+                    self.server_active_club = None;
+                    self.server_active_identity = None;
+                    self.contest_session_id = Uuid::new_v4().to_string();
+                    self.contest_exchange_template.clear();
+                    self.profile_dirty = true;
+                    self.persist_profile("Contest definition saved");
+                    self.emit_contest_profile_hooks();
+                }
+            });
+            let definition = crate::contest_catalog::find(&self.contest_type);
+            if let Some(definition) = definition {
+                ui.label(
+                    RichText::new(definition.description.as_str())
+                        .small()
+                        .color(theme_muted(ui)),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "{} · {} point/QSO · multiplier: {} · dupes: {}",
+                        definition.organization,
+                        definition.points_per_qso,
+                        definition.multiplier.as_deref().unwrap_or("none"),
+                        definition.duplicate_rule
+                    ))
+                    .small()
+                    .color(theme_accent(ui)),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "Bands: {} · Modes: {}",
+                        definition.bands.join(", "),
+                        definition.modes.join(", ")
+                    ))
+                    .small()
+                    .color(theme_muted(ui)),
+                );
+                ui.label(
+                    RichText::new(format!("Schedule: {}", definition.schedule))
+                        .small()
+                        .color(theme_muted(ui)),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Setup fields");
+                    for field in &definition.fields {
+                        let value = self
+                            .contest_field_values
+                            .entry(field.key.to_string())
+                            .or_default();
+                        ui.label(field.label.as_str());
+                        if field.options.is_empty() {
+                            ui.add(
+                                egui::TextEdit::singleline(value)
+                                    .desired_width(96.0)
+                                    .hint_text(field.description.as_str()),
+                            );
+                        } else {
+                            egui::ComboBox::from_id_salt(format!("contest_field_{}", field.key))
+                                .selected_text(if value.is_empty() {
+                                    "Select"
+                                } else {
+                                    value.as_str()
+                                })
+                                .show_ui(ui, |ui| {
+                                    for option in &field.options {
+                                        ui.selectable_value(value, option.clone(), option.as_str());
+                                    }
+                                });
+                        }
+                    }
+                });
+                ui.hyperlink_to("Open current rules", definition.rules_url.as_str());
+            }
             if ui
                 .checkbox(&mut self.contest_enabled, "Enable contest workflow profile")
                 .changed()
@@ -517,6 +619,14 @@ impl QsonautGuiApp {
                 || self.config.contest.serial_start != self.contest_serial_start
                 || self.config.contest.serial_step != self.contest_serial_step
                 || self.config.contest.dupe_check != self.contest_dupe_check
+                || self
+                    .config
+                    .contest
+                    .contest_type
+                    .as_deref()
+                    .unwrap_or_default()
+                    != self.contest_type
+                || self.config.contest.field_values != self.contest_field_values
             {
                 self.config.contest = ContestProfile {
                     enabled: self.contest_enabled,
@@ -531,6 +641,8 @@ impl QsonautGuiApp {
                     serial_start: self.contest_serial_start,
                     serial_step: self.contest_serial_step,
                     dupe_check: self.contest_dupe_check,
+                    contest_type: Some(self.contest_type.clone()),
+                    field_values: self.contest_field_values.clone(),
                 };
                 self.profile_dirty = true;
                 self.persist_profile("Auto-saved");
@@ -1109,10 +1221,244 @@ impl QsonautGuiApp {
         );
     }
 
+    pub(in super::super) fn draw_third_party_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Third-party integrations");
+        ui.separator();
+        ui.label(
+            RichText::new("Global logging and station-network integrations")
+                .small()
+                .color(Color32::GRAY),
+        );
+        ui.label(
+            RichText::new("QSOs are saved locally first. External delivery runs in a background worker and never controls the radio.")
+                .small()
+                .color(Color32::GRAY),
+        );
+        ui.add_space(8.0);
+
+        let before = self.config.third_party.clone();
+        ui.collapsing("N3FJP application API", |ui| {
+            ui.checkbox(
+                &mut self.config.third_party.n3fjp_api.enabled,
+                "Enable API logging",
+            );
+            ui.horizontal(|ui| {
+                ui.label("Host");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.config.third_party.n3fjp_api.host)
+                        .desired_width(180.0),
+                );
+                ui.label("Port");
+                ui.add(
+                    egui::DragValue::new(&mut self.config.third_party.n3fjp_api.port)
+                        .range(1..=u16::MAX),
+                );
+            });
+            ui.small(
+                "Uses PROGRAM discovery, then submits saved QSOs through the scored ENTER path.",
+            );
+        });
+        ui.add_space(5.0);
+        ui.collapsing("N3FJP station network", |ui| {
+            ui.checkbox(
+                &mut self.config.third_party.station_network.enabled,
+                "Enable station-network sharing",
+            );
+            ui.horizontal(|ui| {
+                ui.label("Host");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.config.third_party.station_network.host)
+                        .desired_width(180.0),
+                );
+                ui.label("Port");
+                ui.add(
+                    egui::DragValue::new(&mut self.config.third_party.station_network.port)
+                        .range(1..=u16::MAX),
+                );
+            });
+            ui.small(
+                "Inbound messages are observed but never apply destructive changes automatically.",
+            );
+        });
+        ui.add_space(5.0);
+        ui.collapsing("UDP logging broadcasts", |ui| {
+            ui.checkbox(
+                &mut self.config.third_party.udp_logging.enabled,
+                "Enable UDP broadcasts",
+            );
+            ui.horizontal(|ui| {
+                ui.label("Format");
+                egui::ComboBox::from_id_salt("third_party_udp_format")
+                    .selected_text(if self.config.third_party.udp_logging.format == "adif" {
+                        "ADIF"
+                    } else {
+                        "N1MM contactinfo"
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.config.third_party.udp_logging.format,
+                            "n1mm_contact_info".to_string(),
+                            "N1MM contactinfo",
+                        );
+                        ui.selectable_value(
+                            &mut self.config.third_party.udp_logging.format,
+                            "adif".to_string(),
+                            "ADIF",
+                        );
+                    });
+            });
+            let mut remove = None;
+            for (index, destination) in self
+                .config
+                .third_party
+                .udp_logging
+                .destinations
+                .iter_mut()
+                .enumerate()
+            {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Destination {}", index + 1));
+                    ui.add_enabled(
+                        self.config.third_party.udp_logging.enabled,
+                        egui::TextEdit::singleline(destination).desired_width(220.0),
+                    );
+                    if ui.small_button("−").clicked() {
+                        remove = Some(index);
+                    }
+                });
+            }
+            if let Some(index) = remove {
+                self.config
+                    .third_party
+                    .udp_logging
+                    .destinations
+                    .remove(index);
+            }
+            if ui.button("＋ Add destination").clicked() {
+                self.config
+                    .third_party
+                    .udp_logging
+                    .destinations
+                    .push("127.0.0.1:2237".to_string());
+            }
+            ui.small(
+                "Use host:port destinations. Delivery is best-effort after the local log is saved.",
+            );
+        });
+        ui.add_space(8.0);
+        let changed = before != self.config.third_party;
+        if changed {
+            self.third_party_settings_dirty = true;
+            self.third_party_apply_status =
+                "Changes pending — nothing connects until Apply is pressed".to_string();
+        }
+        if self.third_party_settings_dirty {
+            ui.colored_label(theme_warning(ui), "Unsaved integration changes");
+        }
+        if let Some(bridge) = &self.third_party_bridge {
+            let status = bridge.status();
+            ui.separator();
+            ui.label(RichText::new("Live integration status").strong());
+            ui.label(format!(
+                "API: {} · Network: {} · UDP: {} · LAN: {}",
+                status.api, status.network, status.udp, status.lan
+            ));
+            if let Some(error) = status.last_error {
+                ui.colored_label(theme_warning(ui), format!("Last error: {error}"));
+            } else {
+                ui.small("No integration errors reported.");
+            }
+        }
+        ui.label(RichText::new(&self.third_party_apply_status).small());
+        if ui
+            .add_enabled(
+                self.third_party_settings_dirty,
+                egui::Button::new("Apply and restart integrations"),
+            )
+            .clicked()
+        {
+            self.persist_profile("Third-party settings saved to");
+            self.third_party_settings_dirty = false;
+            self.third_party_apply_status =
+                "Applied — attempting the configured connections".to_string();
+            self.restart_third_party_bridge();
+        }
+        ui.small("Editing these fields does not connect. Use Apply and restart integrations to test the saved endpoints.");
+    }
+
+    pub(crate) fn restart_third_party_bridge(&mut self) {
+        info!(
+            api_enabled = self.config.third_party.n3fjp_api.enabled,
+            api_host = %self.config.third_party.n3fjp_api.host,
+            api_port = self.config.third_party.n3fjp_api.port,
+            network_enabled = self.config.third_party.station_network.enabled,
+            network_host = %self.config.third_party.station_network.host,
+            network_port = self.config.third_party.station_network.port,
+            "Applying third-party integration settings and restarting worker"
+        );
+        self.third_party_bridge = None;
+        self.third_party_bridge =
+            ThirdPartyBridge::spawn(&self.config.third_party, self.station_callsign.trim());
+    }
+
     pub(in super::super) fn draw_radio_profile_settings(&mut self, ui: &mut egui::Ui) {
         ui.heading("Radio profile settings");
         ui.separator();
         self.draw_device_settings(ui, false);
+        self.draw_radio_validation_controls(ui);
+    }
+
+    fn draw_radio_validation_controls(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(10.0);
+        ui.separator();
+        ui.label(RichText::new("Full hardware validation").strong());
+        ui.label(
+            RichText::new(
+                "Exercises every supported radio control and meter read path. Choose whether the validation may also perform a bounded low-power PTT test.",
+            )
+            .small()
+            .color(Color32::GRAY),
+        );
+        ui.radio_value(
+            &mut self.radio_validation_low_power,
+            false,
+            "Full validation without PTT",
+        );
+        ui.radio_value(
+            &mut self.radio_validation_low_power,
+            true,
+            "Full validation with low-power PTT",
+        );
+        if self.radio_validation_low_power {
+            ui.horizontal(|ui| {
+                ui.label("Capped RF power level");
+                ui.add(egui::DragValue::new(&mut self.radio_validation_power_level).range(1..=10));
+            });
+            ui.checkbox(
+                &mut self.radio_validation_confirm_low_power,
+                "I understand this will key the transmitter briefly",
+            );
+        }
+        if ui
+            .add_enabled(
+                !self.radio_validation_active,
+                egui::Button::new(if self.radio_validation_active {
+                    "Validation running…"
+                } else {
+                    "Run full hardware validation"
+                }),
+            )
+            .clicked()
+        {
+            self.start_radio_validation();
+        }
+        if self.radio_validation_status != "Not run" {
+            ui.label(
+                RichText::new(&self.radio_validation_status)
+                    .small()
+                    .color(theme_muted(ui)),
+            );
+        }
     }
 
     pub(in super::super) fn draw_radio_profile_assignments(&mut self, ui: &mut egui::Ui) {
@@ -1613,6 +1959,7 @@ impl QsonautGuiApp {
     }
 
     pub(in super::super) fn draw_server_panel(&mut self, ui: &mut egui::Ui) {
+        self.poll_radio_validation();
         ui.heading("🌐 QSONaut Server");
         ui.separator();
         ui.label(RichText::new("Use http://localhost:8080 for local development, a LAN address when the server is on another machine, or the hosted HTTPS address. QSONaut selects WS/WSS automatically; reverse proxies require no specialty port.").small().color(Color32::GRAY));
