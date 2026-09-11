@@ -227,7 +227,7 @@ impl QsonautGuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::tuning_step_hz;
+    use super::*;
 
     #[test]
     fn tuning_step_hz_maps_profile_indices_and_defaults() {
@@ -235,5 +235,33 @@ mod tests {
         assert_eq!(tuning_step_hz(Some(0)), 1);
         assert_eq!(tuning_step_hz(Some(3)), 50);
         assert_eq!(tuning_step_hz(Some(99)), 1_000);
+    }
+
+    #[test]
+    fn banner_controls_render_with_default_offline_state() {
+        let context = egui::Context::default();
+        let icon = eframe::icon_data::from_png_bytes(crate::QSONAUT_ICON_PNG).unwrap();
+        let mut app = QsonautGuiApp::new_with_context(
+            AppConfig::default(),
+            false,
+            false,
+            &context,
+            &icon,
+            eframe::Renderer::Wgpu,
+            None,
+            GraphicsPreferences::from_environment(),
+            None,
+            Vec::new(),
+            Arc::new(Mutex::new(None)),
+        );
+        let snapshot = app.state.lock().unwrap().clone();
+
+        let _ = context.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                app.draw_header_branding(ui);
+                app.draw_banner_radio_controls(ui, &snapshot);
+                app.draw_banner_op_modes(ui, &snapshot);
+            });
+        });
     }
 }
