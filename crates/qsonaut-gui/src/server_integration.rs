@@ -2,6 +2,15 @@ use super::*;
 
 const DIAGNOSTIC_LOG_BYTES: usize = 24 * 1024;
 
+fn canonical_server_exchange_fields(
+    fields: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    fields
+        .iter()
+        .map(|(key, value)| (key.trim().to_ascii_lowercase(), value.clone()))
+        .collect()
+}
+
 fn redact_log_value(text: &mut String, value: &str, replacement: &str) {
     let value = value.trim();
     if !value.is_empty() {
@@ -291,8 +300,8 @@ impl QsonautGuiApp {
             "exchange": {
                 "sent": record.contest_exchange_sent,
                 "received": record.contest_exchange_received,
-                "fields_sent": record.contest_fields_sent,
-                "fields_received": record.contest_fields_received,
+                "fields_sent": canonical_server_exchange_fields(&record.contest_fields_sent),
+                "fields_received": canonical_server_exchange_fields(&record.contest_fields_received),
                 "serial_sent": record.contest_serial_sent,
                 "serial_received": record.contest_serial_received,
                 "grid": record.grid,
@@ -550,5 +559,17 @@ mod tests {
             app.profile_io_status,
             "Enable manual diagnostic snapshots before sending"
         );
+    }
+
+    #[test]
+    fn server_contest_exchange_fields_match_server_catalog_keys() {
+        let fields = BTreeMap::from([
+            ("CLASS".to_owned(), "1A".to_owned()),
+            ("SECTION".to_owned(), "WMA".to_owned()),
+        ]);
+        let canonical = canonical_server_exchange_fields(&fields);
+        assert_eq!(canonical.get("class").map(String::as_str), Some("1A"));
+        assert_eq!(canonical.get("section").map(String::as_str), Some("WMA"));
+        assert!(!canonical.contains_key("CLASS"));
     }
 }
