@@ -42,7 +42,7 @@ qsonaut-log = { path = "../qsonaut-log" }
 qsonaut-radio = { package = "rigwright", version = "0.1.30" }
 qsonaut-pskreporter = { path = "../qsonaut-pskreporter" }
 qsonaut-server-client = { path = "../qsonaut-server-client" }
-qsonaut-modems = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "c93660a34b9ed65ea1eb46df57ffc856eb68e797" }
-qsonaut-js8 = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "c93660a34b9ed65ea1eb46df57ffc856eb68e797" }
-qsonaut-third-party = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "6b1cc030fa5fc25db4cbd390ae3cbc2cc732beec" }
-qsonaut-n3fjp = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "6b1cc030fa5fc25db4cbd390ae3cbc2cc732beec", package = "qsonaut-n3fjp" }
+qsonaut-modems = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "3a4f815e7afabe492de60dea72ca00224261c062" }
+qsonaut-js8 = { git = "https://github.com/nicksbar/qsonaut-modems.git", rev = "3a4f815e7afabe492de60dea72ca00224261c062" }
+qsonaut-third-party = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "f3de204e186c03c4996cba180904b7603a05dfc8" }
+qsonaut-n3fjp = { git = "https://github.com/nicksbar/qsonaut-third-party.git", rev = "f3de204e186c03c4996cba180904b7603a05dfc8", package = "qsonaut-n3fjp" }
