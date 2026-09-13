@@ -15,11 +15,14 @@
 [![Core 89.49%](https://img.shields.io/badge/core-89.49%25-brightgreen)](#coverage-area-snapshot)
 [![Server client 83.86%](https://img.shields.io/badge/server%20client-83.86%25-brightgreen)](#coverage-area-snapshot)
 [![PSK Reporter 82.74%](https://img.shields.io/badge/PSK%20Reporter-82.74%25-brightgreen)](#coverage-area-snapshot)
-[![Logging 87.47%](https://img.shields.io/badge/logging-87.47%25-brightgreen)](#coverage-area-snapshot)
+[![Logging 87.55%](https://img.shields.io/badge/logging-87.55%25-brightgreen)](#coverage-area-snapshot)
 [![Release builds](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml/badge.svg)](https://github.com/nicksbar/QSONaut/actions/workflows/release-builds.yml)
 [![Latest release](https://img.shields.io/github/v/release/nicksbar/QSONaut?display_name=tag&sort=semver)](https://github.com/nicksbar/QSONaut/releases)
 
 **An enthusiast-built amateur-radio mission control console.**
+
+**Current release line:** `0.4.2` · software/CI validation is green; physical
+acceptance remains limited to the documented IC-7300 evidence matrix.
 
 QSONaut combines radio control, live audio and spectrum views, WSJT-family
 digital modes, contact logging, and early operator-assist scaffolding in one
@@ -250,6 +253,21 @@ devices are refreshed and selected in **Settings > Devices**:
 cargo run -p qsonaut -- --help
 cargo run -p qsonaut -- --list-radio
 ```
+
+For the reference IC-7300 setup, use `/dev/ttyUSB0`, 115200 baud, radio
+address `0x94`, and controller address `0xE0` only after confirming that your
+device and CI-V settings match. The non-transmitting status probe is:
+
+```bash
+cargo run --locked -p qsonaut -- \
+  --radio-port /dev/ttyUSB0 --radio-baud 115200 \
+  --radio-civ-address 0x94 --controller-civ-address 0xE0 --radio-status
+```
+
+The complete live-radio procedure, including reversible probe, spectrum,
+disconnect/reconnect, and PTT safety boundaries, is in
+[`docs/hardware-acceptance.md`](docs/hardware-acceptance.md). Do not run PTT
+commands without an approved load and an explicit operator safety check.
 
 ## QSONaut Server Integration
 

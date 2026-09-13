@@ -240,7 +240,7 @@ graph LR
 
 | Point | Location | Version | Notes |
 |-------|----------|---------|-------|
-| Cargo workspace | QSONaut/Cargo.toml | 0.2.3 | Main client version |
+| Cargo workspace | QSONaut/Cargo.toml | 0.4.2 | Main client version |
 | Protocol version | qsonaut-protocol/src/lib.rs | v1 | API version string |
 | WebSocket protocol | qsonaut-server-client/src/lib.rs | qsonaut.v1 | Subprotocol name |
 | Message format | qsonaut-protocol/src/lib.rs | Structured | JSON envelope |

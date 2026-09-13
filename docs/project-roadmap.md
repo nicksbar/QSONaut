@@ -1,7 +1,7 @@
 # QSONaut project roadmap
 
-Status: reconciliation baseline
-Date: 2026-09-01
+Status: release-readiness reconciliation
+Date: 2026-09-13
 
 This is the current planning source for the QSONaut family after radio HAL and
 modem extraction. The older [core hardening plan](core-hardening-plan.md) is
@@ -44,15 +44,21 @@ expand every possible radio or modem surface.
 - [x] Add ADIF import/export, filtered views, application diagnostics, and
   opt-in server/automation boundaries.
 - [x] Reach the current 60% overall QSONaut executable-line coverage baseline;
-  preserve the Rigwright integration gate.
-- [ ] Raise QSONaut's Rigwright integration coverage from the current 74.33%
-  snapshot to the enforced 80% gate.
+  preserve the Rigwright integration gate (61.12% workspace, 82.31%
+  integration, 80% CW gate).
+- [x] Raise QSONaut's Rigwright integration coverage above the enforced 80%
+  gate.
 - [ ] Finish the deterministic regression-fixture catalog and promote the
   remaining high-value cases into CI.
-- [ ] Complete a documented IC-7300 acceptance run for the v0.4 release
-  candidate, including safe settings restoration and sanitized logs.
-- [ ] Reconcile release metadata, dependency revisions, README badges, and
-  the GitHub v0.4 milestone before tagging.
+- [x] Complete the non-transmitting IC-7300 status, reversible probe, and
+  spectrum-stream evidence with safe final readback.
+- [x] Reconcile release metadata, dependency revisions, README badges, and
+  changelog coverage for the `0.4.2` release line.
+
+The remaining hardware boundary is explicit: a PTT-SAFE process-stop test and
+any new transmit evidence require an approved load and an operator-present
+run. See [hardware acceptance](hardware-acceptance.md) for the recorded
+results and blocked rows.
 
 Explicit v0.4 non-goals: universal hardware validation, unattended operation,
 new modem implementations, broad new radio-family expansion, complete CW

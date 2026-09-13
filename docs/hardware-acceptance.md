@@ -121,7 +121,7 @@ cargo run --manifest-path Cargo.toml -p qsonaut -- --radio-port /dev/ttyUSB0 --r
 cargo run --manifest-path Cargo.toml -p qsonaut -- --radio-port /dev/ttyUSB0 --radio-baud 115200 --radio-civ-address 0x94 --controller-civ-address 0xE0 --ptt off
 ```
 
-## Recorded IC-7300 run
+## Recorded IC-7300 run — 2026-09-05
 
 Live acceptance was run on 2026-09-05 using `/dev/ttyUSB0`, the stable
 CP2102 by-id endpoint, 115200 baud, radio address `0x94`, and controller
@@ -166,3 +166,21 @@ transport/profile facts:
 
 Retain the JSON probe reports and diagnostic log with the release validation
 record.
+
+## Follow-up IC-7300 run — 2026-09-13
+
+A fresh non-transmitting follow-up was run from QSONaut `0.4.2` on Linux. The
+radio was discovered at `/dev/ttyUSB0` and responded at 115200 baud with radio
+address `0x94` and controller address `0xE0`.
+
+| ID | Result | Evidence |
+| --- | --- | --- |
+| STATUS | PASS | QSONaut read `14,074,000 Hz`, base mode USB, data mode enabled (`USB-D`). |
+| PROBE | PASS | Rigwright reversible exercise completed; `PTT=false`, 74 commands, 73 matched responses, one unsupported repeater-read timeout, and zero dropped frames. Artifact: `/tmp/ic7300-probe-20260913.json`. |
+| SCOPE | PASS | QSONaut received a native spectrum frame within the 5-second timeout, then disabled the stream cleanly. |
+| FINAL | PASS | A new status read after scope shutdown returned `14,074,000 Hz / USB-D`; PTT was not asserted. |
+| PTT-SAFE | BLOCKED | No process-stop test or transmit test was run because an approved RF load and operator authorization were not recorded for this session. |
+
+This follow-up supplements, but does not replace, the 2026-09-05 transmit and
+recovery evidence. Keep the temporary JSON artifact and the QSONaut diagnostic
+log with the release record if this run is being used as acceptance evidence.
