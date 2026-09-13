@@ -67,6 +67,7 @@ use qsonaut_radio::{
 use qsonaut_server_client::{
     log_idempotency_key, new_instance_id, ConnectionConfig as ServerConnectionConfig,
     ConnectionState as ServerConnectionState, Presence as ServerPresence, ServerClient,
+    DEFAULT_SERVER_URL,
 };
 use qsonaut_third_party::sstv as qsonaut_sstv;
 use qsonaut_third_party::wsjt::Q65Submode;
@@ -1524,6 +1525,11 @@ struct QsonautGuiApp {
     psk_reporter: Option<Reporter>,
     third_party_bridge: Option<ThirdPartyBridge>,
     server_client: Option<ServerClient>,
+    server_browser_link_rx: Option<mpsc::Receiver<BrowserLinkProgress>>,
+    server_browser_link_stop: Option<Arc<AtomicBool>>,
+    server_browser_link_url: Option<String>,
+    server_browser_link_code: Option<String>,
+    server_browser_link_status: String,
     server_active_club: Option<(String, String)>,
     server_active_event: Option<(String, String)>,
     server_active_identity: Option<(String, String)>,
@@ -1534,6 +1540,12 @@ struct QsonautGuiApp {
     first_frame_logged: bool,
     last_viewport_log: Option<String>,
     window_geometry: Option<WindowGeometry>,
+}
+
+enum BrowserLinkProgress {
+    ApprovalReady { url: String, user_code: String },
+    Authorized(String),
+    Failed(String),
 }
 
 // Runtime resources owned by a radio tab. The selected tab controls the UI,
@@ -1906,6 +1918,9 @@ impl Drop for QsonautGuiApp {
     fn drop(&mut self) {
         let shutdown_started = Instant::now();
         let parked_profile_count = self.parked_radio_sessions.len();
+        if let Some(stop) = self.server_browser_link_stop.take() {
+            stop.store(true, Ordering::Release);
+        }
         self.force_stop_tx();
         self.stop_native_digital_tx();
         // A clean shutdown must not rewrite a valid profile with runtime

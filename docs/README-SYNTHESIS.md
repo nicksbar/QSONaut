@@ -1,7 +1,16 @@
-# QSONaut Codebase Synthesis Report
+# QSONaut Codebase Synthesis Report — historical snapshot
 
-**Date:** 2026-09-05
+**Snapshot date:** 2026-09-05
 **Workspace:** /home/nick/RigForge
+
+> **Documentation status:** This is an archival synthesis, not the current
+> product specification. It predates QSONaut `0.4.2`, the JS8 mentor-parity
+> update, the MFSK `0.11.0` / third-party `0.2.0` refresh, and the latest
+> coverage and IC-7300 evidence. For current claims, use the root
+> [`README.md`](../README.md), [feature matrix](feature-matrix.md),
+> [project roadmap](project-roadmap.md),
+> [software evidence](software-evidence-v0.4.md), and
+> [hardware acceptance matrix](hardware-acceptance.md).
 
 ## Executive Summary
 
@@ -169,7 +178,11 @@ Management UI (Svelte)
 
 ---
 
-## 5. README Update Needs
+## 5. Historical README update notes
+
+The recommendations below were captured during the 2026-09-05 synthesis and
+are retained only to explain the document’s history. They are not an active
+documentation backlog; the current README and changelog supersede them.
 
 ### QSONaut/README.md
 **Current issues:**

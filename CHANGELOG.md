@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+Changes for the next release will be recorded here.
+
+## [0.4.2] - 2026-09-13
+
 ### Added — 2026-09-10
 - Shared catalog setup and structured exchange editor across mode workspaces,
   with setup/band/mode feedback and checks before application-controlled TX.
@@ -14,17 +18,70 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   duplicate scopes that group phone and digital modes appropriately.
 - Operator, station, contest template/session, club, and server event fields in
   local logs and ADIF; historical uploads use their recorded event context.
+- Browser-based device linking contract for the desktop client, with the
+  hosted QSONaut endpoint as the safe default and manual token entry retained
+  only as an advanced compatibility path.
+- First-party JS8 waterfall receive, semantic message/TX handling, and the
+  pinned mentor-parity modem revision with bounded multi-signal scanning.
+- Deterministic HostBridge media and endpoint-boundary coverage for malformed
+  frames, direction/version mismatches, and reconnect-safe transport behavior.
 
 ### Changed
+- Server-published QSOs resolve and report a current verified managed operating
+  identity; ambiguous records remain local instead of being queued for server
+  rejection. Audience policy remains a server-owned callsign, club, or event
+  decision.
+- Server log publishing now validates recorded identity validity windows and
+  event binding before queueing, and emits the server's nested contest exchange
+  field shape with canonical lower-case keys.
 - Updated native radio consumers to Rigwright `0.1.30`, including the
   hardware-validated IC-756PROII capability correction and write-only Split
   handling.
+- Updated the third-party WSJT adapters to `0.2.0` with MFSK `0.11.0`
+  capabilities, and aligned the transitive modem contract to the JS8
+  mentor-parity revision so shared audio types remain compatible.
+- Published the browser-linking and server contract documentation under
+  `docs/server-integration.md`, replacing the earlier draft location.
 
 ### Fixed
 - Activity/template/server changes disarm queued TX and clear selected context.
 - Voice no longer treats setup-only values such as power as received exchanges.
 - Serial advancement is shared by Voice, CW, FT8, and FT4 logging; received
   exchange fields clear after logging.
+
+### Release evidence — 2026-09-13
+- CI-equivalent validation passes formatting, workspace clippy, workspace
+  tests, 61.12% executable-contract line coverage, 82.31% Rigwright
+  integration coverage, and the 80% CW coverage gate.
+- Coverage badges and the README area snapshot were refreshed from the
+  Linux report generated with the checked-in CI exclusions.
+
+### Release boundary and open issues
+- The release remains software-validated rather than hardware-certified:
+  physical IC-7300 acceptance, alternate radio/audio evidence, recovery and
+  safety evidence, fixture provenance, logging/backup validation, and broader
+  acceptance work remain tracked in [#85](https://github.com/nicksbar/QSONaut/issues/85),
+  [#83](https://github.com/nicksbar/QSONaut/issues/83),
+  [#81](https://github.com/nicksbar/QSONaut/issues/81),
+  [#79](https://github.com/nicksbar/QSONaut/issues/79),
+  [#78](https://github.com/nicksbar/QSONaut/issues/78),
+  [#77](https://github.com/nicksbar/QSONaut/issues/77),
+  [#75](https://github.com/nicksbar/QSONaut/issues/75),
+  [#72](https://github.com/nicksbar/QSONaut/issues/72),
+  [#32](https://github.com/nicksbar/QSONaut/issues/32),
+  [#31](https://github.com/nicksbar/QSONaut/issues/31),
+  [#29](https://github.com/nicksbar/QSONaut/issues/29),
+  [#28](https://github.com/nicksbar/QSONaut/issues/28),
+  [#27](https://github.com/nicksbar/QSONaut/issues/27),
+  [#26](https://github.com/nicksbar/QSONaut/issues/26),
+  [#25](https://github.com/nicksbar/QSONaut/issues/25),
+  [#24](https://github.com/nicksbar/QSONaut/issues/24),
+  [#23](https://github.com/nicksbar/QSONaut/issues/23),
+  [#20](https://github.com/nicksbar/QSONaut/issues/20),
+  [#18](https://github.com/nicksbar/QSONaut/issues/18), and
+  [#17](https://github.com/nicksbar/QSONaut/issues/17). These are release
+  evidence and follow-up gaps, not claims that the corresponding software
+  paths are absent.
 
 ## [0.4.1] - 2026-09-09
 

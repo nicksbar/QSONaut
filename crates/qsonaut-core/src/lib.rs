@@ -10,7 +10,7 @@ pub use commands::{
 pub use config::{
     AppConfig, AudioConfig, ContestOperatingMode, ContestProfile, FoxHoundRole, LanDiscoveryConfig,
     N3fjpEndpointConfig, RadioConfig, ServerConfig, SplitPolicy, StationConfig, ThirdPartyConfig,
-    UdpLoggingConfig,
+    UdpLoggingConfig, DEFAULT_SERVER_URL,
 };
 pub use contracts::{AudioFormat, LogOutcome};
 pub use events::{is_valid_component_transition, AppEvent, AppEventBus, Component, ComponentState};

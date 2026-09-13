@@ -567,6 +567,8 @@ mod tests {
         );
         assert!(normalize_endpoint("ws://127.0.0.1:8765").is_ok());
         assert!(normalize_endpoint("https://example.test").is_err());
+        assert!(normalize_endpoint("http://example.test").is_err());
+        assert!(normalize_endpoint("not a valid endpoint").is_err());
     }
 
     #[test]
@@ -584,6 +586,55 @@ mod tests {
         };
         assert!(validate_outgoing_media(header, &[0, 0]).is_ok());
         assert!(validate_outgoing_media(header, &[0]).is_err());
+        assert!(validate_outgoing_media(
+            MediaFrameHeader {
+                version: MEDIA_HEADER_VERSION + 1,
+                ..header
+            },
+            &[0, 0]
+        )
+        .is_err());
+        assert!(validate_outgoing_media(
+            MediaFrameHeader {
+                direction: MediaDirection::HostToClient,
+                ..header
+            },
+            &[0, 0]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn media_decoder_accepts_host_frames_and_rejects_bad_boundaries() {
+        assert!(decode_media(&[]).is_err());
+        assert!(decode_media(&[0; MediaFrameHeader::BYTES]).is_err());
+
+        let header = MediaFrameHeader {
+            version: MEDIA_HEADER_VERSION,
+            stream_id: 2,
+            direction: MediaDirection::HostToClient,
+            codec: AudioCodec::PcmS16Le,
+            sequence: 4,
+            timestamp_samples: 8,
+            sample_rate_hz: 48_000,
+            channels: 1,
+            payload_bytes: 2,
+        };
+        let mut frame = Vec::new();
+        header.encode(&mut frame);
+        frame.extend_from_slice(&[1, 2]);
+        let (decoded_header, payload) = decode_media(&frame).expect("valid media frame");
+        assert_eq!(decoded_header, header);
+        assert_eq!(payload, vec![1, 2]);
+
+        let mut wrong_direction = Vec::new();
+        MediaFrameHeader {
+            direction: MediaDirection::ClientToHost,
+            ..header
+        }
+        .encode(&mut wrong_direction);
+        wrong_direction.extend_from_slice(&[1, 2]);
+        assert!(decode_media(&wrong_direction).is_err());
     }
 
     #[test]

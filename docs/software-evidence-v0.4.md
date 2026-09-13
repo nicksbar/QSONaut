@@ -1,16 +1,20 @@
 # v0.4 software evidence
 
 This record separates evidence that can be reproduced without a physical radio
-from the final IC-7300 acceptance run.
+from the live IC-7300 evidence recorded in
+[`hardware-acceptance.md`](hardware-acceptance.md). Updated 2026-09-13 for the
+`0.4.2` release line.
 
 ## Reproducible checks
 
 Run from the QSONaut workspace:
 
-- `cargo fmt --all -- --check`
-- `cargo test --offline -p qsonaut-core -p qsonaut-automation -p qsonaut-gui --lib`
-- `cargo clippy --offline -p qsonaut-core -p qsonaut-automation -p qsonaut-gui --all-targets --all-features -- -D warnings`
+- `cargo fmt --all --check`
+- `cargo test --locked --workspace --all-targets`
+- `cargo clippy --locked --workspace --all-targets -- -D warnings`
 - `git diff --check`
+- `cargo llvm-cov --locked --all-features --workspace` with the checked-in CI
+	exclusions and coverage gates
 
 The null-radio and null-audio fixtures cover lifecycle startup/failure/recovery,
 command acceptance and terminal outcomes, duplicate command rejection, timeout
@@ -37,8 +41,14 @@ These rows belong in `docs/hardware-acceptance.md` and must include the commit
 SHA, model/firmware, transport settings, sanitized diagnostics, observed
 result, and final safe-state readback.
 
-## Release boundary
+## Current release boundary
 
-Software evidence may close the deterministic implementation work. The v0.4
-release remains hardware-pending until the IC-7300 matrix is rerun against the
-release candidate and the report is retained with the release artifacts.
+The current software evidence is green: workspace line coverage is 61.12%,
+Rigwright integration coverage is 82.31%, and the CW coverage gate passes.
+The IC-7300 has fresh non-transmitting status, reversible-probe, and native
+spectrum-stream evidence on `/dev/ttyUSB0` at 115200 baud; the final readback
+was 14.074 MHz USB-D with PTT off.
+
+The release is not hardware-complete. PTT-SAFE process-stop evidence and any
+additional transmit evidence remain blocked until an operator confirms an
+approved load and performs the bounded test described in the hardware matrix.

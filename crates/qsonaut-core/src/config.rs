@@ -67,11 +67,13 @@ pub struct RadioConfig {
     pub hostbridge_audio_output_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub const DEFAULT_SERVER_URL: &str = "https://www.qsonaut.com";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServerConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
+    #[serde(default = "default_server_url")]
     pub url: String,
     #[serde(default)]
     pub device_token: String,
@@ -87,6 +89,25 @@ pub struct ServerConfig {
     /// diagnostic snapshots. This never enables automatic uploads.
     #[serde(default)]
     pub share_debug_logs: bool,
+}
+
+fn default_server_url() -> String {
+    DEFAULT_SERVER_URL.to_owned()
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: default_server_url(),
+            device_token: String::new(),
+            share_presence: false,
+            share_radio_details: false,
+            share_logs: false,
+            share_diagnostics: false,
+            share_debug_logs: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -717,6 +738,7 @@ backend = "none"
         assert_eq!(default_radio_endpoint(), "127.0.0.1:4532");
         assert_eq!(default_radio_civ_address(), 0x94);
         assert_eq!(default_controller_civ_address(), 0xE0);
+        assert_eq!(ServerConfig::default().url, DEFAULT_SERVER_URL);
         assert_eq!(default_serial_start(), 1);
         assert_eq!(default_serial_step(), 1);
         assert!(default_dupe_check());
