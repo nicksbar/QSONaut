@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+Changes for the next release will be recorded here.
+
+## [0.4.2] - 2026-09-13
+
 ### Added — 2026-09-10
 - Shared catalog setup and structured exchange editor across mode workspaces,
   with setup/band/mode feedback and checks before application-controlled TX.
