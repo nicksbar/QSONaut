@@ -2520,8 +2520,8 @@ dependencies = [
 
 [[package]]
 name = "mfsk-core"
-version = "0.10.2"
-source = "git+https://github.com/jl1nie/mfsk-core.git?rev=ce9affcfd0c9c5205bbe464224e1c3ca55dafba5#ce9affcfd0c9c5205bbe464224e1c3ca55dafba5"
+version = "0.11.0"
+source = "git+https://github.com/jl1nie/mfsk-core.git?rev=5cba86d5924d1b8736914b5511350eaf1bff3fbc#5cba86d5924d1b8736914b5511350eaf1bff3fbc"
 dependencies = [
  "crc",
  "num-complex",
@@ -3650,8 +3650,8 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-n3fjp"
-version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=26abb027feded0df17948beb765619273cda83df#26abb027feded0df17948beb765619273cda83df"
+version = "0.2.0"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=6b1cc030fa5fc25db4cbd390ae3cbc2cc732beec#6b1cc030fa5fc25db4cbd390ae3cbc2cc732beec"
 dependencies = [
  "serde",
 ]
@@ -3682,8 +3682,8 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-third-party"
-version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=5d2c4c7b618a523ff93824602ab98217d2623c66#5d2c4c7b618a523ff93824602ab98217d2623c66"
+version = "0.2.0"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=6b1cc030fa5fc25db4cbd390ae3cbc2cc732beec#6b1cc030fa5fc25db4cbd390ae3cbc2cc732beec"
 dependencies = [
  "cwdit-dsp",
  "cwdit-morse",
