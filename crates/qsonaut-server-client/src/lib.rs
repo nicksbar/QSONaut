@@ -32,6 +32,200 @@ use url::Url;
 use uuid::Uuid;
 
 const PROTOCOL_VERSION: &str = "v1";
+pub const DEFAULT_SERVER_URL: &str = "https://www.qsonaut.com";
+pub const DEVICE_LINK_CLIENT_ID: &str = "qsonaut-desktop";
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct BrowserLinkStart {
+    pub device_code: String,
+    pub user_code: String,
+    #[serde(alias = "verification_url")]
+    pub verification_uri: String,
+    #[serde(default)]
+    pub verification_uri_complete: Option<String>,
+    pub expires_in: u64,
+    #[serde(default = "default_browser_link_interval")]
+    pub interval: u64,
+}
+
+impl BrowserLinkStart {
+    pub fn approval_url(&self) -> Result<String> {
+        if let Some(url) = self
+            .verification_uri_complete
+            .as_deref()
+            .filter(|url| !url.trim().is_empty())
+        {
+            return Ok(url.to_owned());
+        }
+        let mut url = Url::parse(self.verification_uri.trim())
+            .context("browser-link verification URI is invalid")?;
+        if self.user_code.trim().is_empty() {
+            return Err(anyhow!("browser-link response is missing user_code"));
+        }
+        url.query_pairs_mut()
+            .append_pair("user_code", self.user_code.trim());
+        Ok(url.to_string())
+    }
+}
+
+fn default_browser_link_interval() -> u64 {
+    5
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrowserLinkPoll {
+    Pending { retry_after_secs: u64 },
+    Authorized { device_token: String },
+    Denied { message: String },
+    Expired { message: String },
+}
+
+#[derive(Debug, Deserialize)]
+struct BrowserLinkTokenResponse {
+    #[serde(alias = "device_token", alias = "token")]
+    access_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BrowserLinkErrorResponse {
+    error: Option<String>,
+    error_description: Option<String>,
+    message: Option<String>,
+}
+
+/// Start the standard device-authorization flow without exposing a device
+/// token to the desktop UI. The hosted server owns the browser session and
+/// approval policy; the desktop receives only the one-time device code.
+pub fn request_browser_link(
+    server_url: &str,
+    device_name: &str,
+    client_version: &str,
+) -> Result<BrowserLinkStart> {
+    install_tls_crypto_provider();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent(format!("QSONaut/{client_version}"))
+        .build()
+        .context("create browser-link HTTP client")?;
+    let response = client
+        .post(http_api_url(server_url, "/api/v1/auth/device/authorize")?)
+        .json(&serde_json::json!({
+            "client_id": DEVICE_LINK_CLIENT_ID,
+            "device_name": device_name.trim(),
+            "client_version": client_version,
+        }))
+        .send()
+        .context("request browser-based QSONaut Server link")?;
+    if !response.status().is_success() {
+        return Err(http_response_error(response, "browser-link request"));
+    }
+    let link = response
+        .json::<BrowserLinkStart>()
+        .context("decode browser-link response")?;
+    if link.device_code.trim().is_empty() || link.user_code.trim().is_empty() {
+        return Err(anyhow!("browser-link response is missing its device code"));
+    }
+    let _ = link.approval_url()?;
+    Ok(link)
+}
+
+/// Poll the server-side approval state for a device authorization request.
+/// Pending and slow-down responses are returned as states so callers can keep
+/// the UI responsive and honor the server's requested polling interval.
+pub fn poll_browser_link(
+    server_url: &str,
+    device_code: &str,
+    client_version: &str,
+    retry_after_secs: u64,
+) -> Result<BrowserLinkPoll> {
+    install_tls_crypto_provider();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent(format!("QSONaut/{client_version}"))
+        .build()
+        .context("create browser-link polling client")?;
+    let response = client
+        .post(http_api_url(server_url, "/api/v1/auth/device/token")?)
+        .json(&serde_json::json!({
+            "client_id": DEVICE_LINK_CLIENT_ID,
+            "device_code": device_code,
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        }))
+        .send()
+        .context("poll browser-based QSONaut Server link")?;
+    let retry_after_secs = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(retry_after_secs.max(1));
+    let status = response.status();
+    let body = response
+        .text()
+        .context("read browser-link polling response")?;
+    browser_link_poll_response(status, &body, retry_after_secs)
+}
+
+fn browser_link_poll_response(
+    status: reqwest::StatusCode,
+    body: &str,
+    retry_after_secs: u64,
+) -> Result<BrowserLinkPoll> {
+    if status.is_success() {
+        let token = serde_json::from_str::<BrowserLinkTokenResponse>(body)
+            .context("decode browser-link token response")?;
+        if token.access_token.trim().is_empty() {
+            return Err(anyhow!("browser-link token response is empty"));
+        }
+        return Ok(BrowserLinkPoll::Authorized {
+            device_token: token.access_token,
+        });
+    }
+    let detail = serde_json::from_str::<BrowserLinkErrorResponse>(body).ok();
+    let code = detail
+        .as_ref()
+        .and_then(|value| value.error.as_deref())
+        .unwrap_or_default();
+    let message = detail
+        .as_ref()
+        .and_then(|value| {
+            value
+                .error_description
+                .as_deref()
+                .or(value.message.as_deref())
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(code);
+    match code {
+        "authorization_pending" => Ok(BrowserLinkPoll::Pending { retry_after_secs }),
+        "slow_down" => Ok(BrowserLinkPoll::Pending {
+            retry_after_secs: retry_after_secs.saturating_add(5),
+        }),
+        "access_denied" | "authorization_declined" => Ok(BrowserLinkPoll::Denied {
+            message: if message.is_empty() {
+                "browser authorization was denied".to_owned()
+            } else {
+                message.to_owned()
+            },
+        }),
+        "expired_token" | "expired" => Ok(BrowserLinkPoll::Expired {
+            message: if message.is_empty() {
+                "browser authorization expired".to_owned()
+            } else {
+                message.to_owned()
+            },
+        }),
+        _ => Err(anyhow!(
+            "browser-link polling failed ({}): {}",
+            status,
+            if body.trim().is_empty() {
+                "server returned no details".to_owned()
+            } else {
+                bounded_error_detail(body)
+            }
+        )),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ConnectionConfig {
@@ -556,6 +750,49 @@ fn websocket_url(server_url: &str) -> Result<Url> {
     Ok(url)
 }
 
+fn http_api_url(server_url: &str, path: &str) -> Result<Url> {
+    let mut url = Url::parse(server_url.trim()).context("server URL is invalid")?;
+    let scheme = match url.scheme() {
+        "https" | "wss" => "https",
+        "http" | "ws" => "http",
+        _ => return Err(anyhow!("server URL must use https, http, wss, or ws")),
+    };
+    url.set_scheme(scheme)
+        .map_err(|_| anyhow!("server URL scheme cannot be changed"))?;
+    url.set_path(path);
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url)
+}
+
+fn http_response_error(response: reqwest::blocking::Response, action: &str) -> anyhow::Error {
+    let status = response.status();
+    let body = response.text().unwrap_or_default();
+    let detail = serde_json::from_str::<BrowserLinkErrorResponse>(&body)
+        .ok()
+        .and_then(|value| value.error_description.or(value.message).or(value.error))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            if body.trim().is_empty() {
+                "server returned no details".to_owned()
+            } else {
+                bounded_error_detail(&body)
+            }
+        });
+    anyhow!("{action} failed ({status}): {detail}")
+}
+
+fn bounded_error_detail(body: &str) -> String {
+    let detail = body.trim();
+    let mut chars = detail.chars();
+    let bounded = chars.by_ref().take(512).collect::<String>();
+    if chars.next().is_some() {
+        format!("{bounded}…")
+    } else {
+        bounded
+    }
+}
+
 async fn send<S>(writer: &mut S, message: ClientMessage) -> Result<Uuid>
 where
     S: futures_util::Sink<Message> + Unpin,
@@ -768,6 +1005,30 @@ fn receive_with_channels(
                         "id",
                         receipt
                             .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ),
+                    (
+                        "callsign_id",
+                        receipt
+                            .get("callsign_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ),
+                    (
+                        "operating_callsign",
+                        receipt
+                            .get("operating_callsign")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ),
+                    (
+                        "event_id",
+                        receipt
+                            .get("event_id")
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_owned(),
@@ -1257,6 +1518,91 @@ mod tests {
     }
 
     #[test]
+    fn browser_link_builds_a_safe_approval_url() {
+        let link = BrowserLinkStart {
+            device_code: "device-secret".to_owned(),
+            user_code: "ABCD-EFGH".to_owned(),
+            verification_uri: "https://www.qsonaut.com/link".to_owned(),
+            verification_uri_complete: None,
+            expires_in: 600,
+            interval: 5,
+        };
+        assert_eq!(
+            link.approval_url().unwrap(),
+            "https://www.qsonaut.com/link?user_code=ABCD-EFGH"
+        );
+        assert!(!link.approval_url().unwrap().contains("device-secret"));
+
+        let complete = BrowserLinkStart {
+            verification_uri_complete: Some(
+                "https://www.qsonaut.com/link?user_code=ABCD-EFGH".to_owned(),
+            ),
+            ..link
+        };
+        assert_eq!(
+            complete.approval_url().unwrap(),
+            "https://www.qsonaut.com/link?user_code=ABCD-EFGH"
+        );
+    }
+
+    #[test]
+    fn browser_link_poll_states_follow_standard_device_authorization_errors() {
+        assert_eq!(
+            browser_link_poll_response(
+                reqwest::StatusCode::BAD_REQUEST,
+                r#"{"error":"authorization_pending"}"#,
+                5,
+            )
+            .unwrap(),
+            BrowserLinkPoll::Pending {
+                retry_after_secs: 5
+            }
+        );
+        assert_eq!(
+            browser_link_poll_response(
+                reqwest::StatusCode::BAD_REQUEST,
+                r#"{"error":"slow_down"}"#,
+                5,
+            )
+            .unwrap(),
+            BrowserLinkPoll::Pending {
+                retry_after_secs: 10
+            }
+        );
+        assert_eq!(
+            browser_link_poll_response(
+                reqwest::StatusCode::OK,
+                r#"{"device_token":"token-from-browser"}"#,
+                5,
+            )
+            .unwrap(),
+            BrowserLinkPoll::Authorized {
+                device_token: "token-from-browser".to_owned()
+            }
+        );
+        assert!(matches!(
+            browser_link_poll_response(
+                reqwest::StatusCode::BAD_REQUEST,
+                r#"{"error":"access_denied","error_description":"Nope"}"#,
+                5,
+            )
+            .unwrap(),
+            BrowserLinkPoll::Denied { message } if message == "Nope"
+        ));
+    }
+
+    #[test]
+    fn browser_link_http_urls_accept_websocket_scheme_overrides() {
+        assert_eq!(
+            http_api_url("wss://server.example/base", "/api/v1/auth/device/token")
+                .unwrap()
+                .as_str(),
+            "https://server.example/api/v1/auth/device/token"
+        );
+        assert!(http_api_url("ftp://server.example", "/api/v1/auth/device/token").is_err());
+    }
+
+    #[test]
     fn bounded_automation_events_discard_oldest_entries() {
         let events = Arc::new(Mutex::new(VecDeque::new()));
         for index in 0..257 {
@@ -1441,6 +1787,9 @@ mod tests {
                 "payload":{
                     "qso": {
                         "id":"3ecb975c-bd24-47fd-b230-5a79c0d5cad3",
+                        "callsign_id":"20000000-0000-4000-8000-000000000001",
+                        "operating_callsign":"W1CLUB",
+                        "event_id":"10000000-0000-4000-8000-000000000001",
                         "points":2,
                         "is_duplicate":false,
                         "multipliers":{"section":"EMA"},
@@ -1464,6 +1813,15 @@ mod tests {
         let event = events.lock().unwrap().pop_front().unwrap();
         assert_eq!(event.kind, "qso_log_accepted");
         assert_eq!(event.fields["points"], "2");
+        assert_eq!(event.fields["operating_callsign"], "W1CLUB");
+        assert_eq!(
+            event.fields["callsign_id"],
+            "20000000-0000-4000-8000-000000000001"
+        );
+        assert_eq!(
+            event.fields["event_id"],
+            "10000000-0000-4000-8000-000000000001"
+        );
         assert_eq!(event.fields["is_duplicate"], "false");
         assert_eq!(event.fields["multipliers"], r#"{"section":"EMA"}"#);
         assert!(event.fields["scoring_explanation"].contains("multiplier earned"));

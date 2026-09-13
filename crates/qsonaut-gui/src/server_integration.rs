@@ -1,14 +1,99 @@
 use super::*;
+use qsonaut_server_client::{
+    poll_browser_link, request_browser_link, BrowserLinkPoll, ServerIdentity,
+};
+use serde_json::Value;
 
 const DIAGNOSTIC_LOG_BYTES: usize = 24 * 1024;
 
-fn canonical_server_exchange_fields(
-    fields: &BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
+fn canonical_server_exchange_fields(fields: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     fields
         .iter()
         .map(|(key, value)| (key.trim().to_ascii_lowercase(), value.clone()))
         .collect()
+}
+
+fn resolve_server_identity_id(
+    identities: &[ServerIdentity],
+    record: &QsoRecord,
+    occurred_at: &str,
+) -> Option<Uuid> {
+    let requested_id = if record.managed_callsign_id.trim().is_empty() {
+        None
+    } else {
+        Some(Uuid::parse_str(record.managed_callsign_id.trim()).ok()?)
+    };
+    let event_id = if record.server_event_id.trim().is_empty() {
+        None
+    } else {
+        Some(Uuid::parse_str(record.server_event_id.trim()).ok()?)
+    };
+    let occurred_at =
+        time::OffsetDateTime::parse(occurred_at, &time::format_description::well_known::Rfc3339)
+            .ok()?;
+    identities
+        .iter()
+        .filter(|identity| {
+            let identity_event_matches = match (identity.event_id.as_deref(), event_id) {
+                (None, _) => true,
+                (Some(identity_event), Some(event_id)) => {
+                    Uuid::parse_str(identity_event).ok() == Some(event_id)
+                }
+                (Some(_), None) => false,
+            };
+            let effective_at = identity.effective_from.as_deref().is_none_or(|value| {
+                time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                    .is_ok_and(|effective| occurred_at >= effective)
+            });
+            let before_expiry = identity.expires_at.as_deref().is_none_or(|value| {
+                time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                    .is_ok_and(|expires| occurred_at < expires)
+            });
+            identity
+                .callsign
+                .eq_ignore_ascii_case(record.station_callsign.trim())
+                && identity.status == "active"
+                && identity.verification_status == "verified"
+                && identity_event_matches
+                && effective_at
+                && before_expiry
+        })
+        .find(|identity| {
+            requested_id.is_some_and(|id| Uuid::parse_str(&identity.id).ok() == Some(id))
+                || (requested_id.is_none() && identity.identity_type == "personal")
+        })
+        .and_then(|identity| Uuid::parse_str(&identity.id).ok())
+}
+
+fn server_qso_payload(record: &QsoRecord, callsign_id: Uuid, occurred_at: &str) -> Value {
+    serde_json::json!({
+        "event_id": Uuid::parse_str(record.server_event_id.trim()).ok(),
+        "operating_callsign": record.station_callsign.trim(),
+        "callsign_id": callsign_id,
+        "idempotency_key": log_idempotency_key(record.id),
+        "callsign": record.callsign.trim(),
+        "band": record.band.trim(),
+        "mode": record.mode.trim(),
+        "frequency_hz": i64::try_from(record.frequency_hz).ok(),
+        "occurred_at": occurred_at,
+        "rst_sent": (!record.report_sent.trim().is_empty()).then_some(record.report_sent.trim()),
+        "rst_received": (!record.report_received.trim().is_empty()).then_some(record.report_received.trim()),
+        "exchange": {
+            "sent": record.contest_exchange_sent,
+            "received": record.contest_exchange_received,
+            "fields_sent": canonical_server_exchange_fields(&record.contest_fields_sent),
+            "fields_received": canonical_server_exchange_fields(&record.contest_fields_received),
+            "serial_sent": record.contest_serial_sent,
+            "serial_received": record.contest_serial_received,
+            "grid": record.grid,
+            "operator_callsign": record.operator_callsign,
+            "station_callsign": record.station_callsign,
+            "contest_template_id": record.contest_template_id,
+            "club_id": record.club_id,
+        },
+        "points": 0,
+        "source": "qsonaut",
+    })
 }
 
 fn redact_log_value(text: &mut String, value: &str, replacement: &str) {
@@ -43,6 +128,149 @@ fn redacted_diagnostic_log(raw: String, config: &AppConfig) -> String {
 }
 
 impl QsonautGuiApp {
+    pub(super) fn poll_server_browser_link(&mut self) {
+        let Some(rx) = self.server_browser_link_rx.take() else {
+            return;
+        };
+        let mut keep_receiver = true;
+        loop {
+            match rx.try_recv() {
+                Ok(BrowserLinkProgress::ApprovalReady { url, user_code }) => {
+                    self.server_browser_link_url = Some(url);
+                    self.server_browser_link_code = Some(user_code);
+                    self.server_browser_link_status =
+                        "Browser approval is open; waiting for authorization".to_owned();
+                }
+                Ok(BrowserLinkProgress::Authorized(token)) => {
+                    self.config.server.device_token = token;
+                    self.config.server.enabled = true;
+                    self.server_browser_link_status =
+                        "Browser approval complete; connecting to QSONaut Server".to_owned();
+                    self.profile_dirty = true;
+                    keep_receiver = false;
+                    self.server_browser_link_stop = None;
+                    self.reconnect_server();
+                    break;
+                }
+                Ok(BrowserLinkProgress::Failed(message)) => {
+                    self.server_browser_link_status = message;
+                    keep_receiver = false;
+                    self.server_browser_link_stop = None;
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.server_browser_link_status =
+                        "Browser-link worker stopped unexpectedly".to_owned();
+                    keep_receiver = false;
+                    self.server_browser_link_stop = None;
+                    break;
+                }
+            }
+        }
+        if keep_receiver {
+            self.server_browser_link_rx = Some(rx);
+        }
+    }
+
+    pub(super) fn start_server_browser_link(&mut self) {
+        if self.server_browser_link_rx.is_some() {
+            self.server_browser_link_status =
+                "A browser link is already waiting for approval".to_owned();
+            return;
+        }
+        let server_url = if self.config.server.url.trim().is_empty() {
+            DEFAULT_SERVER_URL.to_owned()
+        } else {
+            self.config.server.url.trim().to_owned()
+        };
+        self.config.server.url = server_url.clone();
+        self.profile_dirty = true;
+        self.server_browser_link_url = None;
+        self.server_browser_link_code = None;
+        self.server_browser_link_status = "Requesting a browser link…".to_owned();
+        let (tx, rx) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let client_version = env!("CARGO_PKG_VERSION").to_owned();
+        let device_name = "QSONaut desktop".to_owned();
+        thread::spawn(move || {
+            let link = match request_browser_link(&server_url, &device_name, &client_version) {
+                Ok(link) => link,
+                Err(error) => {
+                    let _ = tx.send(BrowserLinkProgress::Failed(error.to_string()));
+                    return;
+                }
+            };
+            let approval_url = match link.approval_url() {
+                Ok(url) => url,
+                Err(error) => {
+                    let _ = tx.send(BrowserLinkProgress::Failed(error.to_string()));
+                    return;
+                }
+            };
+            if tx
+                .send(BrowserLinkProgress::ApprovalReady {
+                    url: approval_url.clone(),
+                    user_code: link.user_code.clone(),
+                })
+                .is_err()
+            {
+                return;
+            }
+            let _ = webbrowser::open(&approval_url);
+            let deadline = Instant::now() + Duration::from_secs(link.expires_in.max(1));
+            let mut retry_after_secs = link.interval.clamp(1, 60);
+            loop {
+                if worker_stop.load(Ordering::Acquire) {
+                    return;
+                }
+                if Instant::now() >= deadline {
+                    let _ = tx.send(BrowserLinkProgress::Failed(
+                        "Browser authorization expired; start the link again".to_owned(),
+                    ));
+                    return;
+                }
+                thread::sleep(Duration::from_secs(retry_after_secs));
+                match poll_browser_link(
+                    &server_url,
+                    &link.device_code,
+                    &client_version,
+                    retry_after_secs,
+                ) {
+                    Ok(BrowserLinkPoll::Pending {
+                        retry_after_secs: next,
+                    }) => {
+                        retry_after_secs = next.clamp(1, 60);
+                    }
+                    Ok(BrowserLinkPoll::Authorized { device_token }) => {
+                        let _ = tx.send(BrowserLinkProgress::Authorized(device_token));
+                        return;
+                    }
+                    Ok(BrowserLinkPoll::Denied { message })
+                    | Ok(BrowserLinkPoll::Expired { message }) => {
+                        let _ = tx.send(BrowserLinkProgress::Failed(message));
+                        return;
+                    }
+                    Err(error) => {
+                        let _ = tx.send(BrowserLinkProgress::Failed(error.to_string()));
+                        return;
+                    }
+                }
+            }
+        });
+        self.server_browser_link_rx = Some(rx);
+        self.server_browser_link_stop = Some(stop);
+    }
+
+    pub(super) fn cancel_server_browser_link(&mut self) {
+        if let Some(stop) = self.server_browser_link_stop.take() {
+            stop.store(true, Ordering::Release);
+        }
+        self.server_browser_link_rx = None;
+        self.server_browser_link_status = "Browser link canceled".to_owned();
+    }
+
     pub(super) fn reconcile_server_activity_context(&mut self) {
         let Some(client) = &self.server_client else {
             return;
@@ -282,37 +510,25 @@ impl QsonautGuiApp {
         let Some(occurred_at) = qso_timestamp(record) else {
             return;
         };
-        let callsign_id = Uuid::parse_str(&record.managed_callsign_id).ok();
-        let operating_callsign = (callsign_id.is_some() || !record.server_event_id.is_empty())
-            .then_some(record.station_callsign.as_str());
-        client.publish_log(serde_json::json!({
-            "event_id": Uuid::parse_str(&record.server_event_id).ok(),
-            "operating_callsign": operating_callsign,
-            "callsign_id": callsign_id,
-            "idempotency_key": log_idempotency_key(record.id),
-            "callsign": record.callsign,
-            "band": record.band,
-            "mode": record.mode,
-            "frequency_hz": i64::try_from(record.frequency_hz).ok(),
-            "occurred_at": occurred_at,
-            "rst_sent": (!record.report_sent.is_empty()).then_some(&record.report_sent),
-            "rst_received": (!record.report_received.is_empty()).then_some(&record.report_received),
-            "exchange": {
-                "sent": record.contest_exchange_sent,
-                "received": record.contest_exchange_received,
-                "fields_sent": canonical_server_exchange_fields(&record.contest_fields_sent),
-                "fields_received": canonical_server_exchange_fields(&record.contest_fields_received),
-                "serial_sent": record.contest_serial_sent,
-                "serial_received": record.contest_serial_received,
-                "grid": record.grid,
-                "operator_callsign": record.operator_callsign,
-                "station_callsign": record.station_callsign,
-                "contest_template_id": record.contest_template_id,
-                "club_id": record.club_id,
-            },
-            "points": 0,
-            "source": "qsonaut",
-        }));
+        if record.callsign.trim().is_empty()
+            || record.band.trim().is_empty()
+            || record.mode.trim().is_empty()
+        {
+            warn!("QSO not queued for server: callsign, band, and mode are required");
+            return;
+        }
+        let Some(callsign_id) =
+            resolve_server_identity_id(&client.status().identities, record, &occurred_at)
+        else {
+            warn!(callsign = %record.station_callsign, "QSO not queued for server: no active verified managed operating identity");
+            return;
+        };
+        let operating_callsign = record.station_callsign.trim();
+        if operating_callsign.is_empty() {
+            warn!("QSO not queued for server: operating callsign is empty");
+            return;
+        }
+        client.publish_log(server_qso_payload(record, callsign_id, &occurred_at));
         info!(callsign = %record.callsign, band = %record.band, mode = %record.mode, "QSO queued for server log publishing");
     }
 
@@ -571,5 +787,92 @@ mod tests {
         assert_eq!(canonical.get("class").map(String::as_str), Some("1A"));
         assert_eq!(canonical.get("section").map(String::as_str), Some("WMA"));
         assert!(!canonical.contains_key("CLASS"));
+    }
+
+    #[test]
+    fn ordinary_qsos_resolve_their_personal_server_identity() {
+        let identity_id = Uuid::new_v4();
+        let identities = vec![ServerIdentity {
+            id: identity_id.to_string(),
+            callsign: "N7UF".to_owned(),
+            identity_type: "personal".to_owned(),
+            club_id: None,
+            event_id: None,
+            status: "active".to_owned(),
+            verification_status: "verified".to_owned(),
+            effective_from: None,
+            expires_at: None,
+        }];
+        let mut record = QsoRecord::new("W1AW", "FT8", "20m", 14_074_000, 1, 2);
+        record.station_callsign = "N7UF".to_owned();
+        let occurred_at = qso_timestamp(&record).unwrap();
+        assert_eq!(
+            resolve_server_identity_id(&identities, &record, &occurred_at),
+            Some(identity_id)
+        );
+    }
+
+    #[test]
+    fn server_identity_resolution_rejects_invalid_explicit_and_event_context() {
+        let identity_id = Uuid::new_v4();
+        let event_id = Uuid::new_v4();
+        let identities = vec![ServerIdentity {
+            id: identity_id.to_string(),
+            callsign: "N7UF".to_owned(),
+            identity_type: "event".to_owned(),
+            club_id: None,
+            event_id: Some(event_id.to_string()),
+            status: "active".to_owned(),
+            verification_status: "verified".to_owned(),
+            effective_from: Some("2026-09-11T00:00:00Z".to_owned()),
+            expires_at: Some("2026-09-12T00:00:00Z".to_owned()),
+        }];
+        let mut record = QsoRecord::new("W1AW", "FT8", "20m", 14_074_000, 1, 2);
+        record.station_callsign = "N7UF".to_owned();
+        record.server_event_id = event_id.to_string();
+        record.managed_callsign_id = identity_id.to_string();
+        assert_eq!(
+            resolve_server_identity_id(&identities, &record, "2026-09-11T12:00:00Z"),
+            Some(identity_id)
+        );
+
+        record.server_event_id = Uuid::new_v4().to_string();
+        assert!(resolve_server_identity_id(&identities, &record, "2026-09-11T12:00:00Z").is_none());
+
+        record.server_event_id = event_id.to_string();
+        record.managed_callsign_id = "not-a-uuid".to_owned();
+        assert!(resolve_server_identity_id(&identities, &record, "2026-09-11T12:00:00Z").is_none());
+        assert!(resolve_server_identity_id(&identities, &record, "2026-09-12T00:00:00Z").is_none());
+    }
+
+    #[test]
+    fn server_qso_payload_matches_the_server_log_contract() {
+        let identity_id = Uuid::new_v4();
+        let event_id = Uuid::new_v4();
+        let mut record = QsoRecord::new(" w1aw ", " ft8 ", " 20m ", 14_074_000, 1, 2);
+        record.station_callsign = "N7UF".to_owned();
+        record.operator_callsign = "K1OP".to_owned();
+        record.server_event_id = event_id.to_string();
+        record.report_sent = "-10".to_owned();
+        record.report_received = "-12".to_owned();
+        record.contest_exchange_sent = "1A WMA".to_owned();
+        record
+            .contest_fields_sent
+            .insert("CLASS".to_owned(), "1A".to_owned());
+        record
+            .contest_fields_received
+            .insert("SECTION".to_owned(), "WMA".to_owned());
+        record.contest_serial_sent = Some(7);
+        let payload = server_qso_payload(&record, identity_id, "2026-09-11T12:00:00Z");
+        assert_eq!(payload["event_id"], event_id.to_string());
+        assert_eq!(payload["callsign_id"], identity_id.to_string());
+        assert_eq!(payload["operating_callsign"], "N7UF");
+        assert_eq!(payload["callsign"], "W1AW");
+        assert_eq!(payload["band"], "20m");
+        assert_eq!(payload["mode"], "FT8");
+        assert_eq!(payload["exchange"]["fields_sent"]["class"], "1A");
+        assert_eq!(payload["exchange"]["fields_received"]["section"], "WMA");
+        assert_eq!(payload["exchange"]["serial_sent"], 7);
+        assert_eq!(payload["source"], "qsonaut");
     }
 }

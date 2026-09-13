@@ -1960,6 +1960,7 @@ impl QsonautGuiApp {
 
     pub(in super::super) fn draw_server_panel(&mut self, ui: &mut egui::Ui) {
         self.poll_radio_validation();
+        self.poll_server_browser_link();
         ui.heading("🌐 QSONaut Server");
         ui.separator();
         ui.label(RichText::new("Use http://localhost:8080 for local development, a LAN address when the server is on another machine, or the hosted HTTPS address. QSONaut selects WS/WSS automatically; reverse proxies require no specialty port.").small().color(Color32::GRAY));
@@ -1976,16 +1977,48 @@ impl QsonautGuiApp {
                     .hint_text("http://localhost:8080 or https://qsonaut.example.org"),
             );
         });
-        ui.horizontal(|ui| {
-            ui.label("Device token");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.config.server.device_token)
-                    .password(true)
-                    .desired_width(ui.available_width())
-                    .hint_text("Paste the token issued by QSONaut Server"),
-            );
+        ui.group(|ui| {
+            ui.label(RichText::new("Link this installation in your browser").strong());
+            ui.label(RichText::new("The browser handles sign-in and approval. QSONaut receives a revocable device credential after approval; no key or password is copied through this window.").small().color(Color32::GRAY));
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Link in browser").clicked() {
+                    self.start_server_browser_link();
+                }
+                if self.server_browser_link_rx.is_some() && ui.button("Cancel").clicked() {
+                    self.cancel_server_browser_link();
+                }
+            });
+            if let Some(url) = &self.server_browser_link_url {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Approval page:");
+                    ui.hyperlink_to("open again", url);
+                    if let Some(code) = &self.server_browser_link_code {
+                        ui.label(format!("Code: {code}"));
+                    }
+                });
+            }
+            if !self.server_browser_link_status.is_empty() {
+                ui.label(
+                    RichText::new(&self.server_browser_link_status)
+                        .small()
+                        .color(Color32::LIGHT_BLUE),
+                );
+            }
         });
-        ui.label(RichText::new("The token is stored locally in profile.toml with owner-only permissions on Unix systems.").small().color(Color32::GRAY));
+        egui::CollapsingHeader::new("Advanced: use an existing device token")
+            .default_open(!self.config.server.device_token.trim().is_empty())
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Device token");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.config.server.device_token)
+                            .password(true)
+                            .desired_width(ui.available_width())
+                            .hint_text("Existing token issued by QSONaut Server"),
+                    );
+                });
+                ui.label(RichText::new("Stored locally in profile.toml with owner-only permissions on Unix systems.").small().color(Color32::GRAY));
+            });
         ui.add_space(5.0);
         ui.label(RichText::new("Privacy controls").strong());
         ui.checkbox(

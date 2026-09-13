@@ -14,8 +14,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   duplicate scopes that group phone and digital modes appropriately.
 - Operator, station, contest template/session, club, and server event fields in
   local logs and ADIF; historical uploads use their recorded event context.
+- Browser-based device linking contract for the desktop client, with the
+  hosted QSONaut endpoint as the safe default and manual token entry retained
+  only as an advanced compatibility path.
 
 ### Changed
+- Server-published QSOs resolve and report a current verified managed operating
+  identity; ambiguous records remain local instead of being queued for server
+  rejection. Audience policy remains a server-owned callsign, club, or event
+  decision.
+- Server log publishing now validates recorded identity validity windows and
+  event binding before queueing, and emits the server's nested contest exchange
+  field shape with canonical lower-case keys.
 - Updated native radio consumers to Rigwright `0.1.30`, including the
   hardware-validated IC-756PROII capability correction and write-only Split
   handling.

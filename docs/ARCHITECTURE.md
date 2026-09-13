@@ -4,7 +4,7 @@
 
 ```mermaid
 graph TB
-    subgraph QSONaut_Client["QSONaut Client v0.4.1"]
+    subgraph QSONaut_Client["QSONaut Client v0.4.2"]
         direction TB
         A[apps/qsonaut<br/>Main CLI]
         A --> B[crates/qsonaut-gui<br/>eframe 0.33 + wgpu]
@@ -182,7 +182,7 @@ graph TB
 
 | Component | Version | Notes |
 |-----------|---------|-------|
-| QSONaut Client | 0.4.1 | Release branch |
+| QSONaut Client | 0.4.2 | Release branch |
 | QSONaut Server | 0.1.0 | Independent release |
 | qsonaut-third-party | pinned revision | GPL/third-party modem adapters |
 | qsonaut-modems | pinned revision | Consumer-neutral modem contracts |
