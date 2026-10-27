@@ -7,7 +7,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
-Changes for the next release will be recorded here.
+### Changed
+- Maintenance refresh: pin `qsonaut-third-party` and `qsonaut-n3fjp` to
+  `3ef1fbdc037d54eab6f71babfa25b5ff335c178b`, and `qsonaut-modems` and
+  `qsonaut-js8` to `a0ef913c4684e8aa4711d13bbbe6775baa436db0` (`0.1.1`).
+- The adapter now resolves `mfsk-core` at
+  `c21458c90bcb853f20181e9e7cac3c2f9b4bad34` (`0.14.0` plus unreleased
+  upstream corrections). Existing consumer TX, arm/disarm, audio, clock, and
+  protocol-adoption policies remain unchanged.
+- Correct the linked dependency's license to `GPL-3.0-only`, document immutable
+  transitive sources, and include its locked-source GPL license in desktop
+  release archives. QSONaut's original source remains MIT licensed.
+
+### Fixed
+- Restore null-audio standard-message compatibility by replacing the shared
+  synthetic `QZ0NA`–`QZ5NF` fallback pool with `0Z0NA`, `0Z1NB`, `0Z2NC`,
+  `0Z3ND`, `0Z4NE`, and `0Z5NF`. These demo identifiers pack and round-trip
+  intact; contributor/tester variables and supplied calls are not rewritten.
+  No packer bypass, test suppression, or radio/TX safety change is included.
+  See [maintenance evidence](docs/UPSTREAM-CATCHUP-2026-10-27.md).
 
 ## [0.4.2] - 2026-09-13
 

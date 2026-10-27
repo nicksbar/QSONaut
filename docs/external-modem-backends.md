@@ -4,9 +4,10 @@ This project is intentionally moving toward **integration-first** modem strategy
 
 ## Integrated now
 
-- [`mfsk-core`](https://github.com/jl1nie/mfsk-core) (GPL-3.0-or-later,
-  developed by its upstream contributors; pinned Git revision behind
-  `qsonaut-third-party`)
+- [`mfsk-core`](https://github.com/jl1nie/mfsk-core/tree/c21458c90bcb853f20181e9e7cac3c2f9b4bad34)
+  (`GPL-3.0-only`, `0.14.0` plus unreleased upstream corrections; immutable
+  revision `c21458c90bcb853f20181e9e7cac3c2f9b4bad34` behind the pinned
+  `qsonaut-third-party` adapter; see [source notices](../THIRD_PARTY_NOTICES.md))
   - FT8/FT4/FST4/WSPR/JT9/JT65/all wired Q65 submodes/MSK144 support
   - QSONaut wires mode-specific receive adapters for each of those families.
   - FT8, FT4, FST4-60, JT9, JT65, and all selectable Q65 submodes have

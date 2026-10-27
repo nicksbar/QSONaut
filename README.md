@@ -6,8 +6,8 @@
 
 [![CI](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/ci.yml)
 [![Coverage gate](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml/badge.svg?branch=main)](https://github.com/nicksbar/QSONaut/actions/workflows/coverage.yml)
-[![Line coverage 61.12%](https://img.shields.io/badge/line%20coverage-61.12%25-yellow)](#coverage-area-snapshot)
-[![GUI core 51.50%](https://img.shields.io/badge/GUI%20core-51.50%25-yellow)](#coverage-area-snapshot)
+[![Line coverage 61.17%](https://img.shields.io/badge/line%20coverage-61.17%25-yellow)](#coverage-area-snapshot)
+[![GUI core 51.68%](https://img.shields.io/badge/GUI%20core-51.68%25-yellow)](#coverage-area-snapshot)
 [![GUI workers 62.49%](https://img.shields.io/badge/GUI%20workers-62.49%25-yellow)](#coverage-area-snapshot)
 [![GUI modes 62.85%](https://img.shields.io/badge/GUI%20modes-62.85%25-yellow)](#coverage-area-snapshot)
 [![GUI panels 64.78%](https://img.shields.io/badge/GUI%20panels-64.78%25-yellow)](#coverage-area-snapshot)
@@ -61,7 +61,7 @@ console. This is an honest capability snapshot, not a compatibility promise:
 | --- | --- |
 | Digital modes | FT8 and FT4 provide native decode, activity, conversation, TX history, sequencing, logging, and explicit global TX disarm. JS8 now has a first-party waterfall-wide receive path, semantic compose/TX support, multi-signal null-audio simulation, and an initial FT8-like activity UI; it remains experimental and incomplete. FST4, JT9, JT65, and all currently exposed Q65 submodes have experimental receive/scheduled-TX paths; WSPR and MSK144 are receive-only integrations. |
 | SSTV and local images | Single-channel auto-targeting finds shifted VIS headers across the audio baseband, and Auto VIS receive or manual receive filtering decodes 13 Martin/Scottie/Robot/PD modes. Waterfall clicking overrides targeting; acquisition, ranked-candidate, progress, and failure diagnostics use the filterable Application Log. The pinned adapter also provides selectable experimental TX. Existing images can be browsed or generated through local Ollama/Lemonade models, and TX remains explicitly armed. |
-| CW | Software audio CW through [cw-dit](https://github.com/nicksbar/cw-dit), with selected-channel streaming decode, adaptive timing, noise-floor slicing, and generated subband TX. Paddle/keyed-carrier input, prosigns, punctuation, and auto-sequencing are not implemented yet. |
+| CW | Software audio CW through [cw-dit](https://github.com/swilcox/cw-dit/tree/153fc247ce6e4934c94e0cd2dcbf7887e368ec29), with selected-channel streaming decode, adaptive timing, noise-floor slicing, and generated subband TX. Paddle/keyed-carrier input, prosigns, punctuation, and auto-sequencing are not implemented yet. |
 | Radio control | Rigwright profiles cover Icom CI-V, modern and classic Yaesu CAT, and Kenwood PC control, with generic and model-specific profiles. Capability-gated power, AF/RF gain, squelch, RF power, preamp/attenuator, NB, NR, IP+, notch, AGC, tuner, normalized meters, and SWR controls are exposed where supported. IC-7300 is QSONaut's hardware-validated path; Rigwright 0.1.30 also has direct IC-756PROII hardware evidence, while its complete QSONaut workflow remains experimental. |
 | Spectrum and audio | Equal-height radio/audio waterfalls, narrow/active-band views, VBW controls, click-to-tune audio/radio scopes, upper-banner scope details, audio-device selection, decoder-channel monitoring, and RX monitor volume. Radio scope and vendor controls remain capability-gated. |
 | Remote stations | [`QSONaut-HostBridge`](https://github.com/nicksbar/QSONaut-HostBridge) is the optional background service for remote radio operation. QSONaut authenticates, enumerates host-owned radios and audio endpoints, selects the driver/model and devices, and consumes bidirectional PCM, meters, controls, state, and optional CI-V scope frames over its documented WebSocket protocol. HostBridge owns private device paths, leases, and hardware safety; one remote session is allowed per QSONaut process. |
@@ -124,7 +124,22 @@ cargo run --release -p qsonaut -- --gui
 ```
 
 Cargo resolves the pinned revisions and records those sources in `Cargo.lock`
-for reproducible builds.
+for reproducible builds. The maintenance pins are `qsonaut-modems` / `qsonaut-js8`
+`a0ef913c4684e8aa4711d13bbbe6775baa436db0` (`0.1.1`) and
+`qsonaut-third-party` / `qsonaut-n3fjp`
+`3ef1fbdc037d54eab6f71babfa25b5ff335c178b`. The adapter's transitive
+`mfsk-core` source is `c21458c90bcb853f20181e9e7cac3c2f9b4bad34`
+(`0.14.0` plus unreleased upstream corrections), not a floating branch head.
+See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for all modem source pins.
+This refresh does not adopt additional protocols or change consumer TX,
+arm/disarm, audio, or clock policies.
+
+The shared null-audio fallback pool now uses synthetic `0Z0NA`, `0Z1NB`,
+`0Z2NC`, `0Z3ND`, `0Z4NE`, and `0Z5NF` demo identifiers in place of the
+codec-rejected `QZ` series. They round-trip intact as standard messages;
+contributor/tester variables and supplied calls are preserved, not silently
+substituted. These demo identifiers are not operating identities or authority
+to transmit. See the [maintenance evidence](docs/UPSTREAM-CATCHUP-2026-10-27.md).
 
 Use a release build for maximum live-decoding performance. The workspace
 optimizes the lower-level modem DSP crates in dev builds by default, so the
@@ -166,15 +181,19 @@ truth for included areas.
 
 ### Coverage area snapshot
 
-The current development measurement was generated on Linux on 2026-09-13
+The current development measurement was generated on Linux on 2026-10-27
 with the workspace tests and the existing CI filename exclusions. The grouped
-executable-contract report is 61.12% (23,059 / 37,729 lines), above the CI
-gate of 60%. Rigwright integration is 82.31% (3,374 / 4,099 lines), above its
-80% target. JS8 is included in the measured GUI-mode area and remains above
+executable-contract report is 61.17% (23,109 / 37,777 lines), above the CI
+gate of 60%. Rigwright integration is 82.09% (3,365 / 4,099 lines), above its
+80% target. CW is 81.63% (440 / 539 lines), passing the unchanged 80% gate.
+JS8 is included in the measured GUI-mode area and remains above
 the 50% per-mode target. Physical-radio behavior still
 requires the documented hardware validation runs. The unfiltered all-feature
-report is 52.76% (23,501 / 44,522 lines); it includes the UI files excluded by
+report is 52.82% (23,544 / 44,570 lines); it includes the UI files excluded by
 the existing CI contract. No exclusions or thresholds were changed.
+The table below uses `resolved-coverage-workflow.txt` from the
+[maintenance validation](docs/UPSTREAM-CATCHUP-2026-10-27.md); the unfiltered
+measurement is a separate complete all-feature run.
 The high-coverage `qsonaut-sstv` crate is
 now maintained behind the pinned `qsonaut-third-party` boundary and is covered
 by that repository's workflow rather than this workspace. These are grouped
@@ -192,12 +211,12 @@ remains the detailed, per-file source of truth.
 | qsonaut-audio | 316 / 871 | 36.28% |
 | qsonaut-core | 707 / 790 | 89.49% |
 | HostBridge client | 218 / 481 | 45.32% |
-| GUI core | 9,766 / 18,963 | 51.50% |
+| GUI core | 9,825 / 19,011 | 51.68% |
 | GUI workers | 1,866 / 2,986 | 62.49% |
 | GUI modes | 2,067 / 3,289 | 62.85% |
 | JS8 mode (included in GUI modes) | 598 / 809 | 73.92% |
 | GUI panels | 1,153 / 1,780 | 64.78% |
-| Rigwright integration | 3,374 / 4,099 | 82.31% |
+| Rigwright integration | 3,365 / 4,099 | 82.09% |
 | Application entry point | 195 / 564 | 34.57% |
 
 The workspace gate requires 60% overall coverage, and the Rigwright integration
@@ -341,8 +360,9 @@ device enrollment and proxy-friendly WSS configuration.
 - [`rigwright`](https://github.com/nicksbar/rigwright) — sibling radio HAL and native Icom CI-V implementation
 - [`QSONaut-HostBridge`](https://github.com/nicksbar/QSONaut-HostBridge) — optional remote station service and host-device provider
 
-QSONaut resolves `rigwright` and the shared modem/third-party components from
-immutable Git revisions recorded in the manifests and `Cargo.lock`. This keeps
+QSONaut resolves `rigwright` from crates.io and the shared modem/third-party
+components from immutable Git revisions recorded in the manifests and
+`Cargo.lock`. This keeps
 CI and release builds reproducible while allowing local sibling checkouts to be
 used temporarily for development validation. CI does not require any sibling
 repository checkout.
@@ -436,13 +456,13 @@ QSONaut's FT8, FT4, FST4, WSPR, JT9, JT65, Q65, and MSK144 integrations.
 
 We are grateful to that project for making a serious pure-Rust WSJT-family
 engine available to the amateur-radio community. `mfsk-core` is licensed
-**GPL-3.0-or-later** and carries its own attribution to WSJT-X, Joe Taylor
-K1JT, and collaborators. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
+**GPL-3.0-only** at the pinned revision and carries its own attribution to
+WSJT-X, Joe Taylor K1JT, and collaborators. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
 for the exact source revision and license details used by QSONaut releases.
 
 ## License
 
 QSONaut's original source code is offered under the MIT license; see
-[`LICENSE`](LICENSE). QSONaut currently links with GPL-3.0-or-later
-`mfsk-core`, so distributed combined binaries are also subject to the
-applicable GPL terms. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+[`LICENSE`](LICENSE). QSONaut links with **GPL-3.0-only** `mfsk-core` through
+the pinned adapter, so distributed combined binaries must comply with GPL
+version 3. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

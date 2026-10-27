@@ -123,15 +123,16 @@ pub(crate) fn qsonaut_demo_people() -> Vec<QsonautPerson> {
 
     // Keep the null modem and demos useful in developer builds where release
     // contributor/tester variables are not present. These are intentionally
-    // fictional QZ-prefixed identities and are shared by every mode rather
-    // than being hidden in one mode's audio worker.
+    // synthetic 0Z demo identifiers, not operator identities. Their two-letter
+    // suffixes round-trip as standard WSJT messages; Q-prefixed calls are
+    // rejected by the upstream codec. Every mode shares this fallback pool.
     const FALLBACKS: &[(&str, &str, &str)] = &[
-        ("QZ0NA", "CN87", "QSONaut Alpha"),
-        ("QZ1NB", "FN31", "QSONaut Bravo"),
-        ("QZ2NC", "DM13", "QSONaut Charlie"),
-        ("QZ3ND", "EM12", "QSONaut Delta"),
-        ("QZ4NE", "IO91", "QSONaut Echo"),
-        ("QZ5NF", "JN58", "QSONaut Foxtrot"),
+        ("0Z0NA", "CN87", "QSONaut Alpha"),
+        ("0Z1NB", "FN31", "QSONaut Bravo"),
+        ("0Z2NC", "DM13", "QSONaut Charlie"),
+        ("0Z3ND", "EM12", "QSONaut Delta"),
+        ("0Z4NE", "IO91", "QSONaut Echo"),
+        ("0Z5NF", "JN58", "QSONaut Foxtrot"),
     ];
     for (callsign, grid, name) in FALLBACKS {
         if people
@@ -4348,12 +4349,69 @@ mod tests {
             .into_iter()
             .filter_map(|person| person.callsign)
             .collect();
-        for callsign in ["QZ0NA", "QZ1NB", "QZ2NC", "QZ3ND", "QZ4NE", "QZ5NF"] {
+        for callsign in ["0Z0NA", "0Z1NB", "0Z2NC", "0Z3ND", "0Z4NE", "0Z5NF"] {
             assert!(
                 callsigns.contains(callsign),
                 "missing demo station {callsign}"
             );
         }
+    }
+
+    #[test]
+    fn demo_pool_standard_messages_synthesize_without_replacing_invalid_calls() {
+        let people = qsonaut_demo_people();
+        for callsign in ["0Z0NA", "0Z1NB", "0Z2NC", "0Z3ND", "0Z4NE", "0Z5NF"] {
+            let person = people
+                .iter()
+                .find(|person| person.callsign.as_deref() == Some(callsign))
+                .expect("shared fallback station");
+            let message = format!("CQ {callsign} {}", person.grid.as_deref().expect("grid"));
+            let pcm = build_ft8_tx_pcm(&message, 1_500).expect("fallback CQ synthesis");
+            assert!(pcm.iter().any(|sample| *sample != 0), "{message}");
+        }
+        // All six exchange frames used by the null source must pack, not just CQ.
+        for message in [
+            "CQ 0Z0NA CN87",
+            "0Z0NA 0Z1NB -10",
+            "0Z1NB 0Z0NA R-07",
+            "0Z0NA 0Z1NB RR73",
+            "0Z1NB 0Z0NA 73",
+            "CQ 0Z1NB FN31",
+        ] {
+            let pcm = build_ft8_tx_pcm(message, 1_500).expect("fallback exchange synthesis");
+            assert!(pcm.iter().any(|sample| *sample != 0), "{message}");
+        }
+        // User-supplied calls still go through the codec unchanged: no bypass
+        // or silent substitution with a fallback, and no truncated DEMO suffix.
+        assert!(build_ft8_tx_pcm("CQ QZ0NA CN87", 1_500).is_err());
+        assert!(build_ft8_tx_pcm("CQ 0Z0DEMO CN87", 1_500).is_err());
+    }
+
+    #[test]
+    fn demo_pool_directed_message_decodes_with_both_identities_intact() {
+        let message = "0Z0NA 0Z1NB -10";
+        let pcm = build_ft8_tx_pcm(message, 1_500).expect("fallback exchange synthesis");
+        let mut slot = vec![0.0_f32; FT8_SLOT_SAMPLES];
+        let start = (FT8_TX_AUDIO_START_S * 12_000.0) as usize;
+        for (target, sample) in slot[start..].iter_mut().zip(pcm) {
+            *target = sample as f32 / i16::MAX as f32 * 0.06;
+        }
+        let outcome = qsonaut_third_party::wsjt::decode_ft8(
+            &qsonaut_modems::AudioBlock::new(12_000, slot).expect("demo audio"),
+            &qsonaut_third_party::wsjt::WsjtDecodeConfig {
+                frequency_min_hz: 1_400.0,
+                frequency_max_hz: 1_700.0,
+                sync_min: FT8_FAST_SYNC_MIN,
+                max_candidates: 8,
+                ..qsonaut_third_party::wsjt::WsjtDecodeConfig::default()
+            },
+        )
+        .expect("fallback decode");
+        assert!(
+            outcome.events.iter().any(|event| event.message == message),
+            "fallback decode changed identities or report: {:?}",
+            outcome.events
+        );
     }
 
     #[test]

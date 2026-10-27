@@ -243,8 +243,8 @@ impl NullAudioGenerator {
 
         let first = &stations[0];
         let second = &stations[1];
-        let first_call = first.callsign.as_deref().unwrap_or("QZ0NA");
-        let second_call = second.callsign.as_deref().unwrap_or("QZ1NB");
+        let first_call = first.callsign.as_deref().unwrap_or("0Z0NA");
+        let second_call = second.callsign.as_deref().unwrap_or("0Z1NB");
         let first_grid = first.grid.as_deref().unwrap_or("CN87");
         let second_grid = second.grid.as_deref().unwrap_or("FN31");
         let first_power = first.power_dbm.unwrap_or(30);
@@ -257,7 +257,7 @@ impl NullAudioGenerator {
                     (
                         format!(
                             "{} {}",
-                            station.callsign.as_deref().unwrap_or("QZ0NA"),
+                            station.callsign.as_deref().unwrap_or("0Z0NA"),
                             station.name.as_deref().unwrap_or("IMAGE")
                         ),
                         1_500,
@@ -287,7 +287,7 @@ impl NullAudioGenerator {
                     .map(|(index, station)| {
                         let frequency = (cursor as i32 + offsets[index]).clamp(200, 2_800) as u32;
                         (
-                            station.callsign.as_deref().unwrap_or("QZ0NA"),
+                            station.callsign.as_deref().unwrap_or("0Z0NA"),
                             station.grid.as_deref().unwrap_or("CN87"),
                             frequency,
                         )

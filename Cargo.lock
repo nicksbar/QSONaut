@@ -2532,8 +2532,8 @@ dependencies = [
 
 [[package]]
 name = "mfsk-core"
-version = "0.11.0"
-source = "git+https://github.com/jl1nie/mfsk-core.git?rev=5cba86d5924d1b8736914b5511350eaf1bff3fbc#5cba86d5924d1b8736914b5511350eaf1bff3fbc"
+version = "0.14.0"
+source = "git+https://github.com/jl1nie/mfsk-core.git?rev=c21458c90bcb853f20181e9e7cac3c2f9b4bad34#c21458c90bcb853f20181e9e7cac3c2f9b4bad34"
 dependencies = [
  "crc",
  "num-complex",
@@ -3658,8 +3658,8 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-js8"
-version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=3a4f815e7afabe492de60dea72ca00224261c062#3a4f815e7afabe492de60dea72ca00224261c062"
+version = "0.1.1"
+source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=a0ef913c4684e8aa4711d13bbbe6775baa436db0#a0ef913c4684e8aa4711d13bbbe6775baa436db0"
 dependencies = [
  "qsonaut-modems",
  "rustfft",
@@ -3681,16 +3681,16 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-modems"
-version = "0.1.0"
-source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=3a4f815e7afabe492de60dea72ca00224261c062#3a4f815e7afabe492de60dea72ca00224261c062"
+version = "0.1.1"
+source = "git+https://github.com/nicksbar/qsonaut-modems.git?rev=a0ef913c4684e8aa4711d13bbbe6775baa436db0#a0ef913c4684e8aa4711d13bbbe6775baa436db0"
 dependencies = [
  "thiserror 2.0.20",
 ]
 
 [[package]]
 name = "qsonaut-n3fjp"
-version = "0.2.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=f3de204e186c03c4996cba180904b7603a05dfc8#f3de204e186c03c4996cba180904b7603a05dfc8"
+version = "0.3.0"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=3ef1fbdc037d54eab6f71babfa25b5ff335c178b#3ef1fbdc037d54eab6f71babfa25b5ff335c178b"
 dependencies = [
  "serde",
 ]
@@ -3721,8 +3721,8 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-third-party"
-version = "0.2.0"
-source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=f3de204e186c03c4996cba180904b7603a05dfc8#f3de204e186c03c4996cba180904b7603a05dfc8"
+version = "0.3.0"
+source = "git+https://github.com/nicksbar/qsonaut-third-party.git?rev=3ef1fbdc037d54eab6f71babfa25b5ff335c178b#3ef1fbdc037d54eab6f71babfa25b5ff335c178b"
 dependencies = [
  "cwdit-dsp",
  "cwdit-morse",

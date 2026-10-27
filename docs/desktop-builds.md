@@ -6,15 +6,14 @@ QSONaut supports native desktop builds for these release targets:
 | --- | --- | --- | --- |
 | Linux | x86_64 | `x86_64-unknown-linux-gnu` | `.tar.gz` |
 | Linux | ARM64 | `aarch64-unknown-linux-gnu` | `.tar.gz` |
-| Windows | x86_64 | `x86_64-pc-windows-gnullvm` | `.zip` |
-| Windows | ARM64 | `aarch64-pc-windows-gnullvm` | `.zip` |
+| Windows | x86_64 | `x86_64-pc-windows-msvc` | `.zip` |
+| Windows | ARM64 | `aarch64-pc-windows-msvc` | `.zip` |
 
 The release matrix is in `.github/workflows/release-builds.yml`. It runs for
-version tags and can also be started manually. When a `v*` tag is pushed, the
-workflow now also publishes the generated archives to a GitHub Release.
-Windows application builds run on Linux with LLVM-MinGW. Windows runners are
-not required for compilation; the resulting PE executables are packaged as
-normal Windows distributions.
+`v*` version-tag pushes, verifies the SemVer tag against the workspace version,
+and publishes the generated archives to a GitHub Release. Windows application
+builds use MSVC on native Windows x86_64 and ARM64 runners; Linux builds use
+native Ubuntu runners for each architecture.
 
 ## Native dependencies
 
@@ -51,10 +50,12 @@ startup and on the first rendered frame; `QSONAUT_RENDERER` is no longer used.
 UI scale presets use a rebased baseline where the previous physical 75% size
 is now represented as 100%.
 
-`mfsk-core` is resolved from its upstream Git dependency during builds; no
-local checkout is required. The release archive includes QSONaut's
-`THIRD_PARTY_NOTICES.md`, which identifies the upstream GPL-3.0-or-later
-license and source location.
+`mfsk-core` is resolved transitively through the pinned `qsonaut-third-party`
+adapter at immutable revision `c21458c90bcb853f20181e9e7cac3c2f9b4bad34`
+(`0.14.0` plus unreleased upstream corrections); no local checkout is required.
+The release archive includes QSONaut's `THIRD_PARTY_NOTICES.md` and the
+`mfsk-core-LICENSE` copied from that locked source. The dependency is
+`GPL-3.0-only`, and combined binaries must comply with GPL version 3.
 
 `cw-dit` is likewise resolved from its pinned upstream Git dependency; no
 local checkout is required for CW builds.
