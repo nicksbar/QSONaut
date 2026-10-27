@@ -11,7 +11,8 @@ weakened and no tests were suppressed.
 
 This update is based on QSONaut `main` at
 `0b264a46ade7050fda36ea4c5c9fc3a07f8a789d`, on maintenance branch
-`maintenance/upstream-catchup-2026-10-27`. The desktop version remains `0.4.2`.
+`maintenance/upstream-catchup-2026-10-27`. The desktop version is prepared as
+`0.4.3` (unreleased; no tag or binary release yet).
 Changes include dependency pins, the lockfile, notices/documentation,
 dependency-license packaging, and the synthetic fallback pool in production
 Rust plus focused tests. Consumer TX, arm/disarm, audio-processing, clock, and
@@ -27,8 +28,10 @@ protocol-adoption policies, coverage exclusions, and gates are unchanged.
 | `qsonaut-n3fjp` | `3ef1fbdc037d54eab6f71babfa25b5ff335c178b` | `0.3.0`, GPL-3.0-or-later |
 | transitive `mfsk-core` | `c21458c90bcb853f20181e9e7cac3c2f9b4bad34` | `0.14.0` plus unreleased upstream corrections, GPL-3.0-only |
 
-The lock update changes only the versions and Git sources of these five
-packages. No registry versions or dependency lists change. QSONaut's old lock
+The maintenance lock update changed only the versions and Git sources of these
+five packages. The subsequent `0.4.3` release preparation changes only the 11
+workspace package versions from `0.4.2` to `0.4.3`. No registry versions or
+dependency lists change. QSONaut's old lock
 used `mfsk-core` `0.11.0` at `5cba86d5924d1b8736914b5511350eaf1bff3fbc`;
 the adapter's separate 522-commit catch-up comparison starts from its previous
 `0.11.1` source, `ef3fc8eaa4ec3936b76bbb21e8befd91728cb8e8`.
@@ -105,6 +108,19 @@ on-air validation is claimed. The validated adapter update was published as
 `09f70e20dc28f8dfa174777d21672bb2d51647ac`. Both maintenance branches were
 fast-forwarded and pushed to their respective `main` branches. No release
 tags or binary releases were created.
+
+### Release version synchronization
+
+The subsequent metadata-only preparation aligns the workspace packages,
+lockfile, changelog, and current release documentation at `0.4.3`, with a fresh
+empty `[Unreleased]` section. It preserves the publication history above and
+does not change production Rust, tests, dependency pins, or coverage policy.
+The 481 workspace passes, 2 separate slow-test passes, and local coverage
+figures above are the measured maintenance evidence; coverage is not rerun for
+this metadata-only bump. GitHub coverage checks are not claimed green, and no
+new hardware or on-air evidence is claimed. Release-preparation gate logs are
+kept separately under `/tmp/qsonaut-release-0.4.3/`. The maintenance branch is
+prepared for review only, not merged or tagged by this release preparation.
 
 ## Reproduced simulator regression and root-cause fix
 

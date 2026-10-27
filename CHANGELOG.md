@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-27
+
 ### Changed
 - Maintenance refresh: pin `qsonaut-third-party` and `qsonaut-n3fjp` to
   `3ef1fbdc037d54eab6f71babfa25b5ff335c178b`, and `qsonaut-modems` and
@@ -26,6 +28,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   intact; contributor/tester variables and supplied calls are not rewritten.
   No packer bypass, test suppression, or radio/TX safety change is included.
   See [maintenance evidence](docs/UPSTREAM-CATCHUP-2026-10-27.md).
+
+### Release evidence — 2026-10-27
+- Prepared release; no `v0.4.3` tag or binary release has been published.
+- Prior local maintenance validation passed 481 workspace tests and both
+  separately run slow generated-fixture tests (2 passed).
+- Workflow-filtered local line coverage is 61.17%, Rigwright integration
+  coverage is 82.09%, and CW coverage is 81.63%, passing the unchanged gates.
+- This metadata-only preparation does not rerun coverage or claim pending
+  GitHub coverage checks are green. No new hardware, on-air, cross-platform
+  build, or release-archive validation is claimed.
 
 ## [0.4.2] - 2026-09-13
 

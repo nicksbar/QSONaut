@@ -3522,7 +3522,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -3541,14 +3541,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-accelerate"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "qsonaut-audio"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "cpal",
@@ -3557,7 +3557,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-automation"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -3566,7 +3566,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-contests"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -3574,7 +3574,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-core"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "dotenvy",
@@ -3587,7 +3587,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-gui"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3631,7 +3631,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-hostbridge-client"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -3668,7 +3668,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-log"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -3697,14 +3697,14 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-pskreporter"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "qsonaut-server-client"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "futures-util",
