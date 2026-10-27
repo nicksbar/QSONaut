@@ -12,6 +12,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   feature keys such as `USB` and `usb`. Preserve those keys during PowerShell
   JSON parsing so both Windows archives can include the locked-source
   `mfsk-core` license; release binary compilation is unchanged.
+- Allow manually rebuilding an existing release tag with the current workflow
+  fixes while pinning all build and publication jobs to that tag's source
+  commit. Release tags do not need to be moved to repair packaging.
 
 ## [0.4.3] - 2026-10-27
 
