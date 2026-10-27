@@ -21,8 +21,10 @@
 
 **An enthusiast-built amateur-radio mission control console.**
 
-**Current release line:** `0.4.2` · software/CI validation is green; physical
-acceptance remains limited to the documented IC-7300 evidence matrix.
+**Prepared release line:** `0.4.3` (unreleased; no tag or binary release yet).
+Local maintenance software gates pass; pending GitHub coverage checks are not
+claimed green. Physical acceptance remains limited to the documented IC-7300
+evidence matrix; this preparation adds no hardware validation.
 
 QSONaut combines radio control, live audio and spectrum views, WSJT-family
 digital modes, contact logging, and early operator-assist scaffolding in one

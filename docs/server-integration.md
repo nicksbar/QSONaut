@@ -24,7 +24,7 @@ POST /api/v1/auth/device/authorize
 {
   "client_id": "qsonaut-desktop",
   "device_name": "QSONaut desktop",
-  "client_version": "0.4.2"
+  "client_version": "0.4.3"
 }
 
 200 OK
