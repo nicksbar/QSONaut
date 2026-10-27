@@ -10,6 +10,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [0.4.3] - 2026-10-27
 
 ### Changed
+- Integrate Dependabot PR #105's Rustls `0.23.44` → `0.23.46` lockfile
+  update, including upstream TLS security and I/O fixes. Preserve explicit
+  Ring provider startup and the workspace's `ring`/`std` configuration;
+  see [patch assessment and validation](docs/UPSTREAM-CATCHUP-2026-10-27.md#dependabot-follow-up--pr-105).
+- Align shared dependency patches with `nicksbar/QSONaut-HostBridge` PR #12
+  (`clap` / `clap_builder` `4.6.6` → `4.6.7`, `clap_derive` `4.6.4` →
+  `4.6.7`) and PR #14 (`thiserror` / `thiserror-impl` `2.0.20` → `2.0.21`).
+  Retain required transitive `thiserror` / `thiserror-impl` `1.0.69` and the
+  existing `tempfile` `3.27.0` edge to `getrandom 0.3.4`; no Rust source edits.
 - Maintenance refresh: pin `qsonaut-third-party` and `qsonaut-n3fjp` to
   `3ef1fbdc037d54eab6f71babfa25b5ff335c178b`, and `qsonaut-modems` and
   `qsonaut-js8` to `a0ef913c4684e8aa4711d13bbbe6775baa436db0` (`0.1.1`).
@@ -33,6 +42,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Prepared release; no `v0.4.3` tag or binary release has been published.
 - Prior local maintenance validation passed 481 workspace tests and both
   separately run slow generated-fixture tests (2 passed).
+- The lockfile/docs-only dependency follow-up also passes 481 workspace tests
+  (0 failed, 2 ignored), formatting, strict Clippy, and full locked metadata.
 - Workflow-filtered local line coverage is 61.17%, Rigwright integration
   coverage is 82.09%, and CW coverage is 81.63%, passing the unchanged gates.
 - This metadata-only preparation does not rerun coverage or claim pending
