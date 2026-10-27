@@ -106,7 +106,8 @@ jobs:
           New-Item -ItemType Directory -Force "dist/${{ matrix.artifact }}" | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/qsonaut.exe" "dist/${{ matrix.artifact }}/"
           Copy-Item README.md,CHANGELOG.md,LICENSE,THIRD_PARTY_NOTICES.md,qsonaut.toml.example "dist/${{ matrix.artifact }}/"
-          $metadata = cargo metadata --locked --format-version 1 | ConvertFrom-Json
+          # Cargo feature keys can differ only by case (for example USB/usb).
+          $metadata = cargo metadata --locked --format-version 1 | ConvertFrom-Json -AsHashtable
           if ($LASTEXITCODE -ne 0) { throw "Could not resolve locked dependency licenses" }
           $mfskManifest = ($metadata.packages | Where-Object { $_.name -eq 'mfsk-core' }).manifest_path
           if (-not $mfskManifest) { throw "Locked mfsk-core package not found" }
