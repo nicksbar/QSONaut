@@ -100,8 +100,11 @@ No local software blocker remains. PowerShell is unavailable locally: the
 Windows packaging path is statically reviewed, not executed. The desktop-build
 documentation now matches the workflow's tag-only trigger and native Windows
 MSVC runners. No desktop release archive, cross-platform build, hardware or
-on-air validation is claimed. No commit, push, or main merge was performed;
-the changes remain on `maintenance/upstream-catchup-2026-10-27` for review.
+on-air validation is claimed. The validated adapter update was published as
+`3ef1fbdc037d54eab6f71babfa25b5ff335c178b`, and the desktop integration as
+`09f70e20dc28f8dfa174777d21672bb2d51647ac`. Both maintenance branches were
+fast-forwarded and pushed to their respective `main` branches. No release
+tags or binary releases were created.
 
 ## Reproduced simulator regression and root-cause fix
 
