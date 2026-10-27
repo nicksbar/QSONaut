@@ -7,6 +7,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+- Fix Windows release packaging when Cargo metadata contains case-distinct
+  feature keys such as `USB` and `usb`. Preserve those keys during PowerShell
+  JSON parsing so both Windows archives can include the locked-source
+  `mfsk-core` license; release binary compilation is unchanged.
+
 ## [0.4.3] - 2026-10-27
 
 ### Changed
